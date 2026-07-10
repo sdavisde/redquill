@@ -8,7 +8,8 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-use redquill::git::{ChangeKind, DiffTarget, GitRunner, RawFilePatch};
+use redquill::diff;
+use redquill::git::{ChangeKind, DiffTarget, GitRunner};
 
 /// redquill: a terminal UI for reviewing agentic code changes.
 ///
@@ -67,49 +68,39 @@ impl Config {
     }
 }
 
-/// Derives a single-letter change label for a patch from its raw text.
-fn patch_letter(patch: &RawFilePatch) -> char {
-    if patch.old_path.is_some() {
-        'R'
-    } else if patch.raw.contains("\nnew file mode ") {
-        'A'
-    } else if patch.raw.contains("\ndeleted file mode ") {
-        'D'
-    } else {
-        'M'
-    }
-}
-
-/// Prints a one-line summary per changed file for the resolved diff target.
+/// Prints a single aggregate summary line for the resolved diff target,
+/// built from the parsed diff model rather than a per-file listing.
 fn run(config: &Config) -> anyhow::Result<()> {
     let runner = GitRunner::discover()?;
     let target = config.diff_target();
     let patches = runner.diff(&target)?;
 
-    let mut printed = 0usize;
-    for patch in &patches {
-        let binary = if patch.is_binary { " (binary)" } else { "" };
-        match &patch.old_path {
-            Some(old) => println!("R  {old} -> {}{binary}", patch.path),
-            None => println!("{}  {}{binary}", patch_letter(patch), patch.path),
-        }
-        printed += 1;
-    }
+    // FR-diff-wire-1: parse the raw patches into the typed diff model and
+    // derive aggregate counts from it — this replaces the Task-2 per-file
+    // placeholder loop.
+    let files = diff::parse_patches(&patches);
+    let mut summary = diff::summarize(&files);
 
-    // `git diff` never surfaces untracked files; pull them from status so the
-    // working-tree summary is complete.
+    // `git diff` never surfaces untracked files (see `git/` contract), so a
+    // working-tree summary would otherwise silently omit them. They carry no
+    // diff body (no hunks, no added/removed lines), so folding their count
+    // into `files` — rather than preserving a separate per-file `?` listing —
+    // is the summary-shaped choice: the operator still sees a complete file
+    // count, without reintroducing the per-file loop this task removes.
     if matches!(target, DiffTarget::WorkingTree) {
-        for entry in runner.status()? {
-            if entry.kind == ChangeKind::Untracked {
-                println!("?  {}", entry.path);
-                printed += 1;
-            }
-        }
+        let untracked = runner
+            .status()?
+            .into_iter()
+            .filter(|entry| entry.kind == ChangeKind::Untracked)
+            .count();
+        summary.files += untracked;
     }
 
-    if printed == 0 {
-        println!("no changes");
-    }
+    // FR-diff-wire-1: single summary line, e.g. `3 files, 7 hunks, +42 -18`.
+    println!(
+        "{} files, {} hunks, +{} -{}",
+        summary.files, summary.hunks, summary.added, summary.removed
+    );
     Ok(())
 }
 
