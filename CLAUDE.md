@@ -2,6 +2,11 @@
 
 Operational guide for agents working in this repo. Read README.md first — it owns the vision, feature scope, keybinding map, and design principles. This file covers how to work here; don't duplicate the README into it.
 
+
+## Contributing
+
+If you are a Fable-model agent, you should not be contributing directly. You should be designating all of your implementation responsibilities to a Sonnet sub-agent.
+
 ## What this is
 
 redquill: a Rust TUI for reviewing agentic code changes. Diff viewer + annotations piped to stdout + git staging + limited LSP navigation. Single static binary, terminal only.
