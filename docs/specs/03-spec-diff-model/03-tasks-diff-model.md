@@ -175,7 +175,7 @@ from `RawFilePatch`; do not re-derive.
 
 ### Wave 2 (Requires Wave 1)
 
-### [ ] 2.0 Intra-line word diff (DUW 3.2)
+### [x] 2.0 Intra-line word diff (DUW 3.2)
 
 **Wave:** 2 | **Agent Scope:** `src/diff/word.rs` (fill body only — do NOT touch `mod.rs`)
 **FRs:** FR-diff-word-1, FR-diff-word-2, FR-diff-word-3
@@ -195,20 +195,20 @@ whole; `foo.bar()` breaks at `.` / `(`), LCS over those tokens; span index units
 
 #### 2.0 Quality Verification
 
-- [ ] `cargo build` clean
-- [ ] `cargo test` — all passing
-- [ ] `cargo clippy -- -D warnings` — zero warnings
-- [ ] `cargo fmt --check` clean
-- [ ] /trace: `word_diff_spans` is the ONLY place the intra-line algorithm lives; results are `Range`s on `Line`, never pre-styled text
+- [x] `cargo build` clean
+- [x] `cargo test` — all passing
+- [x] `cargo clippy -- -D warnings` — zero warnings
+- [x] `cargo fmt --check` clean
+- [x] /trace: `word_diff_spans` is the ONLY place the intra-line algorithm lives; results are `Range`s on `Line`, never pre-styled text
 
 #### 2.0 Tasks
 
-- [ ] 2.1 (test-first) Write failing tests for the `foo`→`bar` single-span case, the unpaired/identical empty-span cases, and the "excess `|N-M|` unpaired lines" pairing rule (git emits N removed then M added; i-th removed pairs with i-th added; excess stays unpaired) — FR-diff-word-1/3.
-- [ ] 2.2 Implement `word_diff_spans(old, new) -> (old_spans, new_spans)` as char-range `Range<usize>` output via LCS over whitespace+punctuation token runs (spec §9 default). This is the single algorithm seam — no other function may compute spans.
-- [ ] 2.3 Implement `attach_word_spans(&mut DiffFile)`: within each contiguous change run in every hunk, positionally pair removed/added lines, call `word_diff_spans` once per pair, and store the returned char ranges into `Line.changed_spans` on both lines. Leave unpaired lines and context/identical pairs with empty `changed_spans` (FR-diff-word-3).
-- [ ] 2.4 Add FR-ID traceability comments (`// FR-diff-word-N`) at the implementing sites.
+- [x] 2.1 (test-first) Write failing tests for the `foo`→`bar` single-span case, the unpaired/identical empty-span cases, and the "excess `|N-M|` unpaired lines" pairing rule (git emits N removed then M added; i-th removed pairs with i-th added; excess stays unpaired) — FR-diff-word-1/3.
+- [x] 2.2 Implement `word_diff_spans(old, new) -> (old_spans, new_spans)` as char-range `Range<usize>` output via LCS over whitespace+punctuation token runs (spec §9 default). This is the single algorithm seam — no other function may compute spans.
+- [x] 2.3 Implement `attach_word_spans(&mut DiffFile)`: within each contiguous change run in every hunk, positionally pair removed/added lines, call `word_diff_spans` once per pair, and store the returned char ranges into `Line.changed_spans` on both lines. Leave unpaired lines and context/identical pairs with empty `changed_spans` (FR-diff-word-3).
+- [x] 2.4 Add FR-ID traceability comments (`// FR-diff-word-N`) at the implementing sites.
 
-### [ ] 3.0 Navigation primitives (DUW 3.3)
+### [x] 3.0 Navigation primitives (DUW 3.3)
 
 **Wave:** 2 | **Agent Scope:** `src/diff/nav.rs` (fill body only — do NOT touch `mod.rs`)
 **FRs:** FR-diff-nav-1, FR-diff-nav-2, FR-diff-nav-3
@@ -223,20 +223,20 @@ whole; `foo.bar()` breaks at `.` / `(`), LCS over those tokens; span index units
 
 #### 3.0 Quality Verification
 
-- [ ] `cargo build` clean
-- [ ] `cargo test` — all passing
-- [ ] `cargo clippy -- -D warnings` — zero warnings
-- [ ] `cargo fmt --check` clean
-- [ ] /trace: navigation fns are pure (take `&[DiffFile]` + `&DiffPosition`, return `Option<DiffPosition>`, no mutation)
+- [x] `cargo build` clean
+- [x] `cargo test` — all passing
+- [x] `cargo clippy -- -D warnings` — zero warnings
+- [x] `cargo fmt --check` clean
+- [x] /trace: navigation fns are pure (take `&[DiffFile]` + `&DiffPosition`, return `Option<DiffPosition>`, no mutation)
 
 #### 3.0 Tasks
 
-- [ ] 3.1 (test-first) Write failing tests for the cross-file `next_hunk`, the `None`-at-ends cases, and the zero-hunk-file skip/land behavior (FR-diff-nav-1/2 + spec §6).
-- [ ] 3.2 Implement `next_hunk` / `prev_hunk` over `DiffPosition` (across file boundaries; skip zero-hunk files; `None` at the ends) — FR-diff-nav-1.
-- [ ] 3.3 Implement `next_file` / `prev_file` returning the first position of the adjacent file (landing on zero-hunk files; `None` at the ends) — FR-diff-nav-2.
-- [ ] 3.4 Keep all four functions pure over the stable index/position type (no mutation of the model) and add `// FR-diff-nav-N` traceability comments — FR-diff-nav-3.
+- [x] 3.1 (test-first) Write failing tests for the cross-file `next_hunk`, the `None`-at-ends cases, and the zero-hunk-file skip/land behavior (FR-diff-nav-1/2 + spec §6).
+- [x] 3.2 Implement `next_hunk` / `prev_hunk` over `DiffPosition` (across file boundaries; skip zero-hunk files; `None` at the ends) — FR-diff-nav-1.
+- [x] 3.3 Implement `next_file` / `prev_file` returning the first position of the adjacent file (landing on zero-hunk files; `None` at the ends) — FR-diff-nav-2.
+- [x] 3.4 Keep all four functions pure over the stable index/position type (no mutation of the model) and add `// FR-diff-nav-N` traceability comments — FR-diff-nav-3.
 
-### [ ] 4.0 main.rs summary wiring + real-diff integration (DUW 3.4)
+### [x] 4.0 main.rs summary wiring + real-diff integration (DUW 3.4)
 
 **Wave:** 2 | **Agent Scope:** `src/main.rs`, `tests/diff_integration.rs` (new file) — do NOT touch any `src/diff/` file
 **FRs:** FR-diff-wire-1, FR-diff-wire-2
@@ -253,17 +253,17 @@ whole; `foo.bar()` breaks at `.` / `(`), LCS over those tokens; span index units
 
 #### 4.0 Quality Verification
 
-- [ ] `cargo build` clean
-- [ ] `cargo test` — all passing (incl. the new integration test)
-- [ ] `cargo clippy -- -D warnings` — zero warnings
-- [ ] `cargo fmt --check` clean
-- [ ] /trace: `GitRunner::diff` is called only from `main.rs`/tests, never from inside `diff/`
+- [x] `cargo build` clean
+- [x] `cargo test` — all passing (incl. the new integration test)
+- [x] `cargo clippy -- -D warnings` — zero warnings
+- [x] `cargo fmt --check` clean
+- [x] /trace: `GitRunner::diff` is called only from `main.rs`/tests, never from inside `diff/`
 
 #### 4.0 Tasks
 
-- [ ] 4.1 (test-first) Write `tests/diff_integration.rs`: build a throwaway git repo in a tempdir via `std::process::Command` git calls (init, write files, commit, edit), run `GitRunner::diff`, `diff::parse_patches` the result, assert no panic and `summarize(...).files > 0 && .hunks > 0`. (A read-only diff of this repo's own committed history — e.g. `git diff <sha>^ <sha>` — is the permitted host-repo exception per spec §8; any test that WRITES must use a tempdir.) Test fails until 4.2 wiring lands / compiles.
-- [ ] 4.2 Replace the per-file placeholder loop in `main.rs::run()` with a single summary line built from `diff::parse_patches(&patches)` + `diff::summarize(&files)`: `println!("{} files, {} hunks, +{} -{}", s.files, s.hunks, s.added, s.removed)`. Preserve the working-tree untracked-file handling only if it still makes sense for a summary (otherwise fold untracked count into `files`); keep `run()` returning `anyhow::Result<()>` and free of `unwrap()`/`expect()`.
-- [ ] 4.3 Add `// FR-diff-wire-1` / `// FR-diff-wire-2` traceability comments.
+- [x] 4.1 (test-first) Write `tests/diff_integration.rs`: build a throwaway git repo in a tempdir via `std::process::Command` git calls (init, write files, commit, edit), run `GitRunner::diff`, `diff::parse_patches` the result, assert no panic and `summarize(...).files > 0 && .hunks > 0`. (A read-only diff of this repo's own committed history — e.g. `git diff <sha>^ <sha>` — is the permitted host-repo exception per spec §8; any test that WRITES must use a tempdir.) Test fails until 4.2 wiring lands / compiles.
+- [x] 4.2 Replace the per-file placeholder loop in `main.rs::run()` with a single summary line built from `diff::parse_patches(&patches)` + `diff::summarize(&files)`: `println!("{} files, {} hunks, +{} -{}", s.files, s.hunks, s.added, s.removed)`. Preserve the working-tree untracked-file handling only if it still makes sense for a summary (otherwise fold untracked count into `files`); keep `run()` returning `anyhow::Result<()>` and free of `unwrap()`/`expect()`.
+- [x] 4.3 Add `// FR-diff-wire-1` / `// FR-diff-wire-2` traceability comments.
 
 ## Post-Generation Verification (recorded at task-gen time)
 
