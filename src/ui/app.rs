@@ -15,7 +15,9 @@ use super::compose::ComposeState;
 use super::keymap::Action;
 use super::lsp_ops::LspClient;
 use super::peek::{CachedPreview, PeekKind, PeekState};
-use super::rows::{LineRow, Row, SyntaxSpans, anchor_row_index, build_rows, hunk_span};
+use super::rows::{
+    LineRow, Row, SbsRow, SyntaxSpans, anchor_row_index, build_rows, build_sbs_rows, hunk_span,
+};
 use super::search::SearchState;
 use super::stage_ops::{ReviewSnapshot, StageOps, StagedFile, build_review, staged_from_status};
 use super::syntax::{self, HighlightCache};
@@ -50,6 +52,19 @@ pub enum Mode {
     Peek,
 }
 
+/// Which layout the diff pane renders: one column of unified hunks, or two
+/// columns (old left, new right) built as a rendering-time view over the
+/// same source [`Row`]s (see [`super::rows::build_sbs_rows`]). Toggled with
+/// `t`; the choice is preserved across file switches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ViewMode {
+    /// One column, old/new lines interleaved in patch order.
+    #[default]
+    Unified,
+    /// Two columns, old and new lines side by side.
+    SideBySide,
+}
+
 /// The TUI's full state: the diffed files, which one is selected, the
 /// flattened row model for that file, cursor and scroll position, help
 /// overlay visibility, and the annotation store the session accumulates
@@ -61,11 +76,33 @@ pub struct App {
     pub selected_file: usize,
     /// The flattened row model for `files[selected_file]`.
     pub rows: Vec<Row>,
+    /// The side-by-side visual row model over `rows` (see
+    /// [`build_sbs_rows`]), rebuilt alongside it. Only consulted when
+    /// `view == ViewMode::SideBySide`.
+    pub sbs_rows: Vec<SbsRow>,
+    /// `rows` index -> `sbs_rows` index, sized to `rows.len()`, rebuilt
+    /// alongside both. Used to keep [`App::sbs_scroll`] following the
+    /// source-row cursor in visual-row space.
+    sbs_visual_of: Vec<usize>,
     /// The cursor's row index into `rows` — a LINE the user moves with
-    /// j/k, Zed-style. Anchors future annotation/staging commands.
+    /// j/k, Zed-style. Anchors future annotation/staging commands. Stays a
+    /// source-row index in both view modes (see [`ViewMode`]): every
+    /// gesture that derives an annotation/staging/LSP target, or resolves
+    /// a search match, reads `rows[cursor]` exactly as unified view always
+    /// has, so side-by-side mode adds zero new target-derivation paths.
     pub cursor: usize,
-    /// The first visible row index (the viewport follows the cursor).
+    /// The first visible row index into `rows` (the unified viewport
+    /// follows the cursor). Meaningless in `ViewMode::SideBySide` — see
+    /// [`App::sbs_scroll`].
     pub scroll: usize,
+    /// The first visible row index into `sbs_rows` (the side-by-side
+    /// viewport follows the cursor's paired visual row). Kept in sync with
+    /// `cursor`/`viewport_height` by [`App::ensure_visible`] alongside
+    /// `scroll`, regardless of which view is active, so toggling `t`
+    /// never needs a scroll-position fixup.
+    pub sbs_scroll: usize,
+    /// Which layout the diff pane renders. Preserved across file switches.
+    pub view: ViewMode,
     /// Whether the help overlay is open.
     pub help_open: bool,
     /// Annotations accumulated this session.
@@ -157,8 +194,12 @@ impl App {
             files,
             selected_file: 0,
             rows: Vec::new(),
+            sbs_rows: Vec::new(),
+            sbs_visual_of: Vec::new(),
             cursor: 0,
             scroll: 0,
+            sbs_scroll: 0,
+            view: ViewMode::default(),
             help_open: false,
             annotations,
             mode: Mode::Normal,
@@ -288,6 +329,7 @@ impl App {
                 }
             }
             Action::ToggleHelp => self.help_open = !self.help_open,
+            Action::ToggleView => self.toggle_view(),
             Action::EnterVisual => self.toggle_visual(),
             Action::Compose => self.open_compose(),
             Action::ToggleList => self.toggle_list(),
@@ -301,6 +343,17 @@ impl App {
             Action::Hover => self.request_code_intel(PeekKind::Hover),
             Action::Quit | Action::QuitDiscard => {}
         }
+    }
+
+    /// Flips between unified and side-by-side layout. The cursor stays a
+    /// source-row index (see [`ViewMode`]'s docs), so nothing else needs to
+    /// change — `scroll` and `sbs_scroll` are already kept in sync by
+    /// [`App::ensure_visible`] regardless of which view is active.
+    fn toggle_view(&mut self) {
+        self.view = match self.view {
+            ViewMode::Unified => ViewMode::SideBySide,
+            ViewMode::SideBySide => ViewMode::Unified,
+        };
     }
 
     fn half_page(&self) -> usize {
@@ -339,12 +392,23 @@ impl App {
     fn ensure_visible(&mut self) {
         if self.rows.is_empty() {
             self.scroll = 0;
+            self.sbs_scroll = 0;
             return;
         }
         if self.cursor < self.scroll {
             self.scroll = self.cursor;
         } else if self.cursor >= self.scroll + self.viewport_height {
             self.scroll = self.cursor + 1 - self.viewport_height;
+        }
+
+        // Side-by-side scrolls in visual-row space (a paired removed/added
+        // line occupies one visual row, not two), kept in sync here
+        // unconditionally so toggling `t` never needs a fixup.
+        let visual_cursor = self.sbs_visual_of.get(self.cursor).copied().unwrap_or(0);
+        if visual_cursor < self.sbs_scroll {
+            self.sbs_scroll = visual_cursor;
+        } else if visual_cursor >= self.sbs_scroll + self.viewport_height {
+            self.sbs_scroll = visual_cursor + 1 - self.viewport_height;
         }
     }
 
@@ -359,6 +423,7 @@ impl App {
         self.rebuild_rows();
         self.cursor = 0;
         self.scroll = 0;
+        self.sbs_scroll = 0;
     }
 
     /// Rebuilds `rows` for the currently selected file against the current
@@ -384,6 +449,8 @@ impl App {
     fn rebuild_rows(&mut self) {
         let Some(file) = self.files.get(self.selected_file) else {
             self.rows = Vec::new();
+            self.sbs_rows = Vec::new();
+            self.sbs_visual_of = Vec::new();
             self.search.recompute(&self.rows);
             return;
         };
@@ -432,6 +499,9 @@ impl App {
                 old: old_spans,
             },
         );
+        let (sbs_rows, sbs_visual_of) = build_sbs_rows(file, &self.rows);
+        self.sbs_rows = sbs_rows;
+        self.sbs_visual_of = sbs_visual_of;
         self.search.recompute(&self.rows);
     }
 
@@ -470,6 +540,7 @@ impl App {
                 self.rebuild_rows();
                 self.cursor = first;
                 self.scroll = 0;
+                self.sbs_scroll = 0;
                 self.ensure_visible();
                 return;
             }
@@ -502,6 +573,7 @@ impl App {
                 self.rebuild_rows();
                 self.cursor = last;
                 self.scroll = 0;
+                self.sbs_scroll = 0;
                 self.ensure_visible();
                 return;
             }
@@ -721,6 +793,7 @@ impl App {
             self.rebuild_rows();
             self.cursor = anchor_row_index(&self.files[index], &self.rows, &target).unwrap_or(0);
             self.scroll = 0;
+            self.sbs_scroll = 0;
             self.ensure_visible();
         }
         self.mode = Mode::Normal;
@@ -970,6 +1043,7 @@ impl App {
         if self.rows.is_empty() {
             self.cursor = 0;
             self.scroll = 0;
+            self.sbs_scroll = 0;
         } else {
             self.cursor = self.nearest_addressable(self.cursor.min(self.max_cursor()), true);
             self.scroll = self.scroll.min(self.cursor);
@@ -1451,6 +1525,7 @@ impl App {
         self.rebuild_rows();
         self.cursor = closest_row_for_new_line(&self.rows, target_line).unwrap_or(0);
         self.scroll = 0;
+        self.sbs_scroll = 0;
         self.ensure_visible();
         self.close_peek();
     }
@@ -1474,6 +1549,7 @@ fn visual_mode_allows(action: Action) -> bool {
             | Action::ToggleStage
             | Action::ToggleStagingPanel
             | Action::ToggleHelp
+            | Action::ToggleView
     )
 }
 
@@ -1918,6 +1994,202 @@ Binary files a/img.png and b/img.png differ
         app.apply(Action::CursorDown); // Binary row
         let target = app.target_for_cursor().unwrap();
         assert_eq!(target, Target::file("img.png"));
+    }
+
+    // -- Side-by-side view --------------------------------------------------
+
+    #[test]
+    fn toggle_view_flips_and_round_trips() {
+        let mut app = App::new(vec![file("a.rs", 1)]);
+        assert_eq!(app.view, ViewMode::Unified);
+        app.apply(Action::ToggleView);
+        assert_eq!(app.view, ViewMode::SideBySide);
+        app.apply(Action::ToggleView);
+        assert_eq!(app.view, ViewMode::Unified);
+    }
+
+    #[test]
+    fn toggle_view_is_preserved_across_file_switches() {
+        let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
+        app.apply(Action::ToggleView);
+        assert_eq!(app.view, ViewMode::SideBySide);
+        app.apply(Action::NextFile);
+        assert_eq!(app.view, ViewMode::SideBySide);
+    }
+
+    #[test]
+    fn toggle_view_is_allowed_in_visual_mode() {
+        let mut app = App::new(vec![file("a.rs", 1)]);
+        app.apply(Action::CursorDown); // hunk header
+        app.apply(Action::CursorDown); // line row
+        app.apply(Action::EnterVisual);
+        app.apply(Action::ToggleView);
+        assert_eq!(app.view, ViewMode::SideBySide);
+        assert!(matches!(app.mode, Mode::Visual { .. }));
+    }
+
+    #[test]
+    fn sbs_rows_are_derived_alongside_rows_on_build() {
+        let raw = "\
+diff --git a/f.rs b/f.rs
+index 1..2 100644
+--- a/f.rs
++++ b/f.rs
+@@ -1,2 +1,2 @@
+-old1
++new1
+ ctx
+";
+        let app = App::new(vec![file_with_raw("f.rs", raw)]);
+        // rows: FileHeader(0) HunkHeader(1) old1(2) new1(3) ctx(4)
+        assert_eq!(app.rows.len(), 5);
+        // sbs_rows: Full(0) Full(1) Paired{2,3} Context(4) -> 4 visual rows.
+        assert_eq!(app.sbs_rows.len(), 4);
+        assert_eq!(app.sbs_rows[0], SbsRow::Full(0));
+        assert_eq!(app.sbs_rows[1], SbsRow::Full(1));
+        assert_eq!(app.sbs_rows[2], SbsRow::Paired { old: 2, new: 3 });
+        assert_eq!(app.sbs_rows[3], SbsRow::Context(4));
+    }
+
+    /// [`App::ensure_visible`] keeps `sbs_scroll` in visual-row space: a
+    /// tiny viewport whose cursor sits on the paired line must not scroll
+    /// past the (fewer) visual rows even though the source-row cursor has
+    /// advanced past where `scroll` (row-space) would put it.
+    #[test]
+    fn sbs_scroll_tracks_visual_rows_not_source_rows() {
+        let raw = "\
+diff --git a/f.rs b/f.rs
+index 1..2 100644
+--- a/f.rs
++++ b/f.rs
+@@ -1,2 +1,2 @@
+-old1
++new1
+ ctx
+";
+        let mut app = App::new(vec![file_with_raw("f.rs", raw)]);
+        app.set_viewport_height(2);
+        // Cursor onto the paired "new1" row (source row 3, visual row 2).
+        app.apply(Action::CursorDown); // hunk header, source row 1
+        app.apply(Action::CursorDown); // old1, source row 2
+        app.apply(Action::CursorDown); // new1, source row 3 (visual row 2)
+        assert_eq!(app.cursor, 3);
+        // Visual row 2 must be visible within a 2-row viewport: sbs_scroll
+        // in [1, 2].
+        assert!(app.sbs_scroll <= 2 && app.sbs_scroll + 2 > 2);
+    }
+
+    /// The cursor stays a source-row index in both view modes (see
+    /// [`ViewMode`]'s docs): every gesture that derives an annotation
+    /// target must land on the exact same [`Target`] whether `t` has been
+    /// pressed or not, since side-by-side is purely a rendering-time view
+    /// over the same `rows`.
+    #[test]
+    fn target_for_cursor_is_identical_in_both_views() {
+        let raw = "\
+diff --git a/f.rs b/f.rs
+index 1..2 100644
+--- a/f.rs
++++ b/f.rs
+@@ -1,2 +1,2 @@
+-removed
++added
+";
+        let mut app = App::new(vec![file_with_raw("f.rs", raw)]);
+        app.apply(Action::CursorDown); // hunk header
+        app.apply(Action::CursorDown); // removed line
+        let unified_target = app.target_for_cursor();
+
+        app.apply(Action::ToggleView);
+        let sbs_target = app.target_for_cursor();
+        assert_eq!(unified_target, sbs_target);
+        assert_eq!(unified_target, Some(Target::line("f.rs", 1, Side::Old)));
+    }
+
+    /// Same parity check for the Visual-mode range target.
+    #[test]
+    fn target_for_visual_is_identical_in_both_views() {
+        let mut app = App::new(vec![file("a.rs", 1)]);
+        app.apply(Action::CursorDown); // hunk header
+        app.apply(Action::CursorDown); // removed line
+        let anchor = app.cursor;
+        app.apply(Action::EnterVisual);
+        app.apply(Action::CursorDown);
+        let unified_target = app.target_for_visual(anchor);
+
+        app.apply(Action::ToggleView);
+        let sbs_target = app.target_for_visual(anchor);
+        assert_eq!(unified_target, sbs_target);
+    }
+
+    /// Same parity check for the `space` staging gesture: two apps built
+    /// from the same fixture, one toggled to side-by-side before staging,
+    /// must resolve to the exact same patch — the gesture is derived from
+    /// `rows[cursor]`, which side-by-side never touches.
+    #[test]
+    fn staging_gesture_target_is_identical_in_both_views() {
+        let p = raw_patch("a.rs", 1);
+        let (mut unified_app, unified_calls) = app_with_fake(
+            vec![p.clone()],
+            DiffTarget::WorkingTree,
+            vec![p.clone()],
+            vec![],
+        );
+        unified_app.apply(Action::CursorDown); // hunk header
+        unified_app.apply(Action::CursorDown); // line row
+        unified_app.apply(Action::ToggleStage);
+        let StageCall::Apply(unified_patch) = single_call(&unified_calls) else {
+            panic!("expected apply_cached");
+        };
+
+        let (mut sbs_app, sbs_calls) =
+            app_with_fake(vec![p.clone()], DiffTarget::WorkingTree, vec![p], vec![]);
+        sbs_app.apply(Action::ToggleView);
+        sbs_app.apply(Action::CursorDown); // hunk header
+        sbs_app.apply(Action::CursorDown); // line row
+        sbs_app.apply(Action::ToggleStage);
+        let StageCall::Apply(sbs_patch) = single_call(&sbs_calls) else {
+            panic!("expected apply_cached");
+        };
+
+        assert_eq!(unified_patch, sbs_patch);
+    }
+
+    /// Search matches are source-row indices; a match on a source row that
+    /// ends up on the left (old) side of a paired visual row must not also
+    /// be reported for the right (new) side's row, and vice versa — i.e.
+    /// the match set itself is unaffected by which view is active.
+    #[test]
+    fn search_matches_are_source_rows_unaffected_by_view() {
+        let raw = "\
+diff --git a/f.rs b/f.rs
+index 1..2 100644
+--- a/f.rs
++++ b/f.rs
+@@ -1,2 +1,2 @@
+-old needle
++new needle
+";
+        let mut app = App::new(vec![file_with_raw("f.rs", raw)]);
+        app.search.pattern = Some("needle".to_string());
+        app.search.recompute(&app.rows);
+        let unified_matches = app.search.matches.clone();
+
+        app.apply(Action::ToggleView);
+        app.search.recompute(&app.rows);
+        let sbs_matches = app.search.matches.clone();
+        assert_eq!(unified_matches, sbs_matches);
+        // Both the removed and added rows matched (each contains "needle"),
+        // and they resolve to distinct source rows / distinct sides of the
+        // same paired visual row.
+        assert_eq!(unified_matches.len(), 2);
+        let (Row::Line(old_line), Row::Line(new_line)) =
+            (&app.rows[unified_matches[0]], &app.rows[unified_matches[1]])
+        else {
+            panic!("expected line rows");
+        };
+        assert_eq!(old_line.origin, LineOrigin::Removed);
+        assert_eq!(new_line.origin, LineOrigin::Added);
     }
 
     #[test]
@@ -3370,6 +3642,21 @@ index 1..2 100644
         assert_eq!(
             app.status_message.as_deref(),
             Some("lsp: resolving\u{2026}")
+        );
+    }
+
+    /// `gd`'s LSP position is derived from `rows[cursor]`/the column
+    /// cursor, exactly like every other target-derivation gesture — toggling
+    /// side-by-side must not change the requested position.
+    #[test]
+    fn gd_position_is_identical_in_both_views() {
+        let (mut app, tmp, calls, _poll) = lsp_test_app();
+        move_to_added_line(&mut app);
+        app.apply(Action::ToggleView);
+        app.apply(Action::GotoDefinition);
+        assert_eq!(
+            calls.borrow()[0],
+            LspCall::Definition(tmp.path().join("src/main.rs"), 1, 0)
         );
     }
 

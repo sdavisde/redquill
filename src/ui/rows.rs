@@ -379,6 +379,133 @@ pub(crate) fn anchor_row_index(file: &FileDiff, rows: &[Row], target: &Target) -
     }
 }
 
+/// One visual row of the side-by-side diff pane: a rendering-time view over
+/// [`Row`]s, never a fork of them. Every variant carries the source-row
+/// index(es) it maps back to (see [`SbsRow::source_rows`]), so annotations,
+/// search, staging, and the cursor keep addressing [`Row`]s exactly as they
+/// do in the unified view — only the side-by-side renderer (and the
+/// visual-row scroll math in [`super::app::App`]) ever looks at this type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SbsRow {
+    /// A row that spans the full pane width: [`Row::FileHeader`],
+    /// [`Row::HunkHeader`], [`Row::Binary`], or [`Row::Annotation`].
+    Full(usize),
+    /// A context line: the same source row rendered on both sides (old
+    /// gutter/number on the left, new on the right, identical content).
+    Context(usize),
+    /// A removed/added pair discovered by [`pair_hunk_lines`]: the old
+    /// (removed) source row on the left, the new (added) source row on the
+    /// right, sharing one visual row.
+    Paired {
+        /// Index of the removed [`Row::Line`] in the source rows.
+        old: usize,
+        /// Index of the added [`Row::Line`] in the source rows.
+        new: usize,
+    },
+    /// An unpaired removed line: old content on the left, an empty right
+    /// cell.
+    OldOnly(usize),
+    /// An unpaired added line: an empty left cell, new content on the
+    /// right.
+    NewOnly(usize),
+}
+
+impl SbsRow {
+    /// The source-row index(es) this visual row maps back to.
+    pub fn source_rows(&self) -> Vec<usize> {
+        match *self {
+            SbsRow::Full(i) | SbsRow::Context(i) | SbsRow::OldOnly(i) | SbsRow::NewOnly(i) => {
+                vec![i]
+            }
+            SbsRow::Paired { old, new } => vec![old, new],
+        }
+    }
+}
+
+/// Builds the side-by-side visual row model over `rows` (as produced by
+/// [`build_rows`] for `file`), plus a `source_row -> visual_row` index
+/// sized to `rows.len()` (for [`SbsRow::Paired`] rows, *both* source
+/// indices map to the same visual row).
+///
+/// Within each hunk, [`pair_hunk_lines`] pairs up removed/added runs; each
+/// pair collapses onto one [`SbsRow::Paired`] visual row. Context lines
+/// become [`SbsRow::Context`] (rendered on both sides from the one source
+/// row). Unpaired removed/added lines become [`SbsRow::OldOnly`]/
+/// [`SbsRow::NewOnly`]. Every other row (file/hunk headers, binary
+/// placeholder, spliced-in annotation display rows) becomes [`SbsRow::Full`]
+/// unchanged — this function never reorders `rows`, it only decides which
+/// source rows share a visual row.
+pub fn build_sbs_rows(file: &FileDiff, rows: &[Row]) -> (Vec<SbsRow>, Vec<usize>) {
+    // `(hunk_index, line-index-within-hunk) -> row index`, built by walking
+    // `rows` once: `Row::Line` entries appear in the same relative order as
+    // their hunk's `lines`, interleaved only with non-`Line` annotation
+    // rows, so a per-hunk counter over `Row::Line` rows reconstructs each
+    // line's index into `hunk.lines` exactly.
+    let mut hunk_counters: HashMap<usize, usize> = HashMap::new();
+    let mut row_by_hunk_line: HashMap<(usize, usize), usize> = HashMap::new();
+    for (i, row) in rows.iter().enumerate() {
+        if let Row::Line(l) = row {
+            let counter = hunk_counters.entry(l.hunk_index).or_insert(0);
+            row_by_hunk_line.insert((l.hunk_index, *counter), i);
+            *counter += 1;
+        }
+    }
+
+    // `removed_row -> added_row` for every pair `pair_hunk_lines` finds,
+    // plus the set of added rows consumed by a pair (skipped on their own
+    // pass through `rows` below, since the removed row already accounts for
+    // the pair's visual row).
+    let mut pair_of: HashMap<usize, usize> = HashMap::new();
+    let mut consumed: HashSet<usize> = HashSet::new();
+    for (hunk_index, hunk) in file.hunks.iter().enumerate() {
+        for (removed_idx, added_idx) in pair_hunk_lines(hunk) {
+            let (Some(&r), Some(&a)) = (
+                row_by_hunk_line.get(&(hunk_index, removed_idx)),
+                row_by_hunk_line.get(&(hunk_index, added_idx)),
+            ) else {
+                continue;
+            };
+            pair_of.insert(r, a);
+            consumed.insert(a);
+        }
+    }
+
+    let mut sbs = Vec::new();
+    let mut source_to_visual = vec![0usize; rows.len()];
+    for (i, row) in rows.iter().enumerate() {
+        if consumed.contains(&i) {
+            continue;
+        }
+        let visual_index = sbs.len();
+        match row {
+            Row::Line(l) if l.origin == LineOrigin::Context => {
+                sbs.push(SbsRow::Context(i));
+                source_to_visual[i] = visual_index;
+            }
+            Row::Line(l) if l.origin == LineOrigin::Removed => {
+                if let Some(&added) = pair_of.get(&i) {
+                    sbs.push(SbsRow::Paired { old: i, new: added });
+                    source_to_visual[i] = visual_index;
+                    source_to_visual[added] = visual_index;
+                } else {
+                    sbs.push(SbsRow::OldOnly(i));
+                    source_to_visual[i] = visual_index;
+                }
+            }
+            Row::Line(_) => {
+                // Added, and not consumed above, so it's unpaired.
+                sbs.push(SbsRow::NewOnly(i));
+                source_to_visual[i] = visual_index;
+            }
+            _ => {
+                sbs.push(SbsRow::Full(i));
+                source_to_visual[i] = visual_index;
+            }
+        }
+    }
+    (sbs, source_to_visual)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -917,5 +1044,126 @@ index 1..2 100644
             panic!("expected line row");
         };
         assert_eq!(line.syntax_spans, None);
+    }
+
+    // -- Side-by-side row derivation -----------------------------------------
+
+    #[test]
+    fn paired_removed_added_lines_share_one_visual_row() {
+        // rows: FileHeader(0) HunkHeader(1) old1(2) new1(3) ctx(4)
+        let diff = file_diff(raw_two_line_hunk(), "f.rs", false);
+        let rows = build_rows(&diff, &no_notes(), SyntaxSpans::default());
+        let (sbs, map) = build_sbs_rows(&diff, &rows);
+
+        assert_eq!(
+            sbs,
+            vec![
+                SbsRow::Full(0),
+                SbsRow::Full(1),
+                SbsRow::Paired { old: 2, new: 3 },
+                SbsRow::Context(4),
+            ]
+        );
+        // Both sides of the pair map back to the same visual row.
+        assert_eq!(map[2], map[3]);
+        assert_eq!(map[2], 2);
+        assert_eq!(map[4], 3);
+        assert_eq!(map[0], 0);
+        assert_eq!(map[1], 1);
+    }
+
+    #[test]
+    fn sbs_row_source_rows_reports_one_or_two_indices() {
+        let diff = file_diff(raw_two_line_hunk(), "f.rs", false);
+        let rows = build_rows(&diff, &no_notes(), SyntaxSpans::default());
+        let (sbs, _) = build_sbs_rows(&diff, &rows);
+        assert_eq!(sbs[0].source_rows(), vec![0]);
+        assert_eq!(sbs[2].source_rows(), vec![2, 3]);
+    }
+
+    #[test]
+    fn unpaired_removed_line_has_empty_right_cell() {
+        let raw = "\
+diff --git a/f.rs b/f.rs
+index 111..222 100644
+--- a/f.rs
++++ b/f.rs
+@@ -1,2 +1,1 @@
+-only removed
+ context
+";
+        let diff = file_diff(raw, "f.rs", false);
+        let rows = build_rows(&diff, &no_notes(), SyntaxSpans::default());
+        let (sbs, map) = build_sbs_rows(&diff, &rows);
+        // rows: FileHeader(0) HunkHeader(1) removed(2) context(3)
+        assert_eq!(sbs[2], SbsRow::OldOnly(2));
+        assert_eq!(map[2], 2);
+    }
+
+    #[test]
+    fn unpaired_added_line_has_empty_left_cell() {
+        let raw = "\
+diff --git a/f.rs b/f.rs
+index 111..222 100644
+--- a/f.rs
++++ b/f.rs
+@@ -1,1 +1,2 @@
+ context
++only added
+";
+        let diff = file_diff(raw, "f.rs", false);
+        let rows = build_rows(&diff, &no_notes(), SyntaxSpans::default());
+        let (sbs, map) = build_sbs_rows(&diff, &rows);
+        // rows: FileHeader(0) HunkHeader(1) context(2) added(3)
+        assert_eq!(sbs[3], SbsRow::NewOnly(3));
+        assert_eq!(map[3], 3);
+    }
+
+    #[test]
+    fn full_width_rows_cover_file_hunk_annotation_and_binary() {
+        let diff = file_diff(raw_two_line_hunk(), "f.rs", false);
+        let mut store = AnnotationStore::new();
+        store
+            .add(Target::file("f.rs"), Classification::Praise, "nice")
+            .unwrap();
+        let rows = build_rows(&diff, &store, SyntaxSpans::default());
+        // rows: FileHeader(0) Annotation(1) HunkHeader(2) old1(3) new1(4) ctx(5)
+        let (sbs, map) = build_sbs_rows(&diff, &rows);
+        assert_eq!(sbs[0], SbsRow::Full(0));
+        assert_eq!(sbs[1], SbsRow::Full(1));
+        assert_eq!(map[1], 1);
+
+        let raw_binary = "\
+diff --git a/img.png b/img.png
+index 1..2 100644
+Binary files a/img.png and b/img.png differ
+";
+        let bin_diff = file_diff(raw_binary, "img.png", true);
+        let bin_rows = build_rows(&bin_diff, &no_notes(), SyntaxSpans::default());
+        let (bin_sbs, _) = build_sbs_rows(&bin_diff, &bin_rows);
+        assert_eq!(bin_sbs, vec![SbsRow::Full(0), SbsRow::Full(1)]);
+    }
+
+    #[test]
+    fn annotation_between_paired_lines_does_not_break_pairing() {
+        // An annotation on the removed line splices in between the removed
+        // and added rows of a pair — pairing must still resolve correctly
+        // (it's derived from `hunk.lines`, not from adjacency in `rows`).
+        let diff = file_diff(raw_two_line_hunk(), "f.rs", false);
+        let mut store = AnnotationStore::new();
+        store
+            .add(
+                Target::line("f.rs", 1, Side::Old),
+                Classification::Question,
+                "why?",
+            )
+            .unwrap();
+        let rows = build_rows(&diff, &store, SyntaxSpans::default());
+        // rows: FileHeader(0) HunkHeader(1) old1(2) Annotation(3) new1(4) ctx(5)
+        assert!(matches!(rows[3], Row::Annotation { .. }));
+        let (sbs, map) = build_sbs_rows(&diff, &rows);
+        assert!(sbs.contains(&SbsRow::Paired { old: 2, new: 4 }));
+        assert!(sbs.contains(&SbsRow::Full(3)));
+        assert_eq!(map[2], map[4]);
     }
 }

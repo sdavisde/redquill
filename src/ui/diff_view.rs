@@ -21,20 +21,20 @@ use super::app::App;
 use super::rows::{LineRow, Row};
 use super::theme::Theme;
 
-const GUTTER_WIDTH: usize = 5;
+pub(super) const GUTTER_WIDTH: usize = 5;
 /// Width of the annotated-line dot column, rendered before the gutter.
-const DOT_WIDTH: usize = 2;
+pub(super) const DOT_WIDTH: usize = 2;
 /// Left padding for [`Row::Annotation`] display rows, aligned under the
 /// gutter/marker columns so the bullet and continuation text sit clear of
 /// the line-number columns.
 const ANNOTATION_INDENT: usize = DOT_WIDTH + GUTTER_WIDTH * 2 + 3;
 
-fn dot_span(annotated: bool, theme: &Theme) -> Span<'static> {
+pub(super) fn dot_span(annotated: bool, theme: &Theme) -> Span<'static> {
     let text = if annotated { "\u{25cf} " } else { "  " };
     Span::styled(text, Style::default().fg(theme.dot_marker))
 }
 
-fn origin_marker(origin: LineOrigin) -> &'static str {
+pub(super) fn origin_marker(origin: LineOrigin) -> &'static str {
     match origin {
         LineOrigin::Added => "+",
         LineOrigin::Removed => "-",
@@ -42,7 +42,7 @@ fn origin_marker(origin: LineOrigin) -> &'static str {
     }
 }
 
-fn gutter_number(n: Option<u32>) -> String {
+pub(super) fn gutter_number(n: Option<u32>) -> String {
     match n {
         Some(n) => format!("{n:>width$}", width = GUTTER_WIDTH),
         None => " ".repeat(GUTTER_WIDTH),
@@ -116,7 +116,11 @@ fn style_for_range(
 /// background) treatment, then the column cursor's cell highlight on top
 /// (`cursor_col`: a char index into `row.content`, `Some` only on the
 /// cursor row).
-fn content_spans(row: &LineRow, cursor_col: Option<usize>, theme: &Theme) -> Vec<Span<'static>> {
+pub(super) fn content_spans(
+    row: &LineRow,
+    cursor_col: Option<usize>,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
     if row.content.is_empty() {
         return vec![Span::raw(String::new())];
     }
@@ -156,7 +160,7 @@ fn content_spans(row: &LineRow, cursor_col: Option<usize>, theme: &Theme) -> Vec
 /// wins (must stay visible over everything else), then a search match,
 /// then the diff-origin tint. `None` if nothing applies (an unselected,
 /// unmatched context line).
-fn line_bg(
+pub(super) fn line_bg(
     origin: LineOrigin,
     selected: bool,
     is_match: bool,
@@ -297,7 +301,11 @@ fn annotation_row_line(
     Line::from(Span::styled(content, style))
 }
 
-fn row_line(
+/// Renders one row (any [`Row`] variant) as a full-width [`Line`]: the
+/// diff pane's own per-frame renderer, and reused as-is by the side-by-side
+/// view for its full-width rows (file/hunk headers, annotations, binary
+/// placeholder) — see [`super::sbs_view`].
+pub(super) fn row_line(
     row: &Row,
     index: usize,
     cursor: usize,

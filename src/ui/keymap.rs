@@ -47,6 +47,8 @@ pub enum Action {
     PrevFile,
     /// Toggle the help overlay.
     ToggleHelp,
+    /// Toggle the diff pane between unified and side-by-side layout.
+    ToggleView,
     /// Enter Visual mode at the cursor row (Normal), or cancel Visual mode
     /// back to Normal (Visual). No-op on non-line rows in Normal mode.
     EnterVisual,
@@ -254,6 +256,11 @@ impl Keymap {
                     keys: KeySeq::one(Esc, none),
                     action: ToggleHelp,
                     description: "Close help",
+                },
+                Binding {
+                    keys: KeySeq::one(Char('t'), none),
+                    action: ToggleView,
+                    description: "Toggle side-by-side view",
                 },
                 Binding {
                     keys: KeySeq::one(Char('v'), none),
@@ -497,6 +504,15 @@ mod tests {
         assert_eq!(
             km.lookup(key(KeyCode::Char('s'), KeyModifiers::NONE)),
             Some(Action::ToggleStagingPanel)
+        );
+    }
+
+    #[test]
+    fn t_resolves_to_toggle_view() {
+        let km = Keymap::default_map();
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('t'), KeyModifiers::NONE)),
+            Some(Action::ToggleView)
         );
     }
 
