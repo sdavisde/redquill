@@ -5,7 +5,7 @@
 //! - [`GitRunner`] discovers the repo root and runs commands against it.
 //! - [`status`] parses `git status --porcelain=v2 -z` into [`FileStatus`].
 //! - [`diff`] splits `git diff` output into raw per-file [`RawFilePatch`]es
-//!   (no hunk parsing — that belongs to a later diff-model task).
+//!   (no hunk parsing — see [`crate::diff::parse_hunks`] for that).
 
 mod diff;
 mod error;

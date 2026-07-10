@@ -2,8 +2,8 @@
 //!
 //! This is deliberately shallow: it locates `diff --git` boundaries, extracts
 //! the path(s) for each file, and flags binary patches. It does NOT parse
-//! hunks — that belongs to the diff model in a later task. Each file's patch
-//! text is preserved verbatim in [`RawFilePatch::raw`].
+//! hunks — see `crate::diff::parse_hunks` for that. Each file's patch text
+//! is preserved verbatim in [`RawFilePatch::raw`].
 
 /// One file's slice of a combined diff, kept as raw patch text.
 #[derive(Debug, Clone, PartialEq, Eq)]

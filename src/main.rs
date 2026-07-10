@@ -8,7 +8,8 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-use redquill::git::{ChangeKind, DiffTarget, GitRunner, RawFilePatch};
+use redquill::diff::FileDiff;
+use redquill::git::{ChangeKind, DiffTarget, GitRunner};
 
 /// redquill: a terminal UI for reviewing agentic code changes.
 ///
@@ -67,19 +68,6 @@ impl Config {
     }
 }
 
-/// Derives a single-letter change label for a patch from its raw text.
-fn patch_letter(patch: &RawFilePatch) -> char {
-    if patch.old_path.is_some() {
-        'R'
-    } else if patch.raw.contains("\nnew file mode ") {
-        'A'
-    } else if patch.raw.contains("\ndeleted file mode ") {
-        'D'
-    } else {
-        'M'
-    }
-}
-
 /// Prints a one-line summary per changed file for the resolved diff target.
 fn run(config: &Config) -> anyhow::Result<()> {
     let runner = GitRunner::discover()?;
@@ -89,9 +77,10 @@ fn run(config: &Config) -> anyhow::Result<()> {
     let mut printed = 0usize;
     for patch in &patches {
         let binary = if patch.is_binary { " (binary)" } else { "" };
+        let diff = FileDiff::from_patch(patch)?;
         match &patch.old_path {
             Some(old) => println!("R  {old} -> {}{binary}", patch.path),
-            None => println!("{}  {}{binary}", patch_letter(patch), patch.path),
+            None => println!("{}  {}{binary}", diff.kind.letter(), patch.path),
         }
         printed += 1;
     }
