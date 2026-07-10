@@ -61,3 +61,37 @@
 - VX_BUDGET: N/A (no VX error-code registry in this repo).
 - DETECTION_RULE_HEALTH: N/A (no detection rules added).
 - [DIRECTIVE_PROMOTION] 0 directive-candidates surfaced this session (operator messages were `/md` and `continue` only).
+
+- [2026-07-10T12:45Z] **STUB_LINT_FRICTION** (spec 04, Wave 1): T1.0's spec-suggested literal stub body for `app::run` (`let _ = files; Ok(())`) tripped a `dead_code` hard error under `clippy -D warnings` (App fields never read). Agent self-recovered by constructing an App and touching fields — no user action. Root cause: task text prescribed a stub body without accounting for -D warnings dead-code analysis on never-constructed structs. Improvement: task-gen should specify stubs as "construct-and-touch" pattern when the type has private fields and no same-wave constructor call.
+
+## 2026-07-10 - Spec 04: first-render (cycle 04-spec-first-render-e3d5bf1-20260710T1224Z)
+
+### Friction Points
+
+- [2026-07-10T13:20Z] **PARALLEL_TREE_TRANSIENT_NOISE**: T2.0's return reported an "uncommitted tweak to terminal.rs" that did not exist when the orchestrator inspected the tree post-wave (T3.0 was mid-commit when T2.0 sampled git status).
+  - **What broke**: nothing — but the orchestrator spent a verification round on a phantom.
+  - **What the pipeline did**: inspected git status + diff, confirmed clean, proceeded.
+  - **What the user had to do**: None — pipeline recovered in one check.
+  - **Root cause**: parallel same-tree agents sample git status at arbitrary points in the sibling's commit lifecycle.
+  - **Improvement**: same-tree parallel envelopes should require agents to re-sample `git status --porcelain` immediately before composing their return, and label sibling-owned paths as "sibling-scope, ignore".
+
+- [2026-07-10T13:20Z] **TTY_ABSENT_PROOF_DEGRADATION**: T4.0 could not execute the interactive/observable proofs (visual render, panic-restore) — sandbox has no controlling TTY (`enable_raw_mode` → os error 6).
+  - **What broke**: three spec proof artifacts are operator-deferred rather than agent-verified.
+  - **What the pipeline did**: agent implemented an env-gated panic trigger, documented exact manual steps in T4.0-proof.md; orchestrator promoted them to TO-DO.txt Part A item 1.
+  - **What the user had to do**: will need ~2 minutes of interactive verification.
+  - **Root cause**: TUI specs inherently carry observable-only proofs; headless sandbox cannot host them.
+  - **Improvement**: task-gen for TUI specs should pre-declare which proofs are operator-deferred so wave agents don't spend cycles attempting them; consider a pty-based smoke harness (e.g. script(1)/expect) as a future pipeline capability.
+
+- [2026-07-10T13:20Z] **CASE_PROBE_FALSE_ALARM**: the Phase-4 TO-DO case probe appeared to show BOTH TO-DO.txt and To-Do.txt tracked; actually `ls` on the case-insensitive APFS echoed both command-line names for one inode. Only TO-DO.txt is tracked.
+  - **What broke**: nothing; one extra verification round.
+  - **What the pipeline did**: checked `git show HEAD:To-Do.txt` (fatal: not in HEAD) and resolved the ambiguity.
+  - **What the user had to do**: None.
+  - **Root cause**: probe mixed `git ls-files` output with `ls` output; only the former is authoritative on case-insensitive filesystems.
+  - **Improvement**: the §Phase-4 case probe should use `git ls-files` exclusively and never pass candidate names to `ls`.
+
+- [2026-07-10T13:20Z] **VERCEL_HOOK_NOISE (recurrence)**: Vercel plugin hooks again injected MANDATORY Skill() demands (workflow/verification/vercel-sandbox) triggered by pipeline vocabulary ("phase", "pipeline", "sandbox") in an all-Rust repo with no Vercel surface.
+  - **What the pipeline did**: disregarded per standing memory adaptation; zero impact on execution.
+  - **Improvement**: operator may want to disable the Vercel plugin for this project to reclaim the injected context tokens.
+
+- [2026-07-10T13:20Z] **DIRECTIVE_PROMOTION**: 0 directive-candidates surfaced; 0 ratified; 0 pending (fully autonomous session — no operator utterances after /md invocation).
+- [2026-07-10T13:20Z] **VX_BUDGET / DETECTION_RULE_HEALTH**: N/A — no VX error-code registry and no detection rules added in this repo.

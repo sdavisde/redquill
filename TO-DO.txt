@@ -1,14 +1,25 @@
 # TO-DO.txt
-# Maintained by the /md pipeline. Last updated: 2026-07-10 (spec 03 cycle)
+# Maintained by the /md pipeline. Last updated: 2026-07-10 (spec 04 cycle)
 
 ## Part A — External actions for the operator
 
-1. (Optional, recommended) Install cargo-audit so the pipeline's dep-CVE gate can run:
-   `cargo install cargo-audit`
-   The spec-03 cycle logged "cargo-audit unavailable" and continued (host-tool
-   allowlist forbids agents installing it). Zero dependencies were added this
-   cycle, so exposure is unchanged.
-2. Push when ready: the cycle authored local commits on main; nothing was pushed
+1. Interactive TTY verification of the new TUI (the pipeline sandbox has no
+   controlling TTY, so these are operator-observable proofs — exact steps in
+   docs/specs/04-spec-first-render/04-proofs/T4.0-proof.md):
+   a. In a dirty repo: `cargo run` → colored, scrollable unified diff; `j`/`k`
+      scroll one line, `Ctrl-d`/`Ctrl-u` half page, clamped at both ends; `q`
+      exits with a clean terminal (echo on, cursor visible).
+   b. In a clean repo: `cargo run` → TUI empty-state message; `q` exits cleanly.
+   c. Panic-restore: `REDQUILL_PANIC_TEST=1 cargo run` (dirty repo) → panics
+      mid-render; the shell prompt must return usable (no stuck raw mode).
+      After verifying, tell the pipeline to remove the temporary trigger
+      (tracked as validation finding LOW-8, spec 04).
+2. (Optional, recommended) Install cargo-audit so the pipeline's dep-CVE gate can
+   run: `cargo install cargo-audit`
+   Spec-04 added the cycle's first real dependencies (ratatui 0.30, crossterm
+   0.29 + transitive tree in Cargo.lock), so the gate now has a real surface to
+   scan — this item is more valuable than it was after spec 03.
+3. Push when ready: the cycle authored local commits on main; nothing was pushed
    (operator owns pushes). `git push origin main` at your discretion.
 
 ## Part B — From-scratch setup for a new developer
@@ -17,6 +28,8 @@
 2. `cargo build` — no external services, no env vars, single static binary.
 3. `cargo test` — unit + integration (integration tests create throwaway git
    repos in tempdirs; git must be on PATH).
-4. `cargo run` — runs against the current repo's working tree; prints the diff
-   summary line (TUI arrives with spec 04).
+4. `cargo run` — opens the TUI on the current repo's working-tree diff (spec 04):
+   scroll with `j`/`k` and `Ctrl-d`/`Ctrl-u` (arrows/PgUp/PgDn alias), quit with
+   `q`. Needs a real terminal; in a TTY-less environment it exits cleanly with a
+   terminal I/O error. `--staged` and ref ranges select other diff targets.
 5. Quality bar before any commit: `cargo build && cargo test && cargo clippy -- -D warnings && cargo fmt --check`.
