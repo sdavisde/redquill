@@ -49,15 +49,17 @@ fn gutter_number(n: Option<u32>) -> String {
     }
 }
 
-/// Byte offsets where either word-diff or syntax-highlight styling changes
-/// within a line of length `content_len`, sorted, deduped, always
-/// including `0` and `content_len`, and filtered to valid char boundaries
-/// of `content` so slicing on any adjacent pair is panic-safe even if a
-/// span's own bounds don't quite line up (best-effort content sourcing).
+/// Byte offsets where either word-diff, syntax-highlight, or column-cursor
+/// styling changes within a line of length `content_len`, sorted, deduped,
+/// always including `0` and `content_len`, and filtered to valid char
+/// boundaries of `content` so slicing on any adjacent pair is panic-safe
+/// even if a span's own bounds don't quite line up (best-effort content
+/// sourcing).
 fn style_boundaries(
     content: &str,
     word: &[WordSpan],
     syntax: &[(Range<usize>, TokenKind)],
+    cursor: Option<Range<usize>>,
 ) -> Vec<usize> {
     let len = content.len();
     let mut points: Vec<usize> = std::iter::once(0)
@@ -67,11 +69,19 @@ fn style_boundaries(
                 .flat_map(|s| [s.text_range.start, s.text_range.end]),
         )
         .chain(syntax.iter().flat_map(|(r, _)| [r.start, r.end]))
+        .chain(cursor.iter().flat_map(|r| [r.start, r.end]))
         .filter(|&p| p <= len && content.is_char_boundary(p))
         .collect();
     points.sort_unstable();
     points.dedup();
     points
+}
+
+/// The byte range `[start, start + len_utf8)` of the `char_idx`-th char in
+/// `content`, or `None` if `content` has fewer than `char_idx + 1` chars.
+fn char_byte_range(content: &str, char_idx: usize) -> Option<Range<usize>> {
+    let (start, ch) = content.char_indices().nth(char_idx)?;
+    Some(start..start + ch.len_utf8())
 }
 
 /// The style for the sub-range `[start, end)` (a point `start` suffices —
@@ -103,15 +113,18 @@ fn style_for_range(
 
 /// Renders a single content line's spans, layering syntax-token
 /// foregrounds under word-diff-changed spans' stronger (bold + tinted
-/// background) treatment.
-fn content_spans(row: &LineRow, theme: &Theme) -> Vec<Span<'static>> {
+/// background) treatment, then the column cursor's cell highlight on top
+/// (`cursor_col`: a char index into `row.content`, `Some` only on the
+/// cursor row).
+fn content_spans(row: &LineRow, cursor_col: Option<usize>, theme: &Theme) -> Vec<Span<'static>> {
     if row.content.is_empty() {
         return vec![Span::raw(String::new())];
     }
     let word = row.word_spans.as_deref().unwrap_or(&[]);
     let syntax = row.syntax_spans.as_deref().unwrap_or(&[]);
     let base_fg = theme.origin_fg(row.origin);
-    let boundaries = style_boundaries(&row.content, word, syntax);
+    let cursor_range = cursor_col.and_then(|col| char_byte_range(&row.content, col));
+    let boundaries = style_boundaries(&row.content, word, syntax, cursor_range.clone());
 
     let mut spans = Vec::with_capacity(boundaries.len().saturating_sub(1));
     for w in boundaries.windows(2) {
@@ -120,14 +133,21 @@ fn content_spans(row: &LineRow, theme: &Theme) -> Vec<Span<'static>> {
             continue;
         }
         let text = row.content[start..end].to_string();
-        let style = style_for_range(start, base_fg, word, syntax, theme);
+        let mut style = style_for_range(start, base_fg, word, syntax, theme);
+        if let Some(cr) = &cursor_range
+            && cr.start <= start
+            && start < cr.end
+        {
+            style = style.bg(theme.column_cursor_bg);
+        }
         spans.push(Span::styled(text, style));
     }
     if spans.is_empty() {
-        spans.push(Span::styled(
-            row.content.clone(),
-            Style::default().fg(base_fg),
-        ));
+        let mut style = Style::default().fg(base_fg);
+        if cursor_range.is_some_and(|cr| cr.start == 0) {
+            style = style.bg(theme.column_cursor_bg);
+        }
+        spans.push(Span::styled(row.content.clone(), style));
     }
     spans
 }
@@ -151,7 +171,13 @@ fn line_bg(
     }
 }
 
-fn line_row_line(row: &LineRow, selected: bool, is_match: bool, theme: &Theme) -> Line<'static> {
+fn line_row_line(
+    row: &LineRow,
+    selected: bool,
+    is_match: bool,
+    cursor_col: Option<usize>,
+    theme: &Theme,
+) -> Line<'static> {
     let gutter_style = Style::default().fg(theme.gutter);
     let mut spans = vec![
         dot_span(row.annotated, theme),
@@ -166,7 +192,7 @@ fn line_row_line(row: &LineRow, selected: bool, is_match: bool, theme: &Theme) -
                 .add_modifier(Modifier::BOLD),
         ),
     ];
-    spans.extend(content_spans(row, theme));
+    spans.extend(content_spans(row, cursor_col, theme));
     if row.no_newline {
         spans.push(Span::styled(" \u{2424}", Style::default().fg(theme.gutter)));
     }
@@ -276,6 +302,7 @@ fn row_line(
     index: usize,
     cursor: usize,
     matches: &HashSet<usize>,
+    cursor_col: Option<usize>,
     theme: &Theme,
 ) -> Line<'static> {
     let selected = index == cursor;
@@ -290,7 +317,13 @@ fn row_line(
         Row::HunkHeader {
             text, annotated, ..
         } => hunk_header_line(text, selected, *annotated, is_match, theme),
-        Row::Line(line) => line_row_line(line, selected, is_match, theme),
+        Row::Line(line) => line_row_line(
+            line,
+            selected,
+            is_match,
+            if selected { cursor_col } else { None },
+            theme,
+        ),
         Row::Binary => binary_line(selected, theme),
         Row::Annotation {
             text,
@@ -324,10 +357,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let start = app.scroll;
     let end = (start + inner_height.max(1)).min(app.rows.len());
     let matches: HashSet<usize> = app.search.matches.iter().copied().collect();
+    let cursor_col = app.effective_column();
     let lines: Vec<Line<'static>> = app.rows[start..end]
         .iter()
         .enumerate()
-        .map(|(i, row)| row_line(row, start + i, app.cursor, &matches, &app.theme))
+        .map(|(i, row)| row_line(row, start + i, app.cursor, &matches, cursor_col, &app.theme))
         .collect();
 
     let paragraph = Paragraph::new(lines).block(block);

@@ -22,6 +22,9 @@ mod diff_view;
 mod help;
 mod keymap;
 mod list_panel;
+mod lsp_ops;
+mod peek;
+mod peek_overlay;
 mod rows;
 mod search;
 mod sidebar;
@@ -32,11 +35,13 @@ mod theme;
 
 pub use app::{App, Mode};
 pub use keymap::{Action, Binding, Keymap};
+pub use lsp_ops::LspClient;
 pub use rows::{Row, build_rows};
 pub use stage_ops::{ReviewError, ReviewSnapshot, StageOps, StagedFile, build_review};
 pub use theme::Theme;
 
 use std::io::{self, Stderr};
+use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
@@ -48,6 +53,12 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
+
+/// How long the event loop waits for a key event before giving up and
+/// draining LSP events anyway. Keeps `gd`/`gr`/`K` responses (and any
+/// server-driven state) flowing even while the user isn't typing, without
+/// ever blocking the render loop on a slow or missing language server.
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// How a TUI session ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,13 +79,15 @@ fn split_footer(area: Rect) -> (Rect, Rect) {
     (chunks[0], chunks[1])
 }
 
-/// Splits the main content area into the sidebar and diff-pane rects.
+/// Splits the main content area into the sidebar and diff-pane rects. The
+/// sidebar renders on the right; see `docs/config-layer.md` for making this
+/// (and its width) configurable.
 fn split_layout(area: Rect) -> (Rect, Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(32), Constraint::Min(0)])
+        .constraints([Constraint::Min(0), Constraint::Length(32)])
         .split(area);
-    (chunks[0], chunks[1])
+    (chunks[1], chunks[0])
 }
 
 /// Splits the right-hand area into the diff pane and (when `show_panel`) a
@@ -137,6 +150,9 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
     if matches!(app.mode, Mode::Compose) {
         compose_modal::render(frame, area, app);
     }
+    if matches!(app.mode, Mode::Peek) {
+        peek_overlay::render(frame, area, app);
+    }
 }
 
 /// Puts the terminal into raw mode + alternate screen, on stderr.
@@ -174,6 +190,12 @@ pub fn run(app: &mut App) -> anyhow::Result<QuitOutcome> {
     let keymap = Keymap::default_map();
     let outcome = event_loop(&mut terminal, app, &keymap);
     restore_terminal();
+    // Shut down any LSP servers spawned this session only after the
+    // terminal is restored: `shutdown` blocks briefly (grace period) and
+    // must never delay giving the user's terminal back.
+    if let Some(client) = app.take_lsp_client() {
+        client.shutdown();
+    }
     outcome
 }
 
@@ -277,11 +299,31 @@ fn handle_search_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// Handles one key event while [`Mode::Peek`] is active: `j`/`k` move
+/// through results (or scroll hover text), `Enter` jumps the diff cursor to
+/// a Definition/References result that's one of the diff's files (closing
+/// the overlay) or sets `not in diff` otherwise (a no-op for Hover),
+/// `Esc`/`q` close back to Normal. Bypasses the [`Keymap`] table entirely
+/// (see the module docs).
+fn handle_peek_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('j') => app.peek_move_down(),
+        KeyCode::Char('k') => app.peek_move_up(),
+        KeyCode::Enter => app.peek_enter(),
+        KeyCode::Char('q') | KeyCode::Esc => app.close_peek(),
+        _ => {}
+    }
+}
+
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stderr>>,
     app: &mut App,
     keymap: &Keymap,
 ) -> anyhow::Result<QuitOutcome> {
+    // Tracks a `g`-prefix key across loop iterations while it awaits a
+    // second key to complete `gd`/`gr` (see `Keymap::resolve`).
+    let mut pending_prefix: Option<KeyEvent> = None;
+
     loop {
         let size = terminal.size()?;
         let full_area = Rect::new(0, 0, size.width, size.height);
@@ -292,56 +334,74 @@ fn event_loop(
 
         terminal.draw(|frame| draw(frame, app, keymap))?;
 
-        match event::read()? {
-            Event::Key(key) if key.kind == KeyEventKind::Press => {
-                // Transient footer messages last exactly until the next
-                // keypress (whatever this key does may set a fresh one).
-                app.clear_status_message();
-                match app.mode {
-                    Mode::Compose => handle_compose_key(app, key),
-                    Mode::List => handle_list_key(app, key),
-                    Mode::Staging => handle_staging_key(app, key),
-                    Mode::Search => handle_search_key(app, key),
-                    Mode::Normal | Mode::Visual { .. } => {
-                        // Esc only ever closes an already-open help overlay or
-                        // cancels an in-progress Visual selection; it is never
-                        // bound to opening help, unlike `?` (see keymap.rs).
-                        if key.code == KeyCode::Esc {
-                            if app.help_open {
-                                app.help_open = false;
-                            } else if matches!(app.mode, Mode::Visual { .. }) {
-                                app.apply(Action::EnterVisual);
-                            }
-                            continue;
-                        }
+        // Bounded wait rather than a blocking read: LSP responses must keep
+        // flowing (via `poll_lsp` below) even while the user isn't typing,
+        // without ever blocking the render loop on a slow/missing server.
+        if event::poll(POLL_INTERVAL)? {
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    // Transient footer messages last exactly until the next
+                    // keypress (whatever this key does may set a fresh one).
+                    app.clear_status_message();
+                    match app.mode {
+                        Mode::Compose => handle_compose_key(app, key),
+                        Mode::List => handle_list_key(app, key),
+                        Mode::Staging => handle_staging_key(app, key),
+                        Mode::Search => handle_search_key(app, key),
+                        Mode::Peek => handle_peek_key(app, key),
+                        Mode::Normal | Mode::Visual { .. } => {
+                            let had_pending = pending_prefix.is_some();
+                            let action = keymap.resolve(&mut pending_prefix, key);
 
-                        let Some(action) = keymap.lookup(key) else {
-                            continue;
-                        };
-                        match action {
-                            Action::Quit => return Ok(QuitOutcome::Emit),
-                            Action::QuitDiscard => return Ok(QuitOutcome::Discard),
-                            other => app.apply(other),
+                            // Esc only ever closes an already-open help
+                            // overlay or cancels an in-progress Visual
+                            // selection; it is never bound to opening help,
+                            // unlike `?` (see keymap.rs). This runs only
+                            // when nothing was pending — an Esc that
+                            // cancelled a pending `g` prefix (handled inside
+                            // `resolve`) stops there instead.
+                            if key.code == KeyCode::Esc && !had_pending {
+                                if app.help_open {
+                                    app.help_open = false;
+                                } else if matches!(app.mode, Mode::Visual { .. }) {
+                                    app.apply(Action::EnterVisual);
+                                }
+                                continue;
+                            }
+
+                            let Some(action) = action else {
+                                continue;
+                            };
+                            match action {
+                                Action::Quit => return Ok(QuitOutcome::Emit),
+                                Action::QuitDiscard => return Ok(QuitOutcome::Discard),
+                                other => app.apply(other),
+                            }
                         }
                     }
                 }
+                Event::Resize(_, _) => {
+                    // The next loop iteration re-measures the layout and
+                    // redraws at the new size; nothing else to do here.
+                }
+                _ => {}
             }
-            Event::Resize(_, _) => {
-                // The next loop iteration re-measures the layout and
-                // redraws at the new size; nothing else to do here.
-            }
-            _ => {}
         }
+
+        app.poll_lsp();
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::annotate::{Classification, Target};
     use crate::diff::FileDiff;
     use crate::git::RawFilePatch;
     use crate::highlight::TokenKind;
+    use crate::lsp::SourceLocation;
     use ratatui::backend::TestBackend;
 
     fn sample_file() -> FileDiff {
@@ -607,5 +667,93 @@ index 111..222 100644
             has_match_bg,
             "expected the unselected matched row to carry the search-match background"
         );
+    }
+
+    // -- Column cursor ---------------------------------------------------------
+
+    /// The column cursor renders as a distinct background on the cursor
+    /// row's char cell, and only on the cursor row.
+    #[test]
+    fn column_cursor_renders_distinct_background_on_the_cursor_cell() {
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![sample_file()]);
+        let theme = app.theme;
+        app.apply(Action::CursorDown); // hunk header
+        app.apply(Action::CursorDown); // "fn main() {"
+        app.apply(Action::CursorRight);
+        app.apply(Action::CursorRight); // column 2, the second 'n' of "fn"
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let has_cursor_bg = buffer
+            .content()
+            .iter()
+            .any(|cell| cell.bg == theme.column_cursor_bg);
+        assert!(
+            has_cursor_bg,
+            "expected exactly one cell styled with the column-cursor background"
+        );
+    }
+
+    // -- LSP peek overlay --------------------------------------------------------
+
+    /// Canned References results plus a preloaded preview cache render both
+    /// the location list and the syntax-free preview text, without ever
+    /// touching a real LSP server.
+    #[test]
+    fn peek_overlay_renders_canned_references_and_preview() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![sample_file()]);
+
+        let loc_path = PathBuf::from("/tmp/repo/src/main.rs");
+        let mut peek = super::peek::PeekState::locations(
+            super::peek::PeekKind::References,
+            vec![SourceLocation {
+                path: loc_path.clone(),
+                line: 0,
+                character: 0,
+            }],
+        );
+        peek.preview_cache.insert(
+            loc_path,
+            super::peek::CachedPreview {
+                lines: vec!["fn main() {".to_string(), "    old();".to_string()],
+                spans: Vec::new(),
+            },
+        );
+        app.peek = Some(peek);
+        app.mode = Mode::Peek;
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        assert!(content.contains("references: 1 results"));
+        assert!(content.contains("main.rs"));
+        assert!(content.contains("fn main() {"));
+    }
+
+    /// A Hover overlay renders its text body in the same overlay chrome.
+    #[test]
+    fn peek_overlay_renders_hover_text() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![sample_file()]);
+        app.peek = Some(super::peek::PeekState::hover(
+            "this function does nothing interesting".to_string(),
+        ));
+        app.mode = Mode::Peek;
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        assert!(content.contains("hover"));
+        assert!(content.contains("this function does nothing interesting"));
     }
 }

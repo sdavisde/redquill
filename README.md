@@ -42,6 +42,7 @@ Vim-grammar keybindings, fully remappable. Draft default map:
 | Key | Action |
 |---|---|
 | `j` / `k`, `Ctrl-d` / `Ctrl-u` | Move / scroll |
+| `h` / `l`, `w` / `b` | Move / word-jump the column cursor (needed for `gd`/`gr`/`K`) |
 | `]` / `[` | Next / previous hunk |
 | `Tab` / `Shift-Tab` | Next / previous file |
 | `/` then `n` / `N` | Search |

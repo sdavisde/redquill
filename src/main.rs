@@ -112,7 +112,8 @@ fn run_tui(config: &Config) -> anyhow::Result<()> {
     let target = config.diff_target();
     let snapshot = build_review(&runner, &target)?;
 
-    let mut app = App::with_git(snapshot, target, Box::new(runner));
+    let mut app = App::with_git(snapshot, target, Box::new(runner.clone()));
+    app.set_repo_root(runner.root().to_path_buf());
     let outcome = ui::run(&mut app)?;
 
     if let QuitOutcome::Emit = outcome {

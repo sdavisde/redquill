@@ -43,16 +43,23 @@ const SEARCH_HINTS: &[(&str, &str)] = &[
     ("Backspace", "Delete character"),
 ];
 
+const PEEK_HINTS: &[(&str, &str)] = &[
+    ("j / k", "Move selection (or scroll hover text)"),
+    ("Enter", "Jump to location (definition/references)"),
+    ("Esc / q", "Close"),
+];
+
 /// Which help-overlay group an [`Action`] belongs to.
 fn group_of(action: Action) -> &'static str {
     use Action::*;
     match action {
-        CursorDown | CursorUp | HalfPageDown | HalfPageUp | NextHunk | PrevHunk | NextFile
-        | PrevFile => "Navigation",
+        CursorDown | CursorUp | CursorLeft | CursorRight | WordForward | WordBackward
+        | HalfPageDown | HalfPageUp | NextHunk | PrevHunk | NextFile | PrevFile => "Navigation",
         EnterVisual | Compose => "Annotate",
         ToggleStage | ToggleStagingPanel => "Stage",
         Search | SearchNext | SearchPrev => "Search",
         ToggleList | ToggleHelp => "Panels",
+        GotoDefinition | GotoReferences | Hover => "Code intelligence",
         Quit | QuitDiscard => "Quit",
     }
 }
@@ -103,6 +110,7 @@ pub fn render(frame: &mut Frame, area: Rect, keymap: &Keymap, theme: &Theme) {
         .chain(LIST_HINTS.iter().map(|(k, _)| k.len()))
         .chain(STAGING_HINTS.iter().map(|(k, _)| k.len()))
         .chain(SEARCH_HINTS.iter().map(|(k, _)| k.len()))
+        .chain(PEEK_HINTS.iter().map(|(k, _)| k.len()))
         .max()
         .unwrap_or(0);
 
@@ -113,6 +121,7 @@ pub fn render(frame: &mut Frame, area: Rect, keymap: &Keymap, theme: &Theme) {
         "Stage",
         "Search",
         "Panels",
+        "Code intelligence",
         "Quit",
     ] {
         let group_bindings: Vec<&Binding> = bindings
@@ -149,6 +158,12 @@ pub fn render(frame: &mut Frame, area: Rect, keymap: &Keymap, theme: &Theme) {
 
     lines.push(section_header("Search input", theme));
     for (key, desc) in SEARCH_HINTS {
+        lines.push(key_line(key, desc, key_width, theme));
+    }
+    lines.push(Line::from(""));
+
+    lines.push(section_header("Peek mode", theme));
+    for (key, desc) in PEEK_HINTS {
         lines.push(key_line(key, desc, key_width, theme));
     }
 

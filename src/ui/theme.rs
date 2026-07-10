@@ -49,6 +49,9 @@ pub struct Theme {
     pub hunk_header: Color,
     pub binary_placeholder: Color,
     pub status_message: Color,
+    /// The column cursor's cell highlight (diff pane) and the target
+    /// line's highlight in the LSP peek overlay's preview pane.
+    pub column_cursor_bg: Color,
 
     // -- Change-kind letters (sidebar file list + staging panel) --
     pub kind_added: Color,
@@ -104,6 +107,7 @@ impl Default for Theme {
             hunk_header: Color::Cyan,
             binary_placeholder: Color::DarkGray,
             status_message: Color::Yellow,
+            column_cursor_bg: Color::Rgb(70, 70, 100),
 
             kind_added: Color::Green,
             kind_deleted: Color::Red,
