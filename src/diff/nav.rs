@@ -14,16 +14,20 @@ use super::model::{DiffFile, DiffPosition};
 // FR-diff-nav-1
 pub fn next_hunk(files: &[DiffFile], pos: &DiffPosition) -> Option<DiffPosition> {
     let current = files.get(pos.file)?;
-    if pos.hunk + 1 < current.hunks.len() {
+    // `saturating_add` guards against a pathological stale position (e.g.
+    // `pos.hunk == usize::MAX`): the comparison below simply fails and we
+    // fall through to the cross-file scan instead of overflowing.
+    let next_hunk_idx = pos.hunk.saturating_add(1);
+    if next_hunk_idx < current.hunks.len() {
         return Some(DiffPosition {
             file: pos.file,
-            hunk: pos.hunk + 1,
+            hunk: next_hunk_idx,
             line: 0,
         });
     }
     // FR-diff-nav-1: scan forward across file boundaries, skipping any file
     // with zero hunks, until we find the next file that has one.
-    for (idx, file) in files.iter().enumerate().skip(pos.file + 1) {
+    for (idx, file) in files.iter().enumerate().skip(pos.file.saturating_add(1)) {
         if !file.hunks.is_empty() {
             return Some(DiffPosition {
                 file: idx,
@@ -42,11 +46,16 @@ pub fn next_hunk(files: &[DiffFile], pos: &DiffPosition) -> Option<DiffPosition>
 /// no hunk to land on (spec §6).
 // FR-diff-nav-1
 pub fn prev_hunk(files: &[DiffFile], pos: &DiffPosition) -> Option<DiffPosition> {
-    files.get(pos.file)?;
-    if pos.hunk > 0 {
+    let current = files.get(pos.file)?;
+    // Clamp a stale/out-of-range `pos.hunk` (e.g. left over after the model
+    // was re-parsed to fewer hunks) to the file's real hunk count first, so
+    // decrementing always lands on a genuinely valid index rather than
+    // returning a still-out-of-range one.
+    let effective_hunk = pos.hunk.min(current.hunks.len());
+    if effective_hunk > 0 {
         return Some(DiffPosition {
             file: pos.file,
-            hunk: pos.hunk - 1,
+            hunk: effective_hunk - 1,
             line: 0,
         });
     }
@@ -73,11 +82,14 @@ pub fn prev_hunk(files: &[DiffFile], pos: &DiffPosition) -> Option<DiffPosition>
 /// (`hunk: 0, line: 0`) is a valid position even with no hunk body (spec §6).
 // FR-diff-nav-2
 pub fn next_file(files: &[DiffFile], pos: &DiffPosition) -> Option<DiffPosition> {
-    if pos.file + 1 >= files.len() {
+    // `saturating_add` guards a pathological stale position (`pos.file ==
+    // usize::MAX`) from overflowing; it simply fails the bounds check below.
+    let next = pos.file.saturating_add(1);
+    if next >= files.len() {
         return None;
     }
     Some(DiffPosition {
-        file: pos.file + 1,
+        file: next,
         hunk: 0,
         line: 0,
     })
@@ -379,5 +391,51 @@ mod tests {
         assert_eq!(prev_hunk(&files, &pos), None);
         assert_eq!(next_file(&files, &pos), None);
         assert_eq!(prev_file(&files, &pos), None);
+    }
+
+    // --- Regression: audit findings B-LOW-1 / B-LOW-2 — stale positions ---
+
+    /// A pathological/stale `DiffPosition` (e.g. left over after the model
+    /// was re-parsed) must never panic and must always resolve to either a
+    /// valid in-range position or `None` — never an out-of-range index.
+    #[test]
+    fn stale_out_of_range_position_never_panics_and_stays_valid() {
+        let files = vec![file_with_hunks("a.rs", 2)];
+
+        // `pos.file == usize::MAX`: next_hunk/next_file must not overflow
+        // computing `pos.file + 1`; both degrade to `None`.
+        let far_file = DiffPosition {
+            file: usize::MAX,
+            hunk: 0,
+            line: 0,
+        };
+        assert_eq!(next_hunk(&files, &far_file), None);
+        assert_eq!(next_file(&files, &far_file), None);
+
+        // `pos.hunk == usize::MAX` within an otherwise valid file: next_hunk
+        // must not overflow computing `pos.hunk + 1`.
+        let far_hunk = DiffPosition {
+            file: 0,
+            hunk: usize::MAX,
+            line: 0,
+        };
+        assert_eq!(next_hunk(&files, &far_hunk), None);
+
+        // `pos.hunk` stale-high (beyond the file's real hunk count):
+        // prev_hunk clamps to the last valid hunk instead of returning a
+        // still-out-of-range index.
+        let stale_hunk = DiffPosition {
+            file: 0,
+            hunk: 10,
+            line: 0,
+        };
+        assert_eq!(
+            prev_hunk(&files, &stale_hunk),
+            Some(DiffPosition {
+                file: 0,
+                hunk: 1,
+                line: 0
+            })
+        );
     }
 }

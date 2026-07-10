@@ -179,6 +179,9 @@ fn derive_status(meta: &Metadata, old_path: &Option<String>) -> ChangeStatus {
 /// instead of producing its own `Line`. Unrecognized line shapes (should not
 /// occur in well-formed git output) degrade to a best-effort `Context` line
 /// covering the whole line, rather than panicking — parsing is total.
+/// Counter increments saturate at `u32::MAX` rather than overflowing, so an
+/// adversarial hunk header (e.g. a start line near `u32::MAX`) can never
+/// panic in debug or silently wrap in release.
 // FR-diff-parse-3
 // FR-diff-parse-5
 fn apply_body_line(line: &str, hunk: &mut Hunk, old_lineno: &mut u32, new_lineno: &mut u32) {
@@ -192,17 +195,20 @@ fn apply_body_line(line: &str, hunk: &mut Hunk, old_lineno: &mut u32, new_lineno
 
     let (kind, content, old_no, new_no) = if let Some(rest) = line.strip_prefix('+') {
         let no = *new_lineno;
-        *new_lineno += 1;
+        // Saturate rather than wrap/panic: a crafted hunk header can start a
+        // counter at u32::MAX (spec totality invariant — never panics on
+        // valid UTF-8 input, even adversarial header values).
+        *new_lineno = new_lineno.saturating_add(1);
         (LineKind::Added, rest, None, Some(no))
     } else if let Some(rest) = line.strip_prefix('-') {
         let no = *old_lineno;
-        *old_lineno += 1;
+        *old_lineno = old_lineno.saturating_add(1);
         (LineKind::Removed, rest, Some(no), None)
     } else if let Some(rest) = line.strip_prefix(' ') {
         let old_no = *old_lineno;
         let new_no = *new_lineno;
-        *old_lineno += 1;
-        *new_lineno += 1;
+        *old_lineno = old_lineno.saturating_add(1);
+        *new_lineno = new_lineno.saturating_add(1);
         (LineKind::Context, rest, Some(old_no), Some(new_no))
     } else {
         // Best-effort: an empty line inside a hunk body (some tools trim the
@@ -211,8 +217,8 @@ fn apply_body_line(line: &str, hunk: &mut Hunk, old_lineno: &mut u32, new_lineno
         // panicking or dropping data.
         let old_no = *old_lineno;
         let new_no = *new_lineno;
-        *old_lineno += 1;
-        *new_lineno += 1;
+        *old_lineno = old_lineno.saturating_add(1);
+        *new_lineno = new_lineno.saturating_add(1);
         (LineKind::Context, line, Some(old_no), Some(new_no))
     };
 
@@ -671,5 +677,37 @@ index 3..4 100644
         let lines = &file.hunks[0].lines;
         assert_eq!(lines[0].content, "old\r");
         assert_eq!(lines[1].content, "new\r");
+    }
+
+    // --- Regression: audit finding A-MED-1 — overflow on a crafted header ---
+
+    /// A crafted hunk header starting at `u32::MAX` must not panic (debug)
+    /// or silently wrap (release) when the body-line counters advance;
+    /// they saturate instead, so repeated removed lines all report the
+    /// same saturated line number rather than corrupting data.
+    #[test]
+    fn overflowing_hunk_header_start_saturates_instead_of_panicking() {
+        let diff = "\
+diff --git a/f.rs b/f.rs
+index 1..2 100644
+--- a/f.rs
++++ b/f.rs
+@@ -4294967295 +1 @@
+-x
+-y
+";
+        let file = parse_one(diff);
+        assert_eq!(file.hunks.len(), 1);
+        let hunk = &file.hunks[0];
+        assert_eq!(hunk.old_start, u32::MAX);
+
+        let lines = &hunk.lines;
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].old_lineno, Some(u32::MAX));
+        assert_eq!(
+            lines[1].old_lineno,
+            Some(u32::MAX),
+            "counter saturates at u32::MAX rather than wrapping/panicking"
+        );
     }
 }
