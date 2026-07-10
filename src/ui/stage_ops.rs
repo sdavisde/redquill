@@ -43,6 +43,10 @@ pub trait StageOps {
     /// Reads an untracked file's working-tree content (repo-relative
     /// `path`), for synthesizing its all-added diff. `None` if unreadable.
     fn read_worktree_file(&self, path: &str) -> Option<Vec<u8>>;
+    /// Reads a file's content at a git revision spec (see
+    /// [`GitRunner::show_file`]), for sourcing whole-file content the diff
+    /// pane highlights syntactically. `None` on any failure.
+    fn show_file(&self, spec: &str) -> Option<String>;
 }
 
 impl StageOps for GitRunner {
@@ -72,6 +76,10 @@ impl StageOps for GitRunner {
 
     fn read_worktree_file(&self, path: &str) -> Option<Vec<u8>> {
         std::fs::read(self.root().join(path)).ok()
+    }
+
+    fn show_file(&self, spec: &str) -> Option<String> {
+        GitRunner::show_file(self, spec)
     }
 }
 

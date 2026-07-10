@@ -7,11 +7,15 @@ use std::collections::{HashMap, HashSet};
 use crate::annotate::{AnnotationStore, Side, Target};
 use crate::diff::{FileDiff, LineOrigin};
 use crate::git::{DiffTarget, RawFilePatch, build_hunk_patch, build_line_patch};
+use crate::highlight::Highlighter;
 
 use super::compose::ComposeState;
 use super::keymap::Action;
-use super::rows::{LineRow, Row, anchor_row_index, build_rows, hunk_span};
+use super::rows::{LineRow, Row, SyntaxSpans, anchor_row_index, build_rows, hunk_span};
+use super::search::SearchState;
 use super::stage_ops::{ReviewSnapshot, StageOps, StagedFile, build_review, staged_from_status};
+use super::syntax::{self, HighlightCache};
+use super::theme::Theme;
 
 /// A reasonable default viewport height, used until the first frame reports
 /// the real one. Arbitrary but generous enough that half-page motion isn't
@@ -36,6 +40,8 @@ pub enum Mode {
     List,
     /// The staging panel is open and focused.
     Staging,
+    /// The search input is open in the footer, composing a pattern.
+    Search,
 }
 
 /// The TUI's full state: the diffed files, which one is selected, the
@@ -86,6 +92,19 @@ pub struct App {
     /// The diff pane's last-known content height, used to size half-page
     /// motion. Updated once per frame by the render loop.
     viewport_height: usize,
+    /// The color palette every renderer routes through.
+    pub theme: Theme,
+    /// The tree-sitter highlighting engine. Owned here so its per-language
+    /// config cache persists across selections.
+    highlighter: Highlighter,
+    /// Highlighted line spans, cached per `(path, side)` and cleared on
+    /// every [`App::refresh`] (see [`syntax::HighlightCache`]).
+    highlight_cache: HighlightCache,
+    /// The active (or inactive) search session: confirmed pattern plus its
+    /// match row indices against the current file's rows.
+    pub search: SearchState,
+    /// The in-progress pattern buffer while [`Mode::Search`] is active.
+    pub search_input: String,
 }
 
 /// The staging granularity a `space` gesture resolved to.
@@ -105,15 +124,11 @@ impl App {
     /// message. Interactive sessions should use [`App::with_git`].
     pub fn new(files: Vec<FileDiff>) -> App {
         let annotations = AnnotationStore::new();
-        let rows = files
-            .first()
-            .map(|f| build_rows(f, &annotations))
-            .unwrap_or_default();
         let patches = files.iter().map(|_| None).collect();
-        App {
+        let mut app = App {
             files,
             selected_file: 0,
-            rows,
+            rows: Vec::new(),
             cursor: 0,
             scroll: 0,
             help_open: false,
@@ -128,7 +143,14 @@ impl App {
             status_message: None,
             stage_ops: None,
             viewport_height: DEFAULT_VIEWPORT_HEIGHT,
-        }
+            theme: Theme::default(),
+            highlighter: Highlighter::new(),
+            highlight_cache: HighlightCache::default(),
+            search: SearchState::default(),
+            search_input: String::new(),
+        };
+        app.rebuild_rows();
+        app
     }
 
     /// Builds an `App` over a [`ReviewSnapshot`] with a git backend
@@ -139,6 +161,8 @@ impl App {
         app.staged = snapshot.staged;
         app.target = target;
         app.stage_ops = Some(ops);
+        app.highlight_cache.clear();
+        app.rebuild_rows();
         app
     }
 
@@ -209,6 +233,9 @@ impl App {
             Action::ToggleList => self.toggle_list(),
             Action::ToggleStage => self.toggle_stage(),
             Action::ToggleStagingPanel => self.toggle_staging_panel(),
+            Action::Search => self.enter_search(),
+            Action::SearchNext => self.search_advance(true),
+            Action::SearchPrev => self.search_advance(false),
             Action::Quit | Action::QuitDiscard => {}
         }
     }
@@ -266,7 +293,7 @@ impl App {
             return;
         }
         self.selected_file = index;
-        self.rows = build_rows(&self.files[index], &self.annotations);
+        self.rebuild_rows();
         self.cursor = 0;
         self.scroll = 0;
     }
@@ -276,11 +303,73 @@ impl App {
     /// to the annotation store so inline display/gutter markers stay in
     /// sync.
     fn refresh_rows(&mut self) {
-        if let Some(file) = self.files.get(self.selected_file) {
-            self.rows = build_rows(file, &self.annotations);
+        if self.files.get(self.selected_file).is_some() {
+            self.rebuild_rows();
             self.cursor = self.nearest_addressable(self.cursor.min(self.max_cursor()), true);
             self.ensure_visible();
         }
+    }
+
+    /// Rebuilds `self.rows` for the currently selected file: lazily
+    /// populates the syntax-highlight cache for whichever side(s) this
+    /// file's hunks actually use (a no-op on a cache hit — highlighting
+    /// happens at most once per `(path, side)` between refreshes), then
+    /// rebuilds the row model against the current annotations and those
+    /// spans. Also recomputes the active search's match positions, since
+    /// they're relative to `rows`. Sets `rows` to empty if `selected_file`
+    /// is out of range (e.g. an empty diff).
+    fn rebuild_rows(&mut self) {
+        let Some(file) = self.files.get(self.selected_file) else {
+            self.rows = Vec::new();
+            self.search.recompute(&self.rows);
+            return;
+        };
+        let path = file.path.clone();
+        let old_path = file.old_path.clone();
+        let needs_new = syntax::side_in_use(file, Side::New);
+        let needs_old = syntax::side_in_use(file, Side::Old);
+        let synthetic = self
+            .patches
+            .get(self.selected_file)
+            .is_none_or(|p| p.is_none());
+
+        if needs_new {
+            syntax::populate_cache(
+                &mut self.highlight_cache,
+                &mut self.highlighter,
+                self.stage_ops.as_deref(),
+                &self.target,
+                &path,
+                old_path.as_deref(),
+                Side::New,
+                synthetic,
+            );
+        }
+        if needs_old {
+            syntax::populate_cache(
+                &mut self.highlight_cache,
+                &mut self.highlighter,
+                self.stage_ops.as_deref(),
+                &self.target,
+                &path,
+                old_path.as_deref(),
+                Side::Old,
+                synthetic,
+            );
+        }
+
+        let new_spans = self.highlight_cache.get(&path, Side::New);
+        let old_spans = self.highlight_cache.get(&path, Side::Old);
+        let file = &self.files[self.selected_file];
+        self.rows = build_rows(
+            file,
+            &self.annotations,
+            SyntaxSpans {
+                new: new_spans,
+                old: old_spans,
+            },
+        );
+        self.search.recompute(&self.rows);
     }
 
     /// Row indices of every `HunkHeader` in `rows`.
@@ -305,10 +394,17 @@ impl App {
         }
 
         for index in (self.selected_file + 1)..self.files.len() {
-            let rows = build_rows(&self.files[index], &self.annotations);
-            if let Some(&first) = Self::hunk_header_rows(&rows).first() {
+            // A cheap unhighlighted probe just to check whether this file
+            // has any hunk at all; only the file we actually land on gets
+            // its rows rebuilt with real highlighting, via `rebuild_rows`.
+            let probe = build_rows(
+                &self.files[index],
+                &self.annotations,
+                SyntaxSpans::default(),
+            );
+            if let Some(&first) = Self::hunk_header_rows(&probe).first() {
                 self.selected_file = index;
-                self.rows = rows;
+                self.rebuild_rows();
                 self.cursor = first;
                 self.scroll = 0;
                 self.ensure_visible();
@@ -333,10 +429,14 @@ impl App {
         }
 
         for index in (0..self.selected_file).rev() {
-            let rows = build_rows(&self.files[index], &self.annotations);
-            if let Some(&last) = Self::hunk_header_rows(&rows).last() {
+            let probe = build_rows(
+                &self.files[index],
+                &self.annotations,
+                SyntaxSpans::default(),
+            );
+            if let Some(&last) = Self::hunk_header_rows(&probe).last() {
                 self.selected_file = index;
-                self.rows = rows;
+                self.rebuild_rows();
                 self.cursor = last;
                 self.scroll = 0;
                 self.ensure_visible();
@@ -506,7 +606,7 @@ impl App {
     fn toggle_list(&mut self) {
         match self.mode {
             Mode::List => self.mode = Mode::Normal,
-            Mode::Compose | Mode::Staging => {}
+            Mode::Compose | Mode::Staging | Mode::Search => {}
             Mode::Normal | Mode::Visual { .. } => {
                 if !self.annotations.is_empty() {
                     self.list_cursor = self.list_cursor.min(self.annotations.len() - 1);
@@ -555,7 +655,7 @@ impl App {
         let path = target.path().to_string();
         if let Some(index) = self.files.iter().position(|f| f.path == path) {
             self.selected_file = index;
-            self.rows = build_rows(&self.files[index], &self.annotations);
+            self.rebuild_rows();
             self.cursor = anchor_row_index(&self.files[index], &self.rows, &target).unwrap_or(0);
             self.scroll = 0;
             self.ensure_visible();
@@ -801,11 +901,9 @@ impl App {
         self.selected_file = previous_path
             .and_then(|path| self.files.iter().position(|f| f.path == path))
             .unwrap_or_else(|| previous_index.min(self.files.len().saturating_sub(1)));
-        self.rows = self
-            .files
-            .get(self.selected_file)
-            .map(|f| build_rows(f, &self.annotations))
-            .unwrap_or_default();
+        // Content may have changed underneath every cached (path, side).
+        self.highlight_cache.clear();
+        self.rebuild_rows();
         if self.rows.is_empty() {
             self.cursor = 0;
             self.scroll = 0;
@@ -826,7 +924,7 @@ impl App {
     fn toggle_staging_panel(&mut self) {
         match self.mode {
             Mode::Staging => self.mode = Mode::Normal,
-            Mode::Compose | Mode::List => {}
+            Mode::Compose | Mode::List | Mode::Search => {}
             Mode::Normal | Mode::Visual { .. } => {
                 self.refresh_staged_list();
                 self.staging_cursor = self.staging_cursor.min(self.staged.len().saturating_sub(1));
@@ -889,6 +987,82 @@ impl App {
             }
         };
         self.staged = staged;
+    }
+
+    // -- Search --------------------------------------------------------------
+
+    /// Opens the search input (`/`), starting from an empty pattern buffer
+    /// regardless of any already-active search.
+    fn enter_search(&mut self) {
+        self.search_input.clear();
+        self.mode = Mode::Search;
+    }
+
+    /// Cancels the in-progress search edit, returning to [`Mode::Normal`].
+    /// If the buffer was left empty, this also clears any already-active
+    /// search pattern (matching the spec's "Esc-cleared empty pattern"
+    /// behavior); a non-empty, uncommitted buffer is discarded without
+    /// touching the previously active pattern.
+    pub fn cancel_search(&mut self) {
+        if self.search_input.is_empty() {
+            self.search.pattern = None;
+            self.search.matches.clear();
+        }
+        self.search_input.clear();
+        self.mode = Mode::Normal;
+    }
+
+    /// Confirms the in-progress search pattern: recomputes matches against
+    /// the current file's rows, jumps the cursor to the first match at or
+    /// after the cursor (wrapping if none), and echoes `match k/N` (or
+    /// `no matches`) in the footer. An empty buffer clears the active
+    /// pattern instead, same as an empty-buffer `Esc`.
+    pub fn confirm_search(&mut self) {
+        let pattern = std::mem::take(&mut self.search_input);
+        self.mode = Mode::Normal;
+        if pattern.is_empty() {
+            self.search.pattern = None;
+            self.search.matches.clear();
+            return;
+        }
+        self.search.pattern = Some(pattern);
+        self.search.recompute(&self.rows);
+        match self.search.next_from(self.cursor) {
+            Some(row) => {
+                self.cursor = row;
+                self.ensure_visible();
+                let k = self.search.position_of(row).unwrap_or(1);
+                self.set_status_message(format!("match {k}/{}", self.search.matches.len()));
+            }
+            None => self.set_status_message("no matches"),
+        }
+    }
+
+    /// Applies the `n`/`N` gesture: jumps to the next (`forward = true`) or
+    /// previous match relative to the cursor, wrapping around either end.
+    /// Sets a transient footer message: `match k/N` on success, `no
+    /// matches` if the pattern has zero matches, or `no search pattern` if
+    /// no search is active at all.
+    fn search_advance(&mut self, forward: bool) {
+        if self.search.pattern.is_none() {
+            self.set_status_message("no search pattern");
+            return;
+        }
+        if self.search.matches.is_empty() {
+            self.set_status_message("no matches");
+            return;
+        }
+        let next = if forward {
+            self.search.advance_from(self.cursor)
+        } else {
+            self.search.retreat_from(self.cursor)
+        };
+        if let Some(row) = next {
+            self.cursor = row;
+            self.ensure_visible();
+            let k = self.search.position_of(row).unwrap_or(1);
+            self.set_status_message(format!("match {k}/{}", self.search.matches.len()));
+        }
     }
 }
 
@@ -1602,6 +1776,8 @@ index 1..2 100644
         status: Vec<FileStatus>,
         untracked_content: std::collections::HashMap<String, Vec<u8>>,
         fail_ops: bool,
+        show_calls: Rc<RefCell<usize>>,
+        show_content: Option<String>,
     }
 
     impl FakeGit {
@@ -1653,6 +1829,11 @@ index 1..2 100644
 
         fn read_worktree_file(&self, path: &str) -> Option<Vec<u8>> {
             self.untracked_content.get(path).cloned()
+        }
+
+        fn show_file(&self, _spec: &str) -> Option<String> {
+            *self.show_calls.borrow_mut() += 1;
+            self.show_content.clone()
         }
     }
 
@@ -2195,5 +2376,255 @@ index 1..2 100644
         app.apply(Action::EnterVisual);
         app.apply(Action::ToggleStage);
         assert_eq!(calls.borrow().len(), 1);
+    }
+
+    // -- Syntax highlight cache -----------------------------------------------
+
+    fn highlight_patch(path: &str) -> RawFilePatch {
+        RawFilePatch {
+            path: path.to_string(),
+            old_path: None,
+            raw: format!(
+                "diff --git a/{path} b/{path}\nindex 1..2 100644\n--- a/{path}\n+++ b/{path}\n@@ -1,1 +1,1 @@\n-fn old() {{}}\n+fn new() {{}}\n"
+            ),
+            is_binary: false,
+        }
+    }
+
+    /// Selecting a file's rows highlights each side at most once, even
+    /// across repeated selection (file switches back and forth) — the
+    /// `HighlightCache` keyed by `(path, side)` must be hit, not re-fetched
+    /// and re-highlighted, on every rebuild.
+    #[test]
+    fn selecting_the_same_file_repeatedly_highlights_each_side_once() {
+        let a = highlight_patch("a.rs");
+        let b = highlight_patch("b.rs");
+        let show_calls = Rc::new(RefCell::new(0));
+        let fake = FakeGit {
+            diff: vec![a.clone(), b.clone()],
+            show_calls: Rc::clone(&show_calls),
+            show_content: Some("fn old() {}\nfn new() {}\n".to_string()),
+            ..FakeGit::default()
+        };
+        let snapshot = ReviewSnapshot {
+            files: vec![
+                FileDiff::from_patch(&a).unwrap(),
+                FileDiff::from_patch(&b).unwrap(),
+            ],
+            patches: vec![Some(a), Some(b)],
+            staged: Vec::new(),
+        };
+        let mut app = App::with_git(snapshot, DiffTarget::Staged, Box::new(fake));
+        // `with_git`'s initial rebuild already highlighted a.rs's two sides
+        // (it has both an added and a removed line).
+        assert_eq!(*show_calls.borrow(), 2);
+
+        app.apply(Action::NextFile); // -> b.rs: two fresh fetches
+        assert_eq!(*show_calls.borrow(), 4);
+        app.apply(Action::PrevFile); // -> a.rs: cache hit, no new fetches
+        assert_eq!(*show_calls.borrow(), 4);
+        app.apply(Action::NextFile); // -> b.rs: cache hit again
+        assert_eq!(*show_calls.borrow(), 4);
+    }
+
+    // -- Search ----------------------------------------------------------------
+
+    fn search_file() -> FileDiff {
+        let raw = "\
+diff --git a/f.rs b/f.rs
+index 1..2 100644
+--- a/f.rs
++++ b/f.rs
+@@ -1,3 +1,3 @@ fn foo() {
+ alpha
+-beta
++gamma
+ delta
+";
+        file_with_raw("f.rs", raw)
+    }
+
+    #[test]
+    fn slash_opens_search_mode_with_empty_buffer() {
+        let mut app = App::new(vec![search_file()]);
+        app.apply(Action::Search);
+        assert_eq!(app.mode, Mode::Search);
+        assert_eq!(app.search_input, "");
+    }
+
+    #[test]
+    fn slash_is_disabled_in_visual_mode() {
+        let mut app = App::new(vec![search_file()]);
+        app.apply(Action::CursorDown); // hunk header
+        app.apply(Action::CursorDown); // line row
+        app.apply(Action::EnterVisual);
+        app.apply(Action::Search);
+        assert!(matches!(app.mode, Mode::Visual { .. }));
+    }
+
+    #[test]
+    fn confirm_search_jumps_to_first_match_at_or_after_cursor() {
+        let mut app = App::new(vec![search_file()]);
+        app.apply(Action::Search);
+        for c in "gamma".chars() {
+            app.search_input.push(c);
+        }
+        app.confirm_search();
+        assert_eq!(app.mode, Mode::Normal);
+        let Row::Line(line) = &app.rows[app.cursor] else {
+            panic!("expected cursor on a line row");
+        };
+        assert_eq!(line.content, "gamma");
+        assert_eq!(app.status_message.as_deref(), Some("match 1/1"));
+    }
+
+    #[test]
+    fn confirm_search_with_no_matches_sets_message_but_keeps_pattern() {
+        let mut app = App::new(vec![search_file()]);
+        app.apply(Action::Search);
+        for c in "zzz".chars() {
+            app.search_input.push(c);
+        }
+        app.confirm_search();
+        assert_eq!(app.status_message.as_deref(), Some("no matches"));
+        assert_eq!(app.search.pattern.as_deref(), Some("zzz"));
+    }
+
+    #[test]
+    fn confirm_search_with_empty_buffer_clears_active_pattern() {
+        let mut app = App::new(vec![search_file()]);
+        app.search.pattern = Some("gamma".to_string());
+        app.search.matches = vec![4];
+        app.apply(Action::Search); // buffer starts empty
+        app.confirm_search();
+        assert_eq!(app.search.pattern, None);
+        assert!(app.search.matches.is_empty());
+    }
+
+    #[test]
+    fn esc_with_nonempty_buffer_cancels_without_clearing_active_pattern() {
+        let mut app = App::new(vec![search_file()]);
+        app.apply(Action::Search);
+        for c in "gamma".chars() {
+            app.search_input.push(c);
+        }
+        app.confirm_search(); // active pattern is now "gamma"
+        app.apply(Action::Search); // reopen with a fresh buffer
+        app.search_input.push('x');
+        app.cancel_search();
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.search.pattern.as_deref(), Some("gamma"));
+    }
+
+    #[test]
+    fn esc_with_empty_buffer_clears_active_pattern() {
+        let mut app = App::new(vec![search_file()]);
+        app.search.pattern = Some("gamma".to_string());
+        app.search.matches = vec![4];
+        app.apply(Action::Search);
+        app.cancel_search();
+        assert_eq!(app.search.pattern, None);
+        assert!(app.search.matches.is_empty());
+    }
+
+    #[test]
+    fn search_next_and_prev_wrap_around_both_directions() {
+        let raw = "\
+diff --git a/f.rs b/f.rs
+index 1..2 100644
+--- a/f.rs
++++ b/f.rs
+@@ -1,3 +1,3 @@
+ foo
+ foo
+ foo
+";
+        let mut app = App::new(vec![file_with_raw("f.rs", raw)]);
+        app.apply(Action::Search);
+        for c in "foo".chars() {
+            app.search_input.push(c);
+        }
+        app.confirm_search();
+        let first = app.cursor;
+
+        app.apply(Action::SearchNext);
+        let second = app.cursor;
+        assert_ne!(first, second);
+
+        app.apply(Action::SearchNext);
+        let third = app.cursor;
+        assert_ne!(second, third);
+
+        app.apply(Action::SearchNext); // wraps forward back to the first match
+        assert_eq!(app.cursor, first);
+
+        app.apply(Action::SearchPrev); // wraps backward to the last match
+        assert_eq!(app.cursor, third);
+    }
+
+    #[test]
+    fn search_next_without_active_pattern_sets_message() {
+        let mut app = App::new(vec![search_file()]);
+        app.apply(Action::SearchNext);
+        assert_eq!(app.status_message.as_deref(), Some("no search pattern"));
+    }
+
+    #[test]
+    fn search_next_with_zero_matches_sets_message() {
+        let mut app = App::new(vec![search_file()]);
+        app.apply(Action::Search);
+        for c in "zzz".chars() {
+            app.search_input.push(c);
+        }
+        app.confirm_search();
+        app.apply(Action::SearchNext);
+        assert_eq!(app.status_message.as_deref(), Some("no matches"));
+    }
+
+    #[test]
+    fn search_matches_are_smartcase() {
+        let mut app = App::new(vec![search_file()]);
+        app.apply(Action::Search);
+        for c in "GAMMA".chars() {
+            app.search_input.push(c);
+        }
+        app.confirm_search();
+        // "gamma" (lowercase in the file) does not match the uppercase,
+        // case-sensitive pattern "GAMMA".
+        assert_eq!(app.status_message.as_deref(), Some("no matches"));
+    }
+
+    #[test]
+    fn hunk_header_section_text_is_searchable() {
+        let mut app = App::new(vec![search_file()]);
+        app.apply(Action::Search);
+        for c in "foo".chars() {
+            app.search_input.push(c);
+        }
+        app.confirm_search();
+        assert!(matches!(app.rows[app.cursor], Row::HunkHeader { .. }));
+    }
+
+    #[test]
+    fn search_pattern_survives_row_rebuild() {
+        let mut app = App::new(vec![search_file()]);
+        app.apply(Action::Search);
+        for c in "gamma".chars() {
+            app.search_input.push(c);
+        }
+        app.confirm_search();
+        assert_eq!(app.search.matches.len(), 1);
+
+        // Adding an annotation triggers `refresh_rows` -> `rebuild_rows`,
+        // which must recompute matches against the rebuilt rows rather
+        // than dropping the active pattern.
+        app.apply(Action::Compose);
+        for c in "note".chars() {
+            app.compose.as_mut().unwrap().buffer.insert_char(c);
+        }
+        app.submit_compose();
+
+        assert_eq!(app.search.pattern.as_deref(), Some("gamma"));
+        assert_eq!(app.search.matches.len(), 1);
     }
 }

@@ -48,6 +48,13 @@ pub enum Action {
     ToggleStage,
     /// Toggle the staging panel (files with staged changes).
     ToggleStagingPanel,
+    /// Open the search input, composing a pattern to match against the
+    /// current file's line content and hunk-header section text.
+    Search,
+    /// Jump to the next search match, wrapping around.
+    SearchNext,
+    /// Jump to the previous search match, wrapping around.
+    SearchPrev,
     /// Quit, emitting annotations to stdout.
     Quit,
     /// Quit, discarding annotations.
@@ -198,6 +205,24 @@ impl Keymap {
                     mods: none,
                     action: ToggleStagingPanel,
                     description: "Toggle staging panel",
+                },
+                Binding {
+                    code: Char('/'),
+                    mods: none,
+                    action: Search,
+                    description: "Search",
+                },
+                Binding {
+                    code: Char('n'),
+                    mods: none,
+                    action: SearchNext,
+                    description: "Next search match",
+                },
+                Binding {
+                    code: Char('N'),
+                    mods: none,
+                    action: SearchPrev,
+                    description: "Previous search match",
                 },
                 Binding {
                     code: Char('q'),

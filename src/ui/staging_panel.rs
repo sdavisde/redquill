@@ -10,15 +10,15 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 use super::app::App;
-use super::sidebar::letter_color;
 use super::stage_ops::StagedFile;
+use super::theme::Theme;
 
-fn item_line(entry: &StagedFile) -> Line<'static> {
+fn item_line(entry: &StagedFile, theme: &Theme) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("{} ", entry.letter),
             Style::default()
-                .fg(letter_color(entry.letter))
+                .fg(theme.letter_color(entry.letter))
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(entry.path.clone()),
@@ -40,7 +40,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let items: Vec<ListItem> = app
         .staged
         .iter()
-        .map(|e| ListItem::new(item_line(e)))
+        .map(|e| ListItem::new(item_line(e, &app.theme)))
         .collect();
     let list = List::new(items)
         .block(block)

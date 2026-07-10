@@ -76,7 +76,7 @@ impl Classification {
 }
 
 /// Which side of the diff a line-anchored annotation refers to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Side {
     /// The old (removed, `-`) side of the diff.
     Old,

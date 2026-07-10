@@ -4,13 +4,14 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 use crate::annotate::{Annotation, Side, Target};
 
 use super::app::App;
+use super::theme::Theme;
 
 fn side_marker(side: Side) -> &'static str {
     match side {
@@ -36,13 +37,13 @@ fn target_summary(target: &Target) -> String {
     }
 }
 
-fn item_line(annotation: &Annotation) -> Line<'static> {
+fn item_line(annotation: &Annotation, theme: &Theme) -> Line<'static> {
     let first_line = annotation.body.lines().next().unwrap_or("");
     Line::from(vec![
         Span::raw(format!("{} ", target_summary(&annotation.target))),
         Span::styled(
             format!("[{}] ", annotation.classification.label()),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(theme.classification_tag),
         ),
         Span::raw(first_line.to_string()),
     ])
@@ -62,7 +63,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let items: Vec<ListItem> = app
         .annotations
         .iter()
-        .map(|a| ListItem::new(item_line(a)))
+        .map(|a| ListItem::new(item_line(a, &app.theme)))
         .collect();
     let list = List::new(items)
         .block(block)

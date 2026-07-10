@@ -6,11 +6,12 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use super::keymap::{Action, Binding, Keymap};
+use super::theme::Theme;
 
 /// Static key hints for a mode that isn't driven by the [`Keymap`] table.
 const COMPOSE_HINTS: &[(&str, &str)] = &[
@@ -36,6 +37,12 @@ const STAGING_HINTS: &[(&str, &str)] = &[
     ("s / Esc", "Close panel"),
 ];
 
+const SEARCH_HINTS: &[(&str, &str)] = &[
+    ("Enter", "Confirm search"),
+    ("Esc", "Cancel (clears pattern if buffer empty)"),
+    ("Backspace", "Delete character"),
+];
+
 /// Which help-overlay group an [`Action`] belongs to.
 fn group_of(action: Action) -> &'static str {
     use Action::*;
@@ -44,6 +51,7 @@ fn group_of(action: Action) -> &'static str {
         | PrevFile => "Navigation",
         EnterVisual | Compose => "Annotate",
         ToggleStage | ToggleStagingPanel => "Stage",
+        Search | SearchNext | SearchPrev => "Search",
         ToggleList | ToggleHelp => "Panels",
         Quit | QuitDiscard => "Quit",
     }
@@ -60,21 +68,21 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
     area
 }
 
-fn section_header(label: &str) -> Line<'static> {
+fn section_header(label: &str, theme: &Theme) -> Line<'static> {
     Line::from(Span::styled(
         label.to_string(),
         Style::default()
-            .fg(Color::Yellow)
+            .fg(theme.help_section_header)
             .add_modifier(Modifier::BOLD),
     ))
 }
 
-fn key_line(key: &str, description: &str, key_width: usize) -> Line<'static> {
+fn key_line(key: &str, description: &str, key_width: usize, theme: &Theme) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("{key:>key_width$}"),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.help_key)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
@@ -86,7 +94,7 @@ fn key_line(key: &str, description: &str, key_width: usize) -> Line<'static> {
 /// [`Keymap`] table are grouped Navigation / Annotate / Panels / Quit, with
 /// Compose-mode and List-mode hints appended below (those modes bypass the
 /// table entirely, so they aren't in it).
-pub fn render(frame: &mut Frame, area: Rect, keymap: &Keymap) {
+pub fn render(frame: &mut Frame, area: Rect, keymap: &Keymap, theme: &Theme) {
     let bindings = keymap.bindings();
     let key_width = bindings
         .iter()
@@ -94,11 +102,19 @@ pub fn render(frame: &mut Frame, area: Rect, keymap: &Keymap) {
         .chain(COMPOSE_HINTS.iter().map(|(k, _)| k.len()))
         .chain(LIST_HINTS.iter().map(|(k, _)| k.len()))
         .chain(STAGING_HINTS.iter().map(|(k, _)| k.len()))
+        .chain(SEARCH_HINTS.iter().map(|(k, _)| k.len()))
         .max()
         .unwrap_or(0);
 
     let mut lines: Vec<Line> = Vec::new();
-    for group in ["Navigation", "Annotate", "Stage", "Panels", "Quit"] {
+    for group in [
+        "Navigation",
+        "Annotate",
+        "Stage",
+        "Search",
+        "Panels",
+        "Quit",
+    ] {
         let group_bindings: Vec<&Binding> = bindings
             .iter()
             .filter(|b| group_of(b.action) == group)
@@ -106,28 +122,34 @@ pub fn render(frame: &mut Frame, area: Rect, keymap: &Keymap) {
         if group_bindings.is_empty() {
             continue;
         }
-        lines.push(section_header(group));
+        lines.push(section_header(group, theme));
         for b in group_bindings {
-            lines.push(key_line(&b.key_label(), b.description, key_width));
+            lines.push(key_line(&b.key_label(), b.description, key_width, theme));
         }
         lines.push(Line::from(""));
     }
 
-    lines.push(section_header("Compose mode"));
+    lines.push(section_header("Compose mode", theme));
     for (key, desc) in COMPOSE_HINTS {
-        lines.push(key_line(key, desc, key_width));
+        lines.push(key_line(key, desc, key_width, theme));
     }
     lines.push(Line::from(""));
 
-    lines.push(section_header("List mode"));
+    lines.push(section_header("List mode", theme));
     for (key, desc) in LIST_HINTS {
-        lines.push(key_line(key, desc, key_width));
+        lines.push(key_line(key, desc, key_width, theme));
     }
     lines.push(Line::from(""));
 
-    lines.push(section_header("Staging panel"));
+    lines.push(section_header("Staging panel", theme));
     for (key, desc) in STAGING_HINTS {
-        lines.push(key_line(key, desc, key_width));
+        lines.push(key_line(key, desc, key_width, theme));
+    }
+    lines.push(Line::from(""));
+
+    lines.push(section_header("Search input", theme));
+    for (key, desc) in SEARCH_HINTS {
+        lines.push(key_line(key, desc, key_width, theme));
     }
 
     let height = (lines.len() as u16 + 2).min(area.height);

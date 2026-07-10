@@ -10,11 +10,29 @@
 //! annotations, which mark every covered line).
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 
 use crate::annotate::{Annotation, AnnotationStore, Classification, Side, Target};
 use crate::diff::{
     DiffLine, FileChangeKind, FileDiff, Hunk, LineOrigin, WordSpan, pair_hunk_lines, word_diff,
 };
+use crate::highlight::TokenKind;
+
+/// Per-line syntax-highlight spans for both diff sides of one file,
+/// indexed by 0-based line number within that side's sourced whole-file
+/// content (matching [`crate::highlight::Highlighter::highlight_lines`]'s
+/// output order — slice index `n` is 1-based line `n + 1`). Produced by
+/// [`super::syntax::HighlightCache`]; an empty slice on either side (the
+/// `Default` instance) degrades [`build_rows`] to no syntax highlighting at
+/// all, which is exactly what a language with no highlighter, a content
+/// -sourcing failure, or a git-less test `App` should see.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SyntaxSpans<'a> {
+    /// New-side (added/context lines) per-line spans.
+    pub new: &'a [Vec<(Range<usize>, TokenKind)>],
+    /// Old-side (removed lines) per-line spans.
+    pub old: &'a [Vec<(Range<usize>, TokenKind)>],
+}
 
 /// One rendered line of the diff pane's content, carrying everything the
 /// widget needs precomputed: both gutter numbers, origin, content, and (for
@@ -40,6 +58,11 @@ pub struct LineRow {
     /// Whether this line is covered by at least one annotation (a `Line`
     /// target on this exact line, or a `Range` target spanning it).
     pub annotated: bool,
+    /// Syntax-highlight spans for this line's source line (`new_line` for
+    /// Added/Context, `old_line` for Removed), clipped to `content`'s
+    /// length. `None` when no highlighting is available (unsupported
+    /// language, content-sourcing failure, or an empty line).
+    pub syntax_spans: Option<Vec<(Range<usize>, TokenKind)>>,
 }
 
 /// One row of the flattened diff-pane row model. The cursor addresses rows
@@ -176,12 +199,49 @@ fn annotation_rows(annotation: &Annotation) -> Vec<Row> {
     rows
 }
 
+/// The syntax-highlight spans for one diff line, looked up by its source
+/// line number in `spans` (`new_line` for Added/Context via `syntax.new`,
+/// `old_line` for Removed via `syntax.old`) and clipped to `row_content`'s
+/// byte length so a mismatch between the highlighted source and the diff's
+/// own line text (should not normally happen, but content-sourcing is
+/// best-effort) can never produce an out-of-bounds span. `None` if there's
+/// no line number, no spans for that line, or every span clips away to
+/// nothing.
+fn line_syntax_spans(
+    row_content: &str,
+    line_number: Option<u32>,
+    spans: &[Vec<(Range<usize>, TokenKind)>],
+) -> Option<Vec<(Range<usize>, TokenKind)>> {
+    let idx = (line_number? as usize).checked_sub(1)?;
+    let line_spans = spans.get(idx)?;
+    let clipped: Vec<(Range<usize>, TokenKind)> = line_spans
+        .iter()
+        .filter(|(r, _)| r.start < row_content.len() && row_content.is_char_boundary(r.start))
+        .map(|(r, k)| {
+            let end = r.end.min(row_content.len());
+            let end = (r.start..=end)
+                .rev()
+                .find(|&e| row_content.is_char_boundary(e))
+                .unwrap_or(r.start);
+            (r.start..end, *k)
+        })
+        .filter(|(r, _)| !r.is_empty())
+        .collect();
+    if clipped.is_empty() {
+        None
+    } else {
+        Some(clipped)
+    }
+}
+
 /// Builds the flattened row model for one file: a [`Row::FileHeader`],
 /// followed by a [`Row::HunkHeader`] and its [`Row::Line`]s per hunk, or a
 /// single [`Row::Binary`] placeholder for binary files. Annotations in
 /// `annotations` targeting this file are spliced in as [`Row::Annotation`]
 /// rows after their anchor, with covered rows flagged `annotated`.
-pub fn build_rows(file: &FileDiff, annotations: &AnnotationStore) -> Vec<Row> {
+/// `syntax` supplies precomputed syntax-highlight spans per side (see
+/// [`SyntaxSpans`]); pass `SyntaxSpans::default()` for no highlighting.
+pub fn build_rows(file: &FileDiff, annotations: &AnnotationStore, syntax: SyntaxSpans) -> Vec<Row> {
     let file_annotations: Vec<&Annotation> = annotations.for_path(&file.path).collect();
 
     let mut rows = Vec::new();
@@ -262,6 +322,12 @@ pub fn build_rows(file: &FileDiff, annotations: &AnnotationStore) -> Vec<Row> {
 
         let mut spans = word_spans_by_line(hunk);
         for (line_index, line) in hunk.lines.iter().enumerate() {
+            let syntax_spans = match line.origin {
+                LineOrigin::Removed => line_syntax_spans(&line.content, line.old_line, syntax.old),
+                LineOrigin::Added | LineOrigin::Context => {
+                    line_syntax_spans(&line.content, line.new_line, syntax.new)
+                }
+            };
             rows.push(Row::Line(LineRow {
                 hunk_index,
                 old_line: line.old_line,
@@ -271,6 +337,7 @@ pub fn build_rows(file: &FileDiff, annotations: &AnnotationStore) -> Vec<Row> {
                 word_spans: spans.remove(&line_index),
                 no_newline: line.no_newline,
                 annotated: dotted.contains(&line_index),
+                syntax_spans,
             }));
             if let Some(list) = splice_after.get(&line_index) {
                 for a in list {
@@ -344,7 +411,7 @@ index 1..2 100644
 +b
 ";
         let diff = file_diff(raw, "f.rs", false);
-        let rows = build_rows(&diff, &no_notes());
+        let rows = build_rows(&diff, &no_notes(), SyntaxSpans::default());
         assert_eq!(
             rows[0],
             Row::FileHeader {
@@ -369,7 +436,7 @@ index 1..2 100644
  context2
 ";
         let diff = file_diff(raw, "f.rs", false);
-        let rows = build_rows(&diff, &no_notes());
+        let rows = build_rows(&diff, &no_notes(), SyntaxSpans::default());
         assert_eq!(
             rows[1],
             Row::HunkHeader {
@@ -392,7 +459,7 @@ index 1..2 100644
 +b
 ";
         let diff = file_diff(raw, "f.rs", false);
-        let rows = build_rows(&diff, &no_notes());
+        let rows = build_rows(&diff, &no_notes(), SyntaxSpans::default());
         let Row::HunkHeader { text, .. } = &rows[1] else {
             panic!("expected hunk header");
         };
@@ -414,7 +481,7 @@ index 111..222 100644
  line3
 ";
         let diff = file_diff(raw, "f.rs", false);
-        let rows = build_rows(&diff, &no_notes());
+        let rows = build_rows(&diff, &no_notes(), SyntaxSpans::default());
         // FileHeader, HunkHeader, then 5 line rows.
         assert_eq!(rows.len(), 7);
 
@@ -448,7 +515,7 @@ index 111..222 100644
 +let x = bar;
 ";
         let diff = file_diff(raw, "f.rs", false);
-        let rows = build_rows(&diff, &no_notes());
+        let rows = build_rows(&diff, &no_notes(), SyntaxSpans::default());
 
         let Row::Line(removed) = &rows[2] else {
             panic!("expected removed line row");
@@ -475,7 +542,7 @@ index 111..222 100644
  context
 ";
         let diff = file_diff(raw, "f.rs", false);
-        let rows = build_rows(&diff, &no_notes());
+        let rows = build_rows(&diff, &no_notes(), SyntaxSpans::default());
         let Row::Line(removed) = &rows[2] else {
             panic!("expected line row");
         };
@@ -490,7 +557,7 @@ index 1..2 100644
 Binary files a/img.png and b/img.png differ
 ";
         let diff = file_diff(raw, "img.png", true);
-        let rows = build_rows(&diff, &no_notes());
+        let rows = build_rows(&diff, &no_notes(), SyntaxSpans::default());
         assert_eq!(rows.len(), 2);
         assert!(matches!(rows[0], Row::FileHeader { .. }));
         assert_eq!(rows[1], Row::Binary);
@@ -511,7 +578,7 @@ index 111..222 100644
 +J
 ";
         let diff = file_diff(raw, "f.rs", false);
-        let rows = build_rows(&diff, &no_notes());
+        let rows = build_rows(&diff, &no_notes(), SyntaxSpans::default());
         let hunk_headers: Vec<usize> = rows
             .iter()
             .enumerate()
@@ -548,7 +615,7 @@ index 111..222 100644
                 "why change this?",
             )
             .unwrap();
-        let rows = build_rows(&diff, &store);
+        let rows = build_rows(&diff, &store, SyntaxSpans::default());
 
         // rows: FileHeader(0), HunkHeader(1), Line old1(2), Line new1(3),
         // Annotation(4), Line ctx(5)
@@ -596,7 +663,7 @@ index 111..222 100644
                 "extract helper",
             )
             .unwrap();
-        let rows = build_rows(&diff, &store);
+        let rows = build_rows(&diff, &store, SyntaxSpans::default());
         // rows: FileHeader(0) HunkHeader(1) Line a(2) Line b(3) Line c(4) Annotation(5)
         let Row::Line(b) = &rows[3] else {
             panic!("expected line b");
@@ -620,7 +687,7 @@ index 111..222 100644
                 "clean",
             )
             .unwrap();
-        let rows = build_rows(&diff, &store);
+        let rows = build_rows(&diff, &store, SyntaxSpans::default());
         // FileHeader(0) HunkHeader(1) Annotation(2) Line(3)...
         let Row::HunkHeader { annotated, .. } = &rows[1] else {
             panic!("expected hunk header");
@@ -636,7 +703,7 @@ index 111..222 100644
         store
             .add(Target::file("f.rs"), Classification::Praise, "nice module")
             .unwrap();
-        let rows = build_rows(&diff, &store);
+        let rows = build_rows(&diff, &store, SyntaxSpans::default());
         let Row::FileHeader { annotated, .. } = &rows[0] else {
             panic!("expected file header");
         };
@@ -651,7 +718,7 @@ index 111..222 100644
         store
             .add(Target::file("f.rs"), Classification::Issue, "first\nsecond")
             .unwrap();
-        let rows = build_rows(&diff, &store);
+        let rows = build_rows(&diff, &store, SyntaxSpans::default());
         match &rows[1] {
             Row::Annotation {
                 text,
@@ -683,7 +750,7 @@ index 111..222 100644
         store
             .add(Target::file("f.rs"), Classification::Issue, "note")
             .unwrap();
-        let rows = build_rows(&diff, &store);
+        let rows = build_rows(&diff, &store, SyntaxSpans::default());
         assert!(rows[0].is_addressable());
         assert!(!rows[1].is_addressable());
         assert!(rows[2].is_addressable());
@@ -709,7 +776,7 @@ index 111..000
     #[test]
     fn anchor_row_index_finds_file_hunk_and_line_targets() {
         let diff = file_diff(raw_two_line_hunk(), "f.rs", false);
-        let rows = build_rows(&diff, &no_notes());
+        let rows = build_rows(&diff, &no_notes(), SyntaxSpans::default());
 
         assert_eq!(
             anchor_row_index(&diff, &rows, &Target::file("f.rs")),
@@ -736,10 +803,119 @@ index 111..000
     #[test]
     fn anchor_row_index_returns_none_when_missing() {
         let diff = file_diff(raw_two_line_hunk(), "f.rs", false);
-        let rows = build_rows(&diff, &no_notes());
+        let rows = build_rows(&diff, &no_notes(), SyntaxSpans::default());
         assert_eq!(
             anchor_row_index(&diff, &rows, &Target::line("f.rs", 99, Side::New)),
             None
         );
+    }
+
+    // -- Syntax span attachment ---------------------------------------------
+
+    #[test]
+    fn syntax_spans_attach_new_side_to_added_and_context_lines() {
+        let raw = "\
+diff --git a/f.rs b/f.rs
+index 1..2 100644
+--- a/f.rs
++++ b/f.rs
+@@ -1,2 +1,3 @@
+ ctx1
++added
+ ctx2
+";
+        let diff = file_diff(raw, "f.rs", false);
+        // New-side sourced content is "ctx1\nadded\nctx2\n" — a multi-line
+        // construct spanning a context line and the added line in between,
+        // to confirm each row gets its own line's spans, not a neighbor's.
+        let new_spans: Vec<Vec<(Range<usize>, TokenKind)>> = vec![
+            vec![(0..4, TokenKind::Comment)],
+            vec![(0..5, TokenKind::Keyword)],
+            vec![(0..4, TokenKind::String)],
+        ];
+        let syntax = SyntaxSpans {
+            new: &new_spans,
+            old: &[],
+        };
+        let rows = build_rows(&diff, &no_notes(), syntax);
+        // rows: FileHeader(0) HunkHeader(1) ctx1(2) added(3) ctx2(4)
+        let Row::Line(ctx1) = &rows[2] else {
+            panic!("expected context line row");
+        };
+        assert_eq!(ctx1.syntax_spans, Some(vec![(0..4, TokenKind::Comment)]));
+        let Row::Line(added) = &rows[3] else {
+            panic!("expected added line row");
+        };
+        assert_eq!(added.syntax_spans, Some(vec![(0..5, TokenKind::Keyword)]));
+        let Row::Line(ctx2) = &rows[4] else {
+            panic!("expected context line row");
+        };
+        assert_eq!(ctx2.syntax_spans, Some(vec![(0..4, TokenKind::String)]));
+    }
+
+    #[test]
+    fn syntax_spans_attach_old_side_to_removed_lines() {
+        let raw = "\
+diff --git a/f.rs b/f.rs
+index 1..2 100644
+--- a/f.rs
++++ b/f.rs
+@@ -1,1 +0,0 @@
+-gone
+";
+        let diff = file_diff(raw, "f.rs", false);
+        let old_spans: Vec<Vec<(Range<usize>, TokenKind)>> =
+            vec![vec![(0..4, TokenKind::Variable)]];
+        let syntax = SyntaxSpans {
+            new: &[],
+            old: &old_spans,
+        };
+        let rows = build_rows(&diff, &no_notes(), syntax);
+        let Row::Line(removed) = &rows[2] else {
+            panic!("expected removed line row");
+        };
+        assert_eq!(
+            removed.syntax_spans,
+            Some(vec![(0..4, TokenKind::Variable)])
+        );
+    }
+
+    #[test]
+    fn syntax_spans_clip_to_row_content_length() {
+        let raw = "\
+diff --git a/f.rs b/f.rs
+index 1..2 100644
+--- a/f.rs
++++ b/f.rs
+@@ -1,1 +1,1 @@
+-x
++y
+";
+        let diff = file_diff(raw, "f.rs", false);
+        // A span reaching well past the row's own content length (as if
+        // content-sourcing landed on a mismatched blob) must clip rather
+        // than panic or leave an out-of-range span.
+        let new_spans: Vec<Vec<(Range<usize>, TokenKind)>> =
+            vec![vec![(0..50, TokenKind::Keyword)]];
+        let syntax = SyntaxSpans {
+            new: &new_spans,
+            old: &[],
+        };
+        let rows = build_rows(&diff, &no_notes(), syntax);
+        let Row::Line(added) = &rows[3] else {
+            panic!("expected added line row");
+        };
+        let spans = added.syntax_spans.as_ref().expect("clipped span survives");
+        assert_eq!(spans[0].0, 0..1);
+    }
+
+    #[test]
+    fn missing_syntax_spans_for_a_line_is_none() {
+        let diff = file_diff(raw_two_line_hunk(), "f.rs", false);
+        let rows = build_rows(&diff, &no_notes(), SyntaxSpans::default());
+        let Row::Line(line) = &rows[2] else {
+            panic!("expected line row");
+        };
+        assert_eq!(line.syntax_spans, None);
     }
 }

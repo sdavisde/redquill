@@ -23,14 +23,18 @@ mod help;
 mod keymap;
 mod list_panel;
 mod rows;
+mod search;
 mod sidebar;
 mod stage_ops;
 mod staging_panel;
+mod syntax;
+mod theme;
 
 pub use app::{App, Mode};
 pub use keymap::{Action, Binding, Keymap};
 pub use rows::{Row, build_rows};
 pub use stage_ops::{ReviewError, ReviewSnapshot, StageOps, StagedFile, build_review};
+pub use theme::Theme;
 
 use std::io::{self, Stderr};
 
@@ -41,8 +45,8 @@ use crossterm::terminal::{
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 /// How a TUI session ended.
@@ -108,15 +112,27 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
             _ => list_panel::render(frame, panel_area, app),
         }
     }
-    if let Some(message) = &app.status_message {
+    if matches!(app.mode, Mode::Search) {
+        let text = format!("/{}", app.search_input);
+        let footer = Line::from(Span::styled(
+            text.clone(),
+            Style::default().fg(app.theme.search_prompt),
+        ));
+        frame.render_widget(footer, footer_area);
+        let cursor_x = footer_area
+            .x
+            .saturating_add(text.chars().count() as u16)
+            .min(footer_area.x + footer_area.width.saturating_sub(1));
+        frame.set_cursor_position(Position::new(cursor_x, footer_area.y));
+    } else if let Some(message) = &app.status_message {
         let footer = Line::from(Span::styled(
             format!(" {message}"),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(app.theme.status_message),
         ));
         frame.render_widget(footer, footer_area);
     }
     if app.help_open {
-        help::render(frame, area, keymap);
+        help::render(frame, area, keymap, &app.theme);
     }
     if matches!(app.mode, Mode::Compose) {
         compose_modal::render(frame, area, app);
@@ -244,6 +260,23 @@ fn handle_staging_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// Handles one key event while [`Mode::Search`] is active: printable chars
+/// insert into the pattern buffer, Backspace deletes, `Enter` confirms
+/// (jumping to the first match at-or-after the cursor), `Esc` cancels
+/// (clearing the active pattern only if the buffer was left empty).
+/// Bypasses the [`Keymap`] table entirely (see the module docs).
+fn handle_search_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => app.cancel_search(),
+        KeyCode::Enter => app.confirm_search(),
+        KeyCode::Backspace => {
+            app.search_input.pop();
+        }
+        KeyCode::Char(c) => app.search_input.push(c),
+        _ => {}
+    }
+}
+
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stderr>>,
     app: &mut App,
@@ -268,6 +301,7 @@ fn event_loop(
                     Mode::Compose => handle_compose_key(app, key),
                     Mode::List => handle_list_key(app, key),
                     Mode::Staging => handle_staging_key(app, key),
+                    Mode::Search => handle_search_key(app, key),
                     Mode::Normal | Mode::Visual { .. } => {
                         // Esc only ever closes an already-open help overlay or
                         // cancels an in-progress Visual selection; it is never
@@ -307,6 +341,7 @@ mod tests {
     use crate::annotate::{Classification, Target};
     use crate::diff::FileDiff;
     use crate::git::RawFilePatch;
+    use crate::highlight::TokenKind;
     use ratatui::backend::TestBackend;
 
     fn sample_file() -> FileDiff {
@@ -398,7 +433,11 @@ index 111..222 100644
         // App::new built `rows` before this annotation existed; rebuild so
         // the inline display row/gutter marker reflect it (this is what
         // `App::submit_compose` does internally on a real compose flow).
-        app.rows = build_rows(&app.files[0], &app.annotations);
+        app.rows = build_rows(
+            &app.files[0],
+            &app.annotations,
+            rows::SyntaxSpans::default(),
+        );
         app.mode = Mode::List;
 
         let keymap = Keymap::default_map();
@@ -457,5 +496,116 @@ index 111..222 100644
         let buffer = terminal.backend().buffer().clone();
         let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
         assert!(content.contains("nothing staged yet"));
+    }
+
+    // -- Syntax highlighting (rendering layer) -------------------------------
+
+    /// A row carrying a syntax-highlight span renders that span's text with
+    /// the theme's token color — asserted via actual buffer cell styles,
+    /// not just text content, so this exercises the diff pane's rendering
+    /// (not the tree-sitter engine, which has its own tests).
+    #[test]
+    fn syntax_highlighted_span_renders_with_token_color() {
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![sample_file()]);
+        let theme = app.theme;
+
+        let Some(Row::Line(line)) = app.rows.get_mut(2) else {
+            panic!("expected a line row at index 2");
+        };
+        assert_eq!(line.content, "fn main() {");
+        line.syntax_spans = Some(vec![(0..2, TokenKind::Keyword)]);
+
+        let keymap = Keymap::default_map();
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let has_keyword_cell = buffer
+            .content()
+            .iter()
+            .any(|cell| cell.symbol() == "f" && cell.fg == theme.keyword);
+        assert!(
+            has_keyword_cell,
+            "expected a cell styled with the keyword token color"
+        );
+    }
+
+    // -- Search ---------------------------------------------------------------
+
+    #[test]
+    fn search_input_editing_via_handle_search_key() {
+        let mut app = App::new(vec![sample_file()]);
+        app.mode = Mode::Search;
+        handle_search_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
+        );
+        handle_search_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        );
+        handle_search_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+        );
+        assert_eq!(app.search_input, "old");
+        handle_search_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        );
+        assert_eq!(app.search_input, "ol");
+        handle_search_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.search.pattern.as_deref(), Some("ol"));
+    }
+
+    #[test]
+    fn search_esc_cancels_mode() {
+        let mut app = App::new(vec![sample_file()]);
+        app.mode = Mode::Search;
+        app.search_input.push('x');
+        handle_search_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    /// An active search shows the `/pattern` footer prompt while typing,
+    /// and — once confirmed — the matched row's text renders with the
+    /// search-match background.
+    #[test]
+    fn search_mode_renders_prompt_and_confirmed_match_is_highlighted() {
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![sample_file()]);
+        let theme = app.theme;
+
+        app.mode = Mode::Search;
+        app.search_input = "n".to_string();
+        let keymap = Keymap::default_map();
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+        assert!(content.contains("/n"));
+
+        // "n" matches both "fn main() {" (row 2) and "new();" (row 4);
+        // confirming jumps the cursor to the first match (row 2), leaving
+        // the second match (row 4) highlighted but not selected — so its
+        // background is unambiguously the search-match tint, not the
+        // cursor-row tint.
+        app.confirm_search();
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.search.matches.len(), 2);
+        assert_ne!(app.cursor, app.search.matches[1]);
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let has_match_bg = buffer
+            .content()
+            .iter()
+            .any(|cell| cell.bg == theme.search_match_bg);
+        assert!(
+            has_match_bg,
+            "expected the unselected matched row to carry the search-match background"
+        );
     }
 }

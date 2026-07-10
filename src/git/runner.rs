@@ -99,6 +99,17 @@ impl GitRunner {
         let out = self.run_utf8(&args)?;
         Ok(split_patches(&out))
     }
+
+    /// Reads a file's content at a git revision spec (`git show <spec>`,
+    /// e.g. `HEAD:src/main.rs`, `:0:src/main.rs`). Used to source whole-file
+    /// content for syntax highlighting, since the diff itself only carries
+    /// changed lines. Returns `None` on any failure — an unknown revision,
+    /// a spec with no such path, or non-UTF8 (e.g. binary) content — so
+    /// callers can degrade to unhighlighted content rather than erroring.
+    pub fn show_file(&self, spec: &str) -> Option<String> {
+        let bytes = self.run_raw(&["show", spec]).ok()?;
+        String::from_utf8(bytes).ok()
+    }
 }
 
 /// Maps a spawn `io::Error` to a `GitNotFound` when git is absent, else `Spawn`.

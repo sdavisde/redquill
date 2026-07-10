@@ -5,25 +5,12 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 
 use super::app::App;
-
-/// The color convention for a change-kind letter, matching git's own
-/// `--name-status` letters (plus `?` for untracked). Shared with the
-/// staging panel, which shows the same letters.
-pub(super) fn letter_color(letter: char) -> Color {
-    match letter {
-        'A' => Color::Green,
-        'M' => Color::Yellow,
-        'D' => Color::Red,
-        'R' | 'C' => Color::Blue,
-        '?' => Color::DarkGray,
-        _ => Color::White,
-    }
-}
+use super::theme::Theme;
 
 /// Splits `path` into a dimmed directory prefix and a normal-weight
 /// basename, e.g. `"src/auth/"` + `"session.rs"`.
@@ -34,27 +21,27 @@ fn split_path(path: &str) -> (&str, &str) {
     }
 }
 
-/// The staged-indicator column: a green `●` for files with staged changes,
-/// blank otherwise, so paths stay column-aligned either way.
-fn staged_span(staged: bool) -> Span<'static> {
+/// The staged-indicator column: a `●` for files with staged changes, blank
+/// otherwise, so paths stay column-aligned either way.
+fn staged_span(staged: bool, theme: &Theme) -> Span<'static> {
     if staged {
-        Span::styled("\u{25cf} ", Style::default().fg(Color::Green))
+        Span::styled("\u{25cf} ", Style::default().fg(theme.staged_indicator))
     } else {
         Span::raw("  ")
     }
 }
 
-fn file_line(letter: char, path: &str, staged: bool) -> Line<'static> {
+fn file_line(letter: char, path: &str, staged: bool, theme: &Theme) -> Line<'static> {
     let (dir, base) = split_path(path);
     Line::from(vec![
-        staged_span(staged),
+        staged_span(staged, theme),
         Span::styled(
             format!("{letter} "),
             Style::default()
-                .fg(letter_color(letter))
+                .fg(theme.letter_color(letter))
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(dir.to_string(), Style::default().fg(Color::DarkGray)),
+        Span::styled(dir.to_string(), Style::default().fg(theme.dir_prefix)),
         Span::raw(base.to_string()),
     ])
 }
@@ -73,14 +60,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             let staged = app.staged.iter().any(|s| s.path == f.path);
             let line = if let Some(old) = &f.old_path {
                 let (_, old_base) = split_path(old);
-                let mut line = file_line(f.kind.letter(), &f.path, staged);
+                let mut line = file_line(f.kind.letter(), &f.path, staged, &app.theme);
                 line.spans.push(Span::styled(
                     format!(" \u{2190} {old_base}"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(app.theme.dir_prefix),
                 ));
                 line
             } else {
-                file_line(f.kind.letter(), &f.path, staged)
+                file_line(f.kind.letter(), &f.path, staged, &app.theme)
             };
             ListItem::new(line)
         })
@@ -107,7 +94,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
     let footer = Line::from(Span::styled(
         footer_text,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(app.theme.footer_text),
     ));
     frame.render_widget(footer, chunks[1]);
 }
