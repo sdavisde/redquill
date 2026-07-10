@@ -222,7 +222,7 @@ pub fn lineno_col_width(files: &[crate::diff::DiffFile]) -> usize;
 
 ### Wave 2 (Requires Wave 1)
 
-### [ ] 2.0 Keymap as data (DUW 4.2)
+### [x] 2.0 Keymap as data (DUW 4.2)
 
 **Wave:** 2 | **Agent Scope:** `src/ui/keymap.rs` (fill body only — do NOT touch `mod.rs`, `Cargo.toml`, or any other file)
 **FRs:** FR-render-keymap-1, FR-render-keymap-2, FR-render-keymap-3, FR-render-keymap-4, FR-render-keymap-5
@@ -245,19 +245,19 @@ single-entry no-ops (doc-comment the deferral to Task 5); `K` → `Action::Hover
 
 #### 2.0 Quality Verification
 
-- [ ] `cargo build` clean
-- [ ] `cargo test` — all passing
-- [ ] `cargo clippy -- -D warnings` — zero warnings
-- [ ] `cargo fmt --check` clean
-- [ ] /trace: key resolution is table lookup over `bindings` data — no `match ev.code` behavior arms; bindings are plain data (no closures/trait objects)
+- [x] `cargo build` clean
+- [x] `cargo test` — all passing
+- [x] `cargo clippy -- -D warnings` — zero warnings
+- [x] `cargo fmt --check` clean
+- [x] /trace: key resolution is table lookup over `bindings` data — no `match ev.code` behavior arms; bindings are plain data (no closures/trait objects)
 
 #### 2.0 Tasks
 
-- [ ] 2.1 (test-first) Write failing unit tests in `src/ui/keymap.rs` for the live bindings (`j`/`k`, `Ctrl-d`/`Ctrl-u`, `q`/`Q`), a present-but-no-op binding (`]`→`NextHunk`), an unbound key (→`Noop`), the arrow/page aliases, and the `chord_for` reverse lookup.
-- [ ] 2.2 Implement `KeyChord::from_event` (normalize a `crossterm` `KeyEvent` to `{ code, modifiers }`; strip irrelevant modifier bits so `'j'` with no modifiers is stable as a `HashMap` key).
-- [ ] 2.3 Implement `Keymap::default_map()` binding EXACTLY the README draft map (spec FR-render-keymap-2): `j`/`k`, `Ctrl-d`/`Ctrl-u`, `]`/`[`, `Tab`/`Shift-Tab`, `/`, `n`/`N`, `c`, `v`, `space`, `s`, `gd`/`gr`/`K`, `a`, `?`, `q`/`Q` → their `Action`s; plus the arrow/page aliases. `gd`/`gr` as placeholder single-entry no-ops (doc-comment).
-- [ ] 2.4 Implement `resolve()` (lookup `KeyChord::from_event(ev)` in `bindings`, default `Action::Noop`) and `chord_for()` (reverse scan for the first chord bound to a given `Action`).
-- [ ] 2.5 Add `// FR-render-keymap-N` traceability comments at the implementing sites; doc-comment the `gd`/`gr` deferral and the "all bindings provisional / one-line rebind" invariant (FR-render-keymap-5).
+- [x] 2.1 (test-first) Write failing unit tests in `src/ui/keymap.rs` for the live bindings (`j`/`k`, `Ctrl-d`/`Ctrl-u`, `q`/`Q`), a present-but-no-op binding (`]`→`NextHunk`), an unbound key (→`Noop`), the arrow/page aliases, and the `chord_for` reverse lookup.
+- [x] 2.2 Implement `KeyChord::from_event` (normalize a `crossterm` `KeyEvent` to `{ code, modifiers }`; strip irrelevant modifier bits so `'j'` with no modifiers is stable as a `HashMap` key).
+- [x] 2.3 Implement `Keymap::default_map()` binding EXACTLY the README draft map (spec FR-render-keymap-2): `j`/`k`, `Ctrl-d`/`Ctrl-u`, `]`/`[`, `Tab`/`Shift-Tab`, `/`, `n`/`N`, `c`, `v`, `space`, `s`, `gd`/`gr`/`K`, `a`, `?`, `q`/`Q` → their `Action`s; plus the arrow/page aliases. `gd`/`gr` as placeholder single-entry no-ops (doc-comment).
+- [x] 2.4 Implement `resolve()` (lookup `KeyChord::from_event(ev)` in `bindings`, default `Action::Noop`) and `chord_for()` (reverse scan for the first chord bound to a given `Action`).
+- [x] 2.5 Add `// FR-render-keymap-N` traceability comments at the implementing sites; doc-comment the `gd`/`gr` deferral and the "all bindings provisional / one-line rebind" invariant (FR-render-keymap-5).
 
 ### [x] 3.0 Panic-safe terminal guard (DUW 4.1 — do this first)
 
