@@ -293,7 +293,7 @@ single-entry no-ops (doc-comment the deferral to Task 5); `K` → `Action::Hover
 
 ### Wave 3 (Requires Wave 2)
 
-### [ ] 4.0 Unified diff render + scrolling + main→ui wiring (DUW 4.3 + 4.4)
+### [x] 4.0 Unified diff render + scrolling + main→ui wiring (DUW 4.3 + 4.4)
 
 **Wave:** 3 | **Agent Scope:** `src/ui/app.rs` (fill body only) + `src/main.rs` (route into `ui::run`). Do NOT touch `mod.rs`, `Cargo.toml`, `keymap.rs`, or `terminal.rs`.
 **FRs:** FR-render-view-1, FR-render-view-2, FR-render-view-3, FR-render-view-4, FR-render-view-5, FR-render-wire-1, FR-render-wire-2
@@ -318,20 +318,20 @@ without panic. Only the visible row slice is built/styled per frame (spec §6 la
 
 #### 4.0 Quality Verification
 
-- [ ] `cargo build` clean
-- [ ] `cargo test` — all passing (incl. new layout-helper unit tests)
-- [ ] `cargo clippy -- -D warnings` — zero warnings
-- [ ] `cargo fmt --check` clean
-- [ ] /trace: `ui/` imports no `git` types (wire-1); key handling is `keymap.resolve` only (no widget match arms); no hardcoded key names outside `default_map()` (keymap-5); render slices the visible range only (no whole-buffer per-frame build)
+- [x] `cargo build` clean
+- [x] `cargo test` — all passing (incl. new layout-helper unit tests)
+- [x] `cargo clippy -- -D warnings` — zero warnings
+- [x] `cargo fmt --check` clean
+- [x] /trace: `ui/` imports no `git` types (wire-1); key handling is `keymap.resolve` only (no widget match arms); no hardcoded key names outside `default_map()` (keymap-5); render slices the visible range only (no whole-buffer per-frame build)
 
 #### 4.0 Tasks
 
-- [ ] 4.1 (test-first) Write failing unit tests in `src/ui/app.rs` for the pure helpers: `clamp_scroll` (past-end, past-top, exact-fit), `visible_range` (clamped window, viewport larger than content), `gutter_marker` (all three `LineKind`s), `lineno_col_width` (single-digit vs multi-digit, multi-file max). These compile against T1.0's stubbed signatures and fail until 4.2 lands.
-- [ ] 4.2 Implement the pure helpers and a flattened-row model: build the ordered render rows (file header, hunk header, one per `Line`; binary/zero-hunk → header + placeholder row) from `&[DiffFile]`; `visible_range`/`clamp_scroll` select the slice; `gutter_marker` + `lineno_col_width` format the gutter/number columns. Long lines truncate-to-width with a trailing marker (FR-render-view-1/2/3/4; spec §9 default).
-- [ ] 4.3 Implement `run(files)`: construct `Keymap::default_map()` and a `TerminalGuard::enter()?`; loop = draw the visible slice, then **block on the next crossterm event** (key or resize), `keymap.resolve(ev)` → mutate `App` (`ScrollDown`/`Up` ±1 clamped; `HalfPageDown`/`Up` ± half viewport height recomputed per event; `Quit`/`QuitDiscard` set `should_quit`; every other `Action` is a no-op), re-draw only on change; exit the loop when `should_quit`. Render on event, never busy-loop (FR-render-view-5). Handle resize by re-rendering to the new size (spec §6). No `unwrap`/`expect`.
-- [ ] 4.4 Render styling: added lines in an added color, removed in a removed color, context default (plain colors, no syntax highlighting); within paired lines, render `changed_spans` regions with distinct emphasis (brighter/inverted) — FR-render-view-3/4. Empty-state row when `files` is empty (FR-render-wire-2), with any key hint derived via `keymap.chord_for(Action::Quit)` (FR-render-keymap-5).
-- [ ] 4.5 Wire `src/main.rs::run()`: keep `GitRunner::discover()` + `runner.diff(&target)`, replace the summary `println!` (and the untracked-file counting, which was summary-specific) with `let files = diff::parse_patches(&patches); ui::run(files)?;`. `run()` stays `anyhow::Result<()>` and free of `unwrap`/`expect` (`UiError` converts via `?`). `ui/` is never imported by `git/` and never imports `git/` (FR-render-wire-1).
-- [ ] 4.6 Add a temporary panic-trigger path (behind a hidden/test-only flag or documented manual step) to observe FR-render-term-2 restore end-to-end, then record the observation in `03-proofs`-style proof notes; add `// FR-render-view-N` / `// FR-render-wire-N` traceability comments.
+- [x] 4.1 (test-first) Write failing unit tests in `src/ui/app.rs` for the pure helpers: `clamp_scroll` (past-end, past-top, exact-fit), `visible_range` (clamped window, viewport larger than content), `gutter_marker` (all three `LineKind`s), `lineno_col_width` (single-digit vs multi-digit, multi-file max). These compile against T1.0's stubbed signatures and fail until 4.2 lands.
+- [x] 4.2 Implement the pure helpers and a flattened-row model: build the ordered render rows (file header, hunk header, one per `Line`; binary/zero-hunk → header + placeholder row) from `&[DiffFile]`; `visible_range`/`clamp_scroll` select the slice; `gutter_marker` + `lineno_col_width` format the gutter/number columns. Long lines truncate-to-width with a trailing marker (FR-render-view-1/2/3/4; spec §9 default).
+- [x] 4.3 Implement `run(files)`: construct `Keymap::default_map()` and a `TerminalGuard::enter()?`; loop = draw the visible slice, then **block on the next crossterm event** (key or resize), `keymap.resolve(ev)` → mutate `App` (`ScrollDown`/`Up` ±1 clamped; `HalfPageDown`/`Up` ± half viewport height recomputed per event; `Quit`/`QuitDiscard` set `should_quit`; every other `Action` is a no-op), re-draw only on change; exit the loop when `should_quit`. Render on event, never busy-loop (FR-render-view-5). Handle resize by re-rendering to the new size (spec §6). No `unwrap`/`expect`.
+- [x] 4.4 Render styling: added lines in an added color, removed in a removed color, context default (plain colors, no syntax highlighting); within paired lines, render `changed_spans` regions with distinct emphasis (brighter/inverted) — FR-render-view-3/4. Empty-state row when `files` is empty (FR-render-wire-2), with any key hint derived via `keymap.chord_for(Action::Quit)` (FR-render-keymap-5).
+- [x] 4.5 Wire `src/main.rs::run()`: keep `GitRunner::discover()` + `runner.diff(&target)`, replace the summary `println!` (and the untracked-file counting, which was summary-specific) with `let files = diff::parse_patches(&patches); ui::run(files)?;`. `run()` stays `anyhow::Result<()>` and free of `unwrap`/`expect` (`UiError` converts via `?`). `ui/` is never imported by `git/` and never imports `git/` (FR-render-wire-1).
+- [x] 4.6 Add a temporary panic-trigger path (behind a hidden/test-only flag or documented manual step) to observe FR-render-term-2 restore end-to-end, then record the observation in `03-proofs`-style proof notes; add `// FR-render-view-N` / `// FR-render-wire-N` traceability comments.
 
 ## Post-Generation Verification (recorded at task-gen time)
 

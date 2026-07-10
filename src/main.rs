@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use clap::Parser;
 
 use redquill::diff;
-use redquill::git::{ChangeKind, DiffTarget, GitRunner};
+use redquill::git::{DiffTarget, GitRunner};
+use redquill::ui;
 
 /// redquill: a terminal UI for reviewing agentic code changes.
 ///
@@ -68,39 +69,17 @@ impl Config {
     }
 }
 
-/// Prints a single aggregate summary line for the resolved diff target,
-/// built from the parsed diff model rather than a per-file listing.
+/// Loads the resolved diff target via `git/`, parses it into the typed diff
+/// model via `diff/`, and hands ownership of that model to the `ui/` entry
+/// point (FR-render-wire-1). `main.rs` is the only site that touches
+/// `GitRunner`; `ui/` never references `git/`.
 fn run(config: &Config) -> anyhow::Result<()> {
     let runner = GitRunner::discover()?;
     let target = config.diff_target();
     let patches = runner.diff(&target)?;
 
-    // FR-diff-wire-1: parse the raw patches into the typed diff model and
-    // derive aggregate counts from it — this replaces the Task-2 per-file
-    // placeholder loop.
     let files = diff::parse_patches(&patches);
-    let mut summary = diff::summarize(&files);
-
-    // `git diff` never surfaces untracked files (see `git/` contract), so a
-    // working-tree summary would otherwise silently omit them. They carry no
-    // diff body (no hunks, no added/removed lines), so folding their count
-    // into `files` — rather than preserving a separate per-file `?` listing —
-    // is the summary-shaped choice: the operator still sees a complete file
-    // count, without reintroducing the per-file loop this task removes.
-    if matches!(target, DiffTarget::WorkingTree) {
-        let untracked = runner
-            .status()?
-            .into_iter()
-            .filter(|entry| entry.kind == ChangeKind::Untracked)
-            .count();
-        summary.files += untracked;
-    }
-
-    // FR-diff-wire-1: single summary line, e.g. `3 files, 7 hunks, +42 -18`.
-    println!(
-        "{} files, {} hunks, +{} -{}",
-        summary.files, summary.hunks, summary.added, summary.removed
-    );
+    ui::run(files)?;
     Ok(())
 }
 
