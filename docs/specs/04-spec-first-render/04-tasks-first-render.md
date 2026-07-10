@@ -259,7 +259,7 @@ single-entry no-ops (doc-comment the deferral to Task 5); `K` → `Action::Hover
 - [ ] 2.4 Implement `resolve()` (lookup `KeyChord::from_event(ev)` in `bindings`, default `Action::Noop`) and `chord_for()` (reverse scan for the first chord bound to a given `Action`).
 - [ ] 2.5 Add `// FR-render-keymap-N` traceability comments at the implementing sites; doc-comment the `gd`/`gr` deferral and the "all bindings provisional / one-line rebind" invariant (FR-render-keymap-5).
 
-### [ ] 3.0 Panic-safe terminal guard (DUW 4.1 — do this first)
+### [x] 3.0 Panic-safe terminal guard (DUW 4.1 — do this first)
 
 **Wave:** 2 | **Agent Scope:** `src/ui/terminal.rs` (fill body only — do NOT touch `mod.rs`, `Cargo.toml`, or any other file)
 **FRs:** FR-render-term-1, FR-render-term-2, FR-render-term-3
@@ -275,19 +275,19 @@ single-entry no-ops (doc-comment the deferral to Task 5); `K` → `Action::Hover
 
 #### 3.0 Quality Verification
 
-- [ ] `cargo build` clean
-- [ ] `cargo test` — all passing
-- [ ] `cargo clippy -- -D warnings` — zero warnings
-- [ ] `cargo fmt --check` clean
-- [ ] /trace: setup/teardown is encapsulated in `TerminalGuard`; `Drop` restores; no `unwrap`/`expect` outside tests; panic hook chains to the previous hook
+- [x] `cargo build` clean
+- [x] `cargo test` — all passing
+- [x] `cargo clippy -- -D warnings` — zero warnings
+- [x] `cargo fmt --check` clean
+- [x] /trace: setup/teardown is encapsulated in `TerminalGuard`; `Drop` restores; no `unwrap`/`expect` outside tests; panic hook chains to the previous hook
 
 #### 3.0 Tasks
 
-- [ ] 3.1 (test-first) Write a failing unit test asserting `restore_terminal()` is idempotent and TTY-independent (call it twice; no panic; returns `()`), and that `TerminalGuard`'s teardown path routes through `restore_terminal()`.
-- [ ] 3.2 Implement `restore_terminal()`: `crossterm::terminal::disable_raw_mode()` + `LeaveAlternateScreen` (+ show cursor); ignore "already restored" errors so it is idempotent (FR-render-term-1/3).
-- [ ] 3.3 Implement `TerminalGuard::enter()`: enable raw mode, enter the alternate screen, build the `Terminal<CrosstermBackend<Stdout>>`, and **install a panic hook** (chaining the previous hook) that calls `restore_terminal()` BEFORE the default panic message prints (FR-render-term-2). Return `Result<Self, UiError>`, no `unwrap`.
-- [ ] 3.4 Implement `impl Drop for TerminalGuard` calling `restore_terminal()` so early returns and `?` also restore (FR-render-term-3), plus `terminal_mut()` for the app loop's draw access.
-- [ ] 3.5 Add `// FR-render-term-N` traceability comments at the implementing sites.
+- [x] 3.1 (test-first) Write a failing unit test asserting `restore_terminal()` is idempotent and TTY-independent (call it twice; no panic; returns `()`), and that `TerminalGuard`'s teardown path routes through `restore_terminal()`.
+- [x] 3.2 Implement `restore_terminal()`: `crossterm::terminal::disable_raw_mode()` + `LeaveAlternateScreen` (+ show cursor); ignore "already restored" errors so it is idempotent (FR-render-term-1/3).
+- [x] 3.3 Implement `TerminalGuard::enter()`: enable raw mode, enter the alternate screen, build the `Terminal<CrosstermBackend<Stdout>>`, and **install a panic hook** (chaining the previous hook) that calls `restore_terminal()` BEFORE the default panic message prints (FR-render-term-2). Return `Result<Self, UiError>`, no `unwrap`.
+- [x] 3.4 Implement `impl Drop for TerminalGuard` calling `restore_terminal()` so early returns and `?` also restore (FR-render-term-3), plus `terminal_mut()` for the app loop's draw access.
+- [x] 3.5 Add `// FR-render-term-N` traceability comments at the implementing sites.
 
 ---
 
