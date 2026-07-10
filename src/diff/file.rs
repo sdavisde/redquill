@@ -5,6 +5,7 @@ use crate::git::RawFilePatch;
 
 use super::error::DiffParseError;
 use super::hunk::{Hunk, parse_hunks};
+use super::line::{DiffLine, LineOrigin};
 
 /// The kind of change a file underwent, mirroring git's own
 /// `--name-status` classification.
@@ -76,6 +77,59 @@ impl FileDiff {
             is_binary: patch.is_binary,
             hunks,
         })
+    }
+
+    /// Builds a synthetic [`FileDiff`] for an untracked file: `git diff` never
+    /// surfaces untracked content, but a reviewer needs to see it as a
+    /// single all-added hunk (old side `0,0`; new side `1,n`).
+    ///
+    /// `content` is the file's full text. A missing trailing newline on the
+    /// last line is reflected via [`DiffLine::no_newline`], matching how
+    /// [`parse_hunks`] handles the same case for real patches. An empty
+    /// `content` yields a [`FileDiff`] with no hunks.
+    pub fn synthetic_added(path: String, content: &str) -> FileDiff {
+        let has_trailing_newline = content.is_empty() || content.ends_with('\n');
+        let body = content.strip_suffix('\n').unwrap_or(content);
+        let raw_lines: Vec<&str> = if content.is_empty() {
+            Vec::new()
+        } else {
+            body.split('\n').collect()
+        };
+
+        let last_index = raw_lines.len().saturating_sub(1);
+        let lines: Vec<DiffLine> = raw_lines
+            .into_iter()
+            .enumerate()
+            .map(|(i, text)| DiffLine {
+                origin: LineOrigin::Added,
+                old_line: None,
+                new_line: Some(i as u32 + 1),
+                content: text.to_string(),
+                no_newline: !has_trailing_newline && i == last_index,
+            })
+            .collect();
+
+        let new_count = lines.len() as u32;
+        let hunks = if lines.is_empty() {
+            Vec::new()
+        } else {
+            vec![Hunk {
+                old_start: 0,
+                old_count: 0,
+                new_start: 1,
+                new_count,
+                section: None,
+                lines,
+            }]
+        };
+
+        FileDiff {
+            path,
+            old_path: None,
+            kind: FileChangeKind::Added,
+            is_binary: false,
+            hunks,
+        }
     }
 }
 
@@ -208,6 +262,56 @@ Binary files a/img.png and b/img.png differ
         let diff = FileDiff::from_patch(&p).unwrap();
         assert!(diff.is_binary);
         assert!(diff.hunks.is_empty());
+    }
+
+    #[test]
+    fn synthetic_added_with_trailing_newline() {
+        let diff = FileDiff::synthetic_added("new.rs".to_string(), "a\nb\nc\n");
+        assert_eq!(diff.path, "new.rs");
+        assert_eq!(diff.old_path, None);
+        assert_eq!(diff.kind, FileChangeKind::Added);
+        assert!(!diff.is_binary);
+        assert_eq!(diff.hunks.len(), 1);
+        let hunk = &diff.hunks[0];
+        assert_eq!(hunk.old_start, 0);
+        assert_eq!(hunk.old_count, 0);
+        assert_eq!(hunk.new_start, 1);
+        assert_eq!(hunk.new_count, 3);
+        assert_eq!(hunk.lines.len(), 3);
+        for (i, line) in hunk.lines.iter().enumerate() {
+            assert_eq!(line.origin, LineOrigin::Added);
+            assert_eq!(line.old_line, None);
+            assert_eq!(line.new_line, Some(i as u32 + 1));
+            assert!(!line.no_newline);
+        }
+        assert_eq!(hunk.lines[0].content, "a");
+        assert_eq!(hunk.lines[2].content, "c");
+    }
+
+    #[test]
+    fn synthetic_added_without_trailing_newline_marks_last_line() {
+        let diff = FileDiff::synthetic_added("new.rs".to_string(), "a\nb");
+        let hunk = &diff.hunks[0];
+        assert_eq!(hunk.lines.len(), 2);
+        assert!(!hunk.lines[0].no_newline);
+        assert!(hunk.lines[1].no_newline);
+        assert_eq!(hunk.lines[1].content, "b");
+    }
+
+    #[test]
+    fn synthetic_added_single_line_no_trailing_newline() {
+        let diff = FileDiff::synthetic_added("new.rs".to_string(), "only");
+        let hunk = &diff.hunks[0];
+        assert_eq!(hunk.lines.len(), 1);
+        assert!(hunk.lines[0].no_newline);
+        assert_eq!(hunk.lines[0].new_line, Some(1));
+    }
+
+    #[test]
+    fn synthetic_added_empty_content_has_no_hunks() {
+        let diff = FileDiff::synthetic_added("empty.rs".to_string(), "");
+        assert!(diff.hunks.is_empty());
+        assert_eq!(diff.kind, FileChangeKind::Added);
     }
 
     #[test]
