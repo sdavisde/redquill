@@ -1,0 +1,63 @@
+# Should-Have.txt
+# Autonomous Pipeline Friction Log
+# Tracks every moment the pipeline needed human help or failed to self-correct
+# Use this to improve the pipeline for future runs
+# Last updated: 2026-07-10
+
+## 2026-07-10 - Spec 03: diff-model
+
+### Friction Points
+
+- [2026-07-10T~04:00Z] **SESSION_LIMIT**: Phase-3 fixer agent killed mid-dispatch by API session limit ("resets 1:40am").
+  - **What broke**: fixer agent for audit findings A-MED-1/B-LOW-1/B-LOW-2 terminated before making any edits.
+  - **What the pipeline did**: killed-cluster salvage protocol — inspected tree (clean, nothing to salvage), redispatched ONCE; second dispatch completed cleanly (ff17d7f).
+  - **What the user had to do**: typed "continue" after the limit window reset.
+  - **Root cause**: session usage cap mid-pipeline; no cron survival job was armed.
+  - **Improvement**: arm /cron auto-continue at cycle start when a run may straddle a usage window.
+
+- [2026-07-10T~04:00Z] **DISPATCH_INFRA**: witness-lite dispatch failed once — safety classifier temporarily unavailable.
+  - **What broke**: second Agent call in a two-dispatch block errored ("temporarily unavailable... try again").
+  - **What the pipeline did**: retried on the next turn; succeeded.
+  - **What the user had to do**: none (bundled with the "continue" above).
+  - **Root cause**: transient harness-side model availability.
+  - **Improvement**: none needed — retry-once-later is the correct behavior; keep dispatches idempotent.
+
+- [2026-07-10T~03:05Z] **ORCHESTRATOR_ERROR**: parent's sed for T1.0 checkbox paperwork over-marked `- [ ] \`cargo...\`` quality checkboxes in Wave-2 sections too.
+  - **What broke**: task file transiently claimed unstarted tasks had passing gates.
+  - **What the pipeline did**: caught it in the same turn, section-scoped python fix, amended the paperwork commit before anything consumed it.
+  - **What the user had to do**: none.
+  - **Root cause**: file-global regex for a section-scoped edit.
+  - **Improvement**: always scope task-file checkbox edits to the task's section (parse section headers, never file-global sed).
+
+- [2026-07-10T~02:50Z] **ENVIRONMENT**: cargo-audit not installed — §0.7 dep-CVE gate degraded to logged-skip.
+  - **What broke**: no CVE scan for the cycle (mitigated: zero new deps, Cargo.toml out of scope by task design).
+  - **What the pipeline did**: logged and continued per host-tool allowlist (agents must not install host tools).
+  - **What the user had to do**: nothing yet; TO-DO.txt Part A item added.
+  - **Root cause**: host missing optional tool.
+  - **Improvement**: TO-DO Part A entry (done); pipeline behavior was correct.
+
+- [2026-07-10, throughout] **TOOLING_NOISE**: Vercel plugin hooks repeatedly false-triggered on pipeline vocabulary ("pipeline", "phase", "isolated", "bot"), injecting MANDATORY-read directives and Skill() demands irrelevant to a Rust TUI repo.
+  - **What broke**: nothing functionally — orchestrator and one sub-agent had to recognize and disregard the injections.
+  - **What the pipeline did**: ignored them with a one-line note each time.
+  - **What the user had to do**: none.
+  - **Root cause**: keyword-scored skill-injection hooks with no repo-relevance gate.
+  - **Improvement**: scope/disable the Vercel plugin for non-Vercel repos (plugin settings), or raise its injection threshold.
+
+- [2026-07-10T~03:20Z] **CONCURRENCY (recovered by design)**: Wave-2 siblings transiently observed each other's mid-edit state (T4.0 saw word.rs clippy errors; T2.0/T3.0 saw main.rs mid-edit compile errors).
+  - **What broke**: transient full-workspace gate failures during parallel no-worktree execution.
+  - **What the pipeline did**: dispatch envelopes pre-authorized "re-run once / scope gates to own files while sibling in flight"; all three agents self-resolved; final merged gates green.
+  - **What the user had to do**: none.
+  - **Root cause**: inherent to shared-tree file-ownership parallelism.
+  - **Improvement**: none for this repo size; for larger waves consider staggered gate windows or a parent-run final gate only.
+
+- [2026-07-10T~02:45Z] **SKILL_MISMATCH**: /md's Phase 0/2.5/3 machinery is Node/Python-centric (pnpm/eslint/tsc/pytest/pip-audit); this cycle needed dispatch-envelope overrides for every gate.
+  - **What broke**: nothing — overrides worked; but every future Rust cycle repays the same adaptation tax.
+  - **What the pipeline did**: parent injected a Rust binding context (cargo four-gate contract, Node-step skips, cargo-audit mapping) into every envelope.
+  - **What the user had to do**: none.
+  - **Root cause**: §0.6.5 toolchain detection has no rust branch.
+  - **Improvement**: add `Cargo.toml → toolchain=rust` to §0.6.5 with gate mapping (build/test/clippy/fmt, cargo-audit for §0.7) so envelopes inherit it without per-cycle prose.
+
+### Phase 5 banners
+- VX_BUDGET: N/A (no VX error-code registry in this repo).
+- DETECTION_RULE_HEALTH: N/A (no detection rules added).
+- [DIRECTIVE_PROMOTION] 0 directive-candidates surfaced this session (operator messages were `/md` and `continue` only).

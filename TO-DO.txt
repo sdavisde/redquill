@@ -1,0 +1,22 @@
+# TO-DO.txt
+# Maintained by the /md pipeline. Last updated: 2026-07-10 (spec 03 cycle)
+
+## Part A — External actions for the operator
+
+1. (Optional, recommended) Install cargo-audit so the pipeline's dep-CVE gate can run:
+   `cargo install cargo-audit`
+   The spec-03 cycle logged "cargo-audit unavailable" and continued (host-tool
+   allowlist forbids agents installing it). Zero dependencies were added this
+   cycle, so exposure is unchanged.
+2. Push when ready: the cycle authored local commits on main; nothing was pushed
+   (operator owns pushes). `git push origin main` at your discretion.
+
+## Part B — From-scratch setup for a new developer
+
+1. Install Rust stable (rustup.rs), then clone the repo.
+2. `cargo build` — no external services, no env vars, single static binary.
+3. `cargo test` — unit + integration (integration tests create throwaway git
+   repos in tempdirs; git must be on PATH).
+4. `cargo run` — runs against the current repo's working tree; prints the diff
+   summary line (TUI arrives with spec 04).
+5. Quality bar before any commit: `cargo build && cargo test && cargo clippy -- -D warnings && cargo fmt --check`.
