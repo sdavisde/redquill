@@ -1,0 +1,190 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+# Note on the GITHUB_TOKEN recursive-trigger limitation:
+# Events raised by the default GITHUB_TOKEN (e.g. the release PR that
+# release-please opens/updates) do NOT trigger further workflow runs. So CI
+# does not run on the release PR itself. That is fine for this solo repo; if
+# branch protection ever requires status checks on that PR, swap the
+# release-please `token:` for a PAT so its pushes trigger CI.
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  build:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: macos-latest # Apple Silicon (aarch64) runner
+    permissions:
+      contents: write
+    outputs:
+      arm_sha: ${{ steps.shas.outputs.arm_sha }}
+      intel_sha: ${{ steps.shas.outputs.intel_sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Version-drift tripwire: the release-please tag is derived from the
+      # conventional-commit history; Cargo.toml is bumped by the same tool.
+      # If they ever disagree, `redquill --version` would lie — fail loudly instead.
+      - name: assert Cargo.toml version matches release tag
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          cargo_version="v$(cargo pkgid | cut -d'#' -f2)"
+          if [ "${cargo_version}" != "${TAG_NAME}" ]; then
+            echo "::error::version drift: Cargo.toml is ${cargo_version} but release tag is ${TAG_NAME}"
+            exit 1
+          fi
+          echo "version OK: ${cargo_version} == ${TAG_NAME}"
+
+      - name: add cross-compile target
+        run: rustup target add x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Safety gate: never ship a release built on a failing tree.
+      # (Native aarch64 target only — x86_64 binaries can't run on this runner.)
+      - name: test
+        run: cargo test
+
+      - name: build release binaries
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+
+      - name: package tarballs
+        run: |
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            tar -czf "redquill-${target}.tar.gz" -C "target/${target}/release" redquill
+            shasum -a 256 "redquill-${target}.tar.gz" > "redquill-${target}.tar.gz.sha256"
+            cat "redquill-${target}.tar.gz.sha256"
+          done
+
+      - name: export sha256 job outputs
+        id: shas
+        run: |
+          arm_sha="$(cut -d' ' -f1 redquill-aarch64-apple-darwin.tar.gz.sha256)"
+          intel_sha="$(cut -d' ' -f1 redquill-x86_64-apple-darwin.tar.gz.sha256)"
+          {
+            echo "arm_sha=${arm_sha}"
+            echo "intel_sha=${intel_sha}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: print sha256 to job summary
+        run: |
+          {
+            echo "### redquill release artifacts"
+            echo ""
+            echo '```'
+            cat redquill-aarch64-apple-darwin.tar.gz.sha256
+            cat redquill-x86_64-apple-darwin.tar.gz.sha256
+            echo '```'
+            echo ""
+            echo "These sha256 values are pushed automatically into the tap formula by the update-tap job."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # release-please already created the GitHub release; attach the built
+      # artifacts to it. Notes come from the changelog, so no generate_release_notes.
+      - name: attach artifacts to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
+          files: |
+            redquill-aarch64-apple-darwin.tar.gz
+            redquill-aarch64-apple-darwin.tar.gz.sha256
+            redquill-x86_64-apple-darwin.tar.gz
+            redquill-x86_64-apple-darwin.tar.gz.sha256
+
+  update-tap:
+    needs: [release-please, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: regenerate and push tap formula
+        env:
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          VERSION: ${{ needs.release-please.outputs.version }}
+          ARM_SHA: ${{ needs.build.outputs.arm_sha }}
+          INTEL_SHA: ${{ needs.build.outputs.intel_sha }}
+        run: |
+          set -euo pipefail
+
+          # The secret resolves to an empty string until the user adds it.
+          # Skip gracefully so the release still succeeds beforehand.
+          if [ -z "${TAP_GITHUB_TOKEN}" ]; then
+            echo "::warning::TAP_GITHUB_TOKEN not set — skipping tap update"
+            exit 0
+          fi
+
+          echo "Updating sdavisde/homebrew-tap to redquill ${VERSION}"
+
+          git clone "https://x-access-token:${TAP_GITHUB_TOKEN}@github.com/sdavisde/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+
+          # Quoted heredoc: backticks and $() are literal, placeholders filled by sed below.
+          cat > tap/Formula/redquill.rb <<'EOF'
+          class Redquill < Formula
+            desc "Terminal UI for reviewing agentic code diffs"
+            homepage "https://github.com/sdavisde/redquill"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/sdavisde/redquill/releases/download/v__VERSION__/redquill-aarch64-apple-darwin.tar.gz"
+                sha256 "__ARM_SHA__"
+              end
+              on_intel do
+                url "https://github.com/sdavisde/redquill/releases/download/v__VERSION__/redquill-x86_64-apple-darwin.tar.gz"
+                sha256 "__INTEL_SHA__"
+              end
+            end
+
+            def install
+              bin.install "redquill"
+            end
+
+            test do
+              system "#{bin}/redquill", "--version"
+            end
+          end
+          EOF
+
+          sed -i.bak \
+            -e "s|__VERSION__|${VERSION}|g" \
+            -e "s|__ARM_SHA__|${ARM_SHA}|g" \
+            -e "s|__INTEL_SHA__|${INTEL_SHA}|g" \
+            tap/Formula/redquill.rb
+          rm -f tap/Formula/redquill.rb.bak
+
+          echo "--- generated tap/Formula/redquill.rb ---"
+          cat tap/Formula/redquill.rb
+
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/redquill.rb
+          if git diff --cached --quiet; then
+            echo "Formula already up to date — nothing to commit."
+            exit 0
+          fi
+          git commit -m "redquill ${VERSION}"
+          git push origin HEAD:main
