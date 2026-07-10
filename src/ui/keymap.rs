@@ -33,6 +33,14 @@ pub enum Action {
     PrevFile,
     /// Toggle the help overlay.
     ToggleHelp,
+    /// Enter Visual mode at the cursor row (Normal), or cancel Visual mode
+    /// back to Normal (Visual). No-op on non-line rows in Normal mode.
+    EnterVisual,
+    /// Open the Compose modal: on the cursor row's target (Normal), or on
+    /// the current Visual selection's range (Visual).
+    Compose,
+    /// Toggle the annotation list panel.
+    ToggleList,
     /// Quit, emitting annotations to stdout.
     Quit,
     /// Quit, discarding annotations.
@@ -152,6 +160,24 @@ impl Keymap {
                     mods: none,
                     action: ToggleHelp,
                     description: "Close help",
+                },
+                Binding {
+                    code: Char('v'),
+                    mods: none,
+                    action: EnterVisual,
+                    description: "Enter visual selection / cancel",
+                },
+                Binding {
+                    code: Char('c'),
+                    mods: none,
+                    action: Compose,
+                    description: "Comment on line/hunk/file (or visual selection)",
+                },
+                Binding {
+                    code: Char('a'),
+                    mods: none,
+                    action: ToggleList,
+                    description: "Toggle annotation list panel",
                 },
                 Binding {
                     code: Char('q'),

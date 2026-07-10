@@ -62,6 +62,17 @@ impl Classification {
             _ => None,
         }
     }
+
+    /// The next classification in the compose modal's `Ctrl-t` cycle:
+    /// Issue -> Question -> Nit -> Praise -> Issue.
+    pub fn cycle(self) -> Classification {
+        match self {
+            Classification::Issue => Classification::Question,
+            Classification::Question => Classification::Nit,
+            Classification::Nit => Classification::Praise,
+            Classification::Praise => Classification::Issue,
+        }
+    }
 }
 
 /// Which side of the diff a line-anchored annotation refers to.
@@ -208,6 +219,14 @@ mod tests {
         ] {
             assert_eq!(Classification::from_label(c.label()), Some(c));
         }
+    }
+
+    #[test]
+    fn classification_cycle_wraps_around() {
+        assert_eq!(Classification::Issue.cycle(), Classification::Question);
+        assert_eq!(Classification::Question.cycle(), Classification::Nit);
+        assert_eq!(Classification::Nit.cycle(), Classification::Praise);
+        assert_eq!(Classification::Praise.cycle(), Classification::Issue);
     }
 
     #[test]

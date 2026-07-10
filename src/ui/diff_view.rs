@@ -8,12 +8,24 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+use crate::annotate::Classification;
 use crate::diff::{FileChangeKind, LineOrigin, WordSpan};
 
 use super::app::App;
 use super::rows::{LineRow, Row};
 
 const GUTTER_WIDTH: usize = 5;
+/// Width of the annotated-line dot column, rendered before the gutter.
+const DOT_WIDTH: usize = 2;
+/// Left padding for [`Row::Annotation`] display rows, aligned under the
+/// gutter/marker columns so the bullet and continuation text sit clear of
+/// the line-number columns.
+const ANNOTATION_INDENT: usize = DOT_WIDTH + GUTTER_WIDTH * 2 + 3;
+
+fn dot_span(annotated: bool) -> Span<'static> {
+    let text = if annotated { "\u{25cf} " } else { "  " };
+    Span::styled(text, Style::default().fg(Color::Yellow))
+}
 
 fn kind_color(kind: FileChangeKind) -> Color {
     match kind {
@@ -72,6 +84,7 @@ fn content_spans(row: &LineRow) -> Vec<Span<'static>> {
 fn line_row_line(row: &LineRow, selected: bool) -> Line<'static> {
     let gutter_style = Style::default().fg(Color::DarkGray);
     let mut spans = vec![
+        dot_span(row.annotated),
         Span::styled(gutter_number(row.old_line), gutter_style),
         Span::raw(" "),
         Span::styled(gutter_number(row.new_line), gutter_style),
@@ -102,13 +115,17 @@ fn file_header_line(
     old_path: &Option<String>,
     kind: FileChangeKind,
     selected: bool,
+    annotated: bool,
 ) -> Line<'static> {
-    let mut spans = vec![Span::styled(
-        format!("{} ", kind.letter()),
-        Style::default()
-            .fg(kind_color(kind))
-            .add_modifier(Modifier::BOLD),
-    )];
+    let mut spans = vec![
+        dot_span(annotated),
+        Span::styled(
+            format!("{} ", kind.letter()),
+            Style::default()
+                .fg(kind_color(kind))
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
     if let Some(old) = old_path {
         spans.push(Span::raw(format!("{old} \u{2192} {path}")));
     } else {
@@ -124,11 +141,15 @@ fn file_header_line(
     line
 }
 
-fn hunk_header_line(text: &str, selected: bool) -> Line<'static> {
-    let mut line = Line::from(Span::styled(
-        text.to_string(),
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM),
-    ));
+fn hunk_header_line(text: &str, selected: bool, annotated: bool) -> Line<'static> {
+    let spans = vec![
+        dot_span(annotated),
+        Span::styled(
+            text.to_string(),
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM),
+        ),
+    ];
+    let mut line = Line::from(spans);
     if selected {
         line.style = Style::default().bg(Color::Rgb(30, 30, 40));
     }
@@ -148,6 +169,26 @@ fn binary_line(selected: bool) -> Line<'static> {
     line
 }
 
+/// Renders one [`Row::Annotation`] display row: the first line of an
+/// annotation's body gets the `●` marker and `[classification]` tag,
+/// continuation lines are indented plain text. Always dim/italic — this row
+/// is never addressable, so it's never drawn "selected".
+fn annotation_row_line(text: &str, classification: Option<Classification>) -> Line<'static> {
+    let style = Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::ITALIC);
+    let content = match classification {
+        Some(c) => format!(
+            "{}\u{25cf} [{}] {}",
+            " ".repeat(ANNOTATION_INDENT),
+            c.label(),
+            text
+        ),
+        None => format!("{}{}", " ".repeat(ANNOTATION_INDENT + 2), text),
+    };
+    Line::from(Span::styled(content, style))
+}
+
 fn row_line(row: &Row, index: usize, cursor: usize) -> Line<'static> {
     let selected = index == cursor;
     match row {
@@ -155,10 +196,18 @@ fn row_line(row: &Row, index: usize, cursor: usize) -> Line<'static> {
             path,
             old_path,
             kind,
-        } => file_header_line(path, old_path, *kind, selected),
-        Row::HunkHeader { text, .. } => hunk_header_line(text, selected),
+            annotated,
+        } => file_header_line(path, old_path, *kind, selected, *annotated),
+        Row::HunkHeader {
+            text, annotated, ..
+        } => hunk_header_line(text, selected, *annotated),
         Row::Line(line) => line_row_line(line, selected),
         Row::Binary => binary_line(selected),
+        Row::Annotation {
+            text,
+            classification,
+            ..
+        } => annotation_row_line(text, *classification),
     }
 }
 

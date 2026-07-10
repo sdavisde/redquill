@@ -61,6 +61,25 @@ impl AnnotationStore {
         Ok(())
     }
 
+    /// Replaces the classification of the annotation with the given id.
+    ///
+    /// Additive alongside [`AnnotationStore::edit`] (which only ever
+    /// changes the body) so the compose modal can re-classify an existing
+    /// annotation without touching the locked `edit` contract.
+    pub fn set_classification(
+        &mut self,
+        id: usize,
+        classification: Classification,
+    ) -> Result<(), AnnotateError> {
+        let annotation = self
+            .annotations
+            .iter_mut()
+            .find(|a| a.id == id)
+            .ok_or(AnnotateError::NotFound(id))?;
+        annotation.classification = classification;
+        Ok(())
+    }
+
     /// Iterates over annotations in insertion order.
     pub fn iter(&self) -> impl Iterator<Item = &Annotation> {
         self.annotations.iter()
@@ -200,6 +219,30 @@ mod tests {
     fn edit_unknown_id_errors() {
         let mut store = AnnotationStore::new();
         assert_eq!(store.edit(7, "x"), Err(AnnotateError::NotFound(7)));
+    }
+
+    #[test]
+    fn set_classification_replaces_classification() {
+        let mut store = AnnotationStore::new();
+        let id = store
+            .add(Target::file("a.rs"), Classification::Nit, "body")
+            .unwrap();
+        store
+            .set_classification(id, Classification::Praise)
+            .unwrap();
+        assert_eq!(
+            store.iter().next().unwrap().classification,
+            Classification::Praise
+        );
+    }
+
+    #[test]
+    fn set_classification_unknown_id_errors() {
+        let mut store = AnnotationStore::new();
+        assert_eq!(
+            store.set_classification(9, Classification::Issue),
+            Err(AnnotateError::NotFound(9))
+        );
     }
 
     #[test]

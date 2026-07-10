@@ -83,12 +83,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
     frame.render_stateful_widget(list, chunks[0], &mut state);
 
+    let notes = app.annotations.len();
+    let footer_text = if notes > 0 {
+        format!(" [{} files] [{notes} notes]", app.files.len())
+    } else {
+        format!(" [{} files]", app.files.len())
+    };
     let footer = Line::from(Span::styled(
-        format!(
-            " [{} files] [{} notes]",
-            app.files.len(),
-            app.annotations.len()
-        ),
+        footer_text,
         Style::default().fg(Color::DarkGray),
     ));
     frame.render_widget(footer, chunks[1]);
