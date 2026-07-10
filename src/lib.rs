@@ -7,5 +7,6 @@
 pub mod annotate;
 pub mod diff;
 pub mod git;
+pub mod highlight;
 pub mod lsp;
 pub mod ui;
