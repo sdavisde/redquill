@@ -187,7 +187,7 @@ pub fn lineno_col_width(files: &[crate::diff::DiffFile]) -> usize;
 
 ### Wave 1 (No Dependencies)
 
-### [ ] 1.0 Foundation: deps + `ui/` module skeleton + frozen stubs (DUW 4.1/4.2/4.3/4.4 scaffolding)
+### [x] 1.0 Foundation: deps + `ui/` module skeleton + frozen stubs (DUW 4.1/4.2/4.3/4.4 scaffolding)
 
 **Wave:** 1 | **Agent Scope:** `Cargo.toml`, `src/ui/mod.rs`, `src/ui/keymap.rs` (compiling stub only), `src/ui/terminal.rs` (compiling stub only), `src/ui/app.rs` (compiling stub only). Do NOT touch `src/main.rs`.
 **FRs:** none land behaviorally here — T1.0 establishes the frozen interface the FR-bearing Wave-2/3 tasks fill. (Enables FR-render-term-*, FR-render-keymap-*, FR-render-view-*, FR-render-wire-*.)
@@ -203,20 +203,20 @@ pub fn lineno_col_width(files: &[crate::diff::DiffFile]) -> usize;
 
 #### 1.0 Quality Verification
 
-- [ ] `cargo build` clean
-- [ ] `cargo test` — all passing (existing tests unaffected)
-- [ ] `cargo clippy -- -D warnings` — zero warnings
-- [ ] `cargo fmt --check` clean
-- [ ] /trace: `ui/mod.rs` imports no `git` types; `UiError` uses `thiserror`; stubs contain no key-name literals outside `keymap.rs`
+- [x] `cargo build` clean
+- [x] `cargo test` — all passing (existing tests unaffected)
+- [x] `cargo clippy -- -D warnings` — zero warnings
+- [x] `cargo fmt --check` clean
+- [x] /trace: `ui/mod.rs` imports no `git` types; `UiError` uses `thiserror`; stubs contain no key-name literals outside `keymap.rs`
 
 #### 1.0 Tasks
 
-- [ ] 1.1 Add `ratatui` and `crossterm` to `Cargo.toml` `[dependencies]` (latest compatible stable; crossterm backend only). This task is the SOLE writer of `Cargo.toml` this cycle. The commit that lands this MUST include the one-line dependency justification (see execution context) per the CLAUDE.md guardrail.
-- [ ] 1.2 Define `UiError` (thiserror, `Io(#[from] std::io::Error)`) in `src/ui/mod.rs`, register `pub mod terminal; pub mod keymap; pub mod app;`, and add the `pub use` re-exports from the Interface Contracts block so `ui::Action`, `ui::Keymap`, `ui::TerminalGuard`, `ui::run`, etc. resolve from the crate root.
-- [ ] 1.3 Stub `src/ui/keymap.rs`: define the full `Action` enum, `KeyChord { code, modifiers }` (derive `Hash, Eq, PartialEq, Clone, Copy, Debug`) with `from_event`, and `Keymap { bindings: HashMap<KeyChord, Action> }` with `default_map()` (return `Keymap { bindings: HashMap::new() }`), `resolve()` (return `Action::Noop`), and `chord_for()` (return `None`). Real behavior fills in T2.0. Clippy-clean.
-- [ ] 1.4 Stub `src/ui/terminal.rs`: define `TerminalGuard` (holding the ratatui `Terminal<CrosstermBackend<Stdout>>`), `TerminalGuard::enter() -> Result<Self, UiError>`, `terminal_mut()`, `impl Drop`, and a free `restore_terminal()` fn. Stub bodies may construct the terminal but the panic hook + real enter/restore fill in T3.0. Clippy-clean; no `unwrap`/`expect`.
-- [ ] 1.5 Stub `src/ui/app.rs`: define `App { files, scroll, should_quit }` (private fields, `usize` scroll), `pub fn run(files) -> Result<(), UiError>` (stub body: `let _ = files; Ok(())`), and the pure helpers `clamp_scroll`, `visible_range`, `gutter_marker`, `lineno_col_width` with minimal correct-typed bodies (real logic fills in T4.0). Clippy-clean.
-- [ ] 1.6 Confirm all four gates green with the full skeleton in place; the crate root exposes the frozen contract for Wave 2/3.
+- [x] 1.1 Add `ratatui` and `crossterm` to `Cargo.toml` `[dependencies]` (latest compatible stable; crossterm backend only). This task is the SOLE writer of `Cargo.toml` this cycle. The commit that lands this MUST include the one-line dependency justification (see execution context) per the CLAUDE.md guardrail.
+- [x] 1.2 Define `UiError` (thiserror, `Io(#[from] std::io::Error)`) in `src/ui/mod.rs`, register `pub mod terminal; pub mod keymap; pub mod app;`, and add the `pub use` re-exports from the Interface Contracts block so `ui::Action`, `ui::Keymap`, `ui::TerminalGuard`, `ui::run`, etc. resolve from the crate root.
+- [x] 1.3 Stub `src/ui/keymap.rs`: define the full `Action` enum, `KeyChord { code, modifiers }` (derive `Hash, Eq, PartialEq, Clone, Copy, Debug`) with `from_event`, and `Keymap { bindings: HashMap<KeyChord, Action> }` with `default_map()` (return `Keymap { bindings: HashMap::new() }`), `resolve()` (return `Action::Noop`), and `chord_for()` (return `None`). Real behavior fills in T2.0. Clippy-clean.
+- [x] 1.4 Stub `src/ui/terminal.rs`: define `TerminalGuard` (holding the ratatui `Terminal<CrosstermBackend<Stdout>>`), `TerminalGuard::enter() -> Result<Self, UiError>`, `terminal_mut()`, `impl Drop`, and a free `restore_terminal()` fn. Stub bodies may construct the terminal but the panic hook + real enter/restore fill in T3.0. Clippy-clean; no `unwrap`/`expect`.
+- [x] 1.5 Stub `src/ui/app.rs`: define `App { files, scroll, should_quit }` (private fields, `usize` scroll), `pub fn run(files) -> Result<(), UiError>` (stub body: `let _ = files; Ok(())`), and the pure helpers `clamp_scroll`, `visible_range`, `gutter_marker`, `lineno_col_width` with minimal correct-typed bodies (real logic fills in T4.0). Clippy-clean.
+- [x] 1.6 Confirm all four gates green with the full skeleton in place; the crate root exposes the frozen contract for Wave 2/3.
 
 ---
 
