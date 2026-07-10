@@ -1,6 +1,7 @@
-//! The file sidebar: one row per changed file, a colored change-kind letter
-//! plus path (dimmed directory, normal basename), the selected file
-//! highlighted, and a footer summarizing counts.
+//! The file sidebar: one row per changed file, a green `●` staged marker
+//! for files with staged changes, a colored change-kind letter plus path
+//! (dimmed directory, normal basename), the selected file highlighted, and
+//! a footer summarizing file/staged/note counts.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -11,8 +12,9 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use super::app::App;
 
 /// The color convention for a change-kind letter, matching git's own
-/// `--name-status` letters (plus `?` for untracked).
-fn letter_color(letter: char) -> Color {
+/// `--name-status` letters (plus `?` for untracked). Shared with the
+/// staging panel, which shows the same letters.
+pub(super) fn letter_color(letter: char) -> Color {
     match letter {
         'A' => Color::Green,
         'M' => Color::Yellow,
@@ -32,9 +34,20 @@ fn split_path(path: &str) -> (&str, &str) {
     }
 }
 
-fn file_line(letter: char, path: &str) -> Line<'static> {
+/// The staged-indicator column: a green `●` for files with staged changes,
+/// blank otherwise, so paths stay column-aligned either way.
+fn staged_span(staged: bool) -> Span<'static> {
+    if staged {
+        Span::styled("\u{25cf} ", Style::default().fg(Color::Green))
+    } else {
+        Span::raw("  ")
+    }
+}
+
+fn file_line(letter: char, path: &str, staged: bool) -> Line<'static> {
     let (dir, base) = split_path(path);
     Line::from(vec![
+        staged_span(staged),
         Span::styled(
             format!("{letter} "),
             Style::default()
@@ -57,16 +70,17 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .files
         .iter()
         .map(|f| {
+            let staged = app.staged.iter().any(|s| s.path == f.path);
             let line = if let Some(old) = &f.old_path {
                 let (_, old_base) = split_path(old);
-                let mut line = file_line(f.kind.letter(), &f.path);
+                let mut line = file_line(f.kind.letter(), &f.path, staged);
                 line.spans.push(Span::styled(
                     format!(" \u{2190} {old_base}"),
                     Style::default().fg(Color::DarkGray),
                 ));
                 line
             } else {
-                file_line(f.kind.letter(), &f.path)
+                file_line(f.kind.letter(), &f.path, staged)
             };
             ListItem::new(line)
         })
@@ -84,11 +98,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_stateful_widget(list, chunks[0], &mut state);
 
     let notes = app.annotations.len();
-    let footer_text = if notes > 0 {
-        format!(" [{} files] [{notes} notes]", app.files.len())
-    } else {
-        format!(" [{} files]", app.files.len())
-    };
+    let mut footer_text = format!(" [{} files]", app.files.len());
+    if !app.staged.is_empty() {
+        footer_text.push_str(&format!(" [{} staged]", app.staged.len()));
+    }
+    if notes > 0 {
+        footer_text.push_str(&format!(" [{notes} notes]"));
+    }
     let footer = Line::from(Span::styled(
         footer_text,
         Style::default().fg(Color::DarkGray),

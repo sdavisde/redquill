@@ -2,12 +2,12 @@
 //! data (remappable), not hardcoded match arms scattered through widgets.
 //!
 //! Normal and Visual mode dispatch every keystroke through the [`Keymap`]
-//! table. Compose and List are modal: while either is active, every
+//! table. Compose, List, and Staging are modal: while one is active, every
 //! keystroke is handled directly by [`handle_compose_key`]/
-//! [`handle_list_key`] instead of going through the table, since most of
-//! what they read (printable characters, `j`/`k` as list navigation rather
-//! than the Navigation action) isn't expressible as one fixed [`Action`]
-//! per key.
+//! [`handle_list_key`]/[`handle_staging_key`] instead of going through the
+//! table, since most of what they read (printable characters, `j`/`k` as
+//! list navigation rather than the Navigation action) isn't expressible as
+//! one fixed [`Action`] per key.
 //!
 //! The TUI renders to **stderr**, never stdout: stdout is reserved for the
 //! annotation markdown emitted on quit (`redquill | claude -p "..."`), while
@@ -24,10 +24,13 @@ mod keymap;
 mod list_panel;
 mod rows;
 mod sidebar;
+mod stage_ops;
+mod staging_panel;
 
 pub use app::{App, Mode};
 pub use keymap::{Action, Binding, Keymap};
 pub use rows::{Row, build_rows};
+pub use stage_ops::{ReviewError, ReviewSnapshot, StageOps, StagedFile, build_review};
 
 use std::io::{self, Stderr};
 
@@ -39,6 +42,8 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
 
 /// How a TUI session ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +54,17 @@ pub enum QuitOutcome {
     Discard,
 }
 
-/// Splits the full terminal area into the sidebar and diff-pane rects.
+/// Splits the full terminal area into the main content area and the
+/// single-line status footer at the bottom (transient messages).
+fn split_footer(area: Rect) -> (Rect, Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(area);
+    (chunks[0], chunks[1])
+}
+
+/// Splits the main content area into the sidebar and diff-pane rects.
 fn split_layout(area: Rect) -> (Rect, Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -58,10 +73,10 @@ fn split_layout(area: Rect) -> (Rect, Rect) {
     (chunks[0], chunks[1])
 }
 
-/// Splits the right-hand area into the diff pane and (when `show_list`) the
-/// annotation list panel below it, ~60/40.
-fn split_right(area: Rect, show_list: bool) -> (Rect, Option<Rect>) {
-    if !show_list {
+/// Splits the right-hand area into the diff pane and (when `show_panel`) a
+/// bottom panel (annotation list or staging panel) below it, ~60/40.
+fn split_right(area: Rect, show_panel: bool) -> (Rect, Option<Rect>) {
+    if !show_panel {
         return (area, None);
     }
     let chunks = Layout::default()
@@ -71,17 +86,34 @@ fn split_right(area: Rect, show_list: bool) -> (Rect, Option<Rect>) {
     (chunks[0], Some(chunks[1]))
 }
 
-/// Draws one frame: sidebar, diff pane, annotation list panel (if open),
-/// help overlay (if open), and the Compose modal (if open).
+/// Whether the current mode shows a bottom panel next frame.
+fn panel_open(mode: Mode) -> bool {
+    matches!(mode, Mode::List | Mode::Staging)
+}
+
+/// Draws one frame: sidebar, diff pane, bottom panel (annotation list or
+/// staging panel, if open), status footer, help overlay (if open), and the
+/// Compose modal (if open).
 fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
     let area = frame.area();
-    let (sidebar_area, right_area) = split_layout(area);
-    let (diff_area, list_area) = split_right(right_area, matches!(app.mode, Mode::List));
+    let (main_area, footer_area) = split_footer(area);
+    let (sidebar_area, right_area) = split_layout(main_area);
+    let (diff_area, panel_area) = split_right(right_area, panel_open(app.mode));
 
     sidebar::render(frame, sidebar_area, app);
     diff_view::render(frame, diff_area, app);
-    if let Some(list_area) = list_area {
-        list_panel::render(frame, list_area, app);
+    if let Some(panel_area) = panel_area {
+        match app.mode {
+            Mode::Staging => staging_panel::render(frame, panel_area, app),
+            _ => list_panel::render(frame, panel_area, app),
+        }
+    }
+    if let Some(message) = &app.status_message {
+        let footer = Line::from(Span::styled(
+            format!(" {message}"),
+            Style::default().fg(Color::Yellow),
+        ));
+        frame.render_widget(footer, footer_area);
     }
     if app.help_open {
         help::render(frame, area, keymap);
@@ -198,6 +230,20 @@ fn handle_list_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// Handles one key event while [`Mode::Staging`] is active: `j`/`k` move
+/// focus, `Space`/`Enter` unstage the focused file (the panel stays open),
+/// `s`/`Esc` close the panel. Bypasses the [`Keymap`] table entirely (see
+/// the module docs).
+fn handle_staging_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('j') => app.staging_move_down(),
+        KeyCode::Char('k') => app.staging_move_up(),
+        KeyCode::Char(' ') | KeyCode::Enter => app.unstage_focused_file(),
+        KeyCode::Char('s') | KeyCode::Esc => app.close_staging(),
+        _ => {}
+    }
+}
+
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stderr>>,
     app: &mut App,
@@ -206,39 +252,46 @@ fn event_loop(
     loop {
         let size = terminal.size()?;
         let full_area = Rect::new(0, 0, size.width, size.height);
-        let (_, right_area) = split_layout(full_area);
-        let (diff_area, _) = split_right(right_area, matches!(app.mode, Mode::List));
+        let (main_area, _) = split_footer(full_area);
+        let (_, right_area) = split_layout(main_area);
+        let (diff_area, _) = split_right(right_area, panel_open(app.mode));
         app.set_viewport_height(diff_view::viewport_height(diff_area));
 
         terminal.draw(|frame| draw(frame, app, keymap))?;
 
         match event::read()? {
-            Event::Key(key) if key.kind == KeyEventKind::Press => match app.mode {
-                Mode::Compose => handle_compose_key(app, key),
-                Mode::List => handle_list_key(app, key),
-                Mode::Normal | Mode::Visual { .. } => {
-                    // Esc only ever closes an already-open help overlay or
-                    // cancels an in-progress Visual selection; it is never
-                    // bound to opening help, unlike `?` (see keymap.rs).
-                    if key.code == KeyCode::Esc {
-                        if app.help_open {
-                            app.help_open = false;
-                        } else if matches!(app.mode, Mode::Visual { .. }) {
-                            app.apply(Action::EnterVisual);
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                // Transient footer messages last exactly until the next
+                // keypress (whatever this key does may set a fresh one).
+                app.clear_status_message();
+                match app.mode {
+                    Mode::Compose => handle_compose_key(app, key),
+                    Mode::List => handle_list_key(app, key),
+                    Mode::Staging => handle_staging_key(app, key),
+                    Mode::Normal | Mode::Visual { .. } => {
+                        // Esc only ever closes an already-open help overlay or
+                        // cancels an in-progress Visual selection; it is never
+                        // bound to opening help, unlike `?` (see keymap.rs).
+                        if key.code == KeyCode::Esc {
+                            if app.help_open {
+                                app.help_open = false;
+                            } else if matches!(app.mode, Mode::Visual { .. }) {
+                                app.apply(Action::EnterVisual);
+                            }
+                            continue;
                         }
-                        continue;
-                    }
 
-                    let Some(action) = keymap.lookup(key) else {
-                        continue;
-                    };
-                    match action {
-                        Action::Quit => return Ok(QuitOutcome::Emit),
-                        Action::QuitDiscard => return Ok(QuitOutcome::Discard),
-                        other => app.apply(other),
+                        let Some(action) = keymap.lookup(key) else {
+                            continue;
+                        };
+                        match action {
+                            Action::Quit => return Ok(QuitOutcome::Emit),
+                            Action::QuitDiscard => return Ok(QuitOutcome::Discard),
+                            other => app.apply(other),
+                        }
                     }
                 }
-            },
+            }
             Event::Resize(_, _) => {
                 // The next loop iteration re-measures the layout and
                 // redraws at the new size; nothing else to do here.
@@ -360,5 +413,49 @@ index 111..222 100644
         // List panel entry (mode is List, so the panel is rendered).
         assert!(content.contains("src/main.rs"));
         assert!(content.contains("[1 notes]"));
+    }
+
+    /// With a staged file present and the staging panel open, one frame
+    /// shows all three staging surfaces: the sidebar's staged `●`
+    /// indicator and `[N staged]` footer count, the staging panel entry,
+    /// and the transient status-footer message.
+    #[test]
+    fn staging_panel_indicator_and_footer_render() {
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![sample_file()]);
+        app.staged = vec![StagedFile {
+            path: "src/main.rs".to_string(),
+            letter: 'M',
+        }];
+        app.mode = Mode::Staging;
+        app.set_status_message("staged hunk");
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        assert!(content.contains("\u{25cf}")); // sidebar staged indicator
+        assert!(content.contains("[1 staged]")); // sidebar footer count
+        assert!(content.contains("staged")); // staging panel title
+        assert!(content.contains("M src/main.rs")); // panel entry
+        assert!(content.contains("staged hunk")); // status footer message
+    }
+
+    #[test]
+    fn empty_staging_panel_shows_hint() {
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![sample_file()]);
+        app.mode = Mode::Staging;
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+        assert!(content.contains("nothing staged yet"));
     }
 }

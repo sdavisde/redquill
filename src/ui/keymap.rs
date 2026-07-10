@@ -41,6 +41,13 @@ pub enum Action {
     Compose,
     /// Toggle the annotation list panel.
     ToggleList,
+    /// Stage/unstage at the cursor: the enclosing hunk on line/hunk rows,
+    /// the whole file on file-header/binary rows, the selected lines in
+    /// Visual mode. Stages on the working-tree target, unstages on the
+    /// staged target; a no-op with a message on read-only range targets.
+    ToggleStage,
+    /// Toggle the staging panel (files with staged changes).
+    ToggleStagingPanel,
     /// Quit, emitting annotations to stdout.
     Quit,
     /// Quit, discarding annotations.
@@ -73,6 +80,7 @@ impl Binding {
             label.push_str("Alt-");
         }
         match self.code {
+            KeyCode::Char(' ') => label.push_str("Space"),
             KeyCode::Char(c) => label.push(c),
             KeyCode::Tab => label.push_str("Tab"),
             KeyCode::BackTab => label.push_str("Shift-Tab"),
@@ -178,6 +186,18 @@ impl Keymap {
                     mods: none,
                     action: ToggleList,
                     description: "Toggle annotation list panel",
+                },
+                Binding {
+                    code: Char(' '),
+                    mods: none,
+                    action: ToggleStage,
+                    description: "Stage/unstage hunk (lines in visual mode)",
+                },
+                Binding {
+                    code: Char('s'),
+                    mods: none,
+                    action: ToggleStagingPanel,
+                    description: "Toggle staging panel",
                 },
                 Binding {
                     code: Char('q'),
@@ -316,6 +336,19 @@ mod tests {
     }
 
     #[test]
+    fn space_and_s_resolve_to_staging_actions() {
+        let km = Keymap::default_map();
+        assert_eq!(
+            km.lookup(key(KeyCode::Char(' '), KeyModifiers::NONE)),
+            Some(Action::ToggleStage)
+        );
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('s'), KeyModifiers::NONE)),
+            Some(Action::ToggleStagingPanel)
+        );
+    }
+
+    #[test]
     fn unbound_key_is_none() {
         let km = Keymap::default_map();
         assert_eq!(km.lookup(key(KeyCode::Char('z'), KeyModifiers::NONE)), None);
@@ -330,5 +363,6 @@ mod tests {
         assert!(labels.contains(&"Tab".to_string()));
         assert!(labels.contains(&"Esc".to_string()));
         assert!(labels.contains(&"?".to_string()));
+        assert!(labels.contains(&"Space".to_string()));
     }
 }

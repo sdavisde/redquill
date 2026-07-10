@@ -15,9 +15,9 @@ use std::path::PathBuf;
 use clap::Parser;
 
 use redquill::annotate::render_markdown;
-use redquill::diff::{FileChangeKind, FileDiff};
+use redquill::diff::FileDiff;
 use redquill::git::{ChangeKind, DiffTarget, GitRunner};
-use redquill::ui::{self, App, QuitOutcome};
+use redquill::ui::{self, App, QuitOutcome, build_review};
 
 /// redquill: a terminal UI for reviewing agentic code changes.
 ///
@@ -105,52 +105,14 @@ fn run(config: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Builds the full `Vec<FileDiff>` for `target`: parsed patches plus, for
-/// the working tree, synthetic entries for untracked files (`git diff`
-/// never surfaces those).
-fn build_files(runner: &GitRunner, target: &DiffTarget) -> anyhow::Result<Vec<FileDiff>> {
-    let patches = runner.diff(target)?;
-    let mut files = Vec::with_capacity(patches.len());
-    for patch in &patches {
-        files.push(FileDiff::from_patch(patch)?);
-    }
-
-    if matches!(target, DiffTarget::WorkingTree) {
-        for entry in runner.status()? {
-            if entry.kind != ChangeKind::Untracked {
-                continue;
-            }
-            let path = runner.root().join(&entry.path);
-            let Ok(bytes) = std::fs::read(&path) else {
-                // Unreadable (permissions, race with deletion, ...): skip
-                // rather than fail the whole review session.
-                continue;
-            };
-            let file = match String::from_utf8(bytes) {
-                Ok(content) => FileDiff::synthetic_added(entry.path.clone(), &content),
-                Err(_) => FileDiff {
-                    path: entry.path.clone(),
-                    old_path: None,
-                    kind: FileChangeKind::Added,
-                    is_binary: true,
-                    hunks: Vec::new(),
-                },
-            };
-            files.push(file);
-        }
-    }
-
-    Ok(files)
-}
-
 /// Runs the interactive TUI and, on quit, emits annotations per the
 /// resolved [`QuitOutcome`].
 fn run_tui(config: &Config) -> anyhow::Result<()> {
     let runner = GitRunner::discover()?;
     let target = config.diff_target();
-    let files = build_files(&runner, &target)?;
+    let snapshot = build_review(&runner, &target)?;
 
-    let mut app = App::new(files);
+    let mut app = App::with_git(snapshot, target, Box::new(runner));
     let outcome = ui::run(&mut app)?;
 
     if let QuitOutcome::Emit = outcome {

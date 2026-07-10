@@ -1,7 +1,8 @@
 //! The help overlay: a centered box listing every binding, grouped, plus
-//! the Compose-mode and List-mode key hints that aren't in the [`Keymap`]
-//! table (those two modes handle keys modally, bypassing the table — see
-//! [`super::handle_compose_key`]/[`super::handle_list_key`]).
+//! the Compose-mode, List-mode, and Staging-panel key hints that aren't in
+//! the [`Keymap`] table (those modes handle keys modally, bypassing the
+//! table — see [`super::handle_compose_key`]/[`super::handle_list_key`]/
+//! [`super::handle_staging_key`]).
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
@@ -29,6 +30,12 @@ const LIST_HINTS: &[(&str, &str)] = &[
     ("a / Esc", "Close panel"),
 ];
 
+const STAGING_HINTS: &[(&str, &str)] = &[
+    ("j / k", "Move focus"),
+    ("Space / Enter", "Unstage file"),
+    ("s / Esc", "Close panel"),
+];
+
 /// Which help-overlay group an [`Action`] belongs to.
 fn group_of(action: Action) -> &'static str {
     use Action::*;
@@ -36,6 +43,7 @@ fn group_of(action: Action) -> &'static str {
         CursorDown | CursorUp | HalfPageDown | HalfPageUp | NextHunk | PrevHunk | NextFile
         | PrevFile => "Navigation",
         EnterVisual | Compose => "Annotate",
+        ToggleStage | ToggleStagingPanel => "Stage",
         ToggleList | ToggleHelp => "Panels",
         Quit | QuitDiscard => "Quit",
     }
@@ -85,11 +93,12 @@ pub fn render(frame: &mut Frame, area: Rect, keymap: &Keymap) {
         .map(|b| b.key_label().len())
         .chain(COMPOSE_HINTS.iter().map(|(k, _)| k.len()))
         .chain(LIST_HINTS.iter().map(|(k, _)| k.len()))
+        .chain(STAGING_HINTS.iter().map(|(k, _)| k.len()))
         .max()
         .unwrap_or(0);
 
     let mut lines: Vec<Line> = Vec::new();
-    for group in ["Navigation", "Annotate", "Panels", "Quit"] {
+    for group in ["Navigation", "Annotate", "Stage", "Panels", "Quit"] {
         let group_bindings: Vec<&Binding> = bindings
             .iter()
             .filter(|b| group_of(b.action) == group)
@@ -112,6 +121,12 @@ pub fn render(frame: &mut Frame, area: Rect, keymap: &Keymap) {
 
     lines.push(section_header("List mode"));
     for (key, desc) in LIST_HINTS {
+        lines.push(key_line(key, desc, key_width));
+    }
+    lines.push(Line::from(""));
+
+    lines.push(section_header("Staging panel"));
+    for (key, desc) in STAGING_HINTS {
         lines.push(key_line(key, desc, key_width));
     }
 
