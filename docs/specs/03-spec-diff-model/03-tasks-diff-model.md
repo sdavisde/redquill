@@ -132,7 +132,7 @@ pub fn prev_file(files: &[DiffFile], pos: &DiffPosition) -> Option<DiffPosition>
 
 ### Wave 1 (No Dependencies)
 
-### [ ] 1.0 Diff model core types + patch parsing (DUW 3.1)
+### [x] 1.0 Diff model core types + patch parsing (DUW 3.1)
 
 **Wave:** 1 | **Agent Scope:** `src/diff/mod.rs`, `src/diff/model.rs`, `src/diff/word.rs` (compiling stub only), `src/diff/nav.rs` (compiling stub only)
 **FRs:** FR-diff-parse-1, FR-diff-parse-2, FR-diff-parse-3, FR-diff-parse-4, FR-diff-parse-5
@@ -153,23 +153,23 @@ from `RawFilePatch`; do not re-derive.
 
 #### 1.0 Quality Verification
 
-- [ ] `cargo build` clean
-- [ ] `cargo test` — all passing
-- [ ] `cargo clippy -- -D warnings` — zero warnings
-- [ ] `cargo fmt --check` clean
-- [ ] /trace: `diff/` imports no ratatui/crossterm/git-runner types; model is pure data
+- [x] `cargo build` clean
+- [x] `cargo test` — all passing
+- [x] `cargo clippy -- -D warnings` — zero warnings
+- [x] `cargo fmt --check` clean
+- [x] /trace: `diff/` imports no ratatui/crossterm/git-runner types; model is pure data
 
 #### 1.0 Tasks
 
-- [ ] 1.1 (test-first) Write failing unit tests in `src/diff/model.rs` for the two-hunk header parse (FR-diff-parse-2), including the retained trailing section-heading text after `@@`, and the omitted-count case `@@ -3 +3 @@` (absent count defaults to 1, spec §6).
-- [ ] 1.2 (test-first) Write failing tests for line classification + line-number assignment (FR-diff-parse-3): context carries both `old_lineno`/`new_lineno`; added carries only new; removed carries only old; a zero-context hunk (count 0 on a side) parses correctly.
-- [ ] 1.3 (test-first) Write failing tests for file-level metadata (FR-diff-parse-4): new file, deleted file, rename-with-similarity (`ChangeStatus::Renamed { similarity }`), rename-with-edits (similarity < 100, hunks present), mode-only change (`Modified`, `mode_change: Some`, zero hunks), and binary pass-through (`is_binary` carried, zero hunks, body not parsed). Metadata lines are NOT emitted as body `Line`s.
-- [ ] 1.4 (test-first) Write failing test for the `\ No newline at end of file` marker (FR-diff-parse-5) — flag on the preceding line, on old side / new side / both; no extra `Line` emitted.
-- [ ] 1.5 Define the data types in `src/diff/model.rs` per spec §5 (`DiffFile`, `ChangeStatus`, `Hunk`, `Line`, `LineKind`, `DiffPosition`). Derive `Debug, Clone, PartialEq, Eq` to match `git/` conventions and enable test asserts.
-- [ ] 1.6 Implement the parser `parse_patch(&RawFilePatch) -> DiffFile` (FR-diff-parse-1..5): walk the raw patch, classify header/metadata lines, parse `@@ -a,b +c,d @@` headers (handle omitted counts → default 1), assign old/new line numbers, set `no_newline`, detect `ChangeStatus` + `mode_change`. Leave `changed_spans` empty (populated later by the word module). Total function — never panics on valid UTF-8; treat unexpected shapes as best-effort context lines.
-- [ ] 1.7 Add `parse_patches(&[RawFilePatch]) -> Vec<DiffFile>` and `summarize(&[DiffFile]) -> DiffSummary { files, hunks, added, removed }` (added = count of `LineKind::Added`, removed = count of `LineKind::Removed`) for the T4.0 summary line.
-- [ ] 1.8 Create compiling stubs `src/diff/word.rs` (`word_diff_spans` returning `(Vec::new(), Vec::new())`, `attach_word_spans` a no-op) and `src/diff/nav.rs` (four fns returning `None`). Stubs MUST be clippy-clean (silence unused params via `let _ = ...;`, do not add `#[allow(dead_code)]`). Bodies are filled in Wave 2.
-- [ ] 1.9 Wire `src/diff/mod.rs`: `pub mod model; pub mod word; pub mod nav;` and `pub use` re-exports of every public symbol in the Interface Contracts block, so the crate root (`diff::DiffFile`, `diff::parse_patches`, `diff::next_hunk`, …) resolves. Confirm `cargo build` + all four gates green with the stubs in place.
+- [x] 1.1 (test-first) Write failing unit tests in `src/diff/model.rs` for the two-hunk header parse (FR-diff-parse-2), including the retained trailing section-heading text after `@@`, and the omitted-count case `@@ -3 +3 @@` (absent count defaults to 1, spec §6).
+- [x] 1.2 (test-first) Write failing tests for line classification + line-number assignment (FR-diff-parse-3): context carries both `old_lineno`/`new_lineno`; added carries only new; removed carries only old; a zero-context hunk (count 0 on a side) parses correctly.
+- [x] 1.3 (test-first) Write failing tests for file-level metadata (FR-diff-parse-4): new file, deleted file, rename-with-similarity (`ChangeStatus::Renamed { similarity }`), rename-with-edits (similarity < 100, hunks present), mode-only change (`Modified`, `mode_change: Some`, zero hunks), and binary pass-through (`is_binary` carried, zero hunks, body not parsed). Metadata lines are NOT emitted as body `Line`s.
+- [x] 1.4 (test-first) Write failing test for the `\ No newline at end of file` marker (FR-diff-parse-5) — flag on the preceding line, on old side / new side / both; no extra `Line` emitted.
+- [x] 1.5 Define the data types in `src/diff/model.rs` per spec §5 (`DiffFile`, `ChangeStatus`, `Hunk`, `Line`, `LineKind`, `DiffPosition`). Derive `Debug, Clone, PartialEq, Eq` to match `git/` conventions and enable test asserts.
+- [x] 1.6 Implement the parser `parse_patch(&RawFilePatch) -> DiffFile` (FR-diff-parse-1..5): walk the raw patch, classify header/metadata lines, parse `@@ -a,b +c,d @@` headers (handle omitted counts → default 1), assign old/new line numbers, set `no_newline`, detect `ChangeStatus` + `mode_change`. Leave `changed_spans` empty (populated later by the word module). Total function — never panics on valid UTF-8; treat unexpected shapes as best-effort context lines.
+- [x] 1.7 Add `parse_patches(&[RawFilePatch]) -> Vec<DiffFile>` and `summarize(&[DiffFile]) -> DiffSummary { files, hunks, added, removed }` (added = count of `LineKind::Added`, removed = count of `LineKind::Removed`) for the T4.0 summary line.
+- [x] 1.8 Create compiling stubs `src/diff/word.rs` (`word_diff_spans` returning `(Vec::new(), Vec::new())`, `attach_word_spans` a no-op) and `src/diff/nav.rs` (four fns returning `None`). Stubs MUST be clippy-clean (silence unused params via `let _ = ...;`, do not add `#[allow(dead_code)]`). Bodies are filled in Wave 2.
+- [x] 1.9 Wire `src/diff/mod.rs`: `pub mod model; pub mod word; pub mod nav;` and `pub use` re-exports of every public symbol in the Interface Contracts block, so the crate root (`diff::DiffFile`, `diff::parse_patches`, `diff::next_hunk`, …) resolves. Confirm `cargo build` + all four gates green with the stubs in place.
 
 ---
 
