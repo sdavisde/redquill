@@ -336,6 +336,85 @@ index 111..222 100644
         assert!(content.contains("[1 files]"));
     }
 
+    fn multi_file(path: &str) -> FileDiff {
+        let raw = format!(
+            "diff --git a/{path} b/{path}\nindex 111..222 100644\n--- a/{path}\n+++ b/{path}\n@@ -1,1 +1,1 @@\n-old\n+new\n"
+        );
+        FileDiff::from_patch(&RawFilePatch {
+            path: path.to_string(),
+            old_path: None,
+            raw,
+            is_binary: false,
+        })
+        .unwrap()
+    }
+
+    /// The multibuffer renders every file's section header (expanded, ▾
+    /// indicator) with its kind letter and path, all in one buffer.
+    #[test]
+    fn multibuffer_renders_all_section_headers() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let app = App::new(vec![multi_file("a.rs"), multi_file("b.rs")]);
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        // Both section headers present, each with the expanded indicator ▾
+        // and the change-kind letter M, and both files' bodies visible.
+        assert!(content.contains("\u{25be}")); // ▾ expanded indicator
+        assert!(content.contains("M a.rs"));
+        assert!(content.contains("M b.rs"));
+        assert!(content.contains("old"));
+    }
+
+    /// A collapsed section renders exactly one line: its header with the
+    /// collapsed indicator ▸, and none of its body rows (the `old`/`new`
+    /// diff lines are hidden).
+    #[test]
+    fn collapsed_section_renders_header_only_with_collapsed_indicator() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![multi_file("a.rs")]);
+        app.view.set_collapsed("a.rs", true);
+        app.rebuild_rows();
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        assert!(content.contains("\u{25b8}")); // ▸ collapsed indicator
+        assert!(content.contains("M a.rs"));
+        // Body rows are gone while collapsed.
+        assert!(!content.contains("old"));
+        assert!(!content.contains("new"));
+    }
+
+    /// A file present in `app.staged` renders the `●` marker slot in its
+    /// section header.
+    #[test]
+    fn staged_file_section_header_shows_marker() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![multi_file("a.rs")]);
+        app.staged = vec![StagedFile {
+            path: "a.rs".to_string(),
+            letter: 'M',
+        }];
+        app.rebuild_rows();
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        assert!(content.contains("M a.rs"));
+        assert!(content.contains("\u{25cf}")); // ● staged marker
+    }
+
     #[test]
     fn empty_diff_shows_no_changes_message() {
         let backend = TestBackend::new(80, 20);

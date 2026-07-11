@@ -15,7 +15,9 @@ use super::diff_view_state::DiffViewState;
 use super::keymap::Action;
 use super::lsp_ops::LspClient;
 use super::peek::{PeekKind, PeekState};
-use super::rows::{LineRow, Row, SyntaxSpans, anchor_row_index, build_rows, hunk_span};
+use super::rows::{
+    LineRow, Row, StagedMarker, SyntaxSpans, anchor_row_index, build_multibuffer, hunk_span,
+};
 use super::search::SearchState;
 use super::stage_ops::{ReviewSnapshot, StageOps, StagedFile, build_review, staged_from_status};
 use super::syntax::{self, HighlightCache};
@@ -161,6 +163,14 @@ impl App {
         app.target = target;
         app.stage_ops = Some(ops);
         app.highlight_cache.clear();
+        // Initial collapse state: files already (fully) staged at startup
+        // start collapsed, everything else expanded. Partial-vs-full staged
+        // derivation arrives in task 3.0; here `staged` membership is the
+        // available signal.
+        let staged_paths: Vec<String> = app.staged.iter().map(|s| s.path.clone()).collect();
+        for path in staged_paths {
+            app.view.set_collapsed(&path, true);
+        }
         app.rebuild_rows();
         app
     }
@@ -208,14 +218,11 @@ impl App {
             Action::CursorRight => self.view.move_column_right(),
             Action::WordForward => self.view.move_word_forward(),
             Action::WordBackward => self.view.move_word_backward(),
-            Action::NextHunk => self.next_hunk(),
-            Action::PrevHunk => self.prev_hunk(),
-            Action::NextFile => self.switch_file(self.view.selected_file + 1),
-            Action::PrevFile => {
-                if let Some(prev) = self.view.selected_file.checked_sub(1) {
-                    self.switch_file(prev);
-                }
-            }
+            Action::NextHunk => self.view.next_hunk(),
+            Action::PrevHunk => self.view.prev_hunk(),
+            Action::NextFile => self.view.next_section(),
+            Action::PrevFile => self.view.prev_section(),
+            Action::ToggleCollapse => self.toggle_collapse(),
             Action::ToggleHelp => self.help_open = !self.help_open,
             Action::EnterVisual => self.toggle_visual(),
             Action::Compose => self.open_compose(),
@@ -232,18 +239,21 @@ impl App {
         }
     }
 
-    /// Switches to file `index`, resetting cursor and scroll to the top.
-    /// Out-of-range indices are a no-op (this is how `NextFile`/`PrevFile`
-    /// clamp at the first/last file rather than wrapping). Rebuilding rows
-    /// (with highlighting) stays here; the view just holds the result.
-    fn switch_file(&mut self, index: usize) {
-        if index >= self.view.files.len() {
+    /// Toggles the collapse state of the file section under the cursor, then
+    /// rebuilds the buffer and re-clamps the cursor into the (now shorter or
+    /// longer) buffer, keeping it on the toggled file's header. A no-op on an
+    /// empty diff.
+    fn toggle_collapse(&mut self) {
+        let Some(path) = self.view.toggle_collapse_at_cursor() else {
             return;
-        }
-        self.view.selected_file = index;
+        };
         self.rebuild_rows();
-        self.view.cursor = 0;
-        self.view.scroll = 0;
+        // Keep the cursor on the toggled file's header so a collapse doesn't
+        // strand it inside a section that no longer has body rows.
+        if let Some(index) = self.view.files.iter().position(|f| f.path == path) {
+            self.view.cursor = self.view.header_row_of_file[index];
+            self.view.ensure_visible();
+        }
     }
 
     /// Rebuilds `rows` for the currently selected file against the current
@@ -260,110 +270,107 @@ impl App {
         }
     }
 
-    /// Rebuilds the view's `rows` for the currently selected file: lazily
-    /// populates the syntax-highlight cache for whichever side(s) this
-    /// file's hunks actually use (a no-op on a cache hit — highlighting
-    /// happens at most once per `(path, side)` between refreshes), then
-    /// rebuilds the row model against the current annotations and those
-    /// spans. Also recomputes the active search's match positions, since
-    /// they're relative to `rows`. Sets `rows` to empty if `selected_file`
-    /// is out of range (e.g. an empty diff). This is `App`'s side of the
-    /// seam: highlighting and the git backend live here, and the freshly
-    /// built rows are fed into [`DiffViewState`].
+    /// Rebuilds the whole multi-file row buffer: lazily populates the
+    /// syntax-highlight cache for the in-use side(s) of every *expanded*
+    /// file (collapsed files show only a header, so they are never
+    /// highlighted until expanded — a cache miss is highlighted at most once
+    /// per `(path, side)` between refreshes), then concatenates every file's
+    /// rows into one buffer via [`build_multibuffer`], carrying per-file
+    /// collapse state and staged markers. Also recomputes the active
+    /// search's matches and re-derives `selected_file` from the cursor. This
+    /// is `App`'s side of the seam: highlighting and the git backend live
+    /// here, and the built buffer is fed into [`DiffViewState`].
     pub(super) fn rebuild_rows(&mut self) {
-        let Some(file) = self.view.files.get(self.view.selected_file) else {
-            self.view.rows = Vec::new();
-            self.search.recompute(&self.view.rows);
-            return;
-        };
-        let path = file.path.clone();
-        let old_path = file.old_path.clone();
-        let needs_new = syntax::side_in_use(file, Side::New);
-        let needs_old = syntax::side_in_use(file, Side::Old);
-        let synthetic = self
-            .patches
-            .get(self.view.selected_file)
-            .is_none_or(|p| p.is_none());
-
-        if needs_new {
-            syntax::populate_cache(
-                &mut self.highlight_cache,
-                &mut self.highlighter,
-                self.stage_ops.as_deref(),
-                &self.target,
-                &path,
-                old_path.as_deref(),
-                Side::New,
-                synthetic,
-            );
+        // Per-file metadata, collected first (cloning paths) so the cache /
+        // highlighter can be mutably borrowed without also holding `files`.
+        struct Meta {
+            path: String,
+            old_path: Option<String>,
+            collapsed: bool,
+            needs_new: bool,
+            needs_old: bool,
+            synthetic: bool,
         }
-        if needs_old {
-            syntax::populate_cache(
-                &mut self.highlight_cache,
-                &mut self.highlighter,
-                self.stage_ops.as_deref(),
-                &self.target,
-                &path,
-                old_path.as_deref(),
-                Side::Old,
-                synthetic,
-            );
+        let metas: Vec<Meta> = self
+            .view
+            .files
+            .iter()
+            .enumerate()
+            .map(|(i, file)| {
+                let collapsed = self.view.is_collapsed(&file.path);
+                Meta {
+                    path: file.path.clone(),
+                    old_path: file.old_path.clone(),
+                    collapsed,
+                    needs_new: !collapsed && syntax::side_in_use(file, Side::New),
+                    needs_old: !collapsed && syntax::side_in_use(file, Side::Old),
+                    synthetic: self.patches.get(i).is_none_or(|p| p.is_none()),
+                }
+            })
+            .collect();
+
+        for meta in &metas {
+            if meta.needs_new {
+                syntax::populate_cache(
+                    &mut self.highlight_cache,
+                    &mut self.highlighter,
+                    self.stage_ops.as_deref(),
+                    &self.target,
+                    &meta.path,
+                    meta.old_path.as_deref(),
+                    Side::New,
+                    meta.synthetic,
+                );
+            }
+            if meta.needs_old {
+                syntax::populate_cache(
+                    &mut self.highlight_cache,
+                    &mut self.highlighter,
+                    self.stage_ops.as_deref(),
+                    &self.target,
+                    &meta.path,
+                    meta.old_path.as_deref(),
+                    Side::Old,
+                    meta.synthetic,
+                );
+            }
         }
 
-        let new_spans = self.highlight_cache.get(&path, Side::New);
-        let old_spans = self.highlight_cache.get(&path, Side::Old);
-        let file = &self.view.files[self.view.selected_file];
-        let rows = build_rows(
-            file,
+        let collapsed: Vec<bool> = metas.iter().map(|m| m.collapsed).collect();
+        let markers: Vec<StagedMarker> = self
+            .view
+            .files
+            .iter()
+            .map(|f| {
+                if self.staged.iter().any(|s| s.path == f.path) {
+                    StagedMarker::Staged
+                } else {
+                    StagedMarker::None
+                }
+            })
+            .collect();
+        let syntax: Vec<SyntaxSpans> = self
+            .view
+            .files
+            .iter()
+            .map(|f| SyntaxSpans {
+                new: self.highlight_cache.get(&f.path, Side::New),
+                old: self.highlight_cache.get(&f.path, Side::Old),
+            })
+            .collect();
+
+        let mb = build_multibuffer(
+            &self.view.files,
+            &collapsed,
+            &markers,
             &self.annotations,
-            SyntaxSpans {
-                new: new_spans,
-                old: old_spans,
-            },
+            &syntax,
         );
-        self.view.rows = rows;
+        self.view.rows = mb.rows;
+        self.view.file_of_row = mb.file_of_row;
+        self.view.header_row_of_file = mb.header_row_of_file;
+        self.view.selected_file = self.view.file_of_cursor();
         self.search.recompute(&self.view.rows);
-    }
-
-    /// Jumps the cursor to the next hunk header after the cursor, crossing
-    /// into the next file (at its first hunk) if the current file has none
-    /// left. A no-op if there is no next hunk anywhere. The in-file jump and
-    /// the file probe live on [`DiffViewState`]; `App` orchestrates the
-    /// highlighting rebuild between selecting a file and positioning on it.
-    fn next_hunk(&mut self) {
-        if self.view.next_hunk_in_file() {
-            return;
-        }
-        for index in (self.view.selected_file + 1)..self.view.files.len() {
-            if let Some(first) = self.view.probe_first_hunk_row(&self.annotations, index) {
-                self.view.selected_file = index;
-                self.rebuild_rows();
-                self.view.cursor = first;
-                self.view.scroll = 0;
-                self.view.ensure_visible();
-                return;
-            }
-        }
-    }
-
-    /// Jumps the cursor to the previous hunk header before the cursor,
-    /// crossing into the previous file (at its last hunk) if the current
-    /// file has none before the cursor. A no-op if there is no previous
-    /// hunk anywhere.
-    fn prev_hunk(&mut self) {
-        if self.view.prev_hunk_in_file() {
-            return;
-        }
-        for index in (0..self.view.selected_file).rev() {
-            if let Some(last) = self.view.probe_last_hunk_row(&self.annotations, index) {
-                self.view.selected_file = index;
-                self.rebuild_rows();
-                self.view.cursor = last;
-                self.view.scroll = 0;
-                self.view.ensure_visible();
-                return;
-            }
-        }
     }
 
     // -- Visual mode -------------------------------------------------
@@ -391,7 +398,7 @@ impl App {
     /// derivable target (currently only [`Row::Annotation`], which the
     /// cursor never addresses).
     pub fn target_for_cursor(&self) -> Option<Target> {
-        let file = self.view.files.get(self.view.selected_file)?;
+        let file = self.view.files.get(self.view.file_of_cursor())?;
         match self.view.rows.get(self.view.cursor)? {
             Row::Line(line) => line_target(&file.path, line),
             Row::HunkHeader { hunk_index, .. } => self.hunk_target(*hunk_index),
@@ -401,7 +408,7 @@ impl App {
     }
 
     fn hunk_target(&self, hunk_index: usize) -> Option<Target> {
-        let file = self.view.files.get(self.view.selected_file)?;
+        let file = self.view.files.get(self.view.file_of_cursor())?;
         let hunk = file.hunks.get(hunk_index)?;
         let (start, end) = hunk_span(hunk);
         Target::hunk(&file.path, start, end).ok()
@@ -416,7 +423,7 @@ impl App {
     /// numbers of the non-removed rows the selection spans. `None` if the
     /// selection covers no line rows at all.
     pub fn target_for_visual(&self, anchor: usize) -> Option<Target> {
-        let file = self.view.files.get(self.view.selected_file)?;
+        let file = self.view.files.get(self.view.file_of_cursor())?;
         let (lo, hi) = if anchor <= self.view.cursor {
             (anchor, self.view.cursor)
         } else {
@@ -575,10 +582,18 @@ impl App {
         let target = annotation.target.clone();
         let path = target.path().to_string();
         if let Some(index) = self.view.files.iter().position(|f| f.path == path) {
-            self.view.selected_file = index;
+            // Expand the target section so line/hunk anchors are reachable,
+            // then resolve the anchor within that file's row span.
+            self.view.set_collapsed(&path, false);
             self.rebuild_rows();
-            self.view.cursor =
-                anchor_row_index(&self.view.files[index], &self.view.rows, &target).unwrap_or(0);
+            let (start, end) = self.view.section_span(index);
+            let local = anchor_row_index(
+                &self.view.files[index],
+                &self.view.rows[start..end],
+                &target,
+            )
+            .unwrap_or(0);
+            self.view.cursor = start + local;
             self.view.scroll = 0;
             self.view.ensure_visible();
         }
@@ -649,20 +664,23 @@ impl App {
             }
         };
 
-        let previous_path = self
-            .view
-            .files
-            .get(self.view.selected_file)
-            .map(|f| f.path.clone());
-        let previous_index = self.view.selected_file;
+        // Remember the cursor's file by path and its offset within that
+        // file's section, so the same spot is restored even if files
+        // reorder or the section shrinks.
+        let cursor_file = self.view.file_of_cursor();
+        let previous_path = self.view.files.get(cursor_file).map(|f| f.path.clone());
+        let local_offset = self.view.cursor.saturating_sub(
+            self.view
+                .header_row_of_file
+                .get(cursor_file)
+                .copied()
+                .unwrap_or(0),
+        );
 
         self.view.files = snapshot.files;
         self.patches = snapshot.patches;
         self.staged = snapshot.staged;
 
-        self.view.selected_file = previous_path
-            .and_then(|path| self.view.files.iter().position(|f| f.path == path))
-            .unwrap_or_else(|| previous_index.min(self.view.files.len().saturating_sub(1)));
         // Content may have changed underneath every cached (path, side).
         self.highlight_cache.clear();
         self.rebuild_rows();
@@ -670,9 +688,19 @@ impl App {
             self.view.cursor = 0;
             self.view.scroll = 0;
         } else {
+            let restored = previous_path
+                .as_deref()
+                .and_then(|path| self.view.files.iter().position(|f| f.path == path));
+            let target = match restored {
+                Some(j) => {
+                    let (start, end) = self.view.section_span(j);
+                    (start + local_offset).min(end.saturating_sub(1))
+                }
+                None => self.view.cursor.min(self.view.max_cursor()),
+            };
             self.view.cursor = self
                 .view
-                .nearest_addressable(self.view.cursor.min(self.view.max_cursor()), true);
+                .nearest_addressable(target.min(self.view.max_cursor()), false);
             self.view.scroll = self.view.scroll.min(self.view.cursor);
             self.view.ensure_visible();
         }
@@ -1034,13 +1062,17 @@ mod tests {
     }
 
     #[test]
-    fn next_file_switches_and_resets_cursor() {
+    fn next_file_jumps_to_next_section_header() {
         let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
         app.apply(Action::CursorDown);
         app.apply(Action::NextFile);
         assert_eq!(app.view.selected_file, 1);
-        assert_eq!(app.view.cursor, 0);
-        assert_eq!(app.view.scroll, 0);
+        // Cursor lands on b.rs's section header, not row 0.
+        assert_eq!(app.view.cursor, app.view.header_row_of_file[1]);
+        assert!(matches!(
+            app.view.rows[app.view.cursor],
+            Row::FileHeader { file_index: 1, .. }
+        ));
     }
 
     #[test]
@@ -1059,13 +1091,49 @@ mod tests {
     }
 
     #[test]
-    fn prev_file_switches_and_resets_cursor() {
+    fn prev_file_jumps_back_across_sections() {
         let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
-        app.apply(Action::NextFile);
-        app.apply(Action::CursorDown);
+        app.apply(Action::NextFile); // -> b.rs header
+        assert_eq!(app.view.selected_file, 1);
+        // From b.rs's header, prev-section jumps to a.rs's header.
         app.apply(Action::PrevFile);
         assert_eq!(app.view.selected_file, 0);
-        assert_eq!(app.view.cursor, 0);
+        assert_eq!(app.view.cursor, app.view.header_row_of_file[0]);
+    }
+
+    #[test]
+    fn toggle_collapse_collapses_and_expands_file_under_cursor() {
+        let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
+        let expanded_len = app.view.rows.len();
+        // Cursor starts on a.rs's header.
+        app.apply(Action::ToggleCollapse);
+        assert!(app.view.is_collapsed("a.rs"));
+        assert!(app.view.rows.len() < expanded_len);
+        // a.rs now contributes exactly its (collapsed) header row.
+        assert!(matches!(
+            app.view.rows[app.view.header_row_of_file[0]],
+            Row::FileHeader {
+                collapsed: true,
+                file_index: 0,
+                ..
+            }
+        ));
+        // Cursor stays on a.rs's header, still addressable.
+        assert_eq!(app.view.cursor, app.view.header_row_of_file[0]);
+        assert!(app.view.rows[app.view.cursor].is_addressable());
+
+        app.apply(Action::ToggleCollapse);
+        assert!(!app.view.is_collapsed("a.rs"));
+        assert_eq!(app.view.rows.len(), expanded_len);
+    }
+
+    #[test]
+    fn toggle_collapse_targets_the_cursor_file_not_the_first() {
+        let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
+        app.apply(Action::NextFile); // cursor onto b.rs's header
+        app.apply(Action::ToggleCollapse);
+        assert!(app.view.is_collapsed("b.rs"));
+        assert!(!app.view.is_collapsed("a.rs"));
     }
 
     #[test]
@@ -2168,12 +2236,11 @@ index 1..2 100644
         }
     }
 
-    /// Selecting a file's rows highlights each side at most once, even
-    /// across repeated selection (file switches back and forth) — the
-    /// `HighlightCache` keyed by `(path, side)` must be hit, not re-fetched
-    /// and re-highlighted, on every rebuild.
+    /// The multibuffer highlights every *expanded* file's in-use sides once
+    /// at build time, and the `(path, side)`-keyed cache means later motions
+    /// (section jumps back and forth) re-fetch nothing.
     #[test]
-    fn selecting_the_same_file_repeatedly_highlights_each_side_once() {
+    fn multibuffer_highlights_every_expanded_file_once() {
         let a = highlight_patch("a.rs");
         let b = highlight_patch("b.rs");
         let show_calls = Rc::new(RefCell::new(0));
@@ -2192,15 +2259,47 @@ index 1..2 100644
             staged: Vec::new(),
         };
         let mut app = App::with_git(snapshot, DiffTarget::Staged, Box::new(fake));
-        // `with_git`'s initial rebuild already highlighted a.rs's two sides
-        // (it has both an added and a removed line).
+        // Both files expanded -> a.rs (2 sides) + b.rs (2 sides) = 4 fetches.
+        assert_eq!(*show_calls.borrow(), 4);
+
+        app.apply(Action::NextFile); // -> b.rs header: cache hit
+        app.apply(Action::PrevFile); // -> a.rs header: cache hit
+        app.apply(Action::NextFile); // -> b.rs header: cache hit
+        assert_eq!(*show_calls.borrow(), 4);
+    }
+
+    /// A file that starts collapsed (fully staged at launch) is not
+    /// highlighted until it is expanded — the lazy-per-file population rule.
+    #[test]
+    fn collapsed_file_is_not_highlighted_until_expanded() {
+        let a = highlight_patch("a.rs");
+        let c = highlight_patch("c.rs");
+        let show_calls = Rc::new(RefCell::new(0));
+        let fake = FakeGit {
+            diff: vec![a.clone(), c.clone()],
+            show_calls: Rc::clone(&show_calls),
+            show_content: Some("fn old() {}\nfn new() {}\n".to_string()),
+            ..FakeGit::default()
+        };
+        let snapshot = ReviewSnapshot {
+            files: vec![
+                FileDiff::from_patch(&a).unwrap(),
+                FileDiff::from_patch(&c).unwrap(),
+            ],
+            patches: vec![Some(a), Some(c)],
+            // c.rs starts fully staged -> starts collapsed.
+            staged: vec![StagedFile {
+                path: "c.rs".to_string(),
+                letter: 'M',
+            }],
+        };
+        let mut app = App::with_git(snapshot, DiffTarget::Staged, Box::new(fake));
+        // Only a.rs (expanded) is highlighted; collapsed c.rs is skipped.
         assert_eq!(*show_calls.borrow(), 2);
 
-        app.apply(Action::NextFile); // -> b.rs: two fresh fetches
-        assert_eq!(*show_calls.borrow(), 4);
-        app.apply(Action::PrevFile); // -> a.rs: cache hit, no new fetches
-        assert_eq!(*show_calls.borrow(), 4);
-        app.apply(Action::NextFile); // -> b.rs: cache hit again
+        // Expanding c.rs highlights its two sides on the rebuild.
+        app.view.set_collapsed("c.rs", false);
+        app.rebuild_rows();
         assert_eq!(*show_calls.borrow(), 4);
     }
 

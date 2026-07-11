@@ -52,7 +52,7 @@ Ordering rationale: the side-by-side removal comes first because `rows` and `sbs
 - [x] 1.3 Remove `Action::ToggleView` and the `t` binding from `src/ui/keymap.rs`, its help grouping in `src/ui/help.rs`, and add a test asserting `t` resolves to no action.
 - [x] 1.4 Update README.md (drop `t` row; note unified-only view), run the four gates, and commit `refactor: remove side-by-side view (multibuffer is unified-only)`.
 
-### [ ] 2.0 Multi-file row model with collapsible sections
+### [x] 2.0 Multi-file row model with collapsible sections
 
 #### 2.0 Proof Artifact(s)
 
@@ -62,11 +62,11 @@ Ordering rationale: the side-by-side removal comes first because `rows` and `sbs
 
 #### 2.0 Tasks
 
-- [ ] 2.1 (TDD) In `src/ui/rows.rs`, extend the header row to a section header carrying `{file_index, path, old_path, kind, staged_marker, collapsed, annotated}` and write failing tests for a new `build_multibuffer(files, collapse_state, staged_states, annotations, per-file syntax) -> MultibufferRows` where `MultibufferRows` holds `rows: Vec<Row>`, `file_of_row: Vec<usize>`, and `header_row_of_file: Vec<usize>`; collapsed files contribute exactly their header row; untracked files enter via the existing `FileDiff::synthetic_added` path; then implement to green.
-- [ ] 2.2 In `src/ui/diff_view_state.rs`, store `MultibufferRows` plus a path-keyed collapse map; add `file_of_cursor()`, make `nearest_addressable`/clamping/motions operate over the whole buffer, generalize `]`/`[` to cross into neighboring expanded files (deleting the `probe_*` throwaway-row dance), and add next/prev-section-header motions; keep `selected_file` only as a derived value for the sidebar highlight.
-- [ ] 2.3 In `src/ui/keymap.rs` + `src/ui/app.rs`, add `Action::ToggleCollapse` bound to `za` (extending the two-key prefix machinery to `z`), rebind `Tab`/`Shift-Tab` to the header-jump actions, and wire `App::rebuild_rows` to build the multibuffer with lazy per-file highlight population (only expanded files whose rows can be visible); initial collapse state on launch: fully-staged files collapsed, all else expanded.
-- [ ] 2.4 In `src/ui/diff_view.rs` (+ `src/ui/sidebar.rs`), render section headers visually distinct (current file-header-bar style) with `▾`/`▸`, kind letter, path/rename arrow, and marker slot; collapsed headers render exactly one line; sidebar highlight follows `file_of_cursor()`; add `TestBackend` render tests.
-- [ ] 2.5 Update `src/ui/help.rs` and README.md for `za` and the repurposed `Tab`, run the four gates, record `03-proofs/03-task-02-proofs.md`, and commit `feat: multi-file multibuffer with collapsible sections`.
+- [x] 2.1 (TDD) In `src/ui/rows.rs`, extend the header row to a section header carrying `{file_index, path, old_path, kind, staged_marker, collapsed, annotated}` and write failing tests for a new `build_multibuffer(files, collapse_state, staged_states, annotations, per-file syntax) -> MultibufferRows` where `MultibufferRows` holds `rows: Vec<Row>`, `file_of_row: Vec<usize>`, and `header_row_of_file: Vec<usize>`; collapsed files contribute exactly their header row; untracked files enter via the existing `FileDiff::synthetic_added` path; then implement to green.
+- [x] 2.2 In `src/ui/diff_view_state.rs`, store `MultibufferRows` plus a path-keyed collapse map; add `file_of_cursor()`, make `nearest_addressable`/clamping/motions operate over the whole buffer, generalize `]`/`[` to cross into neighboring expanded files (deleting the `probe_*` throwaway-row dance), and add next/prev-section-header motions; keep `selected_file` only as a derived value for the sidebar highlight.
+- [x] 2.3 In `src/ui/keymap.rs` + `src/ui/app.rs`, add `Action::ToggleCollapse` bound to `za` (extending the two-key prefix machinery to `z`), rebind `Tab`/`Shift-Tab` to the header-jump actions, and wire `App::rebuild_rows` to build the multibuffer with lazy per-file highlight population (only expanded files whose rows can be visible); initial collapse state on launch: fully-staged files collapsed, all else expanded.
+- [x] 2.4 In `src/ui/diff_view.rs` (+ `src/ui/sidebar.rs`), render section headers visually distinct (current file-header-bar style) with `▾`/`▸`, kind letter, path/rename arrow, and marker slot; collapsed headers render exactly one line; sidebar highlight follows `file_of_cursor()`; add `TestBackend` render tests.
+- [x] 2.5 Update `src/ui/help.rs` and README.md for `za` and the repurposed `Tab`, run the four gates, record `03-proofs/03-task-02-proofs.md`, and commit `feat: multi-file multibuffer with collapsible sections`.
 
 ### [ ] 3.0 Staging-driven review flow
 

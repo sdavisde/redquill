@@ -11,10 +11,11 @@
 //! [`super::App`], which feeds freshly built rows into this component; this
 //! keeps `git`/highlighting concerns out of the view state.
 
-use crate::annotate::AnnotationStore;
+use std::collections::HashMap;
+
 use crate::diff::FileDiff;
 
-use super::rows::{Row, SyntaxSpans, build_rows};
+use super::rows::Row;
 
 /// A reasonable default viewport height, used until the first frame reports
 /// the real one. Arbitrary but generous enough that half-page motion isn't
@@ -28,12 +29,24 @@ const DEFAULT_VIEWPORT_HEIGHT: usize = 20;
 pub struct DiffViewState {
     /// Every file in the diff being reviewed.
     pub files: Vec<FileDiff>,
-    /// Index into `files` of the currently selected file.
+    /// The file whose section the cursor is in — a *derived* value kept in
+    /// sync with [`DiffViewState::file_of_cursor`] on every motion, used for
+    /// the sidebar highlight and the diff pane's title. Not the source of
+    /// truth; the multibuffer is.
     pub selected_file: usize,
-    /// The flattened row model for `files[selected_file]`.
+    /// The concatenated multi-file row buffer (all files' rows).
     pub rows: Vec<Row>,
+    /// `file_of_row[i]` is the index into `files` of the file owning
+    /// `rows[i]`.
+    pub file_of_row: Vec<usize>,
+    /// `header_row_of_file[f]` is the row index of file `f`'s section
+    /// header.
+    pub header_row_of_file: Vec<usize>,
+    /// Per-file collapse state, keyed by path so it survives refreshes that
+    /// reorder or re-index files. An absent entry means expanded.
+    collapsed: HashMap<String, bool>,
     /// The cursor's row index into `rows` — a LINE the user moves with
-    /// j/k, Zed-style. Anchors future annotation/staging commands.
+    /// j/k, Zed-style. Anchors annotation/staging/LSP commands.
     pub cursor: usize,
     /// The first visible row index into `rows` (the viewport follows the
     /// cursor).
@@ -50,19 +63,61 @@ pub struct DiffViewState {
 }
 
 impl DiffViewState {
-    /// Builds a fresh view state over `files`, with the first file selected
-    /// and empty rows. The owner ([`super::App`]) populates the row model
+    /// Builds a fresh view state over `files`, with empty rows and every
+    /// file expanded. The owner ([`super::App`]) populates the row model
     /// immediately afterward via its highlighting-aware rebuild.
     pub fn new(files: Vec<FileDiff>) -> DiffViewState {
         DiffViewState {
             files,
             selected_file: 0,
             rows: Vec::new(),
+            file_of_row: Vec::new(),
+            header_row_of_file: Vec::new(),
+            collapsed: HashMap::new(),
             cursor: 0,
             scroll: 0,
             viewport_height: DEFAULT_VIEWPORT_HEIGHT,
             cursor_col: 0,
         }
+    }
+
+    /// The index (into `files`) of the file whose section the cursor is in,
+    /// derived from the row-to-file map. `0` when the buffer is empty.
+    pub fn file_of_cursor(&self) -> usize {
+        self.file_of_row.get(self.cursor).copied().unwrap_or(0)
+    }
+
+    /// Whether `path`'s section is collapsed (header-only). Absent entries
+    /// are expanded.
+    pub fn is_collapsed(&self, path: &str) -> bool {
+        self.collapsed.get(path).copied().unwrap_or(false)
+    }
+
+    /// Sets `path`'s collapse state (does not rebuild rows — the owner
+    /// [`super::App`] rebuilds after mutating this, since rebuilding needs
+    /// highlighting).
+    pub fn set_collapsed(&mut self, path: &str, collapsed: bool) {
+        self.collapsed.insert(path.to_string(), collapsed);
+    }
+
+    /// Toggles the collapse state of the file under the cursor, returning
+    /// its path so the owner can rebuild. `None` on an empty buffer.
+    pub fn toggle_collapse_at_cursor(&mut self) -> Option<String> {
+        let path = self.files.get(self.file_of_cursor())?.path.clone();
+        let now = !self.is_collapsed(&path);
+        self.collapsed.insert(path.clone(), now);
+        Some(path)
+    }
+
+    /// The `[start, end)` row span of file `f`'s section.
+    pub fn section_span(&self, f: usize) -> (usize, usize) {
+        let start = self.header_row_of_file.get(f).copied().unwrap_or(0);
+        let end = self
+            .header_row_of_file
+            .get(f + 1)
+            .copied()
+            .unwrap_or(self.rows.len());
+        (start, end)
     }
 
     /// Records the diff pane's current content height, for half-page
@@ -146,8 +201,12 @@ impl DiffViewState {
     }
 
     /// Scrolls just enough to keep the cursor inside `[scroll, scroll +
-    /// viewport_height)`.
+    /// viewport_height)`, and re-derives [`DiffViewState::selected_file`]
+    /// from the cursor's owning file. Called at the end of every motion, so
+    /// the sidebar highlight and pane title always follow the cursor across
+    /// file boundaries.
     pub fn ensure_visible(&mut self) {
+        self.selected_file = self.file_of_cursor();
         if self.rows.is_empty() {
             self.scroll = 0;
             return;
@@ -167,29 +226,25 @@ impl DiffViewState {
             .collect()
     }
 
-    /// Jumps the cursor to the next hunk header after the cursor within the
-    /// current file, returning `true` if it moved. Returns `false` (leaving
-    /// the cursor put) when the current file has no hunk after the cursor —
-    /// the owner then probes subsequent files via
-    /// [`DiffViewState::probe_first_hunk_row`].
-    pub fn next_hunk_in_file(&mut self) -> bool {
+    /// Jumps the cursor to the next hunk header after the cursor anywhere in
+    /// the buffer — crossing into neighboring expanded files' hunks
+    /// automatically, since the whole buffer's rows are already built (a
+    /// collapsed file contributes no hunk headers, so it's skipped). A no-op
+    /// if there is no hunk after the cursor.
+    pub fn next_hunk(&mut self) {
         if let Some(&next) = Self::hunk_header_rows(&self.rows)
             .iter()
             .find(|&&i| i > self.cursor)
         {
             self.cursor = next;
             self.ensure_visible();
-            true
-        } else {
-            false
         }
     }
 
-    /// Jumps the cursor to the previous hunk header before the cursor within
-    /// the current file, returning `true` if it moved. Returns `false` when
-    /// the current file has no hunk before the cursor — the owner then
-    /// probes earlier files via [`DiffViewState::probe_last_hunk_row`].
-    pub fn prev_hunk_in_file(&mut self) -> bool {
+    /// Jumps the cursor to the previous hunk header before the cursor
+    /// anywhere in the buffer, crossing file boundaries backward. A no-op if
+    /// there is no hunk before the cursor.
+    pub fn prev_hunk(&mut self) {
         if let Some(&prev) = Self::hunk_header_rows(&self.rows)
             .iter()
             .rev()
@@ -197,34 +252,33 @@ impl DiffViewState {
         {
             self.cursor = prev;
             self.ensure_visible();
-            true
-        } else {
-            false
         }
     }
 
-    /// The row index of `files[index]`'s first hunk header, via a cheap
-    /// unhighlighted probe (only the file actually landed on gets its rows
-    /// rebuilt with real highlighting, by the owner). `None` if that file
-    /// has no hunk at all.
-    pub fn probe_first_hunk_row(
-        &self,
-        annotations: &AnnotationStore,
-        index: usize,
-    ) -> Option<usize> {
-        let probe = build_rows(&self.files[index], annotations, SyntaxSpans::default());
-        Self::hunk_header_rows(&probe).first().copied()
+    /// Jumps the cursor to the next file's section header after the cursor.
+    /// A no-op at the last section. Repurposes `Tab`'s old next-file meaning.
+    pub fn next_section(&mut self) {
+        if let Some(&next) = self.header_row_of_file.iter().find(|&&h| h > self.cursor) {
+            self.cursor = next;
+            self.cursor_col = 0;
+            self.ensure_visible();
+        }
     }
 
-    /// The row index of `files[index]`'s last hunk header, via a cheap
-    /// unhighlighted probe. `None` if that file has no hunk at all.
-    pub fn probe_last_hunk_row(
-        &self,
-        annotations: &AnnotationStore,
-        index: usize,
-    ) -> Option<usize> {
-        let probe = build_rows(&self.files[index], annotations, SyntaxSpans::default());
-        Self::hunk_header_rows(&probe).last().copied()
+    /// Jumps the cursor to the previous section header before the cursor
+    /// (the current file's own header first, then earlier files). A no-op
+    /// before the first section. Repurposes `Shift-Tab`'s old meaning.
+    pub fn prev_section(&mut self) {
+        if let Some(&prev) = self
+            .header_row_of_file
+            .iter()
+            .rev()
+            .find(|&&h| h < self.cursor)
+        {
+            self.cursor = prev;
+            self.cursor_col = 0;
+            self.ensure_visible();
+        }
     }
 
     /// The cursor row's content, if it's a [`Row::Line`] (the only rows
@@ -320,7 +374,9 @@ fn is_word_char(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::annotate::AnnotationStore;
     use crate::git::RawFilePatch;
+    use crate::ui::rows::{StagedMarker, SyntaxSpans, build_multibuffer};
 
     fn file_with_raw(path: &str, raw: &str) -> FileDiff {
         FileDiff::from_patch(&RawFilePatch {
@@ -332,18 +388,39 @@ mod tests {
         .unwrap()
     }
 
-    /// Builds a `DiffViewState` over one file with its rows populated
-    /// (unhighlighted), the way `App` would after a rebuild.
-    fn view_with_raw(path: &str, raw: &str) -> DiffViewState {
-        let file = file_with_raw(path, raw);
-        let mut view = DiffViewState::new(vec![file]);
-        let rows = build_rows(
-            &view.files[0],
+    /// Builds a `DiffViewState` over `files` (with the given per-file
+    /// collapse flags), its multibuffer populated the way `App` would after
+    /// a rebuild.
+    fn multibuffer_view(files: Vec<FileDiff>, collapsed: &[bool]) -> DiffViewState {
+        let mut view = DiffViewState::new(files);
+        let paths: Vec<(String, bool)> = view
+            .files
+            .iter()
+            .zip(collapsed)
+            .map(|(f, &c)| (f.path.clone(), c))
+            .collect();
+        for (path, c) in paths {
+            view.set_collapsed(&path, c);
+        }
+        let markers = vec![StagedMarker::None; view.files.len()];
+        let syntax = vec![SyntaxSpans::default(); view.files.len()];
+        let mb = build_multibuffer(
+            &view.files,
+            collapsed,
+            &markers,
             &AnnotationStore::new(),
-            SyntaxSpans::default(),
+            &syntax,
         );
-        view.rows = rows;
+        view.rows = mb.rows;
+        view.file_of_row = mb.file_of_row;
+        view.header_row_of_file = mb.header_row_of_file;
+        view.selected_file = view.file_of_cursor();
         view
+    }
+
+    /// Builds a `DiffViewState` over one expanded file.
+    fn view_with_raw(path: &str, raw: &str) -> DiffViewState {
+        multibuffer_view(vec![file_with_raw(path, raw)], &[false])
     }
 
     fn sample_raw() -> &'static str {
@@ -421,9 +498,8 @@ index 1..2 100644
         assert_eq!(view.effective_column(), Some(0));
     }
 
-    #[test]
-    fn next_hunk_in_file_reports_whether_it_moved() {
-        let raw = "\
+    fn two_hunk_raw() -> &'static str {
+        "\
 diff --git a/f.rs b/f.rs
 index 1..2 100644
 --- a/f.rs
@@ -434,10 +510,128 @@ index 1..2 100644
 @@ -11,1 +11,1 @@
 -old1
 +new1
-";
-        let mut view = view_with_raw("f.rs", raw);
-        assert!(view.next_hunk_in_file()); // -> first hunk header
-        assert!(view.next_hunk_in_file()); // -> second hunk header
-        assert!(!view.next_hunk_in_file()); // no more hunks in this file
+"
+    }
+
+    #[test]
+    fn next_hunk_advances_then_stops_at_last() {
+        let mut view = view_with_raw("f.rs", two_hunk_raw());
+        assert_eq!(view.cursor, 0);
+        view.next_hunk(); // -> first hunk header
+        let first = view.cursor;
+        assert!(matches!(view.rows[first], Row::HunkHeader { .. }));
+        view.next_hunk(); // -> second hunk header
+        assert!(view.cursor > first);
+        let last = view.cursor;
+        view.next_hunk(); // no more hunks
+        assert_eq!(view.cursor, last);
+    }
+
+    fn one_hunk_raw(path: &str) -> String {
+        format!(
+            "diff --git a/{path} b/{path}\nindex 1..2 100644\n--- a/{path}\n+++ b/{path}\n@@ -1,1 +1,1 @@\n-old\n+new\n"
+        )
+    }
+
+    #[test]
+    fn cursor_down_crosses_into_the_next_file_section() {
+        let files = vec![
+            file_with_raw("a.rs", &one_hunk_raw("a.rs")),
+            file_with_raw("b.rs", &one_hunk_raw("b.rs")),
+        ];
+        let mut view = multibuffer_view(files, &[false, false]);
+        // a.rs occupies rows 0..4; b.rs header is row 4.
+        for _ in 0..4 {
+            view.cursor_down();
+        }
+        assert_eq!(view.cursor, 4);
+        assert_eq!(view.file_of_cursor(), 1);
+        assert_eq!(view.selected_file, 1);
+    }
+
+    #[test]
+    fn next_hunk_crosses_the_file_boundary() {
+        let files = vec![
+            file_with_raw("a.rs", &one_hunk_raw("a.rs")),
+            file_with_raw("b.rs", &one_hunk_raw("b.rs")),
+        ];
+        let mut view = multibuffer_view(files, &[false, false]);
+        view.next_hunk(); // a.rs hunk (row 1)
+        assert_eq!(view.file_of_cursor(), 0);
+        view.next_hunk(); // crosses into b.rs hunk (row 5)
+        assert_eq!(view.file_of_cursor(), 1);
+        assert!(matches!(view.rows[view.cursor], Row::HunkHeader { .. }));
+    }
+
+    #[test]
+    fn next_hunk_skips_a_collapsed_section() {
+        // b.rs collapsed contributes only its header (no hunk), so the next
+        // hunk after a.rs's is c.rs's.
+        let files = vec![
+            file_with_raw("a.rs", &one_hunk_raw("a.rs")),
+            file_with_raw("b.rs", &one_hunk_raw("b.rs")),
+            file_with_raw("c.rs", &one_hunk_raw("c.rs")),
+        ];
+        let mut view = multibuffer_view(files, &[false, true, false]);
+        view.next_hunk(); // a.rs hunk
+        assert_eq!(view.file_of_cursor(), 0);
+        view.next_hunk(); // -> c.rs hunk, skipping collapsed b.rs
+        assert_eq!(view.file_of_cursor(), 2);
+    }
+
+    #[test]
+    fn next_and_prev_section_jump_between_headers() {
+        let files = vec![
+            file_with_raw("a.rs", &one_hunk_raw("a.rs")),
+            file_with_raw("b.rs", &one_hunk_raw("b.rs")),
+        ];
+        let mut view = multibuffer_view(files, &[false, false]);
+        view.next_section(); // -> b.rs header (row 4)
+        assert_eq!(view.cursor, view.header_row_of_file[1]);
+        assert_eq!(view.file_of_cursor(), 1);
+        view.next_section(); // no next section -> stays
+        assert_eq!(view.cursor, view.header_row_of_file[1]);
+        view.prev_section(); // -> a.rs header (row 0)
+        assert_eq!(view.cursor, view.header_row_of_file[0]);
+        view.prev_section(); // stays
+        assert_eq!(view.cursor, 0);
+    }
+
+    #[test]
+    fn toggle_collapse_at_cursor_flips_state_for_the_cursor_file() {
+        let files = vec![
+            file_with_raw("a.rs", &one_hunk_raw("a.rs")),
+            file_with_raw("b.rs", &one_hunk_raw("b.rs")),
+        ];
+        let mut view = multibuffer_view(files, &[false, false]);
+        view.next_section(); // cursor onto b.rs
+        assert!(!view.is_collapsed("b.rs"));
+        let path = view.toggle_collapse_at_cursor().unwrap();
+        assert_eq!(path, "b.rs");
+        assert!(view.is_collapsed("b.rs"));
+        assert!(!view.is_collapsed("a.rs"));
+    }
+
+    #[test]
+    fn cursor_clamps_into_range_after_a_smaller_rebuild() {
+        // Cursor deep in a two-file buffer, then the buffer shrinks to a
+        // single short file: the clamp helpers keep the cursor addressable.
+        let files = vec![
+            file_with_raw("a.rs", two_hunk_raw()),
+            file_with_raw("b.rs", &one_hunk_raw("b.rs")),
+        ];
+        let mut view = multibuffer_view(files, &[false, false]);
+        for _ in 0..20 {
+            view.cursor_down();
+        }
+        // Rebuild over a single small file.
+        let small = multibuffer_view(vec![file_with_raw("a.rs", &one_hunk_raw("a.rs"))], &[false]);
+        view.rows = small.rows;
+        view.file_of_row = small.file_of_row;
+        view.header_row_of_file = small.header_row_of_file;
+        view.cursor = view.nearest_addressable(view.cursor.min(view.max_cursor()), false);
+        view.ensure_visible();
+        assert!(view.cursor < view.rows.len());
+        assert!(view.rows[view.cursor].is_addressable());
     }
 }

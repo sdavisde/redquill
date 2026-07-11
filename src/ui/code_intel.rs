@@ -21,7 +21,7 @@ use super::rows::Row;
 /// `Removed` line has no position in the file as it exists on disk). `None`
 /// on any other row.
 fn code_intel_position(view: &DiffViewState) -> Option<(String, u32, u32)> {
-    let file = view.files.get(view.selected_file)?;
+    let file = view.files.get(view.file_of_cursor())?;
     let Row::Line(line) = view.rows.get(view.cursor)? else {
         return None;
     };
@@ -240,9 +240,15 @@ pub(super) fn peek_enter(app: &mut App) {
         return;
     };
 
-    app.view.selected_file = file_index;
+    // Expand the target section if collapsed, rebuild, then land within that
+    // file's row span so the closest-line search never picks another file's
+    // row.
+    let path = app.view.files[file_index].path.clone();
+    app.view.set_collapsed(&path, false);
     app.rebuild_rows();
-    app.view.cursor = closest_row_for_new_line(&app.view.rows, target_line).unwrap_or(0);
+    let (start, end) = app.view.section_span(file_index);
+    let local = closest_row_for_new_line(&app.view.rows[start..end], target_line).unwrap_or(0);
+    app.view.cursor = start + local;
     app.view.scroll = 0;
     app.view.ensure_visible();
     close_peek(app);

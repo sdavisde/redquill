@@ -65,13 +65,45 @@ pub struct LineRow {
     pub syntax_spans: Option<Vec<(Range<usize>, TokenKind)>>,
 }
 
+/// A file section's staged-state marker, shown in its section header. For
+/// task 2.0 only [`StagedMarker::None`] and [`StagedMarker::Staged`] are
+/// produced (from membership in `App::staged`); [`StagedMarker::Partial`]
+/// (the `±` glyph) is wired up by the staged-state derivation in task 3.0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StagedMarker {
+    /// No staged changes for this file.
+    #[default]
+    None,
+    /// The file is fully staged (`●`).
+    Staged,
+    /// The file is partially staged (`±`).
+    Partial,
+}
+
+/// The concatenated multi-file row buffer: every file's rows in display
+/// order, plus two index maps giving each row its owning file and each file
+/// its section-header row. A collapsed file contributes exactly its
+/// [`Row::FileHeader`] row; an expanded file contributes its full row model.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MultibufferRows {
+    /// Every row across all files, in file order.
+    pub rows: Vec<Row>,
+    /// `file_of_row[i]` is the index (into `files`) of the file that owns
+    /// `rows[i]`.
+    pub file_of_row: Vec<usize>,
+    /// `header_row_of_file[f]` is the index (into `rows`) of file `f`'s
+    /// [`Row::FileHeader`] row.
+    pub header_row_of_file: Vec<usize>,
+}
+
 /// One row of the flattened diff-pane row model. The cursor addresses rows
-/// by index into the `Vec<Row>` for the selected file; [`Row::Annotation`]
-/// rows are display-only and never addressable (see [`Row::is_addressable`]).
+/// by index into the whole-buffer `Vec<Row>`; [`Row::Annotation`] rows are
+/// display-only and never addressable (see [`Row::is_addressable`]).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Row {
-    /// The selected file's summary line: path, old path (for renames), and
-    /// change kind.
+    /// A file's section header: path, old path (for renames), change kind,
+    /// its index into the diff's file list, its staged marker, and whether
+    /// the section is collapsed to this single line.
     FileHeader {
         /// The current (b-side) path.
         path: String,
@@ -81,6 +113,12 @@ pub enum Row {
         kind: FileChangeKind,
         /// Whether this file has a `Target::File` annotation.
         annotated: bool,
+        /// Index of the owning file in the diff's file list.
+        file_index: usize,
+        /// The file's staged-state marker.
+        staged_marker: StagedMarker,
+        /// Whether this section is collapsed (header-only).
+        collapsed: bool,
     },
     /// A `@@ -a,b +c,d @@ section` hunk header.
     HunkHeader {
@@ -242,9 +280,74 @@ fn line_syntax_spans(
 /// `syntax` supplies precomputed syntax-highlight spans per side (see
 /// [`SyntaxSpans`]); pass `SyntaxSpans::default()` for no highlighting.
 pub fn build_rows(file: &FileDiff, annotations: &AnnotationStore, syntax: SyntaxSpans) -> Vec<Row> {
-    let file_annotations: Vec<&Annotation> = annotations.for_path(&file.path).collect();
-
     let mut rows = Vec::new();
+    append_file_rows(
+        &mut rows,
+        file,
+        0,
+        StagedMarker::None,
+        false,
+        annotations,
+        syntax,
+    );
+    rows
+}
+
+/// Builds the concatenated multi-file row buffer: for each file, its section
+/// header followed by (unless collapsed) its full row model, with per-row
+/// file identity and per-file header-row indices recorded. The
+/// `collapsed`/`staged_markers`/`syntax` slices are index-aligned with
+/// `files`; collapsed files contribute exactly their header row, and
+/// synthetic untracked files (built via [`FileDiff::synthetic_added`]) enter
+/// as ordinary sections.
+pub fn build_multibuffer(
+    files: &[FileDiff],
+    collapsed: &[bool],
+    staged_markers: &[StagedMarker],
+    annotations: &AnnotationStore,
+    syntax: &[SyntaxSpans],
+) -> MultibufferRows {
+    let mut rows = Vec::new();
+    let mut file_of_row = Vec::new();
+    let mut header_row_of_file = Vec::with_capacity(files.len());
+    for (i, file) in files.iter().enumerate() {
+        header_row_of_file.push(rows.len());
+        let start = rows.len();
+        append_file_rows(
+            &mut rows,
+            file,
+            i,
+            staged_markers.get(i).copied().unwrap_or_default(),
+            collapsed.get(i).copied().unwrap_or(false),
+            annotations,
+            syntax.get(i).copied().unwrap_or_default(),
+        );
+        for _ in start..rows.len() {
+            file_of_row.push(i);
+        }
+    }
+    MultibufferRows {
+        rows,
+        file_of_row,
+        header_row_of_file,
+    }
+}
+
+/// Appends one file's rows to `rows`: its [`Row::FileHeader`] section header
+/// and — unless `collapsed` — its file-targeted annotations, then either a
+/// [`Row::Binary`] placeholder or its per-hunk header/line rows. A collapsed
+/// file contributes exactly its header row.
+#[allow(clippy::too_many_arguments)]
+fn append_file_rows(
+    rows: &mut Vec<Row>,
+    file: &FileDiff,
+    file_index: usize,
+    staged_marker: StagedMarker,
+    collapsed: bool,
+    annotations: &AnnotationStore,
+    syntax: SyntaxSpans,
+) {
+    let file_annotations: Vec<&Annotation> = annotations.for_path(&file.path).collect();
 
     let file_targeted: Vec<&Annotation> = file_annotations
         .iter()
@@ -256,14 +359,20 @@ pub fn build_rows(file: &FileDiff, annotations: &AnnotationStore, syntax: Syntax
         old_path: file.old_path.clone(),
         kind: file.kind,
         annotated: !file_targeted.is_empty(),
+        file_index,
+        staged_marker,
+        collapsed,
     });
+    if collapsed {
+        return;
+    }
     for a in &file_targeted {
         rows.extend(annotation_rows(a));
     }
 
     if file.is_binary {
         rows.push(Row::Binary);
-        return rows;
+        return;
     }
 
     for (hunk_index, hunk) in file.hunks.iter().enumerate() {
@@ -346,8 +455,6 @@ pub fn build_rows(file: &FileDiff, annotations: &AnnotationStore, syntax: Syntax
             }
         }
     }
-
-    rows
 }
 
 /// Locates the row in `rows` (built via [`build_rows`] for `file`) that
@@ -419,6 +526,9 @@ index 1..2 100644
                 old_path: None,
                 kind: FileChangeKind::Modified,
                 annotated: false,
+                file_index: 0,
+                staged_marker: StagedMarker::None,
+                collapsed: false,
             }
         );
     }
@@ -917,5 +1027,161 @@ index 1..2 100644
             panic!("expected line row");
         };
         assert_eq!(line.syntax_spans, None);
+    }
+
+    // -- Multi-file buffer (build_multibuffer) ------------------------------
+
+    fn multi_raw(path: &str) -> String {
+        format!(
+            "diff --git a/{path} b/{path}\nindex 1..2 100644\n--- a/{path}\n+++ b/{path}\n@@ -1,1 +1,1 @@\n-old\n+new\n"
+        )
+    }
+
+    /// Builds a two-file buffer with all files expanded and no markers, the
+    /// common shape the concatenation/identity assertions use.
+    fn two_file_buffer(files: &[FileDiff]) -> MultibufferRows {
+        let collapsed = vec![false; files.len()];
+        let markers = vec![StagedMarker::None; files.len()];
+        let syntax = vec![SyntaxSpans::default(); files.len()];
+        build_multibuffer(files, &collapsed, &markers, &no_notes(), &syntax)
+    }
+
+    #[test]
+    fn multibuffer_concatenates_files_in_order_with_header_indices() {
+        let files = vec![
+            file_diff(&multi_raw("a.rs"), "a.rs", false),
+            file_diff(&multi_raw("b.rs"), "b.rs", false),
+        ];
+        let mb = two_file_buffer(&files);
+        // Each expanded file: FileHeader, HunkHeader, -old, +new = 4 rows.
+        assert_eq!(mb.rows.len(), 8);
+        assert_eq!(mb.header_row_of_file, vec![0, 4]);
+        // First header is a.rs (file_index 0), second is b.rs (file_index 1).
+        let Row::FileHeader {
+            path, file_index, ..
+        } = &mb.rows[0]
+        else {
+            panic!("expected file header");
+        };
+        assert_eq!(path, "a.rs");
+        assert_eq!(*file_index, 0);
+        let Row::FileHeader {
+            path, file_index, ..
+        } = &mb.rows[4]
+        else {
+            panic!("expected file header");
+        };
+        assert_eq!(path, "b.rs");
+        assert_eq!(*file_index, 1);
+    }
+
+    #[test]
+    fn multibuffer_file_of_row_maps_every_row_to_its_file() {
+        let files = vec![
+            file_diff(&multi_raw("a.rs"), "a.rs", false),
+            file_diff(&multi_raw("b.rs"), "b.rs", false),
+        ];
+        let mb = two_file_buffer(&files);
+        assert_eq!(mb.file_of_row, vec![0, 0, 0, 0, 1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn multibuffer_collapsed_file_contributes_exactly_its_header_row() {
+        let files = vec![
+            file_diff(&multi_raw("a.rs"), "a.rs", false),
+            file_diff(&multi_raw("b.rs"), "b.rs", false),
+        ];
+        let collapsed = vec![true, false];
+        let markers = vec![StagedMarker::None; 2];
+        let syntax = vec![SyntaxSpans::default(); 2];
+        let mb = build_multibuffer(&files, &collapsed, &markers, &no_notes(), &syntax);
+        // a.rs collapsed -> 1 row; b.rs expanded -> 4 rows.
+        assert_eq!(mb.rows.len(), 5);
+        assert_eq!(mb.header_row_of_file, vec![0, 1]);
+        assert_eq!(mb.file_of_row, vec![0, 1, 1, 1, 1]);
+        let Row::FileHeader { collapsed, .. } = &mb.rows[0] else {
+            panic!("expected file header");
+        };
+        assert!(collapsed);
+    }
+
+    #[test]
+    fn multibuffer_header_carries_staged_marker() {
+        let files = vec![file_diff(&multi_raw("a.rs"), "a.rs", false)];
+        let collapsed = vec![false];
+        let markers = vec![StagedMarker::Staged];
+        let syntax = vec![SyntaxSpans::default()];
+        let mb = build_multibuffer(&files, &collapsed, &markers, &no_notes(), &syntax);
+        let Row::FileHeader { staged_marker, .. } = &mb.rows[0] else {
+            panic!("expected file header");
+        };
+        assert_eq!(*staged_marker, StagedMarker::Staged);
+    }
+
+    #[test]
+    fn multibuffer_preserves_addressability_of_rows() {
+        let files = vec![file_diff(raw_two_line_hunk(), "f.rs", false)];
+        let mut store = AnnotationStore::new();
+        store
+            .add(Target::file("f.rs"), Classification::Issue, "note")
+            .unwrap();
+        let collapsed = vec![false];
+        let markers = vec![StagedMarker::None];
+        let syntax = vec![SyntaxSpans::default()];
+        let mb = build_multibuffer(&files, &collapsed, &markers, &store, &syntax);
+        // FileHeader(0) Annotation(1) HunkHeader(2) ...
+        assert!(mb.rows[0].is_addressable()); // header
+        assert!(!mb.rows[1].is_addressable()); // annotation display row
+        assert!(mb.rows[2].is_addressable()); // hunk header
+    }
+
+    #[test]
+    fn multibuffer_synthetic_untracked_file_is_a_normal_section() {
+        let files = vec![
+            file_diff(&multi_raw("a.rs"), "a.rs", false),
+            FileDiff::synthetic_added("new.rs".to_string(), "x\ny\n"),
+        ];
+        let mb = two_file_buffer(&files);
+        // The synthetic file gets its own section header at file_index 1.
+        let header = mb.header_row_of_file[1];
+        let Row::FileHeader {
+            path,
+            kind,
+            file_index,
+            ..
+        } = &mb.rows[header]
+        else {
+            panic!("expected file header");
+        };
+        assert_eq!(path, "new.rs");
+        assert_eq!(*kind, FileChangeKind::Added);
+        assert_eq!(*file_index, 1);
+        // Its added lines are present and addressable.
+        assert!(mb.rows[header + 1..].iter().any(|r| matches!(
+            r,
+            Row::Line(l) if l.origin == LineOrigin::Added
+        )));
+    }
+
+    #[test]
+    fn multibuffer_zero_content_file_is_header_only_but_addressable() {
+        // A file with no hunks (e.g. fully staged later) renders header-only
+        // yet stays expandable and addressable.
+        let empty = FileDiff {
+            path: "empty.rs".to_string(),
+            old_path: None,
+            kind: FileChangeKind::Modified,
+            is_binary: false,
+            hunks: Vec::new(),
+        };
+        let files = vec![empty];
+        let mb = two_file_buffer(&files);
+        assert_eq!(mb.rows.len(), 1);
+        assert_eq!(mb.header_row_of_file, vec![0]);
+        assert!(mb.rows[0].is_addressable());
+        let Row::FileHeader { collapsed, .. } = &mb.rows[0] else {
+            panic!("expected file header");
+        };
+        assert!(!collapsed);
     }
 }

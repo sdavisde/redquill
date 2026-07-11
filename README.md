@@ -44,7 +44,8 @@ Vim-grammar keybindings, fully remappable. Draft default map:
 | `j` / `k`, `Ctrl-d` / `Ctrl-u` | Move / scroll |
 | `h` / `l`, `w` / `b` | Move / word-jump the column cursor (needed for `gd`/`gr`/`K`) |
 | `]` / `[` | Next / previous hunk |
-| `Tab` / `Shift-Tab` | Next / previous file |
+| `Tab` / `Shift-Tab` | Next / previous file section |
+| `za` | Collapse / expand the file section under the cursor |
 | `/` then `n` / `N` | Search |
 | `c` | Comment on line (visual select `v` for ranges) |
 | `space` | Stage/unstage hunk (line in visual mode) |

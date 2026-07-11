@@ -41,10 +41,12 @@ pub enum Action {
     NextHunk,
     /// Jump to the previous hunk, crossing file boundaries if needed.
     PrevHunk,
-    /// Switch to the next file in the sidebar.
+    /// Jump the cursor to the next file's section header.
     NextFile,
-    /// Switch to the previous file in the sidebar.
+    /// Jump the cursor to the previous file's section header.
     PrevFile,
+    /// Toggle the collapse state of the file section under the cursor.
+    ToggleCollapse,
     /// Toggle the help overlay.
     ToggleHelp,
     /// Enter Visual mode at the cursor row (Normal), or cancel Visual mode
@@ -238,12 +240,17 @@ impl Keymap {
                 Binding {
                     keys: KeySeq::one(Tab, none),
                     action: NextFile,
-                    description: "Next file",
+                    description: "Next file section",
                 },
                 Binding {
                     keys: KeySeq::one(BackTab, none),
                     action: PrevFile,
-                    description: "Previous file",
+                    description: "Previous file section",
+                },
+                Binding {
+                    keys: KeySeq::two(Char('z'), none, Char('a'), none),
+                    action: ToggleCollapse,
+                    description: "Collapse/expand file section",
                 },
                 Binding {
                     keys: KeySeq::one(Char('?'), none),
@@ -507,9 +514,30 @@ mod tests {
     }
 
     #[test]
-    fn unbound_key_is_none() {
+    fn z_starts_a_sequence_and_za_toggles_collapse() {
         let km = Keymap::default_map();
+        // `z` is now a two-key prefix, not itself a bound single key.
+        assert!(km.starts_sequence(key(KeyCode::Char('z'), KeyModifiers::NONE)));
         assert_eq!(km.lookup(key(KeyCode::Char('z'), KeyModifiers::NONE)), None);
+        let z = key(KeyCode::Char('z'), KeyModifiers::NONE);
+        assert_eq!(
+            km.lookup_double(z, key(KeyCode::Char('a'), KeyModifiers::NONE)),
+            Some(Action::ToggleCollapse)
+        );
+    }
+
+    #[test]
+    fn resolve_completes_za_across_two_events() {
+        let km = Keymap::default_map();
+        let mut pending = None;
+        assert_eq!(
+            km.resolve(&mut pending, key(KeyCode::Char('z'), KeyModifiers::NONE)),
+            None
+        );
+        assert!(pending.is_some());
+        let action = km.resolve(&mut pending, key(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert_eq!(action, Some(Action::ToggleCollapse));
+        assert_eq!(pending, None);
     }
 
     #[test]

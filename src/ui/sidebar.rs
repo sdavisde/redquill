@@ -81,7 +81,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     let mut state = ListState::default();
     if !app.view.files.is_empty() {
-        state.select(Some(app.view.selected_file));
+        state.select(Some(app.view.file_of_cursor()));
     }
     frame.render_stateful_widget(list, chunks[0], &mut state);
 

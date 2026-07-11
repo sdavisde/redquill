@@ -18,7 +18,7 @@ use crate::diff::{FileChangeKind, LineOrigin, WordSpan};
 use crate::highlight::TokenKind;
 
 use super::app::App;
-use super::rows::{LineRow, Row};
+use super::rows::{LineRow, Row, StagedMarker};
 use super::theme::Theme;
 
 pub(super) const GUTTER_WIDTH: usize = 5;
@@ -207,16 +207,42 @@ fn line_row_line(
     line
 }
 
+/// The staged-marker glyph shown in a section header's marker slot: `●`
+/// fully staged, `±` partially staged, blank otherwise (kept width-stable
+/// so headers align).
+fn staged_marker_span(marker: StagedMarker, theme: &Theme) -> Span<'static> {
+    match marker {
+        StagedMarker::Staged => {
+            Span::styled(" \u{25cf}", Style::default().fg(theme.staged_indicator))
+        }
+        StagedMarker::Partial => {
+            Span::styled(" \u{00b1}", Style::default().fg(theme.staged_indicator))
+        }
+        StagedMarker::None => Span::raw("  "),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn file_header_line(
     path: &str,
     old_path: &Option<String>,
     kind: FileChangeKind,
     selected: bool,
     annotated: bool,
+    collapsed: bool,
+    staged_marker: StagedMarker,
     theme: &Theme,
 ) -> Line<'static> {
+    // Collapse indicator: ▾ expanded, ▸ collapsed.
+    let indicator = if collapsed { "\u{25b8} " } else { "\u{25be} " };
     let mut spans = vec![
         dot_span(annotated, theme),
+        Span::styled(
+            indicator.to_string(),
+            Style::default()
+                .fg(theme.gutter)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(
             format!("{} ", kind.letter()),
             Style::default()
@@ -232,6 +258,7 @@ fn file_header_line(
             Style::default().add_modifier(Modifier::BOLD),
         ));
     }
+    spans.push(staged_marker_span(staged_marker, theme));
     let mut line = Line::from(spans);
     if selected {
         line.style = Style::default().bg(theme.selected_row_bg);
@@ -319,7 +346,19 @@ pub(super) fn row_line(
             old_path,
             kind,
             annotated,
-        } => file_header_line(path, old_path, *kind, selected, *annotated, theme),
+            collapsed,
+            staged_marker,
+            ..
+        } => file_header_line(
+            path,
+            old_path,
+            *kind,
+            selected,
+            *annotated,
+            *collapsed,
+            *staged_marker,
+            theme,
+        ),
         Row::HunkHeader {
             text, annotated, ..
         } => hunk_header_line(text, selected, *annotated, is_match, theme),
