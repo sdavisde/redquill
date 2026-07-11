@@ -68,7 +68,7 @@ Ordering rationale: the side-by-side removal comes first because `rows` and `sbs
 - [x] 2.4 In `src/ui/diff_view.rs` (+ `src/ui/sidebar.rs`), render section headers visually distinct (current file-header-bar style) with `▾`/`▸`, kind letter, path/rename arrow, and marker slot; collapsed headers render exactly one line; sidebar highlight follows `file_of_cursor()`; add `TestBackend` render tests.
 - [x] 2.5 Update `src/ui/help.rs` and README.md for `za` and the repurposed `Tab`, run the four gates, record `03-proofs/03-task-02-proofs.md`, and commit `feat: multi-file multibuffer with collapsible sections`.
 
-### [ ] 3.0 Staging-driven review flow
+### [x] 3.0 Staging-driven review flow
 
 #### 3.0 Proof Artifact(s)
 
@@ -78,10 +78,10 @@ Ordering rationale: the side-by-side removal comes first because `rows` and `sbs
 
 #### 3.0 Tasks
 
-- [ ] 3.1 (TDD) In `src/ui/stage_ops.rs`, derive a per-file `StagedState { Unstaged, Partial, Full }` from `FileStatus.staged`/`.unstaged` codes (failing tests first covering all code combinations, including untracked and renames), and thread it into the data `rebuild_rows`/sidebar consume.
-- [ ] 3.2 In `src/ui/keymap.rs` + `src/ui/app.rs`, add `Action::StageFile` bound to `S`: on an unstaged/partial file, `stage_file` via `StageOps` then auto-collapse its section; on a fully staged file (cursor on its header or body), `unstage_file` then auto-expand; status-line feedback on failure; app-level `FakeGit` tests for both directions.
-- [ ] 3.3 In `App::refresh`, preserve the collapse map by path across refreshes, auto-expand any collapsed file whose new status has unstaged changes, keep fully-staged collapsed files collapsed, and drop map entries for files that left the diff; app-level tests for the auto-expand rule and collapse-state survival.
-- [ ] 3.4 Keep `space`/visual-mode hunk-line staging working with the file derived from the cursor row (`src/ui/staging.rs`), update header + sidebar markers to `±`/`●` per `StagedState`, extend `src/ui/help.rs` + README.md with `S`, run the four gates, record `03-proofs/03-task-03-proofs.md`, and commit `feat: stage-and-collapse review flow`.
+- [x] 3.1 (TDD) In `src/ui/stage_ops.rs`, derive a per-file `StagedState { Unstaged, Partial, Full }` from `FileStatus.staged`/`.unstaged` codes (failing tests first covering all code combinations, including untracked and renames), and thread it into the data `rebuild_rows`/sidebar consume.
+- [x] 3.2 In `src/ui/keymap.rs` + `src/ui/app.rs`, add `Action::StageFile` bound to `S`: on an unstaged/partial file, `stage_file` via `StageOps` then auto-collapse its section; on a fully staged file (cursor on its header or body), `unstage_file` then auto-expand; status-line feedback on failure; app-level `FakeGit` tests for both directions.
+- [x] 3.3 In `App::refresh`, preserve the collapse map by path across refreshes, auto-expand any collapsed file whose new status has unstaged changes, keep fully-staged collapsed files collapsed, and drop map entries for files that left the diff; app-level tests for the auto-expand rule and collapse-state survival.
+- [x] 3.4 Keep `space`/visual-mode hunk-line staging working with the file derived from the cursor row (`src/ui/staging.rs`), update header + sidebar markers to `±`/`●` per `StagedState`, extend `src/ui/help.rs` + README.md with `S`, run the four gates, record `03-proofs/03-task-03-proofs.md`, and commit `feat: stage-and-collapse review flow`.
 
 ### [ ] 4.0 Full-surface integration across all diff targets
 

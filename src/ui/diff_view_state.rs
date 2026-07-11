@@ -100,6 +100,19 @@ impl DiffViewState {
         self.collapsed.insert(path.to_string(), collapsed);
     }
 
+    /// Drops collapse-map entries whose path fails `keep`, so files that
+    /// left the review on a refresh don't leave stale collapse state behind.
+    pub fn retain_collapsed(&mut self, keep: impl Fn(&str) -> bool) {
+        self.collapsed.retain(|path, _| keep(path));
+    }
+
+    /// Whether the collapse map holds an entry for `path` at all (regardless
+    /// of its value). Distinguishes "known and expanded" from "absent",
+    /// which [`DiffViewState::is_collapsed`] alone cannot.
+    pub fn collapse_contains(&self, path: &str) -> bool {
+        self.collapsed.contains_key(path)
+    }
+
     /// Toggles the collapse state of the file under the cursor, returning
     /// its path so the owner can rebuild. `None` on an empty buffer.
     pub fn toggle_collapse_at_cursor(&mut self) -> Option<String> {

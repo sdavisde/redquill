@@ -45,7 +45,7 @@ pub(super) fn toggle_stage(app: &mut App) {
         app.set_status_message("staging unavailable (no git backend)");
         return;
     }
-    let Some(file) = app.view.files.get(app.view.selected_file) else {
+    let Some(file) = app.view.files.get(app.view.file_of_cursor()) else {
         return;
     };
     let path = file.path.clone();
@@ -54,7 +54,7 @@ pub(super) fn toggle_stage(app: &mut App) {
 
     let synthetic = app
         .patches
-        .get(app.view.selected_file)
+        .get(app.view.file_of_cursor())
         .is_none_or(|p| p.is_none());
     let gesture = if synthetic {
         StageGesture::WholeFile
@@ -114,7 +114,7 @@ fn run_stage_gesture(
                 .map_err(|e| e.to_string())
         }
         StageGesture::Hunk(hunk_index) => {
-            let Some(Some(raw)) = app.patches.get(app.view.selected_file) else {
+            let Some(Some(raw)) = app.patches.get(app.view.file_of_cursor()) else {
                 return Err("no patch available for this file".to_string());
             };
             let patch = build_hunk_patch(raw, *hunk_index).map_err(|e| e.to_string())?;
@@ -128,7 +128,7 @@ fn run_stage_gesture(
                 .map_err(|e| e.to_string())
         }
         StageGesture::Lines(hunk_index, lines) => {
-            let Some(Some(raw)) = app.patches.get(app.view.selected_file) else {
+            let Some(Some(raw)) = app.patches.get(app.view.file_of_cursor()) else {
                 return Err("no patch available for this file".to_string());
             };
             let patch = build_line_patch(raw, *hunk_index, lines).map_err(|e| e.to_string())?;
@@ -149,8 +149,9 @@ fn run_stage_gesture(
 /// `(hunk_index, body-line indices)` for [`build_line_patch`]: the indices
 /// count every body line of the hunk from 0, and only the selected `+`/`-`
 /// lines are included (context is always kept by the patch builder anyway).
-/// Errors if the selection's line rows span more than one hunk, or contain
-/// no changed lines at all.
+/// Errors if the selection's line rows span more than one *file* section
+/// (`hunk_index` is per-file, so a cross-section span would misattribute
+/// hunks), more than one hunk, or contain no changed lines at all.
 fn visual_stage_selection(
     view: &DiffViewState,
     anchor: usize,
@@ -161,31 +162,49 @@ fn visual_stage_selection(
         (view.cursor, anchor)
     };
 
+    // A visual span may cross section boundaries freely while navigating,
+    // but staging one requires a single owning file: `hunk_index` is only
+    // meaningful within a file, so a cross-file span could stage the wrong
+    // hunk. Reject it before anything else (see decision B, task 3.0).
+    let files_in_span: HashSet<usize> = view.rows[lo..=hi]
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| matches!(r, Row::Line(_)))
+        .filter_map(|(offset, _)| view.file_of_row.get(lo + offset).copied())
+        .collect();
+    if files_in_span.len() > 1 {
+        return Err("selection spans multiple files");
+    }
+
     // Body-line indices are per-hunk positions counted over Row::Line rows
     // only (annotation display rows are interleaved in `rows` but are not
-    // hunk body lines).
+    // hunk body lines). Since `hunk_index` is per-file, the count is scoped
+    // to the selected file's section so a second file's hunk 0 can't shift a
+    // first file's indices.
     let mut body_counters: HashMap<usize, usize> = HashMap::new();
     let mut hunks_in_span: HashSet<usize> = HashSet::new();
     let mut selected_hunk: Option<usize> = None;
     let mut selected_lines: Vec<usize> = Vec::new();
 
-    for (i, row) in view.rows.iter().enumerate() {
-        if i > hi {
-            break;
-        }
-        let Row::Line(line) = row else {
-            continue;
-        };
-        let counter = body_counters.entry(line.hunk_index).or_insert(0);
-        let body_index = *counter;
-        *counter += 1;
-        if i < lo {
-            continue;
-        }
-        hunks_in_span.insert(line.hunk_index);
-        if line.origin != LineOrigin::Context {
-            selected_hunk = Some(line.hunk_index);
-            selected_lines.push(body_index);
+    if let Some((fstart, fend)) = files_in_span.iter().next().map(|&f| view.section_span(f)) {
+        for i in fstart..fend {
+            if i > hi {
+                break;
+            }
+            let Row::Line(line) = &view.rows[i] else {
+                continue;
+            };
+            let counter = body_counters.entry(line.hunk_index).or_insert(0);
+            let body_index = *counter;
+            *counter += 1;
+            if i < lo {
+                continue;
+            }
+            hunks_in_span.insert(line.hunk_index);
+            if line.origin != LineOrigin::Context {
+                selected_hunk = Some(line.hunk_index);
+                selected_lines.push(body_index);
+            }
         }
     }
 
@@ -204,25 +223,39 @@ mod tests {
     use crate::annotate::AnnotationStore;
     use crate::diff::FileDiff;
     use crate::git::RawFilePatch;
-    use crate::ui::rows::{SyntaxSpans, build_rows};
+    use crate::ui::rows::{StagedMarker, SyntaxSpans, build_multibuffer};
 
-    /// A `DiffViewState` over one file with its rows populated (unhighlighted).
-    fn view_with_raw(raw: &str) -> DiffViewState {
-        let file = FileDiff::from_patch(&RawFilePatch {
-            path: "f.rs".to_string(),
+    fn file_from_raw(path: &str, raw: &str) -> FileDiff {
+        FileDiff::from_patch(&RawFilePatch {
+            path: path.to_string(),
             old_path: None,
             raw: raw.to_string(),
             is_binary: false,
         })
-        .unwrap();
-        let mut view = DiffViewState::new(vec![file]);
-        let rows = build_rows(
-            &view.files[0],
+        .unwrap()
+    }
+
+    /// A `DiffViewState` over `files` with its multibuffer populated the way
+    /// `App` would after a rebuild (unhighlighted, all expanded).
+    fn multi_view(files: Vec<FileDiff>) -> DiffViewState {
+        let mut view = DiffViewState::new(files);
+        let n = view.files.len();
+        let mb = build_multibuffer(
+            &view.files,
+            &vec![false; n],
+            &vec![StagedMarker::None; n],
             &AnnotationStore::new(),
-            SyntaxSpans::default(),
+            &vec![SyntaxSpans::default(); n],
         );
-        view.rows = rows;
+        view.rows = mb.rows;
+        view.file_of_row = mb.file_of_row;
+        view.header_row_of_file = mb.header_row_of_file;
         view
+    }
+
+    /// A `DiffViewState` over one file, its multibuffer populated.
+    fn view_with_raw(raw: &str) -> DiffViewState {
+        multi_view(vec![file_from_raw("f.rs", raw)])
     }
 
     #[test]
@@ -263,6 +296,50 @@ index 1..2 100644
         view.cursor = 5;
         let err = visual_stage_selection(&view, 2).unwrap_err();
         assert_eq!(err, "selection spans multiple hunks");
+    }
+
+    #[test]
+    fn visual_stage_selection_rejects_cross_section_span() {
+        // Two single-hunk files: a.rs occupies rows 0..4, b.rs rows 4..8.
+        // A span from a.rs's addition (row 3) into b.rs's removal (row 6)
+        // crosses the section boundary and must be rejected before the
+        // per-file hunk index is trusted (decision B).
+        let one = "\
+diff --git a/x b/x
+index 1..2 100644
+--- a/x
++++ b/x
+@@ -1,1 +1,1 @@
+-old
++new
+";
+        let mut view = multi_view(vec![file_from_raw("a.rs", one), file_from_raw("b.rs", one)]);
+        // rows: FH_a(0) HH_a(1) -old(2) +new(3) FH_b(4) HH_b(5) -old(6) +new(7)
+        view.cursor = 6;
+        let err = visual_stage_selection(&view, 3).unwrap_err();
+        assert_eq!(err, "selection spans multiple files");
+    }
+
+    #[test]
+    fn visual_stage_selection_scopes_body_index_to_second_file_section() {
+        // A selection wholly inside the second file's hunk must yield that
+        // file's own body index (0-based within its hunk), not one offset by
+        // the first file's identically-indexed hunk 0.
+        let one = "\
+diff --git a/x b/x
+index 1..2 100644
+--- a/x
++++ b/x
+@@ -1,1 +1,1 @@
+-old
++new
+";
+        let mut view = multi_view(vec![file_from_raw("a.rs", one), file_from_raw("b.rs", one)]);
+        // b.rs: FH_b(4) HH_b(5) -old(6) +new(7). Select the addition (row 7).
+        view.cursor = 7;
+        let (hunk_index, lines) = visual_stage_selection(&view, 7).unwrap();
+        assert_eq!(hunk_index, 0);
+        assert_eq!(lines, vec![1]); // second body line of b.rs's hunk, not 3
     }
 
     #[test]

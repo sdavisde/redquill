@@ -6,10 +6,14 @@
 //! (needed later to construct hunk/line patches), and which paths currently
 //! have staged changes.
 
+use std::collections::HashMap;
+
 use thiserror::Error;
 
 use crate::diff::{DiffParseError, FileChangeKind, FileDiff};
-use crate::git::{ChangeKind, DiffTarget, FileStatus, GitError, GitRunner, RawFilePatch};
+use crate::git::{
+    ChangeKind, DiffTarget, FileStatus, GitError, GitRunner, RawFilePatch, StatusCode,
+};
 
 /// Errors produced while building a [`ReviewSnapshot`].
 #[derive(Debug, Error)]
@@ -102,10 +106,74 @@ pub struct ReviewSnapshot {
     /// Every file in the diff, in display order.
     pub files: Vec<FileDiff>,
     /// The raw patch each entry of `files` was parsed from, by index.
-    /// `None` for synthetic untracked entries.
+    /// `None` for synthetic untracked entries and for fully-staged
+    /// header-only entries (which have no working-tree patch).
     pub patches: Vec<Option<RawFilePatch>>,
     /// Files with staged changes, per `git status`.
     pub staged: Vec<StagedFile>,
+    /// Per-path [`StagedState`] for the `●`/`±` header/sidebar markers.
+    /// Missing entries default to [`StagedState::Unstaged`].
+    pub staged_states: HashMap<String, StagedState>,
+}
+
+/// A single file's staged state, derived from its `git status` index-side
+/// (`X`) and working-tree-side (`Y`) codes. This is the three-state marker
+/// the multibuffer section header and sidebar render: `Full` → `●`,
+/// `Partial` → `±`, `Unstaged` → blank.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StagedState {
+    /// Nothing staged for this path (working-tree-only changes, or
+    /// untracked): no marker.
+    #[default]
+    Unstaged,
+    /// Some but not all of this path's changes are staged (the index
+    /// differs from `HEAD` *and* the working tree differs from the index):
+    /// `±`.
+    Partial,
+    /// Everything is staged (the index differs from `HEAD`, the working
+    /// tree matches the index): `●`.
+    Full,
+}
+
+/// Derives a file's [`StagedState`] from its porcelain status. A path with
+/// no staged changes is `Unstaged` (covers untracked `??` and working-tree
+/// -only `.M`); a path with staged changes is `Partial` when it *also* has
+/// unstaged changes (e.g. `MM`, `AM`, `RM`) and `Full` otherwise (`M.`,
+/// `A.`, `D.`, `R.`, `C.`).
+pub fn staged_state(status: &FileStatus) -> StagedState {
+    match (status.has_staged_changes(), status.has_unstaged_changes()) {
+        (false, _) => StagedState::Unstaged,
+        (true, true) => StagedState::Partial,
+        (true, false) => StagedState::Full,
+    }
+}
+
+/// A path-keyed map of every file's [`StagedState`], for the paths that have
+/// any staged changes (`Partial`/`Full`); `Unstaged` files are omitted, so a
+/// missing entry means [`StagedState::Unstaged`] (its `Default`). This is
+/// what `rebuild_rows` and the sidebar consume to render the `●`/`±` markers.
+pub fn staged_states_from_status(status: &[FileStatus]) -> HashMap<String, StagedState> {
+    status
+        .iter()
+        .filter_map(|s| {
+            let state = staged_state(s);
+            (state != StagedState::Unstaged).then(|| (s.path.clone(), state))
+        })
+        .collect()
+}
+
+/// Maps a porcelain index-side [`StatusCode`] to the [`FileChangeKind`] used
+/// for a fully-staged file's synthetic (header-only) section, so its header
+/// shows the right change-kind letter.
+fn kind_from_staged_code(code: StatusCode) -> FileChangeKind {
+    match code {
+        StatusCode::Added => FileChangeKind::Added,
+        StatusCode::Deleted => FileChangeKind::Deleted,
+        StatusCode::Renamed => FileChangeKind::Renamed,
+        StatusCode::Copied => FileChangeKind::Copied,
+        // Modified/TypeChange/anything else display as a modification.
+        _ => FileChangeKind::Modified,
+    }
 }
 
 /// The staged-file list derived from parsed porcelain status.
@@ -160,11 +228,219 @@ pub fn build_review(
             files.push(file);
             patches.push(None);
         }
+
+        // Fully-staged files never appear in the working-tree diff (their
+        // changes are all in the index), yet the review must keep them as
+        // sections so unstaging is one `S` on a header (spec Unit 2 —
+        // "nothing hides"). Union them in as header-only sections, in
+        // status order, after the unstaged/untracked entries. See
+        // 03-task-03-proofs.md for the design note on this choice.
+        for entry in &status {
+            if staged_state(entry) != StagedState::Full {
+                continue;
+            }
+            if files.iter().any(|f| f.path == entry.path) {
+                continue;
+            }
+            files.push(FileDiff {
+                path: entry.path.clone(),
+                old_path: entry.orig_path.clone(),
+                kind: kind_from_staged_code(entry.staged),
+                is_binary: false,
+                hunks: Vec::new(),
+            });
+            patches.push(None);
+        }
     }
 
     Ok(ReviewSnapshot {
         files,
         patches,
         staged: staged_from_status(&status),
+        staged_states: staged_states_from_status(&status),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::ChangeKind;
+
+    /// A porcelain status entry with the given record kind, index-side (`X`)
+    /// and working-tree-side (`Y`) codes.
+    fn status(
+        kind: ChangeKind,
+        staged: StatusCode,
+        unstaged: StatusCode,
+        path: &str,
+    ) -> FileStatus {
+        FileStatus {
+            kind,
+            staged,
+            unstaged,
+            path: path.to_string(),
+            orig_path: None,
+        }
+    }
+
+    fn ordinary(staged: StatusCode, unstaged: StatusCode) -> FileStatus {
+        status(ChangeKind::Ordinary, staged, unstaged, "f.rs")
+    }
+
+    #[test]
+    fn unstaged_when_working_tree_only_modification() {
+        // ` M`: modified in the working tree, nothing staged.
+        let s = ordinary(StatusCode::Unmodified, StatusCode::Modified);
+        assert_eq!(staged_state(&s), StagedState::Unstaged);
+    }
+
+    #[test]
+    fn full_when_staged_modification_only() {
+        // `M.`: staged modification, clean working tree.
+        let s = ordinary(StatusCode::Modified, StatusCode::Unmodified);
+        assert_eq!(staged_state(&s), StagedState::Full);
+    }
+
+    #[test]
+    fn partial_when_both_staged_and_unstaged_modification() {
+        // `MM`: staged and then edited again.
+        let s = ordinary(StatusCode::Modified, StatusCode::Modified);
+        assert_eq!(staged_state(&s), StagedState::Partial);
+    }
+
+    #[test]
+    fn full_when_staged_addition() {
+        // `A.`: newly added and fully staged.
+        let s = ordinary(StatusCode::Added, StatusCode::Unmodified);
+        assert_eq!(staged_state(&s), StagedState::Full);
+    }
+
+    #[test]
+    fn partial_when_added_then_modified() {
+        // `AM`: staged add plus a subsequent unstaged edit.
+        let s = ordinary(StatusCode::Added, StatusCode::Modified);
+        assert_eq!(staged_state(&s), StagedState::Partial);
+    }
+
+    #[test]
+    fn full_when_staged_deletion() {
+        // `D.`: staged deletion.
+        let s = ordinary(StatusCode::Deleted, StatusCode::Unmodified);
+        assert_eq!(staged_state(&s), StagedState::Full);
+    }
+
+    #[test]
+    fn unstaged_when_untracked() {
+        // `??`: untracked, counts as unstaged working-tree changes.
+        let s = status(
+            ChangeKind::Untracked,
+            StatusCode::Unmodified,
+            StatusCode::Untracked,
+            "new.rs",
+        );
+        assert_eq!(staged_state(&s), StagedState::Unstaged);
+    }
+
+    #[test]
+    fn full_when_staged_rename() {
+        // `R.`: staged rename, clean working tree.
+        let mut s = status(
+            ChangeKind::RenamedOrCopied,
+            StatusCode::Renamed,
+            StatusCode::Unmodified,
+            "new/name.rs",
+        );
+        s.orig_path = Some("old/name.rs".to_string());
+        assert_eq!(staged_state(&s), StagedState::Full);
+    }
+
+    #[test]
+    fn partial_when_renamed_then_modified() {
+        // `RM`: staged rename plus a subsequent unstaged edit.
+        let s = status(
+            ChangeKind::RenamedOrCopied,
+            StatusCode::Renamed,
+            StatusCode::Modified,
+            "new/name.rs",
+        );
+        assert_eq!(staged_state(&s), StagedState::Partial);
+    }
+
+    #[test]
+    fn full_when_staged_copy() {
+        // `C.`: staged copy.
+        let s = status(
+            ChangeKind::RenamedOrCopied,
+            StatusCode::Copied,
+            StatusCode::Unmodified,
+            "copy.rs",
+        );
+        assert_eq!(staged_state(&s), StagedState::Full);
+    }
+
+    #[test]
+    fn unstaged_when_no_changes_on_either_side() {
+        let s = ordinary(StatusCode::Unmodified, StatusCode::Unmodified);
+        assert_eq!(staged_state(&s), StagedState::Unstaged);
+    }
+
+    #[test]
+    fn states_map_omits_unstaged_and_keys_partial_full_by_path() {
+        let entries = vec![
+            ordinary(StatusCode::Unmodified, StatusCode::Modified), // f.rs unstaged
+            status(
+                ChangeKind::Ordinary,
+                StatusCode::Modified,
+                StatusCode::Unmodified,
+                "full.rs",
+            ),
+            status(
+                ChangeKind::Ordinary,
+                StatusCode::Modified,
+                StatusCode::Modified,
+                "partial.rs",
+            ),
+            status(
+                ChangeKind::Untracked,
+                StatusCode::Unmodified,
+                StatusCode::Untracked,
+                "new.rs",
+            ),
+        ];
+        let map = staged_states_from_status(&entries);
+        // Unstaged (`f.rs`) and untracked (`new.rs`) are omitted.
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get("full.rs"), Some(&StagedState::Full));
+        assert_eq!(map.get("partial.rs"), Some(&StagedState::Partial));
+        assert_eq!(map.get("f.rs"), None);
+        assert_eq!(map.get("new.rs"), None);
+    }
+
+    #[test]
+    fn kind_from_staged_code_maps_letters() {
+        assert_eq!(
+            kind_from_staged_code(StatusCode::Added),
+            FileChangeKind::Added
+        );
+        assert_eq!(
+            kind_from_staged_code(StatusCode::Deleted),
+            FileChangeKind::Deleted
+        );
+        assert_eq!(
+            kind_from_staged_code(StatusCode::Renamed),
+            FileChangeKind::Renamed
+        );
+        assert_eq!(
+            kind_from_staged_code(StatusCode::Copied),
+            FileChangeKind::Copied
+        );
+        assert_eq!(
+            kind_from_staged_code(StatusCode::Modified),
+            FileChangeKind::Modified
+        );
+        assert_eq!(
+            kind_from_staged_code(StatusCode::TypeChange),
+            FileChangeKind::Modified
+        );
+    }
 }

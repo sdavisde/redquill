@@ -393,17 +393,15 @@ index 111..222 100644
         assert!(!content.contains("new"));
     }
 
-    /// A file present in `app.staged` renders the `●` marker slot in its
-    /// section header.
+    /// A fully-staged file renders the `●` marker slot in its section
+    /// header; a partially-staged one renders `±`.
     #[test]
     fn staged_file_section_header_shows_marker() {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new(vec![multi_file("a.rs")]);
-        app.staged = vec![StagedFile {
-            path: "a.rs".to_string(),
-            letter: 'M',
-        }];
+        app.staged_states
+            .insert("a.rs".to_string(), stage_ops::StagedState::Full);
         app.rebuild_rows();
         let keymap = Keymap::default_map();
 
@@ -413,6 +411,25 @@ index 111..222 100644
 
         assert!(content.contains("M a.rs"));
         assert!(content.contains("\u{25cf}")); // ● staged marker
+    }
+
+    /// A partially-staged file renders the `±` marker in its section header.
+    #[test]
+    fn partial_file_section_header_shows_partial_marker() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![multi_file("a.rs")]);
+        app.staged_states
+            .insert("a.rs".to_string(), stage_ops::StagedState::Partial);
+        app.rebuild_rows();
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        assert!(content.contains("M a.rs"));
+        assert!(content.contains("\u{00b1}")); // ± partial-staged marker
     }
 
     #[test]
@@ -497,6 +514,8 @@ index 111..222 100644
             path: "src/main.rs".to_string(),
             letter: 'M',
         }];
+        app.staged_states
+            .insert("src/main.rs".to_string(), stage_ops::StagedState::Full);
         app.mode = Mode::Staging;
         app.set_status_message("staged hunk");
         let keymap = Keymap::default_map();

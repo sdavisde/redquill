@@ -10,6 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 
 use super::app::App;
+use super::stage_ops::StagedState;
 use super::theme::Theme;
 
 /// Splits `path` into a dimmed directory prefix and a normal-weight
@@ -21,20 +22,23 @@ fn split_path(path: &str) -> (&str, &str) {
     }
 }
 
-/// The staged-indicator column: a `●` for files with staged changes, blank
-/// otherwise, so paths stay column-aligned either way.
-fn staged_span(staged: bool, theme: &Theme) -> Span<'static> {
-    if staged {
-        Span::styled("\u{25cf} ", Style::default().fg(theme.staged_indicator))
-    } else {
-        Span::raw("  ")
+/// The staged-indicator column: a `●` for a fully-staged file, `±` for a
+/// partially-staged one, blank otherwise, so paths stay column-aligned
+/// regardless of state.
+fn staged_span(state: StagedState, theme: &Theme) -> Span<'static> {
+    match state {
+        StagedState::Full => Span::styled("\u{25cf} ", Style::default().fg(theme.staged_indicator)),
+        StagedState::Partial => {
+            Span::styled("\u{00b1} ", Style::default().fg(theme.staged_indicator))
+        }
+        StagedState::Unstaged => Span::raw("  "),
     }
 }
 
-fn file_line(letter: char, path: &str, staged: bool, theme: &Theme) -> Line<'static> {
+fn file_line(letter: char, path: &str, state: StagedState, theme: &Theme) -> Line<'static> {
     let (dir, base) = split_path(path);
     Line::from(vec![
-        staged_span(staged, theme),
+        staged_span(state, theme),
         Span::styled(
             format!("{letter} "),
             Style::default()
@@ -58,17 +62,17 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .files
         .iter()
         .map(|f| {
-            let staged = app.staged.iter().any(|s| s.path == f.path);
+            let state = app.staged_states.get(&f.path).copied().unwrap_or_default();
             let line = if let Some(old) = &f.old_path {
                 let (_, old_base) = split_path(old);
-                let mut line = file_line(f.kind.letter(), &f.path, staged, &app.theme);
+                let mut line = file_line(f.kind.letter(), &f.path, state, &app.theme);
                 line.spans.push(Span::styled(
                     format!(" \u{2190} {old_base}"),
                     Style::default().fg(app.theme.dir_prefix),
                 ));
                 line
             } else {
-                file_line(f.kind.letter(), &f.path, staged, &app.theme)
+                file_line(f.kind.letter(), &f.path, state, &app.theme)
             };
             ListItem::new(line)
         })

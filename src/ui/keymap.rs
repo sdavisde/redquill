@@ -62,6 +62,10 @@ pub enum Action {
     /// Visual mode. Stages on the working-tree target, unstages on the
     /// staged target; a no-op with a message on read-only range targets.
     ToggleStage,
+    /// Stage the whole file under the cursor (auto-collapsing its section),
+    /// or unstage it when fully staged (auto-expanding). Stages on the
+    /// working-tree target; a no-op with a message on read-only ranges.
+    StageFile,
     /// Toggle the staging panel (files with staged changes).
     ToggleStagingPanel,
     /// Open the search input, composing a pattern to match against the
@@ -283,6 +287,11 @@ impl Keymap {
                     description: "Stage/unstage hunk (lines in visual mode)",
                 },
                 Binding {
+                    keys: KeySeq::one(Char('S'), none),
+                    action: StageFile,
+                    description: "Stage/unstage file under cursor",
+                },
+                Binding {
                     keys: KeySeq::one(Char('s'), none),
                     action: ToggleStagingPanel,
                     description: "Toggle staging panel",
@@ -501,6 +510,26 @@ mod tests {
             km.lookup(key(KeyCode::Char(' '), KeyModifiers::NONE)),
             Some(Action::ToggleStage)
         );
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('s'), KeyModifiers::NONE)),
+            Some(Action::ToggleStagingPanel)
+        );
+    }
+
+    #[test]
+    fn shift_s_resolves_to_stage_file_regardless_of_shift_bit() {
+        let km = Keymap::default_map();
+        // Uppercase `S` stages/unstages the file under the cursor; matching
+        // strips SHIFT for Char, so both encodings resolve (mirrors K/Q/N).
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('S'), KeyModifiers::NONE)),
+            Some(Action::StageFile)
+        );
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('S'), KeyModifiers::SHIFT)),
+            Some(Action::StageFile)
+        );
+        // Lowercase `s` still opens the staging panel, unaffected.
         assert_eq!(
             km.lookup(key(KeyCode::Char('s'), KeyModifiers::NONE)),
             Some(Action::ToggleStagingPanel)

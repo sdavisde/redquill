@@ -2,6 +2,7 @@
 //! performs. No rendering or terminal I/O lives here — these are plain
 //! methods, unit-tested without a terminal.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::annotate::{AnnotationStore, Side, Target};
@@ -19,7 +20,10 @@ use super::rows::{
     LineRow, Row, StagedMarker, SyntaxSpans, anchor_row_index, build_multibuffer, hunk_span,
 };
 use super::search::SearchState;
-use super::stage_ops::{ReviewSnapshot, StageOps, StagedFile, build_review, staged_from_status};
+use super::stage_ops::{
+    ReviewSnapshot, StageOps, StagedFile, StagedState, build_review, staged_from_status,
+    staged_states_from_status,
+};
 use super::syntax::{self, HighlightCache};
 use super::theme::Theme;
 
@@ -77,6 +81,10 @@ pub struct App {
     pub target: DiffTarget,
     /// Files with staged changes, per the latest `git status` refresh.
     pub staged: Vec<StagedFile>,
+    /// Per-path [`StagedState`] driving the `●`/`±` section-header and
+    /// sidebar markers, refreshed alongside `staged`. Missing entries are
+    /// [`StagedState::Unstaged`].
+    pub staged_states: HashMap<String, StagedState>,
     /// The focused row index into `staged` in the staging panel.
     pub staging_cursor: usize,
     /// A transient one-line message for the status footer (errors, no-op
@@ -137,6 +145,7 @@ impl App {
             patches,
             target: DiffTarget::WorkingTree,
             staged: Vec::new(),
+            staged_states: HashMap::new(),
             staging_cursor: 0,
             status_message: None,
             stage_ops: None,
@@ -160,15 +169,20 @@ impl App {
         let mut app = App::new(snapshot.files);
         app.patches = snapshot.patches;
         app.staged = snapshot.staged;
+        app.staged_states = snapshot.staged_states;
         app.target = target;
         app.stage_ops = Some(ops);
         app.highlight_cache.clear();
-        // Initial collapse state: files already (fully) staged at startup
-        // start collapsed, everything else expanded. Partial-vs-full staged
-        // derivation arrives in task 3.0; here `staged` membership is the
-        // available signal.
-        let staged_paths: Vec<String> = app.staged.iter().map(|s| s.path.clone()).collect();
-        for path in staged_paths {
+        // Initial collapse state: only fully-staged files start collapsed
+        // (there's nothing left to review in them); partially-staged files
+        // keep their unstaged work visible, and everything else is expanded.
+        let full_staged: Vec<String> = app
+            .staged_states
+            .iter()
+            .filter(|(_, state)| **state == StagedState::Full)
+            .map(|(path, _)| path.clone())
+            .collect();
+        for path in full_staged {
             app.view.set_collapsed(&path, true);
         }
         app.rebuild_rows();
@@ -228,6 +242,7 @@ impl App {
             Action::Compose => self.open_compose(),
             Action::ToggleList => self.toggle_list(),
             Action::ToggleStage => super::staging::toggle_stage(self),
+            Action::StageFile => self.stage_file(),
             Action::ToggleStagingPanel => self.toggle_staging_panel(),
             Action::Search => self.enter_search(),
             Action::SearchNext => self.search_advance(true),
@@ -253,6 +268,52 @@ impl App {
         if let Some(index) = self.view.files.iter().position(|f| f.path == path) {
             self.view.cursor = self.view.header_row_of_file[index];
             self.view.ensure_visible();
+        }
+    }
+
+    /// Stages or unstages the whole file under the cursor (the `S` gesture),
+    /// then auto-collapses (on stage) or auto-expands (on unstage) its
+    /// section. Direction is decided by the file's [`StagedState`]: a
+    /// fully-staged file unstages and re-expands; an unstaged or partially
+    /// staged file stages and collapses. Reuses the existing [`StageOps`]
+    /// gestures (`stage_file`/`unstage_file`) — no new git-layer code. A
+    /// read-only range target and a missing git backend both degrade to a
+    /// footer message; a git failure leaves state unchanged.
+    fn stage_file(&mut self) {
+        if matches!(self.target, DiffTarget::Range(_)) {
+            self.set_status_message("read-only diff target");
+            return;
+        }
+        let Some(file) = self.view.files.get(self.view.file_of_cursor()) else {
+            return;
+        };
+        let path = file.path.clone();
+        let staging =
+            self.staged_states.get(&path).copied().unwrap_or_default() != StagedState::Full;
+
+        let result = {
+            let Some(ops) = self.stage_ops.as_deref() else {
+                self.set_status_message("staging unavailable (no git backend)");
+                return;
+            };
+            if staging {
+                ops.stage_file(&path)
+            } else {
+                ops.unstage_file(&path)
+            }
+        };
+        match result {
+            Ok(()) => {
+                // Collapse on stage / expand on unstage. `refresh` preserves
+                // the collapse map by path and re-applies the auto-expand
+                // rule, so a file that becomes fully staged stays collapsed
+                // and an unstaged one stays open.
+                self.view.set_collapsed(&path, staging);
+                let verb = if staging { "staged" } else { "unstaged" };
+                self.set_status_message(format!("{verb} {path}"));
+                self.refresh();
+            }
+            Err(e) => self.set_status_message(e.to_string()),
         }
     }
 
@@ -341,13 +402,13 @@ impl App {
             .view
             .files
             .iter()
-            .map(|f| {
-                if self.staged.iter().any(|s| s.path == f.path) {
-                    StagedMarker::Staged
-                } else {
-                    StagedMarker::None
-                }
-            })
+            .map(
+                |f| match self.staged_states.get(&f.path).copied().unwrap_or_default() {
+                    StagedState::Full => StagedMarker::Staged,
+                    StagedState::Partial => StagedMarker::Partial,
+                    StagedState::Unstaged => StagedMarker::None,
+                },
+            )
             .collect();
         let syntax: Vec<SyntaxSpans> = self
             .view
@@ -680,6 +741,30 @@ impl App {
         self.view.files = snapshot.files;
         self.patches = snapshot.patches;
         self.staged = snapshot.staged;
+        self.staged_states = snapshot.staged_states;
+
+        // Collapse-map maintenance (spec Unit 2, "nothing hides"):
+        // - drop entries for files that left the review, then
+        // - auto-expand any collapsed file that is now *partially* staged
+        //   (staged, then edited again — its fresh unstaged work must not
+        //   stay hidden behind a collapsed header, and it renders `±`).
+        // Fully-staged collapsed files stay collapsed (nothing to review),
+        // and every other file keeps whatever collapse state it had.
+        let present: HashSet<String> = self.view.files.iter().map(|f| f.path.clone()).collect();
+        self.view.retain_collapsed(|path| present.contains(path));
+        let reexpand: Vec<String> = self
+            .view
+            .files
+            .iter()
+            .map(|f| f.path.clone())
+            .filter(|path| self.view.is_collapsed(path))
+            .filter(|path| {
+                self.staged_states.get(path).copied().unwrap_or_default() == StagedState::Partial
+            })
+            .collect();
+        for path in reexpand {
+            self.view.set_collapsed(&path, false);
+        }
 
         // Content may have changed underneath every cached (path, side).
         self.highlight_cache.clear();
@@ -766,19 +851,23 @@ impl App {
         }
     }
 
-    /// Best-effort re-read of the staged-file list from `git status`,
-    /// keeping the previous list on any failure.
+    /// Best-effort re-read of the staged-file list (and per-path staged
+    /// states) from `git status`, keeping the previous values on any failure.
     fn refresh_staged_list(&mut self) {
-        let staged = {
+        let (staged, states) = {
             let Some(ops) = self.stage_ops.as_deref() else {
                 return;
             };
             match ops.status() {
-                Ok(status) => staged_from_status(&status),
+                Ok(status) => (
+                    staged_from_status(&status),
+                    staged_states_from_status(&status),
+                ),
                 Err(_) => return,
             }
         };
         self.staged = staged;
+        self.staged_states = states;
     }
 
     // -- Search --------------------------------------------------------------
@@ -1616,6 +1705,11 @@ index 1..2 100644
         calls: Rc<RefCell<Vec<StageCall>>>,
         diff: Vec<RawFilePatch>,
         status: Vec<FileStatus>,
+        // Interior-mutable overrides: when set, `diff`/`status` read through
+        // these instead, so a test can mutate the refresh result mid-flow
+        // (e.g. to simulate an external edit landing between operations).
+        diff_override: Option<Rc<RefCell<Vec<RawFilePatch>>>>,
+        status_override: Option<Rc<RefCell<Vec<FileStatus>>>>,
         untracked_content: std::collections::HashMap<String, Vec<u8>>,
         fail_ops: bool,
         show_calls: Rc<RefCell<usize>>,
@@ -1634,11 +1728,17 @@ index 1..2 100644
 
     impl StageOps for FakeGit {
         fn diff(&self, _target: &DiffTarget) -> Result<Vec<RawFilePatch>, GitError> {
-            Ok(self.diff.clone())
+            match &self.diff_override {
+                Some(h) => Ok(h.borrow().clone()),
+                None => Ok(self.diff.clone()),
+            }
         }
 
         fn status(&self) -> Result<Vec<FileStatus>, GitError> {
-            Ok(self.status.clone())
+            match &self.status_override {
+                Some(h) => Ok(h.borrow().clone()),
+                None => Ok(self.status.clone()),
+            }
         }
 
         fn stage_file(&self, path: &str) -> Result<(), GitError> {
@@ -1695,12 +1795,37 @@ index 1..2 100644
         }
     }
 
-    /// A porcelain status entry with staged (index-side) changes only.
+    /// A porcelain status entry with staged (index-side) changes only
+    /// (`M.` → fully staged).
     fn staged_entry(path: &str) -> FileStatus {
         FileStatus {
             kind: ChangeKind::Ordinary,
             staged: StatusCode::Modified,
             unstaged: StatusCode::Unmodified,
+            path: path.to_string(),
+            orig_path: None,
+        }
+    }
+
+    /// A porcelain status entry with both staged and unstaged changes
+    /// (`MM` → partially staged).
+    fn partial_entry(path: &str) -> FileStatus {
+        FileStatus {
+            kind: ChangeKind::Ordinary,
+            staged: StatusCode::Modified,
+            unstaged: StatusCode::Modified,
+            path: path.to_string(),
+            orig_path: None,
+        }
+    }
+
+    /// A porcelain status entry with working-tree-only changes (`.M` →
+    /// unstaged).
+    fn unstaged_entry(path: &str) -> FileStatus {
+        FileStatus {
+            kind: ChangeKind::Ordinary,
+            staged: StatusCode::Unmodified,
+            unstaged: StatusCode::Modified,
             path: path.to_string(),
             orig_path: None,
         }
@@ -1730,6 +1855,7 @@ index 1..2 100644
             files,
             patches: patches.into_iter().map(Some).collect(),
             staged: Vec::new(),
+            staged_states: HashMap::new(),
         };
         (App::with_git(snapshot, target, Box::new(fake)), calls)
     }
@@ -1828,6 +1954,7 @@ Binary files a/img.png and b/img.png differ
             files: vec![FileDiff::synthetic_added("new.rs".to_string(), "x\ny\n")],
             patches: vec![None],
             staged: Vec::new(),
+            staged_states: HashMap::new(),
         };
         let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
         app.apply(Action::CursorDown); // hunk header
@@ -1851,6 +1978,7 @@ Binary files a/img.png and b/img.png differ
             files: vec![FileDiff::synthetic_added("new.rs".to_string(), "x\ny\n")],
             patches: vec![None],
             staged: Vec::new(),
+            staged_states: HashMap::new(),
         };
         let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
         app.apply(Action::CursorDown);
@@ -2082,6 +2210,7 @@ index 1..2 100644
             files: vec![FileDiff::from_patch(&p).unwrap()],
             patches: vec![Some(p)],
             staged: Vec::new(),
+            staged_states: HashMap::new(),
         };
         let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
         app.apply(Action::CursorDown); // hunk header
@@ -2126,6 +2255,338 @@ index 1..2 100644
         assert_eq!(app.status_message.as_deref(), Some("staged hunk"));
         app.clear_status_message();
         assert!(app.status_message.is_none());
+    }
+
+    // -- Stage-and-collapse review flow (S) ----------------------------------
+
+    /// Builds an `App` whose fake reads its refresh diff/status through
+    /// mutable handles, so a test can change what the next `refresh` sees.
+    /// The snapshot is derived from `initial_status` (staged list + states)
+    /// over `initial_files`.
+    #[allow(clippy::type_complexity)]
+    fn app_with_mutable_fake(
+        initial_files: Vec<RawFilePatch>,
+        initial_status: Vec<FileStatus>,
+        refresh_diff: Vec<RawFilePatch>,
+        refresh_status: Vec<FileStatus>,
+    ) -> (
+        App,
+        Rc<RefCell<Vec<StageCall>>>,
+        Rc<RefCell<Vec<RawFilePatch>>>,
+        Rc<RefCell<Vec<FileStatus>>>,
+    ) {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let diff_h = Rc::new(RefCell::new(refresh_diff));
+        let status_h = Rc::new(RefCell::new(refresh_status));
+        let fake = FakeGit {
+            calls: Rc::clone(&calls),
+            diff_override: Some(Rc::clone(&diff_h)),
+            status_override: Some(Rc::clone(&status_h)),
+            ..FakeGit::default()
+        };
+        let files = initial_files
+            .iter()
+            .map(|p| FileDiff::from_patch(p).unwrap())
+            .collect();
+        let snapshot = ReviewSnapshot {
+            files,
+            patches: initial_files.into_iter().map(Some).collect(),
+            staged: staged_from_status(&initial_status),
+            staged_states: staged_states_from_status(&initial_status),
+        };
+        let app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
+        (app, calls, diff_h, status_h)
+    }
+
+    #[test]
+    fn stage_file_stages_the_file_and_collapses_its_section() {
+        let p = raw_patch("a.rs", 1);
+        // After staging, a.rs is fully staged and gone from the working diff;
+        // decision (A) keeps it as a header-only section from status.
+        let (mut app, calls) = app_with_fake(
+            vec![p],
+            DiffTarget::WorkingTree,
+            vec![], // nothing unstaged left
+            vec![staged_entry("a.rs")],
+        );
+        assert!(!app.view.is_collapsed("a.rs"));
+        app.apply(Action::StageFile);
+        assert_eq!(
+            single_call(&calls),
+            StageCall::StageFile("a.rs".to_string())
+        );
+        assert!(app.view.is_collapsed("a.rs"));
+        // The section persists (never hides), now marked fully staged.
+        assert_eq!(app.view.files.len(), 1);
+        assert_eq!(app.view.files[0].path, "a.rs");
+        assert_eq!(
+            app.staged_states.get("a.rs").copied(),
+            Some(StagedState::Full)
+        );
+        assert_eq!(app.status_message.as_deref(), Some("staged a.rs"));
+    }
+
+    #[test]
+    fn stage_file_on_fully_staged_file_unstages_and_expands() {
+        let p = raw_patch("a.rs", 1);
+        // Start fully staged (collapsed at launch); after unstaging, a.rs is
+        // back in the working diff with nothing staged.
+        let (mut app, calls, _diff, _status) = app_with_mutable_fake(
+            vec![p.clone()],
+            vec![staged_entry("a.rs")],   // initial: M. -> Full
+            vec![p],                      // refresh diff after unstage
+            vec![unstaged_entry("a.rs")], // refresh status: unstaged only
+        );
+        assert!(app.view.is_collapsed("a.rs")); // fully staged starts collapsed
+        // Cursor sits on the collapsed header.
+        app.apply(Action::StageFile);
+        assert_eq!(
+            single_call(&calls),
+            StageCall::UnstageFile("a.rs".to_string())
+        );
+        assert!(!app.view.is_collapsed("a.rs")); // auto-expanded
+        assert_eq!(app.staged_states.get("a.rs").copied(), None); // no longer staged
+        assert_eq!(app.status_message.as_deref(), Some("unstaged a.rs"));
+    }
+
+    #[test]
+    fn stage_file_records_only_stageops_methods() {
+        // Both directions must go through `stage_file`/`unstage_file` — no
+        // new git-layer gestures.
+        let p = raw_patch("a.rs", 1);
+        let (mut app, calls) = app_with_fake(
+            vec![p],
+            DiffTarget::WorkingTree,
+            vec![],
+            vec![staged_entry("a.rs")],
+        );
+        app.apply(Action::StageFile);
+        for call in calls.borrow().iter() {
+            assert!(
+                matches!(call, StageCall::StageFile(_) | StageCall::UnstageFile(_)),
+                "unexpected call {call:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn stage_file_on_read_only_range_is_a_noop_with_message() {
+        let p = raw_patch("a.rs", 1);
+        let (mut app, calls) = app_with_fake(
+            vec![p.clone()],
+            DiffTarget::Range("main..HEAD".to_string()),
+            vec![p],
+            vec![],
+        );
+        app.apply(Action::StageFile);
+        assert!(calls.borrow().is_empty());
+        assert_eq!(app.status_message.as_deref(), Some("read-only diff target"));
+    }
+
+    #[test]
+    fn stage_file_error_sets_message_and_leaves_state_unchanged() {
+        let p = raw_patch("a.rs", 1);
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let fake = FakeGit {
+            calls: Rc::clone(&calls),
+            diff: vec![],
+            fail_ops: true,
+            ..FakeGit::default()
+        };
+        let snapshot = ReviewSnapshot {
+            files: vec![FileDiff::from_patch(&p).unwrap()],
+            patches: vec![Some(p)],
+            staged: Vec::new(),
+            staged_states: HashMap::new(),
+        };
+        let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
+        app.apply(Action::StageFile);
+        // The stage was attempted but failed; nothing collapsed, file kept.
+        assert_eq!(
+            single_call(&calls),
+            StageCall::StageFile("a.rs".to_string())
+        );
+        assert!(!app.view.is_collapsed("a.rs"));
+        assert_eq!(app.view.files.len(), 1);
+        assert!(
+            app.status_message
+                .as_deref()
+                .is_some_and(|m| m.contains("simulated git failure"))
+        );
+    }
+
+    #[test]
+    fn hunk_stage_marks_file_partial_and_keeps_it_expanded() {
+        // Staging one of two hunks leaves the file partially staged: its
+        // header marker becomes `±` and the section stays expanded (its
+        // unstaged work is still visible).
+        let p = raw_patch("a.rs", 2);
+        let (mut app, _calls) = app_with_fake(
+            vec![p.clone()],
+            DiffTarget::WorkingTree,
+            vec![p],                     // still has unstaged content
+            vec![partial_entry("a.rs")], // MM -> Partial
+        );
+        app.apply(Action::NextHunk); // onto a hunk header
+        app.apply(Action::ToggleStage); // stage that hunk, then refresh
+        assert_eq!(
+            app.staged_states.get("a.rs").copied(),
+            Some(StagedState::Partial)
+        );
+        let header = app.view.header_row_of_file[0];
+        let Row::FileHeader { staged_marker, .. } = &app.view.rows[header] else {
+            panic!("expected file header");
+        };
+        assert_eq!(*staged_marker, StagedMarker::Partial);
+        assert!(!app.view.is_collapsed("a.rs"));
+    }
+
+    // -- Refresh collapse-map rules (task 3.3) -------------------------------
+
+    #[test]
+    fn refresh_auto_expands_a_partially_staged_collapsed_file() {
+        // The "nothing hides" guarantee: a fully-staged (collapsed) file that
+        // gets edited again comes back partially staged and must re-expand.
+        let p = raw_patch("a.rs", 1);
+        let (mut app, _calls, _diff, _status) = app_with_mutable_fake(
+            vec![p.clone()],
+            vec![staged_entry("a.rs")],  // initial: Full -> collapsed
+            vec![p],                     // external edit: unstaged diff present
+            vec![partial_entry("a.rs")], // now MM -> Partial
+        );
+        assert!(app.view.is_collapsed("a.rs"));
+        app.refresh(); // picks up the external edit
+        assert!(!app.view.is_collapsed("a.rs")); // re-expanded
+        assert_eq!(
+            app.staged_states.get("a.rs").copied(),
+            Some(StagedState::Partial)
+        );
+        let header = app.view.header_row_of_file[0];
+        let Row::FileHeader { staged_marker, .. } = &app.view.rows[header] else {
+            panic!("expected file header");
+        };
+        assert_eq!(*staged_marker, StagedMarker::Partial); // ±
+    }
+
+    #[test]
+    fn refresh_keeps_a_still_fully_staged_collapsed_file_collapsed() {
+        let p = raw_patch("a.rs", 1);
+        let (mut app, _calls, _diff, _status) = app_with_mutable_fake(
+            vec![p],
+            vec![staged_entry("a.rs")], // Full -> collapsed
+            vec![],                     // still nothing unstaged
+            vec![staged_entry("a.rs")], // still Full
+        );
+        assert!(app.view.is_collapsed("a.rs"));
+        app.refresh();
+        assert!(app.view.is_collapsed("a.rs")); // stays collapsed
+    }
+
+    #[test]
+    fn refresh_preserves_a_manually_collapsed_unstaged_file() {
+        // A file the reviewer collapsed with `za` that has only unstaged
+        // changes keeps its collapse state (it isn't partially staged).
+        let a = raw_patch("a.rs", 1);
+        let b = raw_patch("b.rs", 1);
+        let (mut app, _calls, _diff, _status) = app_with_mutable_fake(
+            vec![a.clone(), b.clone()],
+            vec![],     // nothing staged
+            vec![a, b], // refresh returns the same two files
+            vec![],
+        );
+        app.view.set_collapsed("a.rs", true);
+        app.rebuild_rows();
+        app.refresh();
+        assert!(app.view.is_collapsed("a.rs")); // survives refresh
+        assert!(!app.view.is_collapsed("b.rs"));
+    }
+
+    #[test]
+    fn refresh_drops_collapse_entries_for_departed_files() {
+        // b.rs leaves the review on refresh; its collapse-map entry must be
+        // dropped rather than lingering as stale state.
+        let a = raw_patch("a.rs", 1);
+        let b = raw_patch("b.rs", 1);
+        let (mut app, _calls, _diff, _status) = app_with_mutable_fake(
+            vec![a.clone(), b.clone()],
+            vec![],
+            vec![a], // b.rs gone from the refresh diff
+            vec![],
+        );
+        app.view.set_collapsed("b.rs", true);
+        app.rebuild_rows();
+        app.refresh();
+        assert!(!app.view.collapse_contains("b.rs")); // entry cleaned up
+    }
+
+    #[test]
+    fn nothing_hides_smoke_stage_two_then_edit_one_reexpands() {
+        // Drives the Unit-2 smoke via the FakeGit harness: three files,
+        // stage two (watch them collapse), then an external edit lands on a
+        // staged file; the next refresh re-expands it with `±`.
+        let a = raw_patch("a.rs", 1);
+        let b = raw_patch("b.rs", 1);
+        let c = raw_patch("c.rs", 1);
+        let (mut app, calls, diff_h, status_h) = app_with_mutable_fake(
+            vec![a.clone(), b.clone(), c.clone()],
+            vec![], // nothing staged initially -> all expanded
+            // The fake starts reflecting the state after a.rs is staged.
+            vec![b.clone(), c.clone()],
+            vec![staged_entry("a.rs")],
+        );
+        // All three expanded to start.
+        assert!(!app.view.is_collapsed("a.rs"));
+        assert!(!app.view.is_collapsed("b.rs"));
+        assert!(!app.view.is_collapsed("c.rs"));
+
+        // Stage a.rs (cursor on its header): it collapses.
+        app.apply(Action::StageFile);
+        assert!(app.view.is_collapsed("a.rs"));
+
+        // Now stage b.rs. Update the fake to the post-(a,b)-stage state,
+        // then move the cursor onto b.rs and stage it.
+        *diff_h.borrow_mut() = vec![c.clone()];
+        *status_h.borrow_mut() = vec![staged_entry("a.rs"), staged_entry("b.rs")];
+        app.view.cursor = app.view.header_row_of_file[app
+            .view
+            .files
+            .iter()
+            .position(|f| f.path == "b.rs")
+            .unwrap()];
+        app.apply(Action::StageFile);
+        assert!(app.view.is_collapsed("b.rs"));
+        assert!(app.view.is_collapsed("a.rs"));
+        // Two S gestures, both whole-file stages.
+        assert_eq!(
+            *calls.borrow(),
+            vec![
+                StageCall::StageFile("a.rs".to_string()),
+                StageCall::StageFile("b.rs".to_string()),
+            ]
+        );
+
+        // External edit lands on the staged a.rs: it is now partially staged
+        // and reappears in the working diff. A refresh must re-expand it.
+        *diff_h.borrow_mut() = vec![a.clone(), c.clone()];
+        *status_h.borrow_mut() = vec![partial_entry("a.rs"), staged_entry("b.rs")];
+        app.refresh();
+
+        assert!(!app.view.is_collapsed("a.rs")); // re-expanded — nothing hides
+        assert!(app.view.is_collapsed("b.rs")); // still fully staged, collapsed
+        assert_eq!(
+            app.staged_states.get("a.rs").copied(),
+            Some(StagedState::Partial)
+        );
+        let header = app.view.header_row_of_file[app
+            .view
+            .files
+            .iter()
+            .position(|f| f.path == "a.rs")
+            .unwrap()];
+        let Row::FileHeader { staged_marker, .. } = &app.view.rows[header] else {
+            panic!("expected file header");
+        };
+        assert_eq!(*staged_marker, StagedMarker::Partial); // ±
     }
 
     // -- Staging panel -------------------------------------------------------
@@ -2257,6 +2718,7 @@ index 1..2 100644
             ],
             patches: vec![Some(a), Some(b)],
             staged: Vec::new(),
+            staged_states: HashMap::new(),
         };
         let mut app = App::with_git(snapshot, DiffTarget::Staged, Box::new(fake));
         // Both files expanded -> a.rs (2 sides) + b.rs (2 sides) = 4 fetches.
@@ -2292,6 +2754,7 @@ index 1..2 100644
                 path: "c.rs".to_string(),
                 letter: 'M',
             }],
+            staged_states: HashMap::from([("c.rs".to_string(), StagedState::Full)]),
         };
         let mut app = App::with_git(snapshot, DiffTarget::Staged, Box::new(fake));
         // Only a.rs (expanded) is highlighted; collapsed c.rs is skipped.

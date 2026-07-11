@@ -49,6 +49,7 @@ Vim-grammar keybindings, fully remappable. Draft default map:
 | `/` then `n` / `N` | Search |
 | `c` | Comment on line (visual select `v` for ranges) |
 | `space` | Stage/unstage hunk (line in visual mode) |
+| `S` | Stage/unstage the file under the cursor (collapses on stage, expands on unstage) |
 | `s` | Toggle staging panel |
 | `gd` / `gr` / `K` | Go to definition / references / hover docs |
 | `a` | Annotation list |

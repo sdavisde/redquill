@@ -57,7 +57,7 @@ fn group_of(action: Action) -> &'static str {
         | HalfPageDown | HalfPageUp | NextHunk | PrevHunk | NextFile | PrevFile
         | ToggleCollapse => "Navigation",
         EnterVisual | Compose => "Annotate",
-        ToggleStage | ToggleStagingPanel => "Stage",
+        ToggleStage | StageFile | ToggleStagingPanel => "Stage",
         Search | SearchNext | SearchPrev => "Search",
         ToggleList | ToggleHelp => "Panels",
         GotoDefinition | GotoReferences | Hover => "Code intelligence",
