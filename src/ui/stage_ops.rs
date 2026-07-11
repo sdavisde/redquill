@@ -9,7 +9,9 @@
 use thiserror::Error;
 
 use crate::diff::{DiffParseError, FileChangeKind, FileDiff};
-use crate::git::{ChangeKind, DiffTarget, FileStatus, GitError, GitRunner, RawFilePatch};
+use crate::git::{
+    BranchStatus, ChangeKind, DiffTarget, FileStatus, GitError, GitRunner, RawFilePatch, StashEntry,
+};
 
 /// Errors produced while building a [`ReviewSnapshot`].
 #[derive(Debug, Error)]
@@ -47,6 +49,18 @@ pub trait StageOps {
     /// [`GitRunner::show_file`]), for sourcing whole-file content the diff
     /// pane highlights syntactically. `None` on any failure.
     fn show_file(&self, spec: &str) -> Option<String>;
+    /// Reads the current branch / upstream / ahead-behind state (see
+    /// [`GitRunner::status_with_branch`]). The default errors, so
+    /// backend-less or navigation-only fakes need not implement it; the
+    /// panel treats branch state as best-effort.
+    fn branch_status(&self) -> Result<BranchStatus, GitError> {
+        Err(GitError::Parse("branch status unavailable".into()))
+    }
+    /// Reads the stash list, newest first (see [`GitRunner::stash_list`]).
+    /// The default returns an empty list.
+    fn stash_list(&self) -> Result<Vec<StashEntry>, GitError> {
+        Ok(Vec::new())
+    }
 }
 
 impl StageOps for GitRunner {
@@ -80,6 +94,14 @@ impl StageOps for GitRunner {
 
     fn show_file(&self, spec: &str) -> Option<String> {
         GitRunner::show_file(self, spec)
+    }
+
+    fn branch_status(&self) -> Result<BranchStatus, GitError> {
+        Ok(GitRunner::status_with_branch(self)?.branch)
+    }
+
+    fn stash_list(&self) -> Result<Vec<StashEntry>, GitError> {
+        GitRunner::stash_list(self)
     }
 }
 

@@ -1,0 +1,79 @@
+Task 2.0 smoke proof — git panel rendering against a real repository
+====================================================================
+
+Method
+------
+tmux was not available in this environment (`which tmux` -> not found), so
+per the task's documented fallback this is a TestBackend full-frame snapshot
+rendered from REAL git data (not canned test doubles): a `GitRunner` was
+discovered against a scratch fixture repository, `build_review` +
+`App::with_git` populated the panel state (branch/ahead-behind/stashes/
+untracked) by actually shelling out to git, and the panel widget was rendered
+headless into a 32x24 `TestBackend`. The frame below is the verbatim buffer
+content, one line per row.
+
+Fixture repository
+------------------
+A throwaway repo built under the session scratchpad with:
+  - a local `file://` bare upstream (origin/main),
+  - 2 local unpushed commits and 1 remote-side commit  -> ahead 2, behind 1,
+  - two stashes: `spike: tabs` (stash@{0}), `wip: parser` (stash@{1}),
+  - session.rs partially staged (staged + further unstaged edit) -> MM,
+  - keys.rs staged-added (A),
+  - notes.md untracked (?).
+
+Real `git status --porcelain=v2 --branch -z` for the fixture:
+  # branch.oid f7d87e4...
+  # branch.head main
+  # branch.upstream origin/main
+  # branch.ab +2 -1
+  1 A. ... keys.rs
+  1 MM ... session.rs
+  ? notes.md
+Real `git stash list --format=%gd%x00%gs`:
+  stash@{0}<NUL>On main: spike: tabs
+  stash@{1}<NUL>On main: wip: parser
+
+Rendered panel frame (real data, headless TestBackend)
+------------------------------------------------------
+┌git: main ↑2↓1────────────────┐
+│CHANGES                       │
+│● M session.rs                │
+│UNTRACKED                     │
+│  notes.md                    │
+│STASHES (2)                   │
+│  0 spike: tabs               │
+│  1 wip: parser               │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+└──────────────────────────────┘
+ [2 files] [2 staged]
+
+What was observed
+-----------------
+  - Branch header: `git: main ↑2↓1` (upstream present, ahead 2 / behind 1).
+  - CHANGES section with the preserved staged `●` marker and change-kind
+    letter: `● M session.rs`.
+  - UNTRACKED section listing `notes.md`.
+  - STASHES (2) header with `0 spike: tabs` / `1 wip: parser` view-only rows.
+  - Footer counts line: `[2 files] [2 staged]`.
+  (keys.rs is staged-only with no unstaged hunk, so it is not part of the
+  working-tree diff's file list — it is reflected in the [2 staged] count,
+  matching git's working-tree-diff semantics.)
+
+Note: keys.rs staged-add is counted in `[2 staged]` alongside the staged
+half of session.rs; the working-tree diff itself (and hence the CHANGES
+rows) shows only files with unstaged hunks, which is the existing sidebar's
+behavior, preserved unchanged.

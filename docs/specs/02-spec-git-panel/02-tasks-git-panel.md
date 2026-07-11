@@ -56,7 +56,7 @@ Extend `git/` with typed, TDD-tested knowledge of repository sync state: extend 
 - [x] 1.6 Add an integration test to `tests/git_integration.rs` using the existing tempdir helpers: create a local bare upstream, arrange ahead-2/behind-1 via fixture commits, create one stash, and assert the parsed branch name, upstream, counts, and stash entry. Also cover the detached-HEAD and no-upstream cases against real git.
 - [x] 1.7 Run all four gates (`cargo build`, `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check`) and record the test-count delta against the pre-task baseline.
 
-### [ ] 2.0 Git panel rendering: branch header and sectioned file/stash display
+### [x] 2.0 Git panel rendering: branch header and sectioned file/stash display
 
 Evolve the passive `sidebar.rs` into the git panel's visual form in the same 32-column slot: branch header (`git: main ↑2↓1`, detached/no-upstream variants), CHANGES section preserving the existing staged `●` markers and change-kind letters, UNTRACKED section, STASHES section (ref, branch, message), and the existing footer counts. Panel remains passive in this task — no focus or cursor yet. `App` gains branch/stash state populated on startup and on `refresh()`.
 
@@ -68,13 +68,13 @@ Evolve the passive `sidebar.rs` into the git panel's visual form in the same 32-
 
 #### 2.0 Tasks
 
-- [ ] 2.1 Extend the `StageOps` seam (`src/ui/stage_ops.rs`) with branch-status and stash-list reads, implement them on `GitRunner`, and extend the `FakeGit` test double in `src/ui/app.rs` tests to serve canned values.
-- [ ] 2.2 Add branch and stash state to `App`, populated at startup and inside `refresh()`; write a unit test with `FakeGit` asserting `refresh()` repopulates branch/stash state while staged markers and annotations survive exactly as today.
-- [ ] 2.3 Write failing `TestBackend` render tests for the panel: header `git: main ↑2↓1`, detached-HEAD variant (short oid), no-upstream variant (no arrows), the three section headers, `●` staged markers, change-kind letters, stash rows (`0 wip: parser` style), and the footer counts line.
-- [ ] 2.4 Create `src/ui/git_panel.rs` rendering the branch header and CHANGES/UNTRACKED/STASHES sections in the existing 32-column slot, migrating the row rendering (staged marker, letter colors, dir/basename split, footer) from `sidebar.rs`; wire `draw()` in `src/ui/mod.rs` to the new widget; tests from 2.3 pass.
-- [ ] 2.5 Empty-state handling: zero stashes hides or shows an empty STASHES section per the design mock (`STASHES (2)` count in header row), no untracked files shows no UNTRACKED rows; add render assertions for both.
-- [ ] 2.6 Manual smoke: `cargo run` in a scratch fixture repo (upstream + two stashes + mixed staged/unstaged/untracked files) and record the transcript/screenshot of the populated panel.
-- [ ] 2.7 Run all four gates.
+- [x] 2.1 Extend the `StageOps` seam (`src/ui/stage_ops.rs`) with branch-status and stash-list reads, implement them on `GitRunner`, and extend the `FakeGit` test double in `src/ui/app.rs` tests to serve canned values.
+- [x] 2.2 Add branch and stash state to `App`, populated at startup and inside `refresh()`; write a unit test with `FakeGit` asserting `refresh()` repopulates branch/stash state while staged markers and annotations survive exactly as today.
+- [x] 2.3 Write failing `TestBackend` render tests for the panel: header `git: main ↑2↓1`, detached-HEAD variant (short oid), no-upstream variant (no arrows), the three section headers, `●` staged markers, change-kind letters, stash rows (`0 wip: parser` style), and the footer counts line.
+- [x] 2.4 Create `src/ui/git_panel.rs` rendering the branch header and CHANGES/UNTRACKED/STASHES sections in the existing 32-column slot, migrating the row rendering (staged marker, letter colors, dir/basename split, footer) from `sidebar.rs`; wire `draw()` in `src/ui/mod.rs` to the new widget; tests from 2.3 pass.
+- [x] 2.5 Empty-state handling: zero stashes hides or shows an empty STASHES section per the design mock (`STASHES (2)` count in header row), no untracked files shows no UNTRACKED rows; add render assertions for both.
+- [x] 2.6 Manual smoke: `cargo run` in a scratch fixture repo (upstream + two stashes + mixed staged/unstaged/untracked files) and record the transcript/screenshot of the populated panel.
+- [x] 2.7 Run all four gates.
 
 ### [ ] 3.0 Panel focus and keyboard navigation
 

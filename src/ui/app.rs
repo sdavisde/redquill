@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use crate::annotate::{AnnotationStore, Side, Target};
 use crate::diff::{FileDiff, LineOrigin};
-use crate::git::{DiffTarget, RawFilePatch};
+use crate::git::{BranchStatus, DiffTarget, RawFilePatch, StashEntry};
 use crate::highlight::Highlighter;
 use crate::lsp::RequestId;
 
@@ -77,6 +77,17 @@ pub struct App {
     pub target: DiffTarget,
     /// Files with staged changes, per the latest `git status` refresh.
     pub staged: Vec<StagedFile>,
+    /// Current branch / upstream / ahead-behind state, read at startup and
+    /// on every [`App::refresh`]. `None` in git-less contexts, or until the
+    /// first successful read.
+    pub branch: Option<BranchStatus>,
+    /// The stash list (newest first) as of the latest refresh; empty in
+    /// git-less contexts or when nothing is stashed.
+    pub stashes: Vec<StashEntry>,
+    /// Repo-relative paths of untracked files among `view.files`, used by
+    /// the git panel to split its CHANGES and UNTRACKED sections. Derived on
+    /// refresh from which entries have no real patch; empty without git.
+    pub untracked_paths: Vec<String>,
     /// The focused row index into `staged` in the staging panel.
     pub staging_cursor: usize,
     /// A transient one-line message for the status footer (errors, no-op
@@ -137,6 +148,9 @@ impl App {
             patches,
             target: DiffTarget::WorkingTree,
             staged: Vec::new(),
+            branch: None,
+            stashes: Vec::new(),
+            untracked_paths: Vec::new(),
             staging_cursor: 0,
             status_message: None,
             stage_ops: None,
@@ -162,9 +176,41 @@ impl App {
         app.staged = snapshot.staged;
         app.target = target;
         app.stage_ops = Some(ops);
+        app.recompute_untracked();
+        app.refresh_repo_state();
         app.highlight_cache.clear();
         app.rebuild_rows();
         app
+    }
+
+    /// Best-effort re-read of branch/upstream/ahead-behind state and the
+    /// stash list through the git backend. Each read updates its field only
+    /// on success, so a transient failure keeps the last-known values; a
+    /// no-op without a git backend.
+    fn refresh_repo_state(&mut self) {
+        let Some(ops) = self.stage_ops.as_deref() else {
+            return;
+        };
+        if let Ok(branch) = ops.branch_status() {
+            self.branch = Some(branch);
+        }
+        if let Ok(stashes) = ops.stash_list() {
+            self.stashes = stashes;
+        }
+    }
+
+    /// Recomputes `untracked_paths` from the current files/patches: an entry
+    /// with no real patch is a synthetic untracked file (see
+    /// [`build_review`]). Only meaningful with a git backend attached.
+    fn recompute_untracked(&mut self) {
+        self.untracked_paths = self
+            .view
+            .files
+            .iter()
+            .zip(&self.patches)
+            .filter(|(_, patch)| patch.is_none())
+            .map(|(file, _)| file.path.clone())
+            .collect();
     }
 
     /// Sets the workspace root `gd`/`gr`/`K` spawn LSP servers against
@@ -671,6 +717,8 @@ impl App {
         self.view.files = snapshot.files;
         self.patches = snapshot.patches;
         self.staged = snapshot.staged;
+        self.recompute_untracked();
+        self.refresh_repo_state();
 
         self.view.selected_file = previous_path
             .and_then(|path| self.view.files.iter().position(|f| f.path == path))
@@ -1765,6 +1813,8 @@ index 1..2 100644
         fail_ops: bool,
         show_calls: Rc<RefCell<usize>>,
         show_content: Option<String>,
+        branch: Option<BranchStatus>,
+        stashes: Vec<StashEntry>,
     }
 
     impl FakeGit {
@@ -1821,6 +1871,16 @@ index 1..2 100644
         fn show_file(&self, _spec: &str) -> Option<String> {
             *self.show_calls.borrow_mut() += 1;
             self.show_content.clone()
+        }
+
+        fn branch_status(&self) -> Result<BranchStatus, GitError> {
+            self.branch
+                .clone()
+                .ok_or_else(|| GitError::Parse("no branch".into()))
+        }
+
+        fn stash_list(&self) -> Result<Vec<StashEntry>, GitError> {
+            Ok(self.stashes.clone())
         }
     }
 
@@ -2209,6 +2269,52 @@ index 1..2 100644
         assert_eq!(app.staged.len(), 1);
         assert_eq!(app.staged[0].path, "a.rs");
         assert_eq!(app.staged[0].letter, 'M');
+    }
+
+    #[test]
+    fn refresh_repopulates_branch_and_stash_and_preserves_staged_and_annotations() {
+        let p = raw_patch("a.rs", 1);
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let fake = FakeGit {
+            calls: Rc::clone(&calls),
+            diff: vec![p.clone()],
+            status: vec![staged_entry("a.rs")],
+            branch: Some(BranchStatus {
+                name: "main".into(),
+                detached: false,
+                upstream: Some("origin/main".into()),
+                ahead_behind: Some((2, 1)),
+            }),
+            stashes: vec![StashEntry {
+                stash_ref: "stash@{0}".into(),
+                branch: Some("main".into()),
+                message: "wip: parser".into(),
+            }],
+            ..FakeGit::default()
+        };
+        let snapshot = ReviewSnapshot {
+            files: vec![FileDiff::from_patch(&p).unwrap()],
+            patches: vec![Some(p)],
+            staged: Vec::new(),
+        };
+        let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
+        // Startup read populated branch/stash state.
+        assert_eq!(app.branch.as_ref().unwrap().name, "main");
+        assert_eq!(app.stashes.len(), 1);
+        // An annotation made this session must survive the refresh.
+        app.annotations
+            .add(Target::file("a.rs"), Classification::Nit, "look here")
+            .unwrap();
+
+        app.refresh();
+
+        assert_eq!(app.branch.as_ref().unwrap().ahead_behind, Some((2, 1)));
+        assert_eq!(app.stashes[0].message, "wip: parser");
+        // Staged markers survive: the refresh status reports a.rs staged.
+        assert_eq!(app.staged.len(), 1);
+        assert_eq!(app.staged[0].path, "a.rs");
+        // Annotations survive the refresh exactly as today.
+        assert_eq!(app.annotations.len(), 1);
     }
 
     #[test]

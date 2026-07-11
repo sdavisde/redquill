@@ -22,6 +22,7 @@ mod compose;
 mod compose_modal;
 mod diff_view;
 mod diff_view_state;
+mod git_panel;
 mod help;
 mod keymap;
 mod list_panel;
@@ -32,7 +33,6 @@ mod peek_overlay;
 mod rows;
 mod sbs_view;
 mod search;
-mod sidebar;
 mod stage_ops;
 mod staging;
 mod staging_panel;
@@ -115,7 +115,7 @@ fn panel_open(mode: Mode) -> bool {
     matches!(mode, Mode::List | Mode::Staging)
 }
 
-/// Draws one frame: sidebar, diff pane, bottom panel (annotation list or
+/// Draws one frame: git panel, diff pane, bottom panel (annotation list or
 /// staging panel, if open), status footer, help overlay (if open), and the
 /// Compose modal (if open).
 fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
@@ -124,7 +124,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
     let (sidebar_area, right_area) = split_layout(main_area);
     let (diff_area, panel_area) = split_right(right_area, panel_open(app.mode));
 
-    sidebar::render(frame, sidebar_area, app);
+    git_panel::render(frame, sidebar_area, app);
     match app.view.layout {
         ViewMode::Unified => diff_view::render(frame, diff_area, app),
         ViewMode::SideBySide => sbs_view::render(frame, diff_area, app),

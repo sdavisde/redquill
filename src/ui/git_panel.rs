@@ -1,0 +1,375 @@
+//! The git panel: a branch header (name plus `↑N↓M` ahead/behind against the
+//! upstream), then CHANGES / UNTRACKED / STASHES sections, then a footer of
+//! file/staged/note counts — all in the same fixed-width slot the passive
+//! file sidebar used to occupy.
+//!
+//! CHANGES preserves the old sidebar's rows exactly: a green `●` staged
+//! marker, a colored change-kind letter, and a dimmed-directory / normal
+//! basename path split. UNTRACKED lists working-tree files git isn't
+//! tracking yet; STASHES lists `git stash list` entries view-only. The panel
+//! is passive in this task — the currently selected diff file is highlighted,
+//! but there is no independent cursor or focus yet.
+
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
+
+use crate::git::BranchStatus;
+
+use super::app::App;
+use super::theme::Theme;
+
+/// Splits `path` into a dimmed directory prefix and a normal-weight
+/// basename, e.g. `"src/auth/"` + `"session.rs"`.
+fn split_path(path: &str) -> (&str, &str) {
+    match path.rfind('/') {
+        Some(idx) => (&path[..=idx], &path[idx + 1..]),
+        None => ("", path),
+    }
+}
+
+/// The staged-indicator column: a `●` for files with staged changes, blank
+/// otherwise, so paths stay column-aligned either way.
+fn staged_span(staged: bool, theme: &Theme) -> Span<'static> {
+    if staged {
+        Span::styled("\u{25cf} ", Style::default().fg(theme.staged_indicator))
+    } else {
+        Span::raw("  ")
+    }
+}
+
+/// A CHANGES row: staged marker, change-kind letter, then the split path.
+fn file_line(letter: char, path: &str, staged: bool, theme: &Theme) -> Line<'static> {
+    let (dir, base) = split_path(path);
+    Line::from(vec![
+        staged_span(staged, theme),
+        Span::styled(
+            format!("{letter} "),
+            Style::default()
+                .fg(theme.letter_color(letter))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(dir.to_string(), Style::default().fg(theme.dir_prefix)),
+        Span::raw(base.to_string()),
+    ])
+}
+
+/// An UNTRACKED row: no marker or letter, just the split path, indented to
+/// sit under the CHANGES rows.
+fn untracked_line(path: &str, theme: &Theme) -> Line<'static> {
+    let (dir, base) = split_path(path);
+    Line::from(vec![
+        Span::raw("  "),
+        Span::styled(dir.to_string(), Style::default().fg(theme.dir_prefix)),
+        Span::raw(base.to_string()),
+    ])
+}
+
+/// A section header row (`CHANGES`, `UNTRACKED`, `STASHES (2)`).
+fn section_header(text: String, theme: &Theme) -> Line<'static> {
+    Line::from(Span::styled(
+        text,
+        Style::default()
+            .fg(theme.help_section_header)
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+/// The branch header shown as the panel's block title: `git: <name>` plus, if
+/// an upstream exists and either count is nonzero, an `↑N↓M` indicator.
+/// Detached HEAD carries a short oid as its name; no upstream shows no arrows.
+fn branch_title(branch: Option<&BranchStatus>) -> String {
+    let Some(branch) = branch else {
+        return "git".to_string();
+    };
+    let mut title = format!("git: {}", branch.name);
+    if branch.upstream.is_some()
+        && let Some((ahead, behind)) = branch.ahead_behind
+    {
+        let mut arrows = String::new();
+        if ahead > 0 {
+            arrows.push_str(&format!("\u{2191}{ahead}"));
+        }
+        if behind > 0 {
+            arrows.push_str(&format!("\u{2193}{behind}"));
+        }
+        if !arrows.is_empty() {
+            title.push(' ');
+            title.push_str(&arrows);
+        }
+    }
+    title
+}
+
+/// Renders the git panel into `area`.
+pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(area);
+
+    let theme = &app.theme;
+    let mut items: Vec<ListItem> = Vec::new();
+    // Flat index (into `items`) of the currently selected diff file, so the
+    // passive panel still highlights it the way the old sidebar did.
+    let mut selected_row: Option<usize> = None;
+
+    // CHANGES: tracked files (those with a real patch), in display order.
+    let tracked: Vec<usize> = (0..app.view.files.len())
+        .filter(|&i| !app.untracked_paths.contains(&app.view.files[i].path))
+        .collect();
+    if !tracked.is_empty() {
+        items.push(ListItem::new(section_header("CHANGES".to_string(), theme)));
+        for &i in &tracked {
+            let f = &app.view.files[i];
+            let staged = app.staged.iter().any(|s| s.path == f.path);
+            let mut line = file_line(f.kind.letter(), &f.path, staged, theme);
+            if let Some(old) = &f.old_path {
+                let (_, old_base) = split_path(old);
+                line.spans.push(Span::styled(
+                    format!(" \u{2190} {old_base}"),
+                    Style::default().fg(theme.dir_prefix),
+                ));
+            }
+            if i == app.view.selected_file {
+                selected_row = Some(items.len());
+            }
+            items.push(ListItem::new(line));
+        }
+    }
+
+    // UNTRACKED: files git isn't tracking yet.
+    let untracked: Vec<usize> = (0..app.view.files.len())
+        .filter(|&i| app.untracked_paths.contains(&app.view.files[i].path))
+        .collect();
+    if !untracked.is_empty() {
+        items.push(ListItem::new(section_header(
+            "UNTRACKED".to_string(),
+            theme,
+        )));
+        for &i in &untracked {
+            let f = &app.view.files[i];
+            if i == app.view.selected_file {
+                selected_row = Some(items.len());
+            }
+            items.push(ListItem::new(untracked_line(&f.path, theme)));
+        }
+    }
+
+    // STASHES: view-only, `<index> <message>` rows under a counted header.
+    if !app.stashes.is_empty() {
+        items.push(ListItem::new(section_header(
+            format!("STASHES ({})", app.stashes.len()),
+            theme,
+        )));
+        for (i, stash) in app.stashes.iter().enumerate() {
+            items.push(ListItem::new(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(format!("{i} "), Style::default().fg(theme.dir_prefix)),
+                Span::raw(stash.message.clone()),
+            ])));
+        }
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(branch_title(app.branch.as_ref()));
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+
+    let mut state = ListState::default();
+    state.select(selected_row);
+    frame.render_stateful_widget(list, chunks[0], &mut state);
+
+    let notes = app.annotations.len();
+    let mut footer_text = format!(" [{} files]", app.view.files.len());
+    if !app.staged.is_empty() {
+        footer_text.push_str(&format!(" [{} staged]", app.staged.len()));
+    }
+    if notes > 0 {
+        footer_text.push_str(&format!(" [{notes} notes]"));
+    }
+    let footer = Line::from(Span::styled(
+        footer_text,
+        Style::default().fg(theme.footer_text),
+    ));
+    frame.render_widget(footer, chunks[1]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::stage_ops::StagedFile;
+    use super::*;
+    use crate::diff::FileDiff;
+    use crate::git::{RawFilePatch, StashEntry};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn sample_file(path: &str) -> FileDiff {
+        let raw = format!(
+            "diff --git a/{path} b/{path}\n\
+             index 111..222 100644\n\
+             --- a/{path}\n\
+             +++ b/{path}\n\
+             @@ -1,1 +1,1 @@\n\
+             -old\n\
+             +new\n"
+        );
+        FileDiff::from_patch(&RawFilePatch {
+            path: path.to_string(),
+            old_path: None,
+            raw,
+            is_binary: false,
+        })
+        .unwrap()
+    }
+
+    /// Renders `app`'s panel to a 32x24 `TestBackend` and returns the flat
+    /// buffer text.
+    fn render_panel(app: &App) -> String {
+        let backend = TestBackend::new(32, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let area = Rect::new(0, 0, 32, 24);
+        terminal.draw(|frame| render(frame, area, app)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect()
+    }
+
+    fn branch(name: &str, upstream: Option<&str>, ab: Option<(u32, u32)>) -> BranchStatus {
+        BranchStatus {
+            name: name.to_string(),
+            detached: false,
+            upstream: upstream.map(|s| s.to_string()),
+            ahead_behind: ab,
+        }
+    }
+
+    #[test]
+    fn header_shows_branch_name_and_ahead_behind_with_upstream() {
+        let mut app = App::new(vec![sample_file("session.rs")]);
+        app.branch = Some(branch("main", Some("origin/main"), Some((2, 1))));
+        let content = render_panel(&app);
+        assert!(content.contains("git: main"));
+        assert!(content.contains("\u{2191}2\u{2193}1"));
+    }
+
+    #[test]
+    fn header_detached_head_shows_short_oid_without_arrows() {
+        let mut app = App::new(vec![sample_file("session.rs")]);
+        app.branch = Some(BranchStatus {
+            name: "85d7cc5".to_string(),
+            detached: true,
+            upstream: None,
+            ahead_behind: None,
+        });
+        let content = render_panel(&app);
+        assert!(content.contains("git: 85d7cc5"));
+        assert!(!content.contains("\u{2191}"));
+        assert!(!content.contains("\u{2193}"));
+    }
+
+    #[test]
+    fn header_no_upstream_shows_no_arrows() {
+        let mut app = App::new(vec![sample_file("session.rs")]);
+        app.branch = Some(branch("feature", None, None));
+        let content = render_panel(&app);
+        assert!(content.contains("git: feature"));
+        assert!(!content.contains("\u{2191}"));
+        assert!(!content.contains("\u{2193}"));
+    }
+
+    #[test]
+    fn zero_ahead_behind_shows_no_arrows() {
+        let mut app = App::new(vec![sample_file("session.rs")]);
+        app.branch = Some(branch("main", Some("origin/main"), Some((0, 0))));
+        let content = render_panel(&app);
+        assert!(content.contains("git: main"));
+        assert!(!content.contains("\u{2191}"));
+        assert!(!content.contains("\u{2193}"));
+    }
+
+    #[test]
+    fn changes_section_preserves_staged_marker_and_letter() {
+        let mut app = App::new(vec![sample_file("session.rs")]);
+        app.branch = Some(branch("main", Some("origin/main"), Some((2, 1))));
+        app.staged = vec![StagedFile {
+            path: "session.rs".to_string(),
+            letter: 'M',
+        }];
+        let content = render_panel(&app);
+        assert!(content.contains("CHANGES"));
+        assert!(content.contains("\u{25cf}")); // staged dot preserved
+        assert!(content.contains("M session.rs")); // change-kind letter
+    }
+
+    #[test]
+    fn untracked_section_lists_untracked_files() {
+        let mut app = App::new(vec![sample_file("session.rs"), sample_file("notes.md")]);
+        app.untracked_paths = vec!["notes.md".to_string()];
+        let content = render_panel(&app);
+        assert!(content.contains("CHANGES"));
+        assert!(content.contains("session.rs"));
+        assert!(content.contains("UNTRACKED"));
+        assert!(content.contains("notes.md"));
+    }
+
+    #[test]
+    fn stashes_section_shows_counted_header_and_indexed_rows() {
+        let mut app = App::new(vec![sample_file("session.rs")]);
+        app.stashes = vec![
+            StashEntry {
+                stash_ref: "stash@{0}".to_string(),
+                branch: Some("main".to_string()),
+                message: "wip: parser".to_string(),
+            },
+            StashEntry {
+                stash_ref: "stash@{1}".to_string(),
+                branch: Some("main".to_string()),
+                message: "spike: tabs".to_string(),
+            },
+        ];
+        let content = render_panel(&app);
+        assert!(content.contains("STASHES (2)"));
+        assert!(content.contains("0 wip: parser"));
+        assert!(content.contains("1 spike: tabs"));
+    }
+
+    #[test]
+    fn footer_shows_file_and_staged_counts() {
+        let mut app = App::new(vec![sample_file("session.rs")]);
+        app.staged = vec![StagedFile {
+            path: "session.rs".to_string(),
+            letter: 'M',
+        }];
+        let content = render_panel(&app);
+        assert!(content.contains("[1 files]"));
+        assert!(content.contains("[1 staged]"));
+    }
+
+    // -- Empty states ------------------------------------------------------
+
+    #[test]
+    fn empty_stashes_hide_the_stashes_section() {
+        let app = App::new(vec![sample_file("session.rs")]);
+        let content = render_panel(&app);
+        assert!(!content.contains("STASHES"));
+    }
+
+    #[test]
+    fn no_untracked_files_hide_the_untracked_section() {
+        let app = App::new(vec![sample_file("session.rs")]);
+        let content = render_panel(&app);
+        assert!(!content.contains("UNTRACKED"));
+        // The tracked file still appears under CHANGES.
+        assert!(content.contains("CHANGES"));
+        assert!(content.contains("session.rs"));
+    }
+}
