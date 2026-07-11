@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/sdavisde/redquill/compare/v0.2.0...v0.3.0) (2026-07-11)
+
+
+### Features
+
+* add async remote ops (fetch/pull/push) and command log pane ([0bc7c71](https://github.com/sdavisde/redquill/commit/0bc7c71ea1b2ccd811620e5b9a9c264156af8dfc))
+* add branch, ahead/behind, and stash read models to git module ([9db8e72](https://github.com/sdavisde/redquill/commit/9db8e72860802897d68365c9905cfdb318201c8a))
+* add git panel focus and keyboard navigation ([1f22a97](https://github.com/sdavisde/redquill/commit/1f22a97fb225c769c524f0bee8ba7ec1f9ac5ef3))
+* add side-by-side diff view ([ce150a7](https://github.com/sdavisde/redquill/commit/ce150a71cde5366b63aa73d04c3822af69eff473))
+* add transport-agnostic background-task poller ([c91dc50](https://github.com/sdavisde/redquill/commit/c91dc50658a3b363c7b82cd13ede91dd87780f03))
+* render git panel with branch header and sectioned display ([7ed21e4](https://github.com/sdavisde/redquill/commit/7ed21e4a85fe2e5ed481ec912ddf9aeb3ce7c3a5))
+
 ## [0.2.0](https://github.com/sdavisde/redquill/compare/v0.1.0...v0.2.0) (2026-07-10)
 
 
