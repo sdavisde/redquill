@@ -53,6 +53,7 @@ Vim-grammar keybindings, fully remappable. Draft default map:
 | `s` | Toggle staging panel |
 | `` ` `` | Focus / unfocus the git panel |
 | `@` | Toggle the git command log pane |
+| `R` | Refresh the diff from the working tree (edits made outside redquill are also picked up automatically every couple of seconds) |
 | `gd` / `gr` / `K` | Go to definition / references / hover docs |
 | `a` | Annotation list |
 | `?` | Help |

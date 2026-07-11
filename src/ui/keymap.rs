@@ -98,6 +98,9 @@ pub enum Action {
     RemotePush,
     /// Toggle the command-log pane (bound in both scopes).
     ToggleCommandLog,
+    /// Re-read the working tree and rebuild the diff, picking up edits made
+    /// outside redquill (e.g. by an agent) since the last refresh.
+    Refresh,
     /// Quit, emitting annotations to stdout.
     Quit,
     /// Quit, discarding annotations.
@@ -324,6 +327,11 @@ impl Keymap {
                     KeySeq::one(Char('@'), none),
                     ToggleCommandLog,
                     "Toggle command log pane",
+                ),
+                d(
+                    KeySeq::one(Char('R'), none),
+                    Refresh,
+                    "Refresh diff from working tree",
                 ),
                 d(KeySeq::one(Char('/'), none), Search, "Search"),
                 d(
@@ -623,6 +631,21 @@ mod tests {
             km.lookup(key(KeyCode::Char('s'), KeyModifiers::NONE)),
             Some(Action::ToggleStagingPanel)
         );
+    }
+
+    #[test]
+    fn shift_r_resolves_to_refresh_regardless_of_shift_bit() {
+        let km = Keymap::default_map();
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('R'), KeyModifiers::NONE)),
+            Some(Action::Refresh)
+        );
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('R'), KeyModifiers::SHIFT)),
+            Some(Action::Refresh)
+        );
+        // Lowercase `r` is unbound (only `gr` uses `r`, as a sequence tail).
+        assert_eq!(km.lookup(key(KeyCode::Char('r'), KeyModifiers::NONE)), None);
     }
 
     #[test]

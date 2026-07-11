@@ -23,8 +23,8 @@ use super::peek::{PeekKind, PeekState};
 use super::rows::{LineRow, Row, StagedMarker, SyntaxSpans, build_multibuffer, hunk_span};
 use super::search::SearchState;
 use super::stage_ops::{
-    ReviewSnapshot, StageOps, StagedFile, StagedState, build_review, staged_from_status,
-    staged_states_from_status,
+    ReviewError, ReviewSnapshot, StageOps, StagedFile, StagedState, build_review,
+    staged_from_status, staged_states_from_status,
 };
 use super::syntax::{self, HighlightCache};
 use super::theme::Theme;
@@ -386,6 +386,7 @@ impl App {
             Action::RemotePull => self.request_remote_op(RemoteOp::Pull),
             Action::RemotePush => self.request_remote_op(RemoteOp::Push),
             Action::ToggleCommandLog => self.toggle_command_log(),
+            Action::Refresh => self.manual_refresh(),
             Action::Quit | Action::QuitDiscard => {}
         }
     }
@@ -846,20 +847,87 @@ impl App {
     /// git/parse error the state is left unchanged and a footer message is
     /// set. A no-op without a git backend.
     pub(super) fn refresh(&mut self) {
+        if let Err(e) = self.rebuild_from_git() {
+            self.set_status_message(format!("refresh failed: {e}"));
+        }
+    }
+
+    /// Re-reads the diff/status for the current target and applies the fresh
+    /// snapshot (see [`App::apply_snapshot`]). Surfaces a git/parse failure to
+    /// the caller rather than swallowing it; a no-op (and `Ok`) without a git
+    /// backend.
+    fn rebuild_from_git(&mut self) -> Result<(), ReviewError> {
         let snapshot = {
             let Some(ops) = self.stage_ops.as_deref() else {
-                return;
+                return Ok(());
             };
-            build_review(ops, &self.target)
+            build_review(ops, &self.target)?
         };
-        let snapshot = match snapshot {
-            Ok(snapshot) => snapshot,
-            Err(e) => {
-                self.set_status_message(format!("refresh failed: {e}"));
-                return;
+        self.apply_snapshot(snapshot);
+        Ok(())
+    }
+
+    /// The `R` action: an unconditional refresh with a footer acknowledgement,
+    /// so a manual reload always confirms it ran even when nothing changed.
+    fn manual_refresh(&mut self) {
+        match self.rebuild_from_git() {
+            Ok(()) => self.set_status_message("refreshed"),
+            Err(e) => self.set_status_message(format!("refresh failed: {e}")),
+        }
+    }
+
+    /// Re-reads the working tree only when it has actually changed since the
+    /// last refresh, applying the fresh snapshot and returning whether it did.
+    /// This is the lazygit-style polling path (see [`super::event_loop`]): the
+    /// diff/status git reads run every tick, but the expensive row rebuild and
+    /// cursor restoration are skipped whenever the review is byte-identical to
+    /// what's already displayed, so idle polling never disturbs scrolling.
+    /// Silent on a transient git error — it keeps the current view and retries
+    /// next tick, degrading quietly like the LSP layer.
+    pub(super) fn auto_refresh(&mut self) -> bool {
+        let snapshot = {
+            let Some(ops) = self.stage_ops.as_deref() else {
+                return false;
+            };
+            match build_review(ops, &self.target) {
+                Ok(snapshot) => snapshot,
+                Err(_) => return false,
             }
         };
+        if snapshot.files == self.view.files
+            && snapshot.staged == self.staged
+            && snapshot.staged_states == self.staged_states
+        {
+            return false;
+        }
+        self.apply_snapshot(snapshot);
+        true
+    }
 
+    /// Runs an [`App::auto_refresh`] unless a background reload would be
+    /// unwelcome: a remote op is mid-flight (its completion refreshes anyway,
+    /// and the intermediate tree is transient — mirrors lazygit pausing
+    /// background refreshes during its own git ops); the target is a fixed
+    /// range (nothing to pick up); or the user has in-progress input or a
+    /// Visual selection anchored to positions a rebuild would move.
+    pub(super) fn maybe_auto_refresh(&mut self) {
+        if self.remote_op.is_some() || matches!(self.target, DiffTarget::Range(_)) {
+            return;
+        }
+        if matches!(
+            self.mode,
+            Mode::Compose | Mode::Search | Mode::Visual { .. }
+        ) {
+            return;
+        }
+        self.auto_refresh();
+    }
+
+    /// Applies a freshly built [`ReviewSnapshot`]: swaps in the new
+    /// files/patches/staged state, maintains the collapse map, invalidates
+    /// only the highlight-cache entries whose file content changed, rebuilds
+    /// rows, and restores the cursor/scroll/staging-panel position.
+    fn apply_snapshot(&mut self, snapshot: ReviewSnapshot) {
         // Remember the cursor's file by path and its offset within that
         // file's section, so the same spot is restored even if files
         // reorder or the section shrinks.
@@ -3061,6 +3129,115 @@ index 1..2 100644
         app.rebuild_rows();
         app.refresh();
         assert!(!app.view.collapse_contains("b.rs")); // entry cleaned up
+    }
+
+    // -- Auto-refresh (working-tree polling) --------------------------------
+
+    #[test]
+    fn auto_refresh_applies_an_external_edit_and_reports_the_change() {
+        // The working tree gains a second hunk between polls (an agent edited
+        // the file): auto_refresh picks it up and reports that it applied.
+        let (mut app, _calls, diff_h, _status_h) = app_with_mutable_fake(
+            vec![raw_patch("a.rs", 1)],
+            vec![],
+            vec![raw_patch("a.rs", 1)], // override starts identical to the view
+            vec![],
+        );
+        assert_eq!(app.view.files[0].hunks.len(), 1);
+
+        // Simulate the external edit landing between ticks.
+        *diff_h.borrow_mut() = vec![raw_patch("a.rs", 2)];
+        assert!(app.auto_refresh(), "changed tree should apply");
+        assert_eq!(app.view.files[0].hunks.len(), 2);
+    }
+
+    #[test]
+    fn auto_refresh_is_a_noop_when_the_tree_is_unchanged() {
+        // Nothing changed since the last refresh: auto_refresh must not rebuild
+        // (it returns false) so idle polling never disturbs the view.
+        let (mut app, _calls, _diff_h, _status_h) = app_with_mutable_fake(
+            vec![raw_patch("a.rs", 1)],
+            vec![],
+            vec![raw_patch("a.rs", 1)], // identical to what's displayed
+            vec![],
+        );
+        assert!(!app.auto_refresh(), "unchanged tree should be a no-op");
+        assert_eq!(app.status_message, None);
+    }
+
+    #[test]
+    fn maybe_auto_refresh_skips_while_a_remote_op_is_in_flight() {
+        // A remote op's own completion refreshes; the intermediate tree it
+        // produces must not be picked up mid-flight.
+        let (mut app, _calls, diff_h, _status_h) = app_with_mutable_fake(
+            vec![raw_patch("a.rs", 1)],
+            vec![],
+            vec![raw_patch("a.rs", 1)],
+            vec![],
+        );
+        *diff_h.borrow_mut() = vec![raw_patch("a.rs", 2)];
+        app.remote_op = Some(InFlightRemote {
+            id: TaskId(0),
+            op: RemoteOp::Fetch,
+        });
+        app.maybe_auto_refresh();
+        assert_eq!(app.view.files[0].hunks.len(), 1, "skipped during remote op");
+        // With the op cleared, the same pending edit is picked up.
+        app.remote_op = None;
+        app.maybe_auto_refresh();
+        assert_eq!(app.view.files[0].hunks.len(), 2);
+    }
+
+    #[test]
+    fn maybe_auto_refresh_skips_on_a_read_only_range_target() {
+        // A fixed range never changes under the reviewer, so polling is a
+        // no-op — even though the (contrived) fake would return a new diff.
+        let (mut app, _calls) = app_with_fake(
+            vec![raw_patch("a.rs", 1)],
+            DiffTarget::Range("HEAD~1..HEAD".to_string()),
+            vec![raw_patch("a.rs", 2)],
+            vec![],
+        );
+        app.maybe_auto_refresh();
+        assert_eq!(app.view.files[0].hunks.len(), 1, "range target not polled");
+        // The guard is what skips it: a direct auto_refresh still applies.
+        assert!(app.auto_refresh());
+        assert_eq!(app.view.files[0].hunks.len(), 2);
+    }
+
+    #[test]
+    fn maybe_auto_refresh_skips_while_composing() {
+        // Mid-input the diff must not shift under the user; once back in
+        // Normal the pending edit is picked up.
+        let (mut app, _calls, diff_h, _status_h) = app_with_mutable_fake(
+            vec![raw_patch("a.rs", 1)],
+            vec![],
+            vec![raw_patch("a.rs", 1)],
+            vec![],
+        );
+        *diff_h.borrow_mut() = vec![raw_patch("a.rs", 2)];
+        app.mode = Mode::Compose;
+        app.maybe_auto_refresh();
+        assert_eq!(app.view.files[0].hunks.len(), 1, "skipped while composing");
+        app.mode = Mode::Normal;
+        app.maybe_auto_refresh();
+        assert_eq!(app.view.files[0].hunks.len(), 2);
+    }
+
+    #[test]
+    fn manual_refresh_applies_the_edit_and_acknowledges_in_the_footer() {
+        // `R` always confirms it ran (even mid-input, where auto-refresh is
+        // suppressed) and picks up the external edit.
+        let (mut app, _calls, diff_h, _status_h) = app_with_mutable_fake(
+            vec![raw_patch("a.rs", 1)],
+            vec![],
+            vec![raw_patch("a.rs", 1)],
+            vec![],
+        );
+        *diff_h.borrow_mut() = vec![raw_patch("a.rs", 2)];
+        app.apply(Action::Refresh);
+        assert_eq!(app.view.files[0].hunks.len(), 2);
+        assert_eq!(app.status_message.as_deref(), Some("refreshed"));
     }
 
     #[test]

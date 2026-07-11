@@ -73,7 +73,7 @@ fn group_of(action: Action) -> &'static str {
         EnterVisual | Compose => "Annotate",
         ToggleStage | StageFile | ToggleStagingPanel => "Stage",
         Search | SearchNext | SearchPrev => "Search",
-        ToggleList | ToggleHelp | FocusGitPanel | ToggleCommandLog => "Panels",
+        ToggleList | ToggleHelp | FocusGitPanel | ToggleCommandLog | Refresh => "Panels",
         GotoDefinition | GotoReferences | Hover => "Code intelligence",
         PanelCursorDown | PanelCursorUp | PanelSelect | RemoteFetch | RemotePull | RemotePush => {
             "Git panel"

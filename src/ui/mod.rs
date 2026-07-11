@@ -48,7 +48,7 @@ pub use stage_ops::{ReviewError, ReviewSnapshot, StageOps, StagedFile, build_rev
 pub use theme::Theme;
 
 use std::io::{self, Stderr};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use crossterm::execute;
@@ -66,6 +66,13 @@ use ratatui::text::{Line, Span};
 /// server-driven state) flowing even while the user isn't typing, without
 /// ever blocking the render loop on a slow or missing language server.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// How often the event loop polls the working tree for external changes (see
+/// [`App::maybe_auto_refresh`]) so edits made outside redquill — e.g. by an
+/// agent editing files while a review is open — surface without a keypress.
+/// Modelled on lazygit's polling refresh; the reload is gated on the diff
+/// actually changing, so idle ticks are cheap.
+const AUTO_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
 /// How a TUI session ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -300,6 +307,9 @@ fn event_loop(
     // second key to complete `gd`/`gr` (see `Keymap::resolve`).
     let mut pending_prefix: Option<KeyEvent> = None;
 
+    // When the working tree was last polled for external changes.
+    let mut last_auto_refresh = Instant::now();
+
     loop {
         let size = terminal.size()?;
         let full_area = Rect::new(0, 0, size.width, size.height);
@@ -332,6 +342,14 @@ fn event_loop(
 
         code_intel::poll(app);
         app.poll_remote();
+
+        // Poll the working tree on a fixed cadence (independent of keypresses)
+        // so external edits appear without the user asking. The reload itself
+        // is gated on the diff actually changing (see `maybe_auto_refresh`).
+        if last_auto_refresh.elapsed() >= AUTO_REFRESH_INTERVAL {
+            app.maybe_auto_refresh();
+            last_auto_refresh = Instant::now();
+        }
     }
 }
 
