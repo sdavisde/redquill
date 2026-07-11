@@ -157,13 +157,14 @@ fn dispatch_key(
         Mode::Compose => modes::handle_compose_key(app, key),
         Mode::List => modes::handle_list_key(app, key),
         Mode::Staging => modes::handle_staging_key(app, key),
-        Mode::Panel => modes::handle_panel_key(app, key, keymap),
+        Mode::Panel => return modes::handle_panel_key(app, key, keymap),
         Mode::Search => modes::handle_search_key(app, key),
         Mode::Peek => modes::handle_peek_key(app, key),
         Mode::Normal | Mode::Visual { .. } => {
             // While the help overlay is open it captures keys: navigation
-            // keys scroll it (it can outgrow the screen), Esc/Enter/`?`/`q`
-            // close it. This shadows the diff keymap so `j`/`k` scroll the
+            // keys scroll it (it can outgrow the screen), Esc/Enter/`?` close
+            // it (`q` is inert — an open overlay never quits the app). This
+            // shadows the diff keymap so `j`/`k` scroll the
             // overlay rather than the diff underneath. Any pending `g` prefix
             // is irrelevant here, so drop it.
             if app.help_open {
@@ -204,7 +205,7 @@ fn dispatch_key(
 
 /// Handles one key while the help overlay is open. Scrolls the overlay
 /// (`j`/`k`/arrows by a line, PageUp/PageDown by a viewport, `g`/`G`/Home/End
-/// to the ends) or closes it (Esc/Enter/`?`/`q`). The scroll offset is only
+/// to the ends) or closes it (Esc/Enter/`?`). The scroll offset is only
 /// advanced here; [`help::render`] clamps it to the content each frame, so
 /// setting `u16::MAX` for "end" is safe. Paging uses the viewport height
 /// `render` recorded last frame.
@@ -212,7 +213,7 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
     let page = app.help_viewport.get().max(1);
     let cur = app.help_scroll.get();
     match key.code {
-        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') | KeyCode::Char('q') => {
+        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') => {
             app.help_open = false;
             app.help_scroll.set(0);
         }
@@ -385,10 +386,14 @@ fn event_loop(
 
         code_intel::poll(app);
         app.poll_remote();
+        // Drain any completed background working-tree read every tick (cheap,
+        // non-blocking) so its result lands promptly once the worker finishes.
+        app.poll_refresh();
 
-        // Poll the working tree on a fixed cadence (independent of keypresses)
-        // so external edits appear without the user asking. The reload itself
-        // is gated on the diff actually changing (see `maybe_auto_refresh`).
+        // Spawn a working-tree read on a fixed cadence (independent of
+        // keypresses) so external edits appear without the user asking. The
+        // read runs off the render thread and is gated on the diff actually
+        // changing (see `maybe_auto_refresh` / `poll_refresh`).
         if last_auto_refresh.elapsed() >= AUTO_REFRESH_INTERVAL {
             app.maybe_auto_refresh();
             last_auto_refresh = Instant::now();
@@ -1164,6 +1169,67 @@ index 111..222 100644
         press(&mut app, &mut pending, KeyCode::Char('g'));
         press(&mut app, &mut pending, KeyCode::Char('d'));
         assert_eq!(app.mode, Mode::Normal);
+    }
+
+    /// The focused git panel is a first-class view, so the quit family ends
+    /// the session from it just as from the diff view: `q` emits, `Q`/Ctrl-C
+    /// discard. Driven through the real `dispatch_key` path.
+    #[test]
+    fn quit_family_quits_from_focused_panel() {
+        let keymap = Keymap::default_map();
+        let mut pending: Option<KeyEvent> = None;
+        let cases = [
+            (
+                KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+                QuitOutcome::Emit,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::NONE),
+                QuitOutcome::Discard,
+            ),
+            (
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                QuitOutcome::Discard,
+            ),
+        ];
+        for (ev, want) in cases {
+            let mut app = panel_smoke_app();
+            app.apply(Action::FocusGitPanel);
+            assert_eq!(app.mode, Mode::Panel);
+            match dispatch_key(&mut app, &keymap, &mut pending, ev) {
+                Flow::Quit(outcome) => assert_eq!(outcome, want, "wrong quit outcome for {ev:?}"),
+                Flow::Continue => panic!("{ev:?} should quit from the focused panel"),
+            }
+        }
+    }
+
+    /// An open overlay never quits the app: `q` is inert while the help
+    /// overlay is up, and `?` still toggles it closed. Driven through
+    /// `dispatch_key`.
+    #[test]
+    fn q_is_inert_while_help_overlay_open() {
+        let keymap = Keymap::default_map();
+        let mut pending: Option<KeyEvent> = None;
+        let mut app = panel_smoke_app();
+        app.help_open = true;
+        let flow = dispatch_key(
+            &mut app,
+            &keymap,
+            &mut pending,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        );
+        assert!(
+            matches!(flow, Flow::Continue),
+            "q must not quit while help is open"
+        );
+        assert!(app.help_open, "q must not close the help overlay");
+        dispatch_key(
+            &mut app,
+            &keymap,
+            &mut pending,
+            KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+        );
+        assert!(!app.help_open, "? still closes the help overlay");
     }
 
     /// `@` toggles the command-log pane from *both* the diff view (Normal)

@@ -120,25 +120,41 @@ pub(super) fn handle_search_key(app: &mut App, key: KeyEvent) {
 /// stays keymap-driven — panel navigation is a first-class, scoped part of
 /// the keymap, not an ad-hoc match — so anything not bound in panel scope is
 /// ignored (the review-loop keys never fire while the panel is focused).
-pub(super) fn handle_panel_key(app: &mut App, key: KeyEvent, keymap: &super::Keymap) {
-    if let Some(action) = keymap.lookup_in(super::keymap::Scope::Panel, key) {
-        app.apply(action);
+///
+/// The focused git panel is a first-class view rather than an overlay, so the
+/// quit family (`q`/`Q`/Ctrl-C) quits from it just as from the diff view —
+/// hence the [`super::Flow`] return, letting the event loop end the session.
+pub(super) fn handle_panel_key(
+    app: &mut App,
+    key: KeyEvent,
+    keymap: &super::Keymap,
+) -> super::Flow {
+    use super::keymap::Scope;
+    use super::{Action, Flow, QuitOutcome};
+    match keymap.lookup_in(Scope::Panel, key) {
+        Some(Action::Quit) => Flow::Quit(QuitOutcome::Emit),
+        Some(Action::QuitDiscard) => Flow::Quit(QuitOutcome::Discard),
+        Some(action) => {
+            app.apply(action);
+            Flow::Continue
+        }
+        None => Flow::Continue,
     }
 }
 
 /// Handles one key event while [`super::Mode::Peek`] is active: `j`/`k` move
 /// through results (or scroll hover text), `Enter` jumps the diff cursor to
 /// a Definition/References result that's one of the diff's files (closing
-/// the overlay) or sets `not in diff` otherwise (a no-op for Hover),
-/// `Esc`/`q` close back to Normal. Bypasses the [`super::Keymap`] table
-/// entirely.
+/// the overlay) or sets `not in diff` otherwise (a no-op for Hover), `Esc`
+/// closes back to Normal (`q` is inert — an open overlay never quits the
+/// app). Bypasses the [`super::Keymap`] table entirely.
 pub(super) fn handle_peek_key(app: &mut App, key: KeyEvent) {
     use super::code_intel;
     match key.code {
         KeyCode::Char('j') => code_intel::peek_move_down(app),
         KeyCode::Char('k') => code_intel::peek_move_up(app),
         KeyCode::Enter => code_intel::peek_enter(app),
-        KeyCode::Char('q') | KeyCode::Esc => code_intel::close_peek(app),
+        KeyCode::Esc => code_intel::close_peek(app),
         _ => {}
     }
 }
@@ -204,5 +220,20 @@ index 111..222 100644
         app.search_input.push('x');
         handle_search_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::Normal);
+    }
+
+    /// An open overlay never quits the app, so `q` is inert while the Peek
+    /// overlay is up; Esc still closes it back to Normal.
+    #[test]
+    fn peek_q_is_inert_and_esc_closes() {
+        let mut app = App::new(vec![sample_file()]);
+        app.mode = Mode::Peek;
+        handle_peek_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        );
+        assert_eq!(app.mode, Mode::Peek, "q must not close the Peek overlay");
+        handle_peek_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal, "Esc still closes the Peek overlay");
     }
 }

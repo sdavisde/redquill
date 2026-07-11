@@ -399,6 +399,23 @@ impl Keymap {
                     ToggleCommandLog,
                     "Toggle command log pane",
                 ),
+                // The focused git panel is a first-class view, not an overlay,
+                // so the quit family works here exactly as in the diff view.
+                p(
+                    KeySeq::one(Char('q'), none),
+                    Quit,
+                    "Quit and emit annotations",
+                ),
+                p(
+                    KeySeq::one(Char('Q'), none),
+                    QuitDiscard,
+                    "Quit and discard annotations",
+                ),
+                p(
+                    KeySeq::one(Char('c'), ctrl),
+                    QuitDiscard,
+                    "Quit and discard annotations",
+                ),
             ],
         }
     }
@@ -929,6 +946,26 @@ mod tests {
         assert_eq!(km.lookup_in(Scope::Diff, f), None);
         assert_eq!(km.lookup_in(Scope::Diff, p), None);
         assert_eq!(km.lookup_in(Scope::Diff, big_p), None);
+    }
+
+    /// The focused git panel is a first-class view, so the quit family
+    /// (`q`/`Q`/Ctrl-C) resolves in panel scope exactly as in diff scope —
+    /// `q` must work from the panel, not just the diff view.
+    #[test]
+    fn quit_family_resolves_in_panel_scope() {
+        let km = Keymap::default_map();
+        assert_eq!(
+            km.lookup_in(Scope::Panel, key(KeyCode::Char('q'), KeyModifiers::NONE)),
+            Some(Action::Quit)
+        );
+        assert_eq!(
+            km.lookup_in(Scope::Panel, key(KeyCode::Char('Q'), KeyModifiers::NONE)),
+            Some(Action::QuitDiscard)
+        );
+        assert_eq!(
+            km.lookup_in(Scope::Panel, key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Some(Action::QuitDiscard)
+        );
     }
 
     /// `@` toggles the command log from *both* scopes (it is a view toggle,

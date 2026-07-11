@@ -57,7 +57,7 @@ const SEARCH_HINTS: &[(&str, &str)] = &[
 const PEEK_HINTS: &[(&str, &str)] = &[
     ("j / k", "Move selection (or scroll hover text)"),
     ("Enter", "Jump to location (definition/references)"),
-    ("Esc / q", "Close"),
+    ("Esc", "Close"),
 ];
 
 /// The help overlay's group sections, in render order. Every [`Action`]'s
