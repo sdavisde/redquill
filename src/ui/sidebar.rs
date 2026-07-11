@@ -54,6 +54,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .split(area);
 
     let items: Vec<ListItem> = app
+        .view
         .files
         .iter()
         .map(|f| {
@@ -79,13 +80,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
     let mut state = ListState::default();
-    if !app.files.is_empty() {
-        state.select(Some(app.selected_file));
+    if !app.view.files.is_empty() {
+        state.select(Some(app.view.selected_file));
     }
     frame.render_stateful_widget(list, chunks[0], &mut state);
 
     let notes = app.annotations.len();
-    let mut footer_text = format!(" [{} files]", app.files.len());
+    let mut footer_text = format!(" [{} files]", app.view.files.len());
     if !app.staged.is_empty() {
         footer_text.push_str(&format!(" [{} staged]", app.staged.len()));
     }

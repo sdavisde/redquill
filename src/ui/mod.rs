@@ -19,6 +19,7 @@ mod app;
 mod compose;
 mod compose_modal;
 mod diff_view;
+mod diff_view_state;
 mod help;
 mod keymap;
 mod list_panel;
@@ -34,7 +35,8 @@ mod staging_panel;
 mod syntax;
 mod theme;
 
-pub use app::{App, Mode, ViewMode};
+pub use app::{App, Mode};
+pub use diff_view_state::{DiffViewState, ViewMode};
 pub use keymap::{Action, Binding, Keymap};
 pub use lsp_ops::LspClient;
 pub use rows::{Row, build_rows};
@@ -119,7 +121,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
     let (diff_area, panel_area) = split_right(right_area, panel_open(app.mode));
 
     sidebar::render(frame, sidebar_area, app);
-    match app.view {
+    match app.view.layout {
         ViewMode::Unified => diff_view::render(frame, diff_area, app),
         ViewMode::SideBySide => sbs_view::render(frame, diff_area, app),
     }
@@ -334,7 +336,8 @@ fn event_loop(
         let (main_area, _) = split_footer(full_area);
         let (_, right_area) = split_layout(main_area);
         let (diff_area, _) = split_right(right_area, panel_open(app.mode));
-        app.set_viewport_height(diff_view::viewport_height(diff_area));
+        app.view
+            .set_viewport_height(diff_view::viewport_height(diff_area));
 
         terminal.draw(|frame| draw(frame, app, keymap))?;
 
@@ -497,8 +500,8 @@ index 111..222 100644
         // App::new built `rows` before this annotation existed; rebuild so
         // the inline display row/gutter marker reflect it (this is what
         // `App::submit_compose` does internally on a real compose flow).
-        app.rows = build_rows(
-            &app.files[0],
+        app.view.rows = build_rows(
+            &app.view.files[0],
             &app.annotations,
             rows::SyntaxSpans::default(),
         );
@@ -575,7 +578,7 @@ index 111..222 100644
         let mut app = App::new(vec![sample_file()]);
         let theme = app.theme;
 
-        let Some(Row::Line(line)) = app.rows.get_mut(2) else {
+        let Some(Row::Line(line)) = app.view.rows.get_mut(2) else {
             panic!("expected a line row at index 2");
         };
         assert_eq!(line.content, "fn main() {");
@@ -659,7 +662,7 @@ index 111..222 100644
         app.confirm_search();
         assert_eq!(app.mode, Mode::Normal);
         assert_eq!(app.search.matches.len(), 2);
-        assert_ne!(app.cursor, app.search.matches[1]);
+        assert_ne!(app.view.cursor, app.search.matches[1]);
 
         terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -728,7 +731,7 @@ index 111..222 100644
             Some(Action::ToggleView)
         );
         app.apply(Action::ToggleView);
-        assert_eq!(app.view, ViewMode::SideBySide);
+        assert_eq!(app.view.layout, ViewMode::SideBySide);
 
         terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
         let sbs_buffer = terminal.backend().buffer().clone();
@@ -737,7 +740,7 @@ index 111..222 100644
         assert!(sbs_content.contains("new()"));
 
         app.apply(Action::ToggleView);
-        assert_eq!(app.view, ViewMode::Unified);
+        assert_eq!(app.view.layout, ViewMode::Unified);
         terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
         let round_tripped: String = terminal
             .backend()

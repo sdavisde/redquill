@@ -265,17 +265,18 @@ fn joined_line(
 
 /// Renders the side-by-side diff pane into `area`: a bordered block titled
 /// with the selected file's path, containing the visible slice of
-/// `app.sbs_rows` starting at `app.sbs_scroll`. Mirrors
+/// `app.view.sbs_rows` starting at `app.view.sbs_scroll`. Mirrors
 /// [`super::diff_view::render`]'s empty-diff handling.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let title = app
+        .view
         .files
-        .get(app.selected_file)
+        .get(app.view.selected_file)
         .map(|f| f.path.as_str())
         .unwrap_or("diff");
     let block = Block::default().borders(Borders::ALL).title(title);
 
-    if app.files.is_empty() {
+    if app.view.files.is_empty() {
         let paragraph = Paragraph::new("no changes")
             .block(block)
             .alignment(Alignment::Center);
@@ -287,18 +288,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let inner_width = area.width.saturating_sub(2) as usize;
     let (left_width, right_width) = column_widths(inner_width);
 
-    let start = app.sbs_scroll;
-    let end = (start + inner_height.max(1)).min(app.sbs_rows.len());
+    let start = app.view.sbs_scroll;
+    let end = (start + inner_height.max(1)).min(app.view.sbs_rows.len());
     let matches: HashSet<usize> = app.search.matches.iter().copied().collect();
-    let cursor_col = app.effective_column();
+    let cursor_col = app.view.effective_column();
 
-    let lines: Vec<Line<'static>> = app.sbs_rows[start..end]
+    let lines: Vec<Line<'static>> = app.view.sbs_rows[start..end]
         .iter()
         .map(|sbs_row| {
             sbs_row_line(
                 sbs_row,
-                &app.rows,
-                app.cursor,
+                &app.view.rows,
+                app.view.cursor,
                 &matches,
                 cursor_col,
                 left_width,
@@ -381,9 +382,9 @@ index 111..222 100644
         let (sbs_rows, _) = build_sbs_rows(&diff, &rows);
 
         let mut app = crate::ui::App::new(vec![diff]);
-        app.rows = rows;
-        app.sbs_rows = sbs_rows;
-        app.view = crate::ui::app::ViewMode::SideBySide;
+        app.view.rows = rows;
+        app.view.sbs_rows = sbs_rows;
+        app.view.layout = crate::ui::diff_view_state::ViewMode::SideBySide;
 
         let backend = TestBackend::new(100, 20);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -421,9 +422,9 @@ index 111..222 100644
         let (sbs_rows, _) = build_sbs_rows(&diff, &rows);
 
         let mut app = crate::ui::App::new(vec![diff]);
-        app.rows = rows;
-        app.sbs_rows = sbs_rows;
-        app.view = crate::ui::app::ViewMode::SideBySide;
+        app.view.rows = rows;
+        app.view.sbs_rows = sbs_rows;
+        app.view.layout = crate::ui::diff_view_state::ViewMode::SideBySide;
 
         // Under ~100 cols, per the task's narrow-terminal bar.
         let backend = TestBackend::new(30, 10);
@@ -448,9 +449,9 @@ index 111..222 100644
         let (sbs_rows, _) = build_sbs_rows(&diff, &rows);
 
         let mut app = crate::ui::App::new(vec![diff]);
-        app.rows = rows;
-        app.sbs_rows = sbs_rows;
-        app.view = crate::ui::app::ViewMode::SideBySide;
+        app.view.rows = rows;
+        app.view.sbs_rows = sbs_rows;
+        app.view.layout = crate::ui::diff_view_state::ViewMode::SideBySide;
 
         let backend = TestBackend::new(3, 5);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -470,9 +471,9 @@ index 111..222 100644
         let (sbs_rows, _) = build_sbs_rows(&diff, &rows);
 
         let mut app = crate::ui::App::new(vec![diff]);
-        app.rows = rows;
-        app.sbs_rows = sbs_rows;
-        app.view = crate::ui::app::ViewMode::SideBySide;
+        app.view.rows = rows;
+        app.view.sbs_rows = sbs_rows;
+        app.view.layout = crate::ui::diff_view_state::ViewMode::SideBySide;
 
         let backend = TestBackend::new(100, 20);
         let mut terminal = Terminal::new(backend).unwrap();

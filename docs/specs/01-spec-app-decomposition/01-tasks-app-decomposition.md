@@ -12,22 +12,23 @@ Isolate the "one view over one diff" state and its motion/clamp/visibility/
 hunk-jump logic into a new `src/ui/diff_view_state.rs` module (the render
 module already owns `diff_view.rs`). `App` delegates; behavior identical.
 
-- [ ] Create `src/ui/diff_view_state.rs` with a `DiffViewState` struct owning:
+- [x] Create `src/ui/diff_view_state.rs` with a `DiffViewState` struct owning:
       `files`, `selected_file`, `rows`, `sbs_rows`, `sbs_visual_of`, `cursor`,
-      `scroll`, `sbs_scroll`, `view`, `viewport_height`, `cursor_col`; wire it
-      into `mod.rs`.
-- [ ] Move pure motion/clamp/visibility logic onto it: `max_cursor`,
+      `scroll`, `sbs_scroll`, `layout` (ViewMode), `viewport_height`,
+      `cursor_col`; wire it into `mod.rs`.
+- [x] Move pure motion/clamp/visibility logic onto it: `max_cursor`,
       `nearest_addressable`, `ensure_visible`, `half_page`, viewport get/set,
       `toggle_view`, the four cursor-motion bodies, and the column-cursor
       methods (`effective_column`, `cursor_line_content`, `move_column_*`,
       `move_word_*`).
-- [ ] Move hunk navigation (`hunk_header_rows`, `next_hunk`, `prev_hunk`) and
-      `switch_file` onto it, with `App` supplying the row-rebuild step so
-      cross-file jumps still highlight identically.
-- [ ] Repoint `App` fields to `self.view.*` (or delegating accessors) so the
-      render modules (`diff_view`, `sbs_view`, `sidebar`, panels) and all
-      call sites keep compiling and behaving identically.
-- [ ] Relocate the moved logic's unit tests alongside `DiffViewState` where
+- [x] Move hunk navigation (`hunk_header_rows`, in-file jump, and the file
+      probes `probe_first_hunk_row`/`probe_last_hunk_row`) onto it; `App`
+      keeps `switch_file`/`next_hunk`/`prev_hunk` orchestration so the
+      cross-file rebuild still highlights identically.
+- [x] Repoint `App` fields to `self.view.*` so the render modules
+      (`diff_view`, `sbs_view`, `sidebar`, panels) and all call sites keep
+      compiling and behaving identically.
+- [x] Relocate the moved logic's unit tests alongside `DiffViewState` where
       they exercise it directly; keep `App`-level behavior tests in `app.rs`.
 
 **Proof:** `cargo test` still shows the full suite passing (>= 412 lib tests);
