@@ -161,6 +161,17 @@ fn dispatch_key(
         Mode::Search => modes::handle_search_key(app, key),
         Mode::Peek => modes::handle_peek_key(app, key),
         Mode::Normal | Mode::Visual { .. } => {
+            // While the help overlay is open it captures keys: navigation
+            // keys scroll it (it can outgrow the screen), Esc/Enter/`?`/`q`
+            // close it. This shadows the diff keymap so `j`/`k` scroll the
+            // overlay rather than the diff underneath. Any pending `g` prefix
+            // is irrelevant here, so drop it.
+            if app.help_open {
+                *pending = None;
+                handle_help_key(app, key);
+                return Flow::Continue;
+            }
+
             let had_pending = pending.is_some();
             let action = keymap.resolve(pending, key);
 
@@ -189,6 +200,30 @@ fn dispatch_key(
         }
     }
     Flow::Continue
+}
+
+/// Handles one key while the help overlay is open. Scrolls the overlay
+/// (`j`/`k`/arrows by a line, PageUp/PageDown by a viewport, `g`/`G`/Home/End
+/// to the ends) or closes it (Esc/Enter/`?`/`q`). The scroll offset is only
+/// advanced here; [`help::render`] clamps it to the content each frame, so
+/// setting `u16::MAX` for "end" is safe. Paging uses the viewport height
+/// `render` recorded last frame.
+fn handle_help_key(app: &mut App, key: KeyEvent) {
+    let page = app.help_viewport.get().max(1);
+    let cur = app.help_scroll.get();
+    match key.code {
+        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') | KeyCode::Char('q') => {
+            app.help_open = false;
+            app.help_scroll.set(0);
+        }
+        KeyCode::Down | KeyCode::Char('j') => app.help_scroll.set(cur.saturating_add(1)),
+        KeyCode::Up | KeyCode::Char('k') => app.help_scroll.set(cur.saturating_sub(1)),
+        KeyCode::PageDown => app.help_scroll.set(cur.saturating_add(page)),
+        KeyCode::PageUp => app.help_scroll.set(cur.saturating_sub(page)),
+        KeyCode::Home | KeyCode::Char('g') => app.help_scroll.set(0),
+        KeyCode::End | KeyCode::Char('G') => app.help_scroll.set(u16::MAX),
+        _ => {}
+    }
 }
 
 /// Draws one frame: git panel, diff pane, bottom panel (annotation list or
@@ -244,7 +279,15 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
     }
     if app.help_open {
         let staging_allowed = !matches!(app.target, crate::git::DiffTarget::Range(_));
-        help::render(frame, area, keymap, &app.theme, staging_allowed);
+        help::render(
+            frame,
+            area,
+            keymap,
+            &app.theme,
+            staging_allowed,
+            &app.help_scroll,
+            &app.help_viewport,
+        );
     }
     if matches!(app.mode, Mode::Compose) {
         compose_modal::render(frame, area, app);
@@ -553,7 +596,7 @@ index 111..222 100644
         let buffer = terminal.backend().buffer().clone();
         let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
 
-        assert!(content.contains("help"));
+        assert!(content.contains("keybinds"));
         assert!(!content.contains("Stage/unstage file under cursor"));
         assert!(!content.contains("Stage/unstage hunk"));
         // The staging panel toggle still works on any target, so it stays.
@@ -590,7 +633,7 @@ index 111..222 100644
 
         let buffer = terminal.backend().buffer().clone();
         let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
-        assert!(content.contains("help"));
+        assert!(content.contains("keybinds"));
         assert!(content.contains("Move cursor down"));
     }
 
@@ -621,6 +664,49 @@ index 111..222 100644
         assert!(content.contains("Fetch from remote"));
         assert!(content.contains("Pull from remote"));
         assert!(content.contains("Push to remote"));
+    }
+
+    /// On a terminal too short for the whole binding list, the help overlay
+    /// caps its height and scrolls: the top frame shows the first sections
+    /// only, and driving it to the bottom (End, through the real key path)
+    /// reveals the last section while scrolling the first off-screen.
+    #[test]
+    fn help_overlay_scrolls_to_reveal_lower_sections() {
+        let backend = TestBackend::new(100, 22);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![sample_file()]);
+        app.help_open = true;
+        let keymap = Keymap::default_map();
+
+        // First frame renders the top of the list (and records the viewport
+        // height the pager needs). The last section (Peek mode) is far below.
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let top: String = terminal
+            .backend()
+            .buffer()
+            .clone()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(top.contains("Move cursor down"));
+        assert!(!top.contains("Jump to location (definition/references)"));
+
+        // Jump to the bottom through the real dispatch path, then redraw.
+        let mut pending = None;
+        let end = KeyEvent::new(KeyCode::End, KeyModifiers::NONE);
+        let _ = dispatch_key(&mut app, &keymap, &mut pending, end);
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let bottom: String = terminal
+            .backend()
+            .buffer()
+            .clone()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(bottom.contains("Jump to location (definition/references)"));
+        assert!(!bottom.contains("Move cursor down"));
     }
 
     /// An annotation present on the selected file renders both its inline

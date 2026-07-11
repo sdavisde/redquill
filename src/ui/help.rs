@@ -1,14 +1,25 @@
-//! The help overlay: a centered box listing every binding, grouped, plus
-//! the Compose-mode, List-mode, and Staging-panel key hints that aren't in
-//! the [`Keymap`] table (those modes handle keys modally, bypassing the
-//! table — see [`super::handle_compose_key`]/[`super::handle_list_key`]/
-//! [`super::handle_staging_key`]).
+//! The help overlay: a centered, scrollable box listing every binding,
+//! grouped, plus the Compose-mode, List-mode, and Staging-panel key hints
+//! that aren't in the [`Keymap`] table (those modes handle keys modally,
+//! bypassing the table — see [`super::handle_compose_key`]/
+//! [`super::handle_list_key`]/[`super::handle_staging_key`]).
+//!
+//! The full binding list is taller than most terminals, so the box caps its
+//! height to a fraction of the screen and scrolls the overflow (a right-edge
+//! scrollbar shows position); `j`/`k`/arrows, PageUp/PageDown, and `g`/`G`
+//! drive it from [`super::handle_help_key`]. The scroll offset lives in
+//! [`super::app::App::help_scroll`]; this renderer clamps it to the content
+//! each frame and writes the clamped value back.
+
+use std::cell::Cell;
 
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::layout::{Constraint, Flex, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{
+    Block, BorderType, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+};
 
 use super::keymap::{Action, Binding, Keymap, Scope};
 use super::theme::Theme;
@@ -105,12 +116,12 @@ fn section_header(label: &str, theme: &Theme) -> Line<'static> {
 fn key_line(key: &str, description: &str, key_width: usize, theme: &Theme) -> Line<'static> {
     Line::from(vec![
         Span::styled(
-            format!("{key:>key_width$}"),
+            format!("{key:<key_width$}"),
             Style::default()
                 .fg(theme.help_key)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("  "),
+        Span::raw("   "),
         Span::raw(description.to_string()),
     ])
 }
@@ -130,12 +141,20 @@ fn binding_hidden(action: Action, staging_allowed: bool) -> bool {
 /// Compose-mode and List-mode hints appended below (those modes bypass the
 /// table entirely, so they aren't in it). `staging_allowed` is `false` on a
 /// read-only range target, hiding the inert file/hunk staging gestures.
+///
+/// The box caps its height to ~4/5 of `area` and scrolls the overflow:
+/// `scroll` is the caller-owned offset (advanced by
+/// [`super::handle_help_key`]); this fn clamps it to the content and writes
+/// the clamped value back, and records the scrollable region's height in
+/// `viewport` so the key handler can page by a real viewport.
 pub fn render(
     frame: &mut Frame,
     area: Rect,
     keymap: &Keymap,
     theme: &Theme,
     staging_allowed: bool,
+    scroll: &Cell<u16>,
+    viewport: &Cell<u16>,
 ) {
     let bindings = keymap.bindings();
     let key_width = bindings
@@ -210,17 +229,105 @@ pub fn render(
         lines.push(key_line(key, desc, key_width, theme));
     }
 
-    let height = (lines.len() as u16 + 2).min(area.height);
-    let width = (lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16 + 4).min(area.width);
+    // The chrome around the scrollable list, herdr-style: a dim subtitle
+    // under the title, a blank spacer, then the list; the "how to drive it"
+    // hint rides the bottom border.
+    let subtitle = "available commands and configured shortcuts";
+    let footer = "j/k scroll  \u{00b7}  pgup/pgdn page  \u{00b7}  g/G ends  \u{00b7}  esc close";
+    let total = lines.len() as u16;
+
+    // Width: fit the widest content line (or the subtitle/footer), plus a
+    // column for the scrollbar, plus borders and 1-col side padding. Capped
+    // so it never spills off a narrow terminal and never grows absurdly wide.
+    let content_w = lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16;
+    let inner_w = content_w
+        .max(subtitle.chars().count() as u16)
+        .max(footer.chars().count() as u16)
+        .saturating_add(1); // scrollbar gutter
+    let width = (inner_w + 4).min(area.width.saturating_sub(2)).min(92);
+
+    // Height: borders (2) + subtitle (1) + spacer (1) = 4 rows of chrome
+    // around the list (the footer hint rides the bottom border, costing no
+    // row). Cap to ~4/5 of the screen so it reads as a floating panel and
+    // scrolls rather than filling every row.
+    let chrome = 4u16;
+    let desired = total.saturating_add(chrome);
+    let cap = (area.height.saturating_mul(4) / 5).max(chrome + 1);
+    let height = desired.min(cap).min(area.height.saturating_sub(2));
     let popup = centered(area, width, height);
 
     frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title("help")
-        .title_alignment(Alignment::Center);
-    let paragraph = Paragraph::new(lines).block(block);
-    frame.render_widget(paragraph, popup);
+
+    let pill = Style::default()
+        .bg(theme.help_key)
+        .fg(Color::Black)
+        .add_modifier(Modifier::BOLD);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.help_key))
+        .padding(Padding::horizontal(1))
+        .title_top(
+            Line::from(Span::styled(
+                " keybinds ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ))
+            .left_aligned(),
+        )
+        .title_top(Line::from(Span::styled(" esc close ", pill)).right_aligned())
+        .title_bottom(
+            Line::from(Span::styled(
+                format!(" {footer} "),
+                Style::default().fg(theme.footer_text),
+            ))
+            .centered(),
+        );
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let [subtitle_area, _spacer, list_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .areas(inner);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            subtitle,
+            Style::default().fg(theme.footer_text),
+        ))),
+        subtitle_area,
+    );
+
+    // Clamp the caller's scroll offset to the content now that the viewport
+    // height is known, and record that height for PageUp/PageDown paging.
+    let list_h = list_area.height;
+    let max_scroll = total.saturating_sub(list_h);
+    let offset = scroll.get().min(max_scroll);
+    scroll.set(offset);
+    viewport.set(list_h);
+
+    // Reserve the right column for the scrollbar only when it's needed.
+    let scrollable = total > list_h;
+    let text_area = if scrollable {
+        Rect {
+            width: list_area.width.saturating_sub(1),
+            ..list_area
+        }
+    } else {
+        list_area
+    };
+    frame.render_widget(Paragraph::new(lines).scroll((offset, 0)), text_area);
+
+    if scrollable {
+        let mut sb_state = ScrollbarState::new(total as usize)
+            .position(offset as usize)
+            .viewport_content_length(list_h as usize);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None);
+        frame.render_stateful_widget(scrollbar, list_area, &mut sb_state);
+    }
 }
 
 #[cfg(test)]

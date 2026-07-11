@@ -2,6 +2,7 @@
 //! performs. No rendering or terminal I/O lives here — these are plain
 //! methods, unit-tested without a terminal.
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -68,6 +69,15 @@ pub struct App {
     pub view: DiffViewState,
     /// Whether the help overlay is open.
     pub help_open: bool,
+    /// The help overlay's vertical scroll offset (top visible content line).
+    /// The key handler advances it freely; [`super::help::render`] clamps it
+    /// to the content/viewport and writes the clamped value back, so state
+    /// and view never disagree. Reset to 0 whenever the overlay toggles.
+    pub(super) help_scroll: Cell<u16>,
+    /// The help overlay's scrollable-region height, set by
+    /// [`super::help::render`] each frame so the key handler can page by a
+    /// real viewport (PageUp/PageDown) rather than a guessed constant.
+    pub(super) help_viewport: Cell<u16>,
     /// Annotations accumulated this session.
     pub annotations: AnnotationStore,
     /// The current interaction mode.
@@ -188,6 +198,8 @@ impl App {
         let mut app = App {
             view: DiffViewState::new(files),
             help_open: false,
+            help_scroll: Cell::new(0),
+            help_viewport: Cell::new(0),
             annotations,
             mode: Mode::Normal,
             compose: None,
@@ -365,7 +377,10 @@ impl App {
             Action::NextFile => self.view.next_section(),
             Action::PrevFile => self.view.prev_section(),
             Action::ToggleCollapse => self.toggle_collapse(),
-            Action::ToggleHelp => self.help_open = !self.help_open,
+            Action::ToggleHelp => {
+                self.help_open = !self.help_open;
+                self.help_scroll.set(0);
+            }
             Action::EnterVisual => self.toggle_visual(),
             Action::Compose => self.open_compose(),
             Action::ToggleList => self.toggle_list(),
