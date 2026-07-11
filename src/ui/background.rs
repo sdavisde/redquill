@@ -4,12 +4,10 @@
 //! thread + `mpsc` channel + non-blocking `poll()` design, but generalized
 //! to run arbitrary closures (or commands) rather than LSP requests.
 //!
-//! This is a seam for the git-panel workstream (spec 02), which needs
+//! This is the seam for the git-panel workstream (spec 02), which needs
 //! non-blocking fetch/pull/push: those run as closures whose result type the
 //! caller chooses, so no git-specific (or LSP-specific) types leak in here.
-//! It ships with no production callers yet — hence the module-scoped
-//! `dead_code` allowance below.
-#![allow(dead_code)]
+//! Its first production caller is [`super::App::request_remote_op`].
 
 use std::panic::AssertUnwindSafe;
 use std::process::Command;

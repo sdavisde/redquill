@@ -11,12 +11,16 @@
 //!   [`StashEntry`] records.
 //! - [`diff`] splits `git diff` output into raw per-file [`RawFilePatch`]es
 //!   (no hunk parsing — see [`crate::diff::parse_hunks`] for that).
+//! - [`remote`] builds the three sanctioned remote operations (fetch / pull /
+//!   push) as fixed argument vectors with `GIT_TERMINAL_PROMPT=0`, never
+//!   `--force` — the write/network ceiling.
 //! - [`stage`] adds index staging: file-level (`stage_file`/`unstage_file`)
 //!   and hunk/line-level via synthetic patches applied with `--cached`.
 
 mod branch;
 mod diff;
 mod error;
+mod remote;
 mod runner;
 mod stage;
 mod stash;
@@ -25,6 +29,7 @@ mod status;
 pub use branch::{BranchStatus, parse_branch_headers};
 pub use diff::{DiffTarget, RawFilePatch, split_patches};
 pub use error::GitError;
+pub use remote::{RemoteOp, remote_command};
 pub use runner::GitRunner;
 pub use stage::{build_hunk_patch, build_line_patch};
 pub use stash::{STASH_LIST_FORMAT, StashEntry, parse_stash_list};

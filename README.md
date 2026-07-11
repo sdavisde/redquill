@@ -51,6 +51,7 @@ Vim-grammar keybindings, fully remappable. Draft default map:
 | `space` | Stage/unstage hunk (line in visual mode) |
 | `s` | Toggle staging panel |
 | `` ` `` | Focus / unfocus the git panel |
+| `@` | Toggle the git command log pane |
 | `gd` / `gr` / `K` | Go to definition / references / hover docs |
 | `a` | Annotation list |
 | `?` | Help |
@@ -63,6 +64,10 @@ Vim-grammar keybindings, fully remappable. Draft default map:
 | `` ` `` | Return focus to the diff view |
 | `j` / `k` | Move the panel cursor through CHANGES / UNTRACKED / STASHES |
 | `Enter` | Open the cursor's file in the diff (stash / header rows: no-op) |
+| `f` | Fetch from the upstream remote (background, non-blocking) |
+| `p` | Pull from the upstream remote (background, non-blocking) |
+| `P` | Push to the upstream remote (background, non-blocking) |
+| `@` | Toggle the command log pane (also works from the diff view) |
 
 Layout sketch:
 

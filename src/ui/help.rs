@@ -58,9 +58,11 @@ fn group_of(action: Action) -> &'static str {
         EnterVisual | Compose => "Annotate",
         ToggleStage | ToggleStagingPanel => "Stage",
         Search | SearchNext | SearchPrev => "Search",
-        ToggleList | ToggleHelp | ToggleView | FocusGitPanel => "Panels",
+        ToggleList | ToggleHelp | ToggleView | FocusGitPanel | ToggleCommandLog => "Panels",
         GotoDefinition | GotoReferences | Hover => "Code intelligence",
-        PanelCursorDown | PanelCursorUp | PanelSelect => "Git panel",
+        PanelCursorDown | PanelCursorUp | PanelSelect | RemoteFetch | RemotePull | RemotePush => {
+            "Git panel"
+        }
         Quit | QuitDiscard => "Quit",
     }
 }

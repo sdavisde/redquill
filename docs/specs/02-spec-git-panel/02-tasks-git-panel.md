@@ -99,7 +99,7 @@ Add a scope/context dimension to `keymap.rs`'s `Binding` (diff scope vs. panel s
 - [x] 3.8 Manual smoke transcript: toggle focus, traverse all three sections, Enter on a file jumps the diff and returns focus, then confirm a sample of pre-existing bindings (`j`/`k` scroll, `space` stage, `s` staging panel, `gd`) behave exactly as before when the panel is unfocused.
 - [x] 3.9 Run all four gates.
 
-### [ ] 4.0 Async remote operations (fetch/pull/push) and command log pane
+### [x] 4.0 Async remote operations (fetch/pull/push) and command log pane
 
 Wire `BackgroundTasks::poll` into the event-loop tick; add panel-scoped `f`/`p`/`P` running plain `git fetch`/`pull`/`push` (fixed argv, no shell, never `--force`, `GIT_TERMINAL_PROMPT=0`) on the background thread; running indicator; at most one in-flight op (further requests rejected with a message); on completion refresh changes list, branch header, and ahead/behind. Every remote op (command line, exit status, stdout/stderr) appends to a bounded (~50-entry) in-memory command log rendered in the existing bottom-panel slot, toggled with `@`. Pull conflicts surface via existing unmerged-status parsing. Help overlay and README keymap updated.
 
@@ -113,14 +113,14 @@ Wire `BackgroundTasks::poll` into the event-loop tick; add panel-scoped `f`/`p`/
 
 #### 4.0 Tasks
 
-- [ ] 4.1 Ratify the remaining keys in README.md's keymap table: panel-scoped `f` (fetch), `p` (pull), `P` (push) and the command-log toggle `@`; resolve any conflict in README before wiring.
-- [ ] 4.2 Write failing unit tests, then implement remote command construction in `src/git/remote.rs`: fixed argv for plain `git fetch`/`git pull`/`git push` with `GIT_TERMINAL_PROMPT=0` in the child environment; assert no `--force` and no shell invocation is possible by construction.
-- [ ] 4.3 Write failing unit tests, then implement the command-log model in `src/ui/command_log.rs`: entry = command line, exit status, stdout, stderr; bounded at 50 entries with oldest-first eviction; newest-last ordering; no persistence.
-- [ ] 4.4 Wire `BackgroundTasks::poll` draining into the event-loop tick in `src/ui/mod.rs` (alongside the existing `code_intel::poll`), remove `#![allow(dead_code)]` from `src/ui/background.rs`, and add a `BackgroundTasks` field plus a single-in-flight-op guard to `App`; unit test: a second remote request while one is in flight is rejected with a status message.
-- [ ] 4.5 Bind panel-scoped `f`/`p`/`P` actions that spawn the remote command via `BackgroundTasks` and `run_command`, and render a running indicator (spinner or `fetching…` in the panel header/footer) while in flight.
-- [ ] 4.6 On completion: append the command-log entry, re-run `App::refresh` plus the branch/stash reads, and show a success/failure summary in the footer; unit test with `FakeGit` asserting the refresh path runs and staged markers/annotations survive.
-- [ ] 4.7 Render the command log in the existing bottom-panel slot (same 60/40 split as the staging panel), toggled with `@` from both scopes, newest-last; `TestBackend` render test for entries including a nonzero-exit entry with stderr.
-- [ ] 4.8 Add `tests/git_remote_integration.rs` using the tempdir helpers: create a `file://` bare remote; exercise fetch (after remote-side movement, assert behind count), push (assert remote ref advanced and ahead count cleared), a pull that fast-forwards, and a pull that produces a merge conflict — asserting conflicted files appear as unmerged entries in the parsed status.
-- [ ] 4.9 Update the `?` help overlay with the remote-op and command-log bindings in their scope groups.
-- [ ] 4.10 Manual smoke: trigger a slow fetch (large or throttled remote) and scroll the diff during it (no freeze); force a non-fast-forward push rejection and capture the command-log pane showing its stderr and exit status.
-- [ ] 4.11 Run all four gates and record the final test-count delta.
+- [x] 4.1 Ratify the remaining keys in README.md's keymap table: panel-scoped `f` (fetch), `p` (pull), `P` (push) and the command-log toggle `@`; resolve any conflict in README before wiring.
+- [x] 4.2 Write failing unit tests, then implement remote command construction in `src/git/remote.rs`: fixed argv for plain `git fetch`/`git pull`/`git push` with `GIT_TERMINAL_PROMPT=0` in the child environment; assert no `--force` and no shell invocation is possible by construction.
+- [x] 4.3 Write failing unit tests, then implement the command-log model in `src/ui/command_log.rs`: entry = command line, exit status, stdout, stderr; bounded at 50 entries with oldest-first eviction; newest-last ordering; no persistence.
+- [x] 4.4 Wire `BackgroundTasks::poll` draining into the event-loop tick in `src/ui/mod.rs` (alongside the existing `code_intel::poll`), remove `#![allow(dead_code)]` from `src/ui/background.rs`, and add a `BackgroundTasks` field plus a single-in-flight-op guard to `App`; unit test: a second remote request while one is in flight is rejected with a status message.
+- [x] 4.5 Bind panel-scoped `f`/`p`/`P` actions that spawn the remote command via `BackgroundTasks` and `run_command`, and render a running indicator (spinner or `fetching…` in the panel header/footer) while in flight.
+- [x] 4.6 On completion: append the command-log entry, re-run `App::refresh` plus the branch/stash reads, and show a success/failure summary in the footer; unit test with `FakeGit` asserting the refresh path runs and staged markers/annotations survive.
+- [x] 4.7 Render the command log in the existing bottom-panel slot (same 60/40 split as the staging panel), toggled with `@` from both scopes, newest-last; `TestBackend` render test for entries including a nonzero-exit entry with stderr.
+- [x] 4.8 Add `tests/git_remote_integration.rs` using the tempdir helpers: create a `file://` bare remote; exercise fetch (after remote-side movement, assert behind count), push (assert remote ref advanced and ahead count cleared), a pull that fast-forwards, and a pull that produces a merge conflict — asserting conflicted files appear as unmerged entries in the parsed status.
+- [x] 4.9 Update the `?` help overlay with the remote-op and command-log bindings in their scope groups.
+- [x] 4.10 Manual smoke: trigger a slow fetch (large or throttled remote) and scroll the diff during it (no freeze); force a non-fast-forward push rejection and capture the command-log pane showing its stderr and exit status.
+- [x] 4.11 Run all four gates and record the final test-count delta.

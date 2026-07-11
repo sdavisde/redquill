@@ -86,6 +86,14 @@ pub enum Action {
     /// Open the git panel cursor's file in the diff and return focus to it;
     /// a no-op on stash/header rows (panel scope).
     PanelSelect,
+    /// Fetch from the upstream remote on a background thread (panel scope).
+    RemoteFetch,
+    /// Pull from the upstream remote on a background thread (panel scope).
+    RemotePull,
+    /// Push to the upstream remote on a background thread (panel scope).
+    RemotePush,
+    /// Toggle the command-log pane (bound in both scopes).
+    ToggleCommandLog,
     /// Quit, emitting annotations to stdout.
     Quit,
     /// Quit, discarding annotations.
@@ -299,6 +307,11 @@ impl Keymap {
                     FocusGitPanel,
                     "Focus git panel",
                 ),
+                d(
+                    KeySeq::one(Char('@'), none),
+                    ToggleCommandLog,
+                    "Toggle command log pane",
+                ),
                 d(KeySeq::one(Char('/'), none), Search, "Search"),
                 d(
                     KeySeq::one(Char('n'), none),
@@ -353,6 +366,18 @@ impl Keymap {
                     "Move panel cursor up",
                 ),
                 p(KeySeq::one(Enter, none), PanelSelect, "Open file in diff"),
+                p(
+                    KeySeq::one(Char('f'), none),
+                    RemoteFetch,
+                    "Fetch from remote",
+                ),
+                p(KeySeq::one(Char('p'), none), RemotePull, "Pull from remote"),
+                p(KeySeq::one(Char('P'), none), RemotePush, "Push to remote"),
+                p(
+                    KeySeq::one(Char('@'), none),
+                    ToggleCommandLog,
+                    "Toggle command log pane",
+                ),
             ],
         }
     }
@@ -811,6 +836,45 @@ mod tests {
         assert_eq!(
             km.lookup_in(Scope::Panel, key(KeyCode::Char('s'), KeyModifiers::NONE)),
             None
+        );
+    }
+
+    // -- Remote ops and command log (task 4.0) ------------------------------
+
+    /// `f`/`p`/`P` are panel-scope remote ops and resolve to nothing in diff
+    /// scope, so they never fire during the ordinary review loop.
+    #[test]
+    fn remote_ops_resolve_only_in_panel_scope() {
+        let km = Keymap::default_map();
+        let f = key(KeyCode::Char('f'), KeyModifiers::NONE);
+        let p = key(KeyCode::Char('p'), KeyModifiers::NONE);
+        let big_p = key(KeyCode::Char('P'), KeyModifiers::NONE);
+        assert_eq!(km.lookup_in(Scope::Panel, f), Some(Action::RemoteFetch));
+        assert_eq!(km.lookup_in(Scope::Panel, p), Some(Action::RemotePull));
+        assert_eq!(km.lookup_in(Scope::Panel, big_p), Some(Action::RemotePush));
+        assert_eq!(km.lookup_in(Scope::Diff, f), None);
+        assert_eq!(km.lookup_in(Scope::Diff, p), None);
+        assert_eq!(km.lookup_in(Scope::Diff, big_p), None);
+    }
+
+    /// `@` toggles the command log from *both* scopes (it is a view toggle,
+    /// not tied to which pane holds focus).
+    #[test]
+    fn at_toggles_command_log_in_both_scopes() {
+        let km = Keymap::default_map();
+        let at = key(KeyCode::Char('@'), KeyModifiers::NONE);
+        assert_eq!(
+            km.lookup_in(Scope::Diff, at),
+            Some(Action::ToggleCommandLog)
+        );
+        assert_eq!(
+            km.lookup_in(Scope::Panel, at),
+            Some(Action::ToggleCommandLog)
+        );
+        // Terminals that report `@` with the SHIFT bit set still resolve it.
+        assert_eq!(
+            km.lookup_in(Scope::Diff, key(KeyCode::Char('@'), KeyModifiers::SHIFT)),
+            Some(Action::ToggleCommandLog)
         );
     }
 }

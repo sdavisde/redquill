@@ -18,6 +18,7 @@
 mod app;
 mod background;
 mod code_intel;
+mod command_log;
 mod compose;
 mod compose_modal;
 mod diff_view;
@@ -115,6 +116,14 @@ fn panel_open(mode: Mode) -> bool {
     matches!(mode, Mode::List | Mode::Staging)
 }
 
+/// Whether the bottom-panel slot is occupied this frame: the annotation list
+/// or staging panel (mode-driven), or the command-log pane (toggled with `@`,
+/// independent of mode). When the command log is open it takes the slot;
+/// otherwise the mode's own panel does.
+fn bottom_open(app: &App) -> bool {
+    app.command_log_open || panel_open(app.mode)
+}
+
 /// What the event loop should do after dispatching one key.
 enum Flow {
     /// Keep looping.
@@ -183,7 +192,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
     let area = frame.area();
     let (main_area, footer_area) = split_footer(area);
     let (sidebar_area, right_area) = split_layout(main_area);
-    let (diff_area, panel_area) = split_right(right_area, panel_open(app.mode));
+    let (diff_area, panel_area) = split_right(right_area, bottom_open(app));
 
     git_panel::render(frame, sidebar_area, app);
     match app.view.layout {
@@ -191,9 +200,15 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
         ViewMode::SideBySide => sbs_view::render(frame, diff_area, app),
     }
     if let Some(panel_area) = panel_area {
-        match app.mode {
-            Mode::Staging => staging_panel::render(frame, panel_area, app),
-            _ => list_panel::render(frame, panel_area, app),
+        // The command log, when open, owns the slot regardless of mode; else
+        // the mode's own bottom panel renders.
+        if app.command_log_open {
+            command_log::render(frame, panel_area, app);
+        } else {
+            match app.mode {
+                Mode::Staging => staging_panel::render(frame, panel_area, app),
+                _ => list_panel::render(frame, panel_area, app),
+            }
         }
     }
     if matches!(app.mode, Mode::Search) {
@@ -208,6 +223,15 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
             .saturating_add(text.chars().count() as u16)
             .min(footer_area.x + footer_area.width.saturating_sub(1));
         frame.set_cursor_position(Position::new(cursor_x, footer_area.y));
+    } else if let Some(label) = app.remote_running_label() {
+        // A remote op is in flight: show a persistent running indicator (it
+        // outlives the transient status message, which clears on the next
+        // keypress) so the user sees the non-blocking op is still working.
+        let footer = Line::from(Span::styled(
+            format!(" \u{27f3} {label}\u{2026}"),
+            Style::default().fg(app.theme.status_message),
+        ));
+        frame.render_widget(footer, footer_area);
     } else if let Some(message) = &app.status_message {
         let footer = Line::from(Span::styled(
             format!(" {message}"),
@@ -284,7 +308,7 @@ fn event_loop(
         let full_area = Rect::new(0, 0, size.width, size.height);
         let (main_area, _) = split_footer(full_area);
         let (_, right_area) = split_layout(main_area);
-        let (diff_area, _) = split_right(right_area, panel_open(app.mode));
+        let (diff_area, _) = split_right(right_area, bottom_open(app));
         app.view
             .set_viewport_height(diff_view::viewport_height(diff_area));
 
@@ -310,6 +334,7 @@ fn event_loop(
         }
 
         code_intel::poll(app);
+        app.poll_remote();
     }
 }
 
@@ -395,6 +420,35 @@ index 111..222 100644
         let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
         assert!(content.contains("help"));
         assert!(content.contains("Move cursor down"));
+    }
+
+    /// The help overlay documents the new remote-op and command-log bindings
+    /// in their scope groups (no hidden features). A tall terminal avoids the
+    /// overlay clipping its lower sections.
+    #[test]
+    fn help_overlay_lists_remote_and_command_log_bindings() {
+        let backend = TestBackend::new(100, 80);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![sample_file()]);
+        app.help_open = true;
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .clone()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+
+        // Command-log toggle (Panels group, diff scope).
+        assert!(content.contains("Toggle command log pane"));
+        // Remote ops (Git panel focused section, panel scope).
+        assert!(content.contains("Fetch from remote"));
+        assert!(content.contains("Pull from remote"));
+        assert!(content.contains("Push to remote"));
     }
 
     /// An annotation present on the selected file renders both its inline
@@ -877,6 +931,100 @@ index 111..222 100644
         assert_eq!(app.mode, Mode::Normal);
     }
 
+    /// `@` toggles the command-log pane from *both* the diff view (Normal)
+    /// and the focused git panel, driven through the real `dispatch_key`
+    /// path; when open the pane renders in the bottom-panel slot, showing a
+    /// nonzero-exit entry with its stderr.
+    #[test]
+    fn at_toggles_command_log_from_both_scopes_and_renders_in_bottom_slot() {
+        let keymap = Keymap::default_map();
+        let mut pending: Option<KeyEvent> = None;
+        let mut app = panel_smoke_app();
+        app.command_log.push(super::command_log::CommandLogEntry {
+            command_line: "git push".to_string(),
+            success: false,
+            code: Some(1),
+            stdout: String::new(),
+            stderr: "! [rejected] main -> main (non-fast-forward)".to_string(),
+        });
+        let at = KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE);
+        let backtick = KeyEvent::new(KeyCode::Char('`'), KeyModifiers::NONE);
+
+        // Diff scope: `@` opens the log.
+        assert!(!app.command_log_open);
+        dispatch_key(&mut app, &keymap, &mut pending, at);
+        assert!(app.command_log_open);
+
+        // It renders in the bottom slot with the failed entry and its stderr.
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app, &keymap)).unwrap();
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .clone()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(content.contains("command log"));
+        assert!(content.contains("git push"));
+        assert!(content.contains("exit 1"));
+        assert!(content.contains("non-fast-forward"));
+
+        // `@` again closes it.
+        dispatch_key(&mut app, &keymap, &mut pending, at);
+        assert!(!app.command_log_open);
+
+        // Panel scope toggles it too: focus the panel, then `@`.
+        dispatch_key(&mut app, &keymap, &mut pending, backtick);
+        assert_eq!(app.mode, Mode::Panel);
+        dispatch_key(&mut app, &keymap, &mut pending, at);
+        assert!(app.command_log_open);
+        // Still focused on the panel — the log toggle is orthogonal to focus.
+        assert_eq!(app.mode, Mode::Panel);
+    }
+
+    /// The running indicator shows in the footer while a remote op is in
+    /// flight (here, a stalled background task the test controls).
+    #[test]
+    fn running_indicator_renders_while_a_remote_op_is_in_flight() {
+        let keymap = Keymap::default_map();
+        let mut app = panel_smoke_app();
+        // Spawn a task that blocks on a gate we never release, so the op stays
+        // "in flight" for the duration of the render.
+        let (_gate_tx, gate_rx) = std::sync::mpsc::channel::<()>();
+        let id = app.background.spawn(move || {
+            let _ = gate_rx.recv();
+            super::background::CommandOutcome {
+                success: true,
+                code: Some(0),
+                stdout: String::new(),
+                stderr: String::new(),
+            }
+        });
+        app.remote_op = Some(super::app::InFlightRemote {
+            id,
+            op: crate::git::RemoteOp::Fetch,
+        });
+
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app, &keymap)).unwrap();
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .clone()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            content.contains("fetch"),
+            "footer should show the running fetch indicator"
+        );
+    }
+
     /// Regenerates `02-proofs/02-task-03-smoke.txt` from a real key-dispatch
     /// run, rendering a `TestBackend` frame at each step and recording the
     /// observed state. Ignored by default (it writes into the repo); run with
@@ -1000,6 +1148,244 @@ index 111..222 100644
 
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("docs/specs/02-spec-git-panel/02-proofs/02-task-03-smoke.txt");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, out).unwrap();
+    }
+
+    /// Regenerates `02-proofs/02-task-04-smoke.txt` from two real runs:
+    /// (a) a deliberately slow (2s) background command driven through the real
+    /// `BackgroundTasks` path while `j`/`k` scroll the diff via `dispatch_key`,
+    /// with timestamped observations proving the render loop never blocks; and
+    /// (b) a real non-fast-forward push rejection against a `file://` remote,
+    /// driven through the real spawn -> poll -> command-log pipeline, with the
+    /// command-log pane rendered showing git's stderr and nonzero exit.
+    ///
+    /// tmux is unavailable on this host, so this headless driver stands in for
+    /// the manual transcript. Ignored by default (it writes into the repo, runs
+    /// a 2s sleep, and shells out to git); run with
+    /// `cargo test capture_task_04_smoke_transcript -- --ignored`.
+    #[test]
+    #[ignore = "writes the task-04 smoke transcript; 2s sleep + real git. run explicitly"]
+    fn capture_task_04_smoke_transcript() {
+        use super::app::InFlightRemote;
+        use super::background::run_command;
+        use crate::git::RemoteOp;
+        use std::fmt::Write as _;
+        use std::process::Command as PCommand;
+        use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+        fn git(dir: &std::path::Path, args: &[&str]) {
+            let out = PCommand::new("git")
+                .current_dir(dir)
+                .args(args)
+                .output()
+                .expect("spawn git");
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+
+        let mut out = String::new();
+        let wall = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        out.push_str("Task 4.0 smoke transcript — async remote ops & command log\n");
+        out.push_str("Driver: real BackgroundTasks + ui::dispatch_key (the handlers\n");
+        out.push_str("the blocking event loop calls). tmux unavailable; headless.\n");
+        writeln!(out, "Wall-clock start (unix seconds): {wall}\n").unwrap();
+
+        // -- Part (a): non-blocking proof ---------------------------------
+        out.push_str("== Part (a): render loop stays responsive during a slow op ==\n");
+        out.push_str("A 2s `sleep` runs on the real background poller while j/k drive\n");
+        out.push_str("the diff cursor through dispatch_key. Each keypress is timed from\n");
+        out.push_str("op-spawn; all land in single-digit ms, far under the 2000ms op.\n\n");
+
+        let keymap = Keymap::default_map();
+        let mut pending: Option<KeyEvent> = None;
+        let mut app = panel_smoke_app();
+
+        let spawn_at = Instant::now();
+        let id = app.background.spawn(|| {
+            let mut cmd = PCommand::new("sh");
+            cmd.args(["-c", "sleep 2"]);
+            run_command(&mut cmd)
+        });
+        app.remote_op = Some(InFlightRemote {
+            id,
+            op: RemoteOp::Fetch,
+        });
+        writeln!(
+            out,
+            "t=+{:>4}ms spawned slow op (remote_op={:?}, running_label={:?})",
+            spawn_at.elapsed().as_millis(),
+            app.remote_op.map(|o| o.op),
+            app.remote_running_label(),
+        )
+        .unwrap();
+
+        let motions = [
+            (KeyCode::Char('j'), "j"),
+            (KeyCode::Char('j'), "j"),
+            (KeyCode::Char('j'), "j"),
+            (KeyCode::Char('k'), "k"),
+        ];
+        for (code, label) in motions {
+            let before = app.view.cursor;
+            dispatch_key(
+                &mut app,
+                &keymap,
+                &mut pending,
+                KeyEvent::new(code, KeyModifiers::NONE),
+            );
+            // Poll for completion the way the event loop does; the op is still
+            // sleeping, so nothing drains — the guard stays set, log empty.
+            app.poll_remote();
+            let still_pending = app.remote_op.is_some() && app.command_log.is_empty();
+            assert!(still_pending, "op must still be in flight during scrolling");
+            writeln!(
+                out,
+                "t=+{:>4}ms press {label}: diff_cursor {before}->{} | op still pending={} log_len={}",
+                spawn_at.elapsed().as_millis(),
+                app.view.cursor,
+                still_pending,
+                app.command_log.len(),
+            )
+            .unwrap();
+        }
+        assert!(
+            spawn_at.elapsed() < Duration::from_millis(1500),
+            "all scrolling completed well before the 2s op"
+        );
+        writeln!(
+            out,
+            "\nObservation: all {} keypresses processed by t=+{}ms while the\n\
+             2000ms op was still pending — dispatch never blocked on it.",
+            motions.len(),
+            spawn_at.elapsed().as_millis()
+        )
+        .unwrap();
+
+        // Let the op finish and drain it, recording when.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.remote_op.is_some() && Instant::now() < deadline {
+            app.poll_remote();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        writeln!(
+            out,
+            "t=+{:>4}ms op completed and drained (log_len={})\n",
+            spawn_at.elapsed().as_millis(),
+            app.command_log.len()
+        )
+        .unwrap();
+
+        // -- Part (b): failure transparency -------------------------------
+        out.push_str("== Part (b): a non-fast-forward push rejection is logged ==\n");
+        out.push_str("A file:// bare remote is advanced by a second clone; the local\n");
+        out.push_str("clone commits too, so `git push` is rejected non-fast-forward.\n");
+        out.push_str("Driven through App::request_remote_op -> poll_remote (real spawn).\n\n");
+
+        let bare = tempfile::TempDir::new().unwrap();
+        git(bare.path(), &["init", "-q", "--bare"]);
+        let bare_url = format!("file://{}", bare.path().display());
+
+        let repo = tempfile::TempDir::new().unwrap();
+        git(repo.path(), &["init", "-q"]);
+        git(repo.path(), &["config", "user.name", "redquill test"]);
+        git(
+            repo.path(),
+            &["config", "user.email", "test@redquill.invalid"],
+        );
+        git(repo.path(), &["branch", "-M", "main"]);
+        std::fs::write(repo.path().join("base.txt"), b"one\n").unwrap();
+        git(repo.path(), &["add", "."]);
+        git(repo.path(), &["commit", "-qm", "initial"]);
+        git(repo.path(), &["remote", "add", "origin", &bare_url]);
+        git(repo.path(), &["push", "-q", "-u", "origin", "main"]);
+
+        // A second clone advances origin/main out from under `repo`.
+        let parent = tempfile::TempDir::new().unwrap();
+        git(parent.path(), &["clone", "-q", &bare_url, "clone2"]);
+        let clone2 = parent.path().join("clone2");
+        git(&clone2, &["config", "user.name", "redquill test"]);
+        git(&clone2, &["config", "user.email", "test@redquill.invalid"]);
+        std::fs::write(clone2.join("base.txt"), b"one\nremote two\n").unwrap();
+        git(&clone2, &["commit", "-aqm", "remote commit"]);
+        git(&clone2, &["push", "-q", "origin", "main"]);
+
+        // The local clone commits its own divergent history.
+        std::fs::write(repo.path().join("base.txt"), b"one\nlocal two\n").unwrap();
+        git(repo.path(), &["commit", "-aqm", "local commit"]);
+
+        let mut app2 = panel_smoke_app();
+        app2.set_repo_root(repo.path().to_path_buf());
+        app2.request_remote_op(RemoteOp::Push);
+        writeln!(
+            out,
+            "spawned push (running_label={:?})",
+            app2.remote_running_label()
+        )
+        .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app2.command_log.is_empty() && Instant::now() < deadline {
+            app2.poll_remote();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let entry = app2
+            .command_log
+            .entries()
+            .next()
+            .expect("push should have been logged")
+            .clone();
+        assert!(!entry.success, "the non-ff push must be recorded as failed");
+        writeln!(
+            out,
+            "logged: command_line={:?} exit_status={:?} success={}",
+            entry.command_line,
+            entry.exit_status(),
+            entry.success
+        )
+        .unwrap();
+        writeln!(out, "stderr (verbatim from git):").unwrap();
+        for line in entry.stderr.lines() {
+            writeln!(out, "    {line}").unwrap();
+        }
+
+        // Render the command-log pane and capture what the user would see.
+        app2.command_log_open = true;
+        let backend = TestBackend::new(100, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &app2, &keymap)).unwrap();
+        let frame: String = terminal
+            .backend()
+            .buffer()
+            .clone()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(frame.contains("command log"), "pane must be visible");
+        assert!(
+            frame.contains("git push") && frame.contains("exit"),
+            "pane must show the failed push and its exit status"
+        );
+        let shows_reject = frame.contains("rejected") || frame.contains("fast-forward");
+        writeln!(
+            out,
+            "\ncommand-log pane visible: {} | shows rejection text: {}",
+            frame.contains("command log"),
+            shows_reject
+        )
+        .unwrap();
+        out.push_str("Observation: the rejected push did not crash the tool; it landed\n");
+        out.push_str("in the command log with its nonzero exit and git's own stderr.\n");
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/specs/02-spec-git-panel/02-proofs/02-task-04-smoke.txt");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, out).unwrap();
     }

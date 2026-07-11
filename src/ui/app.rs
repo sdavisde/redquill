@@ -6,10 +6,12 @@ use std::path::PathBuf;
 
 use crate::annotate::{AnnotationStore, Side, Target};
 use crate::diff::{FileDiff, LineOrigin};
-use crate::git::{BranchStatus, DiffTarget, RawFilePatch, StashEntry};
+use crate::git::{BranchStatus, DiffTarget, RawFilePatch, RemoteOp, StashEntry, remote_command};
 use crate::highlight::Highlighter;
 use crate::lsp::RequestId;
 
+use super::background::{BackgroundTasks, CommandOutcome, TaskId, run_command};
+use super::command_log::{CommandLog, CommandLogEntry};
 use super::compose::ComposeState;
 use super::diff_view_state::DiffViewState;
 use super::keymap::Action;
@@ -137,6 +139,31 @@ pub struct App {
     /// doesn't match is ignored. `pub(super)` for the code-intelligence
     /// module.
     pub(super) pending_lsp: Option<(RequestId, PeekKind)>,
+    /// The background-task poller remote operations run through. Spawning
+    /// returns immediately; [`App::poll_remote`] drains completed outcomes
+    /// once per event-loop tick.
+    pub(super) background: BackgroundTasks<CommandOutcome>,
+    /// The in-memory, bounded log of every git command redquill ran, rendered
+    /// in the toggleable command-log pane.
+    pub(super) command_log: CommandLog,
+    /// The single remote operation currently in flight, if any. Enforces the
+    /// "at most one remote op at a time" guard: while this is `Some`, further
+    /// remote requests are rejected with a message rather than queued.
+    pub(super) remote_op: Option<InFlightRemote>,
+    /// Whether the command-log pane is open in the bottom-panel slot. Toggled
+    /// with `@` from both the diff view and the focused panel.
+    pub(super) command_log_open: bool,
+}
+
+/// A remote operation that has been spawned and is awaiting completion. Its
+/// [`TaskId`] correlates the background result back to the operation so a
+/// stale or foreign task never clears the guard.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct InFlightRemote {
+    /// The background task delivering this operation's outcome.
+    pub(super) id: TaskId,
+    /// Which remote operation is running (drives the label and command line).
+    pub(super) op: RemoteOp,
 }
 
 impl App {
@@ -172,6 +199,10 @@ impl App {
             peek: None,
             lsp: None,
             pending_lsp: None,
+            background: BackgroundTasks::new(),
+            command_log: CommandLog::new(),
+            remote_op: None,
+            command_log_open: false,
         };
         app.rebuild_rows();
         app
@@ -290,6 +321,10 @@ impl App {
             Action::PanelCursorDown => self.panel_move_down(),
             Action::PanelCursorUp => self.panel_move_up(),
             Action::PanelSelect => self.panel_select(),
+            Action::RemoteFetch => self.request_remote_op(RemoteOp::Fetch),
+            Action::RemotePull => self.request_remote_op(RemoteOp::Pull),
+            Action::RemotePush => self.request_remote_op(RemoteOp::Push),
+            Action::ToggleCommandLog => self.toggle_command_log(),
             Action::Quit | Action::QuitDiscard => {}
         }
     }
@@ -869,6 +904,99 @@ impl App {
         self.mode = Mode::Normal;
     }
 
+    // -- Remote operations & command log ----------------------------------
+
+    /// Toggles the command-log pane in the bottom-panel slot.
+    fn toggle_command_log(&mut self) {
+        self.command_log_open = !self.command_log_open;
+    }
+
+    /// The label of the remote operation currently in flight, if any (drives
+    /// the running indicator). `None` when nothing is running.
+    pub fn remote_running_label(&self) -> Option<&'static str> {
+        self.remote_op.as_ref().map(|o| o.op.label())
+    }
+
+    /// Requests a remote operation (`fetch`/`pull`/`push`), spawning it on a
+    /// background thread so the render loop never blocks. Enforces the
+    /// single-in-flight guard: if a remote op is already running the request
+    /// is rejected with a status message and nothing is spawned. Without a
+    /// known repository root (git-less contexts) the request degrades to a
+    /// message, like every other git-backed gesture.
+    ///
+    /// The child command is a fixed argv with `GIT_TERMINAL_PROMPT=0` (see
+    /// [`crate::git::remote_command`]); no shell, no `--force`, no credential
+    /// handling.
+    pub(super) fn request_remote_op(&mut self, op: RemoteOp) {
+        if let Some(running) = self.remote_op.as_ref() {
+            self.set_status_message(format!(
+                "{} already running — wait for it to finish",
+                running.op.label()
+            ));
+            return;
+        }
+        let Some(root) = self.repo_root.clone() else {
+            self.set_status_message("remote operations unavailable (no repository)");
+            return;
+        };
+        let mut command = remote_command(op, &root);
+        let id = self.background.spawn(move || run_command(&mut command));
+        self.remote_op = Some(InFlightRemote { id, op });
+        self.set_status_message(format!("{}\u{2026}", op.label()));
+    }
+
+    /// Drains completed background remote operations (once per event-loop
+    /// tick, alongside [`super::code_intel::poll`]). For the in-flight op's
+    /// result it appends a [`CommandLogEntry`], clears the guard, re-runs the
+    /// full refresh (diff/status plus branch/stash reads), and sets a
+    /// success/failure footer summary. Foreign or stale task ids are ignored.
+    pub(super) fn poll_remote(&mut self) {
+        let done = self.background.poll();
+        for (id, result) in done {
+            let Some(in_flight) = self.remote_op else {
+                continue;
+            };
+            if in_flight.id != id {
+                continue;
+            }
+            let op = in_flight.op;
+            self.remote_op = None;
+
+            let entry = match result {
+                Ok(outcome) => CommandLogEntry {
+                    command_line: op.command_line(),
+                    success: outcome.success,
+                    code: outcome.code,
+                    stdout: outcome.stdout,
+                    stderr: outcome.stderr,
+                },
+                Err(panic) => CommandLogEntry {
+                    command_line: op.command_line(),
+                    success: false,
+                    code: None,
+                    stdout: String::new(),
+                    stderr: panic.message,
+                },
+            };
+            let success = entry.success;
+            self.command_log.push(entry);
+
+            // Re-read the working tree so the changes list, branch header, and
+            // ahead/behind reflect the remote op; staged markers and
+            // annotations survive exactly as they do after any refresh.
+            self.refresh();
+
+            if success {
+                self.set_status_message(format!("{} succeeded", op.label()));
+            } else {
+                self.set_status_message(format!(
+                    "{} failed \u{2014} see command log (@)",
+                    op.label()
+                ));
+            }
+        }
+    }
+
     /// Best-effort re-read of the staged-file list from `git status`,
     /// keeping the previous list on any failure.
     fn refresh_staged_list(&mut self) {
@@ -980,6 +1108,7 @@ fn visual_mode_allows(action: Action) -> bool {
             | Action::ToggleStagingPanel
             | Action::ToggleHelp
             | Action::ToggleView
+            | Action::ToggleCommandLog
     )
 }
 
@@ -2384,6 +2513,126 @@ index 1..2 100644
         assert_eq!(app.staged.len(), 1);
         assert_eq!(app.staged[0].path, "a.rs");
         // Annotations survive the refresh exactly as today.
+        assert_eq!(app.annotations.len(), 1);
+    }
+
+    // -- Remote operations & command log (task 4.0) ------------------------
+
+    /// While a remote op is in flight, a second request is rejected with a
+    /// status message and spawns nothing — the guard is a message, not a queue.
+    #[test]
+    fn second_remote_request_while_one_in_flight_is_rejected_and_does_not_spawn() {
+        let mut app = App::new(vec![file("a.rs", 1)]);
+        // A repo root is present (so a request *could* spawn) and a fetch is
+        // already recorded as in flight.
+        app.repo_root = Some(std::path::PathBuf::from("/tmp"));
+        app.remote_op = Some(InFlightRemote {
+            id: TaskId(7),
+            op: RemoteOp::Fetch,
+        });
+
+        app.request_remote_op(RemoteOp::Pull);
+
+        // The in-flight op is untouched (still the fetch), the request was
+        // rejected with a message, and nothing new was spawned.
+        assert_eq!(app.remote_op.map(|o| o.op), Some(RemoteOp::Fetch));
+        assert!(
+            app.status_message
+                .as_deref()
+                .is_some_and(|m| m.contains("already running")),
+            "got {:?}",
+            app.status_message
+        );
+        assert!(
+            app.background.poll().is_empty(),
+            "the rejected request must not spawn a background task"
+        );
+    }
+
+    /// Without a known repository root, a remote request degrades to a footer
+    /// message rather than panicking or spawning.
+    #[test]
+    fn remote_request_without_a_repo_root_is_a_message_only() {
+        let mut app = App::new(vec![file("a.rs", 1)]);
+        assert!(app.repo_root.is_none());
+        app.request_remote_op(RemoteOp::Fetch);
+        assert!(app.remote_op.is_none());
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("remote operations unavailable (no repository)")
+        );
+    }
+
+    /// The full spawn -> poll -> log pipeline, driven through the *real*
+    /// [`BackgroundTasks`] path with a benign successful command standing in
+    /// for git: on completion the command log gains an entry, the refresh
+    /// re-reads branch/stash state, and staged markers plus annotations
+    /// survive exactly as after any refresh.
+    #[cfg(unix)]
+    #[test]
+    fn completed_remote_op_logs_and_refreshes_preserving_staged_and_annotations() {
+        use std::process::Command;
+        use std::time::{Duration, Instant};
+
+        let p = raw_patch("a.rs", 1);
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let fake = FakeGit {
+            calls: Rc::clone(&calls),
+            diff: vec![p.clone()],
+            status: vec![staged_entry("a.rs")],
+            branch: Some(BranchStatus {
+                name: "main".into(),
+                detached: false,
+                upstream: Some("origin/main".into()),
+                ahead_behind: Some((0, 0)),
+            }),
+            stashes: vec![StashEntry {
+                stash_ref: "stash@{0}".into(),
+                branch: Some("main".into()),
+                message: "wip: parser".into(),
+            }],
+            ..FakeGit::default()
+        };
+        let snapshot = ReviewSnapshot {
+            files: vec![FileDiff::from_patch(&p).unwrap()],
+            patches: vec![Some(p)],
+            staged: Vec::new(),
+        };
+        let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
+        app.annotations
+            .add(Target::file("a.rs"), Classification::Nit, "look here")
+            .unwrap();
+
+        // Spawn a benign successful command through the real background poller
+        // and mark it as the in-flight fetch (this is exactly what
+        // `request_remote_op` does, minus running git itself).
+        let id = app
+            .background
+            .spawn(|| run_command(&mut Command::new("true")));
+        app.remote_op = Some(InFlightRemote {
+            id,
+            op: RemoteOp::Fetch,
+        });
+
+        // Drain until the op is logged (mirrors the event-loop tick).
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.command_log.is_empty() && Instant::now() < deadline {
+            app.poll_remote();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        // The command log gained exactly one entry for the fetch.
+        assert_eq!(app.command_log.len(), 1);
+        let entry = app.command_log.entries().next().unwrap();
+        assert_eq!(entry.command_line, "git fetch");
+        assert!(entry.success);
+        // The guard is cleared, so a fresh op could start.
+        assert!(app.remote_op.is_none());
+        // Refresh ran: branch/stash re-read; staged markers + annotations survive.
+        assert_eq!(app.branch.as_ref().unwrap().name, "main");
+        assert_eq!(app.stashes.len(), 1);
+        assert_eq!(app.staged.len(), 1);
+        assert_eq!(app.staged[0].path, "a.rs");
         assert_eq!(app.annotations.len(), 1);
     }
 
