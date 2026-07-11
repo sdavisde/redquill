@@ -49,6 +49,19 @@ const PEEK_HINTS: &[(&str, &str)] = &[
     ("Esc / q", "Close"),
 ];
 
+/// The help overlay's group sections, in render order. Every [`Action`]'s
+/// [`group_of`] must be one of these, or its binding would never render — the
+/// `help_overlay_covers_every_keymap_binding` test pins that invariant.
+const GROUP_ORDER: [&str; 7] = [
+    "Navigation",
+    "Annotate",
+    "Stage",
+    "Search",
+    "Panels",
+    "Code intelligence",
+    "Quit",
+];
+
 /// Which help-overlay group an [`Action`] belongs to.
 fn group_of(action: Action) -> &'static str {
     use Action::*;
@@ -133,15 +146,7 @@ pub fn render(
         .unwrap_or(0);
 
     let mut lines: Vec<Line> = Vec::new();
-    for group in [
-        "Navigation",
-        "Annotate",
-        "Stage",
-        "Search",
-        "Panels",
-        "Code intelligence",
-        "Quit",
-    ] {
+    for group in GROUP_ORDER {
         let group_bindings: Vec<&Binding> = bindings
             .iter()
             .filter(|b| group_of(b.action) == group)
@@ -197,4 +202,29 @@ pub fn render(
         .title_alignment(Alignment::Center);
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, popup);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every binding in the keymap must land in one of the overlay's rendered
+    /// groups (`GROUP_ORDER`). If an action's `group_of` returned a label not
+    /// in that list, its binding would be silently omitted from `?` — the
+    /// "every user-visible action is listed in the `?` help overlay" rule
+    /// (CLAUDE.md). Because `group_of` is an exhaustive match, this also
+    /// guarantees any newly added `Action` is forced into a visible group.
+    #[test]
+    fn help_overlay_covers_every_keymap_binding() {
+        let keymap = Keymap::default_map();
+        for binding in keymap.bindings() {
+            let group = group_of(binding.action);
+            assert!(
+                GROUP_ORDER.contains(&group),
+                "binding {:?} ({}) maps to group {group:?}, which the help overlay never renders",
+                binding.action,
+                binding.key_label(),
+            );
+        }
+    }
 }

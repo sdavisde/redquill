@@ -18,9 +18,9 @@ Zed's git panel and diff viewer are the quality bar for the review experience. l
 ## Core features
 
 **v1 — the review loop**
-- Working-tree diff viewer: unified view, syntax highlighting, word-level intra-line diff, file tree sidebar
+- Working-tree diff viewer: all changed files in one scrollable multibuffer of collapsible per-file sections, unified view, syntax highlighting, word-level intra-line diff, file tree sidebar
 - Hunk/line navigation: jump between files, hunks, and changed regions without touching the mouse
-- Staging: stage/unstage at file, hunk, and line granularity (hidden panel by default; toggle it in)
+- Staging: stage/unstage at file, hunk, and line granularity; staging a file collapses its section out of the way (hidden panel by default; toggle it in)
 - Annotations: comment on any line, range, hunk, or file; classify (issue / question / nit / praise); browse all annotations in one list
 - Batch output: on quit, emit annotations as structured markdown to stdout (and optionally a file) so any agent or script can consume them
 - Diff targets: working tree (default), staged, commit ranges, arbitrary refs
@@ -56,18 +56,21 @@ Vim-grammar keybindings, fully remappable. Draft default map:
 | `?` | Help |
 | `q` / `Q` | Quit and emit annotations / quit and discard |
 
-Layout sketch:
+Layout sketch — every changed file is one collapsible section in a single scrollable **multibuffer** (`▾` expanded / `▸` collapsed; `●` fully staged / `±` partially staged); staging a file collapses it out of the way, unstaging on its header brings it back:
 
 ```
-┌─ files ──────┬─ diff: src/auth/session.rs ────────────────────────────┐
-│ M src/auth/  │  42 │  fn validate(token: &Token) -> Result<Claims> {  │
-│  ▸ session.rs│  43 │-     let key = env::var("SECRET")?;              │
-│  ▸ mod.rs    │  44 │+     let key = self.keystore.current()?;         │
-│ A src/keys.rs│     │  ● [question] where does keystore get rotated?   │
-│ M tests/…    │  45 │      decode(token, &key)                         │
-│              │ ┌─ references: keystore.current() ── 3 results ──┐     │
-│ [2 staged]   │ │ src/keys.rs:81   src/auth/mod.rs:12   tests/…  │     │
-│ [4 notes]    │ └────────────────────────────────────────────────┘     │
+┌─ files ──────┬─ uncommitted changes ─────────────────────────────────┐
+│ ± session.rs │ ▾ M src/auth/session.rs                            ±  │
+│   mod.rs     │   42 │  fn validate(token: &Token) -> Result<Claims>{ │
+│ ● keys.rs    │   43 │-     let key = env::var("SECRET")?;            │
+│   tests/…    │   44 │+     let key = self.keystore.current()?;       │
+│              │      │  ● [question] where does keystore get rotated? │
+│ [2 staged]   │ ▸ A src/keys.rs                                    ●  │
+│ [4 notes]    │ ▾ M src/auth/mod.rs                                   │
+│              │   12 │+ pub mod keystore;                             │
+│              │ ┌─ references: keystore.current() ── 3 results ──┐    │
+│              │ │ src/keys.rs:81   src/auth/mod.rs:12   tests/…  │    │
+│              │ └────────────────────────────────────────────────┘   │
 └──────────────┴────────────────────────────────────────────────────────┘
 ```
 

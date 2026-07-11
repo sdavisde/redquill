@@ -99,7 +99,7 @@ Ordering rationale: the side-by-side removal comes first because `rows` and `sbs
 - [x] 4.4 Add the narrow select-by-path seam from spec 02: `App::select_file_by_path(&Path)` expands (if collapsed) and scrolls to that file's section header, and route sidebar/git-panel selection through it; unit tests including the unknown-path case.
 - [x] 4.5 Render the multibuffer for `--staged` and ref-range targets; for ranges, make staging actions no-ops absent from contextual help (`src/ui/help.rs` gains target-aware filtering); tests per target; run the four gates, record `03-proofs/03-task-04-proofs.md`, and commit `feat: multibuffer across all diff targets with full review surface`.
 
-### [ ] 5.0 Performance hardening and keymap/docs finalization
+### [x] 5.0 Performance hardening and keymap/docs finalization
 
 #### 5.0 Proof Artifact(s)
 
@@ -110,7 +110,7 @@ Ordering rationale: the side-by-side removal comes first because `rows` and `sbs
 
 #### 5.0 Tasks
 
-- [ ] 5.1 Replace the wholesale highlight-cache clear in `App::refresh` with per-file invalidation (only files whose diff content changed), and populate the cache lazily on first visibility/expansion; unit tests in `src/ui/syntax.rs`/`app.rs`.
-- [ ] 5.2 Make stage/collapse row rebuilds incremental or verify a full rebuild of a 5k-line buffer is imperceptible (measure; document the numbers in the perf transcript); remove any remaining redundant per-gesture work found while measuring.
-- [ ] 5.3 Build a throwaway ~5k-line multi-file diff fixture repo (commands recorded), run the held-`j`/`Ctrl-d` scroll and stage/collapse checks, and commit `03-proofs/03-task-05-proofs.md`.
-- [ ] 5.4 Final README.md keymap table + `?` overlay sweep (every new action listed, `zM`/`zR` included if implemented), run the four gates, and commit `docs: finalize multibuffer keymap and proofs`.
+- [x] 5.1 Replace the wholesale highlight-cache clear in `App::refresh` with per-file invalidation (only files whose diff content changed), and populate the cache lazily on first visibility/expansion; unit tests in `src/ui/syntax.rs`/`app.rs`.
+- [x] 5.2 Make stage/collapse row rebuilds incremental or verify a full rebuild of a 5k-line buffer is imperceptible (measure; document the numbers in the perf transcript); remove any remaining redundant per-gesture work found while measuring.
+- [x] 5.3 Build a throwaway ~5k-line multi-file diff fixture repo (commands recorded), run the held-`j`/`Ctrl-d` scroll and stage/collapse checks, and commit `03-proofs/03-task-05-proofs.md`.
+- [x] 5.4 Final README.md keymap table + `?` overlay sweep (every new action listed, `zM`/`zR` included if implemented), run the four gates, and commit `docs: finalize multibuffer keymap and proofs`.
