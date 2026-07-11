@@ -36,7 +36,7 @@ Task list for `02-spec-git-panel.md`. Sequencing: spec 01 (app decomposition) is
 
 ## Tasks
 
-### [ ] 1.0 Repository state read models (branch, upstream, ahead/behind, stashes)
+### [x] 1.0 Repository state read models (branch, upstream, ahead/behind, stashes)
 
 Extend `git/` with typed, TDD-tested knowledge of repository sync state: extend the existing `status --porcelain=v2 -z` call with `--branch` and parse the `# branch.head` / `# branch.upstream` / `# branch.ab` headers into a typed struct; add a `git stash list --format=...` parser producing typed entries (ref, source branch, message). Degrade gracefully (detached HEAD → short commit id, no upstream → no counts, zero stashes → empty list); errors via `thiserror`; no TUI types in `git/`.
 
@@ -48,13 +48,13 @@ Extend `git/` with typed, TDD-tested knowledge of repository sync state: extend 
 
 #### 1.0 Tasks
 
-- [ ] 1.1 Write failing unit tests for branch-header parsing in a new `src/git/branch.rs`: fixtures for a normal branch with upstream and `# branch.ab +2 -1`, a detached HEAD (`# branch.head (detached)` plus `# branch.oid`), and a branch with no upstream (no `branch.upstream`/`branch.ab` lines).
-- [ ] 1.2 Implement `BranchStatus` (name-or-short-oid, `Option<upstream>`, `Option<(ahead, behind)>`) and its header parser in `src/git/branch.rs`, errors via the existing `GitError` (`thiserror`), no TUI types; export from `src/git/mod.rs`; tests from 1.1 pass.
-- [ ] 1.3 Add `--branch` to the status invocation in `src/git/runner.rs`, feed `#`-prefixed header lines to the branch parser, and confirm `parse_porcelain_v2` still passes all existing tests with headers present in the stream.
-- [ ] 1.4 Write failing unit tests for stash-list parsing: choose an explicit `--format` with an unambiguous field separator (e.g. `%gd%x00%gs`), fixtures for empty output, multiple entries, and a stash message containing spaces/colons.
-- [ ] 1.5 Implement `StashEntry` (ref such as `stash@{0}`, source branch, message) and its parser in `src/git/stash.rs`; add a `stash_list` method to `GitRunner`; export from `src/git/mod.rs`; tests from 1.4 pass.
-- [ ] 1.6 Add an integration test to `tests/git_integration.rs` using the existing tempdir helpers: create a local bare upstream, arrange ahead-2/behind-1 via fixture commits, create one stash, and assert the parsed branch name, upstream, counts, and stash entry. Also cover the detached-HEAD and no-upstream cases against real git.
-- [ ] 1.7 Run all four gates (`cargo build`, `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check`) and record the test-count delta against the pre-task baseline.
+- [x] 1.1 Write failing unit tests for branch-header parsing in a new `src/git/branch.rs`: fixtures for a normal branch with upstream and `# branch.ab +2 -1`, a detached HEAD (`# branch.head (detached)` plus `# branch.oid`), and a branch with no upstream (no `branch.upstream`/`branch.ab` lines).
+- [x] 1.2 Implement `BranchStatus` (name-or-short-oid, `Option<upstream>`, `Option<(ahead, behind)>`) and its header parser in `src/git/branch.rs`, errors via the existing `GitError` (`thiserror`), no TUI types; export from `src/git/mod.rs`; tests from 1.1 pass.
+- [x] 1.3 Add `--branch` to the status invocation in `src/git/runner.rs`, feed `#`-prefixed header lines to the branch parser, and confirm `parse_porcelain_v2` still passes all existing tests with headers present in the stream.
+- [x] 1.4 Write failing unit tests for stash-list parsing: choose an explicit `--format` with an unambiguous field separator (e.g. `%gd%x00%gs`), fixtures for empty output, multiple entries, and a stash message containing spaces/colons.
+- [x] 1.5 Implement `StashEntry` (ref such as `stash@{0}`, source branch, message) and its parser in `src/git/stash.rs`; add a `stash_list` method to `GitRunner`; export from `src/git/mod.rs`; tests from 1.4 pass.
+- [x] 1.6 Add an integration test to `tests/git_integration.rs` using the existing tempdir helpers: create a local bare upstream, arrange ahead-2/behind-1 via fixture commits, create one stash, and assert the parsed branch name, upstream, counts, and stash entry. Also cover the detached-HEAD and no-upstream cases against real git.
+- [x] 1.7 Run all four gates (`cargo build`, `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check`) and record the test-count delta against the pre-task baseline.
 
 ### [ ] 2.0 Git panel rendering: branch header and sectioned file/stash display
 

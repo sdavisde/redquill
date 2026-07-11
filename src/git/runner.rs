@@ -5,7 +5,8 @@ use std::process::Command;
 
 use super::diff::{DiffTarget, RawFilePatch, split_patches};
 use super::error::GitError;
-use super::status::{FileStatus, parse_porcelain_v2};
+use super::stash::{STASH_LIST_FORMAT, StashEntry, parse_stash_list};
+use super::status::{FileStatus, StatusSnapshot, parse_porcelain_v2, parse_porcelain_v2_full};
 
 /// Runs `git` commands against a single repository working tree.
 ///
@@ -80,9 +81,23 @@ impl GitRunner {
     }
 
     /// Returns the parsed working-tree/index status for every changed path.
+    ///
+    /// The underlying invocation includes `--branch` (see
+    /// [`GitRunner::status_with_branch`] for the branch/upstream/ahead-behind
+    /// data that comes along for free on the same call); `parse_porcelain_v2`
+    /// skips the `# branch.*` header fields, so this keeps returning exactly
+    /// the file-status list it always has.
     pub fn status(&self) -> Result<Vec<FileStatus>, GitError> {
-        let out = self.run_utf8(&["status", "--porcelain=v2", "-z"])?;
+        let out = self.run_utf8(&["status", "--porcelain=v2", "--branch", "-z"])?;
         parse_porcelain_v2(&out)
+    }
+
+    /// Returns the working-tree/index status alongside branch sync state
+    /// (name, upstream, ahead/behind), parsed from one `git status
+    /// --porcelain=v2 --branch -z` invocation.
+    pub fn status_with_branch(&self) -> Result<StatusSnapshot, GitError> {
+        let out = self.run_utf8(&["status", "--porcelain=v2", "--branch", "-z"])?;
+        parse_porcelain_v2_full(&out)
     }
 
     /// Returns raw per-file patches for the given diff target.
@@ -98,6 +113,14 @@ impl GitRunner {
         }
         let out = self.run_utf8(&args)?;
         Ok(split_patches(&out))
+    }
+
+    /// Returns the parsed stash list, newest first. An empty list (no
+    /// stashes) is not an error.
+    pub fn stash_list(&self) -> Result<Vec<StashEntry>, GitError> {
+        let format_arg = format!("--format={STASH_LIST_FORMAT}");
+        let out = self.run_utf8(&["stash", "list", &format_arg])?;
+        parse_stash_list(&out)
     }
 
     /// Reads a file's content at a git revision spec (`git show <spec>`,

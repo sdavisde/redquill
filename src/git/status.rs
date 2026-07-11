@@ -4,6 +4,7 @@
 //! payload and returns typed [`FileStatus`] records. No process spawning lives
 //! here, which keeps it directly unit-testable with fixture strings.
 
+use super::branch::{BranchStatus, parse_branch_headers};
 use super::error::GitError;
 
 /// A single porcelain status code, as it appears in the `XY` field.
@@ -174,6 +175,9 @@ pub fn parse_porcelain_v2(input: &str) -> Result<Vec<FileStatus>, GitError> {
                 path: path.to_string(),
                 orig_path: None,
             });
+        } else if entry.starts_with("# ") {
+            // `--branch` header field (`# branch.head`, `# branch.ab`, ...);
+            // not a file record, see `branch::parse_branch_headers`.
         } else {
             return Err(GitError::Parse(format!(
                 "unrecognized status record: {entry:?}"
@@ -182,6 +186,26 @@ pub fn parse_porcelain_v2(input: &str) -> Result<Vec<FileStatus>, GitError> {
     }
 
     Ok(out)
+}
+
+/// A status snapshot combining per-path statuses with branch sync state,
+/// both parsed from a single `git status --porcelain=v2 --branch -z`
+/// payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusSnapshot {
+    /// Per-path statuses, as returned by [`parse_porcelain_v2`].
+    pub files: Vec<FileStatus>,
+    /// Branch name, upstream, and ahead/behind state.
+    pub branch: BranchStatus,
+}
+
+/// Parses the full payload (file records plus `# branch.*` headers) of
+/// `git status --porcelain=v2 --branch -z` into a [`StatusSnapshot`].
+pub fn parse_porcelain_v2_full(input: &str) -> Result<StatusSnapshot, GitError> {
+    Ok(StatusSnapshot {
+        files: parse_porcelain_v2(input)?,
+        branch: parse_branch_headers(input)?,
+    })
 }
 
 /// Parses an ordinary `1` record (prefix already stripped).
@@ -338,5 +362,37 @@ mod tests {
     fn rename_missing_orig_path_errors() {
         let input = "2 R. N... 100644 100644 100644 c d R100 to.rs\0";
         assert!(matches!(parse_porcelain_v2(input), Err(GitError::Parse(_))));
+    }
+
+    #[test]
+    fn branch_headers_are_skipped_not_errored() {
+        // `git status --porcelain=v2 --branch -z` prepends `# branch.*`
+        // header fields before the ordinary record fields.
+        let input = concat!(
+            "# branch.oid 85d7cc5dd1cf49f6abe1c81439fbb5deae4124ab\0",
+            "# branch.head main\0",
+            "# branch.upstream origin/main\0",
+            "# branch.ab +2 -1\0",
+            "1 .M N... 100644 100644 100644 aaa bbb src/main.rs\0",
+        );
+        let entries = parse_porcelain_v2(input).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "src/main.rs");
+    }
+
+    #[test]
+    fn parse_porcelain_v2_full_combines_files_and_branch() {
+        let input = concat!(
+            "# branch.oid 85d7cc5dd1cf49f6abe1c81439fbb5deae4124ab\0",
+            "# branch.head main\0",
+            "# branch.upstream origin/main\0",
+            "# branch.ab +2 -1\0",
+            "1 .M N... 100644 100644 100644 aaa bbb src/main.rs\0",
+            "? untracked.txt\0",
+        );
+        let snapshot = parse_porcelain_v2_full(input).unwrap();
+        assert_eq!(snapshot.files.len(), 2);
+        assert_eq!(snapshot.branch.name, "main");
+        assert_eq!(snapshot.branch.ahead_behind, Some((2, 1)));
     }
 }

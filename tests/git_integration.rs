@@ -12,6 +12,23 @@ use std::process::Command;
 use redquill::git::{ChangeKind, DiffTarget, GitRunner, StatusCode};
 use tempfile::TempDir;
 
+/// Runs a git command in `dir` and returns its trimmed stdout. Used only to
+/// build fixtures (e.g. discovering a default branch name).
+fn git_out(dir: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .expect("failed to spawn git");
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
 /// Runs a git command in `dir`, asserting success. Used only to build fixtures.
 fn git(dir: &Path, args: &[&str]) {
     let output = Command::new("git")
@@ -206,6 +223,107 @@ fn empty_diff_yields_no_patches() {
     // Clean working tree: nothing changed since the initial commit.
     assert!(runner.diff(&DiffTarget::WorkingTree).unwrap().is_empty());
     assert!(runner.status().unwrap().is_empty());
+}
+
+/// Initializes a fresh repo on a deterministic branch name (`git init`'s
+/// default branch name depends on the host's global config), returning the
+/// tempdir.
+fn init_repo_on_branch(name: &str) -> TempDir {
+    let tmp = init_repo();
+    git(tmp.path(), &["branch", "-M", name]);
+    tmp
+}
+
+#[test]
+fn branch_ahead_and_behind_with_upstream_and_a_stash() {
+    // Bare "remote" repo.
+    let bare = TempDir::new().unwrap();
+    git(bare.path(), &["init", "-q", "--bare"]);
+
+    // Local repo, pushed to the bare remote with an upstream set.
+    let repo = init_repo_on_branch("main");
+    let bare_str = bare.path().to_str().unwrap();
+    git(repo.path(), &["remote", "add", "origin", bare_str]);
+    git(repo.path(), &["push", "-q", "-u", "origin", "main"]);
+
+    // A second clone pushes a commit the local repo doesn't have yet —
+    // this becomes the "behind" commit once the local repo fetches.
+    let parent = TempDir::new().unwrap();
+    git(parent.path(), &["clone", "-q", bare_str, "clone2"]);
+    let clone2 = parent.path().join("clone2");
+    git(&clone2, &["config", "user.name", "redquill test"]);
+    git(&clone2, &["config", "user.email", "test@redquill.invalid"]);
+    write(&clone2, "base.txt", b"line one\nline two\nremote change\n");
+    git(&clone2, &["commit", "-aqm", "remote commit"]);
+    git(&clone2, &["push", "-q", "origin", "main"]);
+
+    // Two local commits the remote doesn't have yet.
+    write(repo.path(), "base.txt", b"line one\nline two\nlocal one\n");
+    git(repo.path(), &["commit", "-aqm", "local commit 1"]);
+    write(
+        repo.path(),
+        "base.txt",
+        b"line one\nline two\nlocal one\nlocal two\n",
+    );
+    git(repo.path(), &["commit", "-aqm", "local commit 2"]);
+    // Ahead/behind is computed against the last-fetched remote-tracking
+    // ref, so the local repo must fetch to see the remote's new commit.
+    git(repo.path(), &["fetch", "-q", "origin"]);
+
+    // One stash on top, with an explicit message.
+    write(
+        repo.path(),
+        "base.txt",
+        b"line one\nline two\nuncommitted\n",
+    );
+    git(
+        repo.path(),
+        &["stash", "push", "-q", "-m", "wip: mid-review"],
+    );
+
+    let runner = runner_for(&repo);
+
+    let snapshot = runner.status_with_branch().unwrap();
+    assert_eq!(snapshot.branch.name, "main");
+    assert!(!snapshot.branch.detached);
+    assert_eq!(snapshot.branch.upstream.as_deref(), Some("origin/main"));
+    assert_eq!(snapshot.branch.ahead_behind, Some((2, 1)));
+
+    let stashes = runner.stash_list().unwrap();
+    assert_eq!(stashes.len(), 1);
+    assert_eq!(stashes[0].stash_ref, "stash@{0}");
+    assert_eq!(stashes[0].branch.as_deref(), Some("main"));
+    assert_eq!(stashes[0].message, "wip: mid-review");
+}
+
+#[test]
+fn detached_head_branch_status_uses_short_oid() {
+    let repo = init_repo_on_branch("main");
+    let head_oid = git_out(repo.path(), &["rev-parse", "HEAD"]);
+    git(repo.path(), &["checkout", "-q", "--detach", "HEAD"]);
+
+    let runner = runner_for(&repo);
+    let snapshot = runner.status_with_branch().unwrap();
+    assert!(snapshot.branch.detached);
+    assert!(head_oid.starts_with(&snapshot.branch.name));
+    assert_eq!(snapshot.branch.upstream, None);
+    assert_eq!(snapshot.branch.ahead_behind, None);
+
+    // Stash list is empty and that's not an error.
+    assert!(runner.stash_list().unwrap().is_empty());
+}
+
+#[test]
+fn branch_with_no_upstream_has_no_ahead_behind() {
+    let repo = init_repo_on_branch("main");
+    git(repo.path(), &["checkout", "-qb", "feature/no-upstream"]);
+
+    let runner = runner_for(&repo);
+    let snapshot = runner.status_with_branch().unwrap();
+    assert_eq!(snapshot.branch.name, "feature/no-upstream");
+    assert!(!snapshot.branch.detached);
+    assert_eq!(snapshot.branch.upstream, None);
+    assert_eq!(snapshot.branch.ahead_behind, None);
 }
 
 #[test]
