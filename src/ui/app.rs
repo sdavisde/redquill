@@ -175,6 +175,20 @@ pub struct App {
     /// Whether the command-log pane is open in the bottom-panel slot. Toggled
     /// with `@` from both the diff view and the focused panel.
     pub(super) command_log_open: bool,
+    /// The background-task poller the async working-tree refresh runs through.
+    /// Separate from `background` so remote-op and refresh results never mix in
+    /// one drain. Yields `None` when the background read hit a git error.
+    pub(super) refresh_tasks: BackgroundTasks<Option<ReviewSnapshot>>,
+    /// The single async refresh currently in flight, if any (single-flight,
+    /// like `remote_op`). Carries the generation it was spawned at so a
+    /// snapshot that predates a foreground refresh is discarded, not applied.
+    pub(super) refresh_in_flight: Option<InFlightRefresh>,
+    /// Bumped by every synchronous refresh — and therefore by every staging or
+    /// remote mutation, which all refresh afterward. An async snapshot is
+    /// applied only if this still matches the value captured when it spawned:
+    /// the staleness guard that stops a background read from clobbering a
+    /// concurrent stage.
+    pub(super) refresh_generation: u64,
 }
 
 /// A remote operation that has been spawned and is awaiting completion. Its
@@ -186,6 +200,18 @@ pub(super) struct InFlightRemote {
     pub(super) id: TaskId,
     /// Which remote operation is running (drives the label and command line).
     pub(super) op: RemoteOp,
+}
+
+/// An async working-tree refresh awaiting completion. Its [`TaskId`]
+/// correlates the background [`ReviewSnapshot`] back to the request; `generation`
+/// is the [`App::refresh_generation`] at spawn time, and the drain discards the
+/// result if a foreground refresh has since bumped it.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct InFlightRefresh {
+    /// The background task delivering this refresh's snapshot.
+    pub(super) id: TaskId,
+    /// The refresh generation captured when this read was spawned.
+    pub(super) generation: u64,
 }
 
 impl App {
@@ -229,6 +255,9 @@ impl App {
             command_log: CommandLog::new(),
             remote_op: None,
             command_log_open: false,
+            refresh_tasks: BackgroundTasks::new(),
+            refresh_in_flight: None,
+            refresh_generation: 0,
         };
         app.rebuild_rows();
         app
@@ -872,6 +901,10 @@ impl App {
     /// the caller rather than swallowing it; a no-op (and `Ok`) without a git
     /// backend.
     fn rebuild_from_git(&mut self) -> Result<(), ReviewError> {
+        // A foreground refresh authoritatively sets the displayed state, so
+        // bump the generation: any async snapshot spawned before now is
+        // discarded on drain rather than clobbering this newer state.
+        self.refresh_generation = self.refresh_generation.wrapping_add(1);
         let snapshot = {
             let Some(ops) = self.stage_ops.as_deref() else {
                 return Ok(());
@@ -891,14 +924,14 @@ impl App {
         }
     }
 
-    /// Re-reads the working tree only when it has actually changed since the
-    /// last refresh, applying the fresh snapshot and returning whether it did.
-    /// This is the lazygit-style polling path (see [`super::event_loop`]): the
-    /// diff/status git reads run every tick, but the expensive row rebuild and
-    /// cursor restoration are skipped whenever the review is byte-identical to
-    /// what's already displayed, so idle polling never disturbs scrolling.
-    /// Silent on a transient git error — it keeps the current view and retries
-    /// next tick, degrading quietly like the LSP layer.
+    /// The *synchronous* fallback for the working-tree poll, used only when the
+    /// backend can't cross a thread boundary (test fakes, git-less contexts);
+    /// the production path is async ([`App::spawn_auto_refresh`] +
+    /// [`App::poll_refresh`]). Re-reads the tree and applies the fresh snapshot
+    /// only when it actually changed, returning whether it did — the expensive
+    /// row rebuild and cursor restoration are skipped whenever the review is
+    /// byte-identical to what's displayed, so idle polling never disturbs
+    /// scrolling. Silent on a transient git error, keeping the current view.
     pub(super) fn auto_refresh(&mut self) -> bool {
         let snapshot = {
             let Some(ops) = self.stage_ops.as_deref() else {
@@ -935,7 +968,82 @@ impl App {
         ) {
             return;
         }
-        self.auto_refresh();
+        // Prefer the async path (git I/O off the render thread); fall back to
+        // a synchronous rebuild for backends that can't cross a thread
+        // boundary (test fakes, git-less contexts).
+        if !self.spawn_auto_refresh() {
+            self.auto_refresh();
+        }
+    }
+
+    /// Spawns a background working-tree read when the backend supports it,
+    /// returning whether the async path is handling this poll. Single-flight:
+    /// if a refresh is already in flight it reports handled (`true`) without
+    /// stacking a second read. Returns `false` only when there is no async
+    /// backend, telling [`App::maybe_auto_refresh`] to fall back to a
+    /// synchronous refresh.
+    fn spawn_auto_refresh(&mut self) -> bool {
+        let Some(builder) = self
+            .stage_ops
+            .as_deref()
+            .and_then(|ops| ops.async_review_builder())
+        else {
+            return false;
+        };
+        if self.refresh_in_flight.is_some() {
+            return true;
+        }
+        let target = self.target.clone();
+        let id = self.refresh_tasks.spawn(move || builder(&target).ok());
+        self.refresh_in_flight = Some(InFlightRefresh {
+            id,
+            generation: self.refresh_generation,
+        });
+        true
+    }
+
+    /// Drains a completed async working-tree refresh (once per event-loop tick,
+    /// alongside [`App::poll_remote`]). Applies the fresh snapshot only when it
+    /// isn't stale — its spawn-time generation still matches the current one —
+    /// and only when the review actually changed (the same gate the synchronous
+    /// path uses). Task panics, git errors, and no-op results drop silently.
+    pub(super) fn poll_refresh(&mut self) {
+        for (id, result) in self.refresh_tasks.poll() {
+            let Some(in_flight) = self.refresh_in_flight else {
+                continue;
+            };
+            if in_flight.id != id {
+                continue;
+            }
+            self.refresh_in_flight = None;
+
+            // A foreground refresh (e.g. a stage) landed after this read was
+            // spawned: the snapshot may predate it, so drop it rather than
+            // clobber the newer state. The next poll re-reads a fresh tree.
+            if in_flight.generation != self.refresh_generation {
+                continue;
+            }
+            // The spawn was gated on a safe mode, but the user may have entered
+            // input/selection in the moment since — don't rebuild rows under an
+            // active Compose/Search/Visual. Drop it; the next poll re-reads once
+            // a safe mode returns (matches the `maybe_auto_refresh` guard).
+            if matches!(
+                self.mode,
+                Mode::Compose | Mode::Search | Mode::Visual { .. }
+            ) {
+                continue;
+            }
+            let Ok(Some(snapshot)) = result else {
+                continue;
+            };
+            if snapshot.files == self.view.files
+                && snapshot.staged == self.staged
+                && snapshot.staged_states == self.staged_states
+            {
+                continue;
+            }
+            self.apply_snapshot(snapshot);
+        }
     }
 
     /// Applies a freshly built [`ReviewSnapshot`]: swaps in the new
@@ -2132,6 +2240,7 @@ index 1..2 100644
 
     use std::cell::RefCell;
     use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
 
     use crate::git::{ChangeKind, FileStatus, GitError, StatusCode};
 
@@ -3253,6 +3362,212 @@ index 1..2 100644
         app.apply(Action::Refresh);
         assert_eq!(app.view.files[0].hunks.len(), 2);
         assert_eq!(app.status_message.as_deref(), Some("refreshed"));
+    }
+
+    #[test]
+    fn maybe_auto_refresh_uses_the_sync_fallback_without_an_async_backend() {
+        // `FakeGit` isn't `Send`, so it yields no async builder: the poll must
+        // fall back to a synchronous rebuild (no task in flight) and apply the
+        // edit directly.
+        let (mut app, _calls, diff_h, _status_h) = app_with_mutable_fake(
+            vec![raw_patch("a.rs", 1)],
+            vec![],
+            vec![raw_patch("a.rs", 1)],
+            vec![],
+        );
+        *diff_h.borrow_mut() = vec![raw_patch("a.rs", 2)];
+        app.maybe_auto_refresh();
+        assert!(
+            app.refresh_in_flight.is_none(),
+            "a non-Send backend must not spawn an async task"
+        );
+        assert_eq!(app.view.files[0].hunks.len(), 2, "applied synchronously");
+    }
+
+    #[test]
+    fn a_foreground_refresh_bumps_the_refresh_generation() {
+        // The staleness guard depends on every synchronous refresh advancing
+        // the generation; a stage refreshes, so it advances too.
+        let p = raw_patch("a.rs", 1);
+        let (mut app, _calls) =
+            app_with_fake(vec![p.clone()], DiffTarget::WorkingTree, vec![p], vec![]);
+        let before = app.refresh_generation;
+        app.refresh();
+        assert!(
+            app.refresh_generation > before,
+            "refresh must bump the generation"
+        );
+        let after_refresh = app.refresh_generation;
+        app.apply(Action::StageFile);
+        assert!(
+            app.refresh_generation > after_refresh,
+            "a stage refreshes, so it bumps the generation too"
+        );
+    }
+
+    /// The async working-tree poll, exercised on real background threads with a
+    /// `Send` fake (the `Rc`-based `FakeGit` can't cross a thread boundary).
+    mod async_refresh {
+        use super::*;
+        use crate::ui::stage_ops::AsyncReviewBuilder;
+        use std::time::{Duration, Instant};
+
+        /// A `Send` [`StageOps`] fake so the async refresh can run on a worker
+        /// thread. `diff`/`status` read through shared handles a test mutates
+        /// to simulate an external edit landing between polls.
+        #[derive(Clone)]
+        struct SendFake {
+            diff: Arc<Mutex<Vec<RawFilePatch>>>,
+            status: Arc<Mutex<Vec<FileStatus>>>,
+        }
+
+        impl StageOps for SendFake {
+            fn diff(&self, _target: &DiffTarget) -> Result<Vec<RawFilePatch>, GitError> {
+                Ok(self.diff.lock().unwrap().clone())
+            }
+            fn status(&self) -> Result<Vec<FileStatus>, GitError> {
+                Ok(self.status.lock().unwrap().clone())
+            }
+            fn stage_file(&self, _path: &str) -> Result<(), GitError> {
+                Ok(())
+            }
+            fn unstage_file(&self, _path: &str) -> Result<(), GitError> {
+                Ok(())
+            }
+            fn apply_cached(&self, _patch: &str) -> Result<(), GitError> {
+                Ok(())
+            }
+            fn unapply_cached(&self, _patch: &str) -> Result<(), GitError> {
+                Ok(())
+            }
+            fn read_worktree_file(&self, _path: &str) -> Option<Vec<u8>> {
+                None
+            }
+            fn show_file(&self, _spec: &str) -> Option<String> {
+                None
+            }
+            fn async_review_builder(&self) -> Option<AsyncReviewBuilder> {
+                let me = self.clone();
+                Some(Box::new(move |target| build_review(&me, target)))
+            }
+        }
+
+        fn snapshot_of(patches: &[RawFilePatch], status: &[FileStatus]) -> ReviewSnapshot {
+            ReviewSnapshot {
+                files: patches
+                    .iter()
+                    .map(|p| FileDiff::from_patch(p).unwrap())
+                    .collect(),
+                patches: patches.iter().cloned().map(Some).collect(),
+                staged: staged_from_status(status),
+                staged_states: staged_states_from_status(status),
+            }
+        }
+
+        /// An `App` backed by a `Send` fake, plus a clone of that fake sharing
+        /// the same `diff`/`status` handles — a test mutates them to stage an
+        /// external edit the background read then sees.
+        fn app_with_send_fake(
+            files: Vec<RawFilePatch>,
+            status: Vec<FileStatus>,
+        ) -> (App, SendFake) {
+            let fake = SendFake {
+                diff: Arc::new(Mutex::new(files.clone())),
+                status: Arc::new(Mutex::new(status.clone())),
+            };
+            let snapshot = snapshot_of(&files, &status);
+            let app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake.clone()));
+            (app, fake)
+        }
+
+        /// Drives `poll_refresh` until the in-flight read drains or a deadline
+        /// passes (the worker runs on its own thread).
+        fn drain_refresh(app: &mut App) {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while app.refresh_in_flight.is_some() && Instant::now() < deadline {
+                app.poll_refresh();
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+
+        #[test]
+        fn async_poll_applies_an_external_edit_off_thread() {
+            let (mut app, fake) = app_with_send_fake(vec![raw_patch("a.rs", 1)], vec![]);
+            assert_eq!(app.view.files[0].hunks.len(), 1);
+
+            // An agent edits the file: it now has a second hunk.
+            *fake.diff.lock().unwrap() = vec![raw_patch("a.rs", 2)];
+            app.maybe_auto_refresh(); // spawns the background read
+            assert!(
+                app.refresh_in_flight.is_some(),
+                "the poll should run on a worker, not inline"
+            );
+            drain_refresh(&mut app);
+            assert!(app.refresh_in_flight.is_none());
+            assert_eq!(app.view.files[0].hunks.len(), 2);
+        }
+
+        #[test]
+        fn async_poll_is_single_flight() {
+            let (mut app, fake) = app_with_send_fake(vec![raw_patch("a.rs", 1)], vec![]);
+            *fake.diff.lock().unwrap() = vec![raw_patch("a.rs", 2)];
+
+            app.maybe_auto_refresh();
+            let first = app.refresh_in_flight.expect("first read in flight").id;
+            // A second tick before the first drains must not stack another read.
+            app.maybe_auto_refresh();
+            let second = app.refresh_in_flight.expect("still the first read").id;
+            assert_eq!(first, second, "must not spawn a second background read");
+
+            drain_refresh(&mut app);
+            assert_eq!(app.view.files[0].hunks.len(), 2);
+        }
+
+        #[test]
+        fn async_poll_discards_a_snapshot_from_before_a_foreground_refresh() {
+            // A background read (2-hunk edit) is in flight when a foreground
+            // refresh lands (bumping the generation). The stale snapshot must be
+            // dropped rather than clobber the newer state.
+            let (mut app, _fake) = app_with_send_fake(vec![raw_patch("a.rs", 3)], vec![]);
+            assert_eq!(app.view.files[0].hunks.len(), 3);
+
+            let stale = snapshot_of(&[raw_patch("a.rs", 2)], &[]);
+            let id = app.refresh_tasks.spawn(move || Some(stale));
+            app.refresh_in_flight = Some(InFlightRefresh {
+                id,
+                generation: app.refresh_generation,
+            });
+            // Foreground refresh happens first: it advances the generation.
+            app.refresh_generation = app.refresh_generation.wrapping_add(1);
+
+            drain_refresh(&mut app);
+            assert!(app.refresh_in_flight.is_none(), "stale read was consumed");
+            assert_eq!(
+                app.view.files[0].hunks.len(),
+                3,
+                "stale snapshot must not be applied over newer state"
+            );
+        }
+
+        #[test]
+        fn async_poll_does_not_rebuild_under_an_active_visual_selection() {
+            // The read was spawned in Normal, but the user entered Visual before
+            // it drained: applying it would rebuild rows under the selection's
+            // anchor, so the drain must drop it instead.
+            let (mut app, fake) = app_with_send_fake(vec![raw_patch("a.rs", 1)], vec![]);
+            *fake.diff.lock().unwrap() = vec![raw_patch("a.rs", 2)];
+            app.maybe_auto_refresh();
+            assert!(app.refresh_in_flight.is_some());
+
+            app.mode = Mode::Visual { anchor: 0 };
+            drain_refresh(&mut app);
+            assert!(app.refresh_in_flight.is_none(), "read was consumed");
+            assert_eq!(
+                app.view.files[0].hunks.len(),
+                1,
+                "must not rebuild while a Visual selection is active"
+            );
+        }
     }
 
     #[test]

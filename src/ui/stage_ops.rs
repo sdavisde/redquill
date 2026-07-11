@@ -27,6 +27,15 @@ pub enum ReviewError {
     Parse(#[from] DiffParseError),
 }
 
+/// A `Send` closure that rebuilds a [`ReviewSnapshot`] off the render thread,
+/// so the periodic working-tree poll doesn't block the event loop on git I/O.
+/// Only backends that can cross a thread boundary produce one (see
+/// [`StageOps::async_review_builder`]): the production [`GitRunner`] does;
+/// non-`Send` test fakes and git-less contexts return `None` and stay on the
+/// synchronous refresh path.
+pub type AsyncReviewBuilder =
+    Box<dyn Fn(&DiffTarget) -> Result<ReviewSnapshot, ReviewError> + Send>;
+
 /// The git operations the TUI needs for staging and refresh, kept behind a
 /// trait so [`super::App`]'s staging logic is unit-testable without a real
 /// repository. [`GitRunner`] is the production implementation.
@@ -36,6 +45,14 @@ pub trait StageOps {
     /// Parsed porcelain status for every changed path (see
     /// [`GitRunner::status`]).
     fn status(&self) -> Result<Vec<FileStatus>, GitError>;
+    /// A `Send` snapshot builder for the async working-tree poll, or `None`
+    /// for backends that can't cross a thread boundary. The default returns
+    /// `None`, keeping non-`Send` fakes (and git-less contexts) on the
+    /// synchronous path; [`GitRunner`] overrides it by cloning itself into the
+    /// closure (it is a cheap `PathBuf` handle).
+    fn async_review_builder(&self) -> Option<AsyncReviewBuilder> {
+        None
+    }
     /// Stages `path` in its entirety (see [`GitRunner::stage_file`]).
     fn stage_file(&self, path: &str) -> Result<(), GitError>;
     /// Unstages `path` (see [`GitRunner::unstage_file`]).
@@ -147,6 +164,14 @@ impl StageOps for GitRunner {
 
     fn switch_branch(&self, name: &str) -> Result<(), GitError> {
         GitRunner::switch_branch(self, name)
+    }
+
+    fn async_review_builder(&self) -> Option<AsyncReviewBuilder> {
+        // `GitRunner` is a `Clone` `PathBuf` handle, so cloning it into a
+        // `Send` closure lets the periodic poll run `build_review` on a
+        // background thread without touching `App`'s non-`Send` state.
+        let runner = self.clone();
+        Some(Box::new(move |target| build_review(&runner, target)))
     }
 }
 
