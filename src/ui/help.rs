@@ -58,7 +58,7 @@ fn group_of(action: Action) -> &'static str {
         EnterVisual | Compose => "Annotate",
         ToggleStage | ToggleStagingPanel => "Stage",
         Search | SearchNext | SearchPrev => "Search",
-        ToggleList | ToggleHelp | ToggleView => "Panels",
+        ToggleList | ToggleHelp => "Panels",
         GotoDefinition | GotoReferences | Hover => "Code intelligence",
         Quit | QuitDiscard => "Quit",
     }

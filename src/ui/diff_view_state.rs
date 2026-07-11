@@ -1,8 +1,7 @@
 //! [`DiffViewState`]: the "one view over one diff" state and the pure
 //! navigation logic over it — the file list, which file is selected, the
 //! flattened row model for that file, the cursor (row and column), the
-//! unified and side-by-side scroll offsets, the viewport height, and the
-//! layout choice.
+//! scroll offset, and the viewport height.
 //!
 //! This is the seam the multi-file collapsible diff buffer (spec 03) will
 //! generalize: everything here is expressed in terms of "rows for the
@@ -15,25 +14,12 @@
 use crate::annotate::AnnotationStore;
 use crate::diff::FileDiff;
 
-use super::rows::{Row, SbsRow, SyntaxSpans, build_rows};
+use super::rows::{Row, SyntaxSpans, build_rows};
 
 /// A reasonable default viewport height, used until the first frame reports
 /// the real one. Arbitrary but generous enough that half-page motion isn't
 /// degenerate before the first draw.
 const DEFAULT_VIEWPORT_HEIGHT: usize = 20;
-
-/// Which layout the diff pane renders: one column of unified hunks, or two
-/// columns (old left, new right) built as a rendering-time view over the
-/// same source [`Row`]s (see [`super::rows::build_sbs_rows`]). Toggled with
-/// `t`; the choice is preserved across file switches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ViewMode {
-    /// One column, old/new lines interleaved in patch order.
-    #[default]
-    Unified,
-    /// Two columns, old and new lines side by side.
-    SideBySide,
-}
 
 /// The per-view state: the diffed files, which one is selected, the
 /// flattened row model for that file, cursor and scroll positions, and the
@@ -46,30 +32,12 @@ pub struct DiffViewState {
     pub selected_file: usize,
     /// The flattened row model for `files[selected_file]`.
     pub rows: Vec<Row>,
-    /// The side-by-side visual row model over `rows` (see
-    /// [`super::rows::build_sbs_rows`]), rebuilt alongside it. Only consulted
-    /// when `layout == ViewMode::SideBySide`.
-    pub sbs_rows: Vec<SbsRow>,
-    /// `rows` index -> `sbs_rows` index, sized to `rows.len()`, rebuilt
-    /// alongside both. Used to keep [`DiffViewState::sbs_scroll`] following
-    /// the source-row cursor in visual-row space.
-    pub sbs_visual_of: Vec<usize>,
     /// The cursor's row index into `rows` — a LINE the user moves with
-    /// j/k, Zed-style. Anchors future annotation/staging commands. Stays a
-    /// source-row index in both view modes.
+    /// j/k, Zed-style. Anchors future annotation/staging commands.
     pub cursor: usize,
-    /// The first visible row index into `rows` (the unified viewport
-    /// follows the cursor). Meaningless in `ViewMode::SideBySide` — see
-    /// `sbs_scroll`.
+    /// The first visible row index into `rows` (the viewport follows the
+    /// cursor).
     pub scroll: usize,
-    /// The first visible row index into `sbs_rows` (the side-by-side
-    /// viewport follows the cursor's paired visual row). Kept in sync with
-    /// `cursor`/`viewport_height` by [`DiffViewState::ensure_visible`]
-    /// alongside `scroll`, regardless of which view is active, so toggling
-    /// `t` never needs a scroll-position fixup.
-    pub sbs_scroll: usize,
-    /// Which layout the diff pane renders. Preserved across file switches.
-    pub layout: ViewMode,
     /// The diff pane's last-known content height, used to size half-page
     /// motion. Updated once per frame by the render loop.
     viewport_height: usize,
@@ -90,12 +58,8 @@ impl DiffViewState {
             files,
             selected_file: 0,
             rows: Vec::new(),
-            sbs_rows: Vec::new(),
-            sbs_visual_of: Vec::new(),
             cursor: 0,
             scroll: 0,
-            sbs_scroll: 0,
-            layout: ViewMode::default(),
             viewport_height: DEFAULT_VIEWPORT_HEIGHT,
             cursor_col: 0,
         }
@@ -110,17 +74,6 @@ impl DiffViewState {
     /// The last-known viewport height (see [`DiffViewState::set_viewport_height`]).
     pub fn viewport_height(&self) -> usize {
         self.viewport_height
-    }
-
-    /// Flips between unified and side-by-side layout. The cursor stays a
-    /// source-row index, so nothing else needs to change — `scroll` and
-    /// `sbs_scroll` are already kept in sync by
-    /// [`DiffViewState::ensure_visible`] regardless of which view is active.
-    pub fn toggle_view(&mut self) {
-        self.layout = match self.layout {
-            ViewMode::Unified => ViewMode::SideBySide,
-            ViewMode::SideBySide => ViewMode::Unified,
-        };
     }
 
     fn half_page(&self) -> usize {
@@ -197,23 +150,12 @@ impl DiffViewState {
     pub fn ensure_visible(&mut self) {
         if self.rows.is_empty() {
             self.scroll = 0;
-            self.sbs_scroll = 0;
             return;
         }
         if self.cursor < self.scroll {
             self.scroll = self.cursor;
         } else if self.cursor >= self.scroll + self.viewport_height {
             self.scroll = self.cursor + 1 - self.viewport_height;
-        }
-
-        // Side-by-side scrolls in visual-row space (a paired removed/added
-        // line occupies one visual row, not two), kept in sync here
-        // unconditionally so toggling `t` never needs a fixup.
-        let visual_cursor = self.sbs_visual_of.get(self.cursor).copied().unwrap_or(0);
-        if visual_cursor < self.sbs_scroll {
-            self.sbs_scroll = visual_cursor;
-        } else if visual_cursor >= self.sbs_scroll + self.viewport_height {
-            self.sbs_scroll = visual_cursor + 1 - self.viewport_height;
         }
     }
 
@@ -379,7 +321,6 @@ fn is_word_char(c: char) -> bool {
 mod tests {
     use super::*;
     use crate::git::RawFilePatch;
-    use crate::ui::rows::build_sbs_rows;
 
     fn file_with_raw(path: &str, raw: &str) -> FileDiff {
         FileDiff::from_patch(&RawFilePatch {
@@ -401,10 +342,7 @@ mod tests {
             &AnnotationStore::new(),
             SyntaxSpans::default(),
         );
-        let (sbs_rows, sbs_visual_of) = build_sbs_rows(&view.files[0], &rows);
         view.rows = rows;
-        view.sbs_rows = sbs_rows;
-        view.sbs_visual_of = sbs_visual_of;
         view
     }
 
@@ -454,16 +392,6 @@ index 1..2 100644
         }
         assert!(view.scroll <= view.cursor);
         assert!(view.cursor < view.scroll + 2);
-    }
-
-    #[test]
-    fn toggle_view_round_trips() {
-        let mut view = view_with_raw("f.rs", sample_raw());
-        assert_eq!(view.layout, ViewMode::Unified);
-        view.toggle_view();
-        assert_eq!(view.layout, ViewMode::SideBySide);
-        view.toggle_view();
-        assert_eq!(view.layout, ViewMode::Unified);
     }
 
     #[test]

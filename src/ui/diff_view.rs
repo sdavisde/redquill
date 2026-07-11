@@ -302,9 +302,7 @@ fn annotation_row_line(
 }
 
 /// Renders one row (any [`Row`] variant) as a full-width [`Line`]: the
-/// diff pane's own per-frame renderer, and reused as-is by the side-by-side
-/// view for its full-width rows (file/hunk headers, annotations, binary
-/// placeholder) — see [`super::sbs_view`].
+/// diff pane's own per-frame renderer.
 pub(super) fn row_line(
     row: &Row,
     index: usize,

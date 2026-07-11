@@ -244,7 +244,6 @@ pub(super) fn peek_enter(app: &mut App) {
     app.rebuild_rows();
     app.view.cursor = closest_row_for_new_line(&app.view.rows, target_line).unwrap_or(0);
     app.view.scroll = 0;
-    app.view.sbs_scroll = 0;
     app.view.ensure_visible();
     close_peek(app);
 }
@@ -544,21 +543,6 @@ index 1..2 100644
         assert_eq!(
             app.status_message.as_deref(),
             Some("lsp: resolving\u{2026}")
-        );
-    }
-
-    /// `gd`'s LSP position is derived from `rows[cursor]`/the column
-    /// cursor, exactly like every other target-derivation gesture — toggling
-    /// side-by-side must not change the requested position.
-    #[test]
-    fn gd_position_is_identical_in_both_views() {
-        let (mut app, tmp, calls, _poll) = lsp_test_app();
-        move_to_added_line(&mut app);
-        app.apply(Action::ToggleView);
-        app.apply(Action::GotoDefinition);
-        assert_eq!(
-            calls.borrow()[0],
-            LspCall::Definition(tmp.path().join("src/main.rs"), 1, 0)
         );
     }
 

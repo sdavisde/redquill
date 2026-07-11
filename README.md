@@ -18,7 +18,7 @@ Zed's git panel and diff viewer are the quality bar for the review experience. l
 ## Core features
 
 **v1 — the review loop**
-- Working-tree diff viewer: unified and side-by-side, syntax highlighting, word-level intra-line diff, file tree sidebar
+- Working-tree diff viewer: unified view, syntax highlighting, word-level intra-line diff, file tree sidebar
 - Hunk/line navigation: jump between files, hunks, and changed regions without touching the mouse
 - Staging: stage/unstage at file, hunk, and line granularity (hidden panel by default; toggle it in)
 - Annotations: comment on any line, range, hunk, or file; classify (issue / question / nit / praise); browse all annotations in one list
@@ -45,7 +45,6 @@ Vim-grammar keybindings, fully remappable. Draft default map:
 | `h` / `l`, `w` / `b` | Move / word-jump the column cursor (needed for `gd`/`gr`/`K`) |
 | `]` / `[` | Next / previous hunk |
 | `Tab` / `Shift-Tab` | Next / previous file |
-| `t` | Toggle side-by-side view |
 | `/` then `n` / `N` | Search |
 | `c` | Comment on line (visual select `v` for ranges) |
 | `space` | Stage/unstage hunk (line in visual mode) |
@@ -120,4 +119,4 @@ Standing on the shoulders of: **lazygit** (staging ergonomics), **revdiff** and 
 
 ## Status
 
-Pre-alpha, but the v1 review loop is implemented and usable via `cargo run --`: diff viewer (unified and side-by-side), annotations with markdown-on-quit, and file/hunk/line staging. LSP peek (`gd`/`gr`/`K`) from the v1.x milestone is implemented too. Installation (prebuilt binaries, package manager taps) is still planned — for now, build from source. Roadmap order: diff viewer → annotations + stdout → staging → LSP peek → agent plugins.
+Pre-alpha, but the v1 review loop is implemented and usable via `cargo run --`: diff viewer (unified view), annotations with markdown-on-quit, and file/hunk/line staging. LSP peek (`gd`/`gr`/`K`) from the v1.x milestone is implemented too. Installation (prebuilt binaries, package manager taps) is still planned — for now, build from source. Roadmap order: diff viewer → annotations + stdout → staging → LSP peek → agent plugins.

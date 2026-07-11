@@ -204,7 +204,7 @@ mod tests {
     use crate::annotate::AnnotationStore;
     use crate::diff::FileDiff;
     use crate::git::RawFilePatch;
-    use crate::ui::rows::{SyntaxSpans, build_rows, build_sbs_rows};
+    use crate::ui::rows::{SyntaxSpans, build_rows};
 
     /// A `DiffViewState` over one file with its rows populated (unhighlighted).
     fn view_with_raw(raw: &str) -> DiffViewState {
@@ -221,10 +221,7 @@ mod tests {
             &AnnotationStore::new(),
             SyntaxSpans::default(),
         );
-        let (sbs_rows, sbs_visual_of) = build_sbs_rows(&view.files[0], &rows);
         view.rows = rows;
-        view.sbs_rows = sbs_rows;
-        view.sbs_visual_of = sbs_visual_of;
         view
     }
 

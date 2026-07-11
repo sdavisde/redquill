@@ -30,7 +30,6 @@ mod modes;
 mod peek;
 mod peek_overlay;
 mod rows;
-mod sbs_view;
 mod search;
 mod sidebar;
 mod stage_ops;
@@ -40,7 +39,7 @@ mod syntax;
 mod theme;
 
 pub use app::{App, Mode};
-pub use diff_view_state::{DiffViewState, ViewMode};
+pub use diff_view_state::DiffViewState;
 pub use keymap::{Action, Binding, Keymap};
 pub use lsp_ops::LspClient;
 pub use rows::{Row, build_rows};
@@ -125,10 +124,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
     let (diff_area, panel_area) = split_right(right_area, panel_open(app.mode));
 
     sidebar::render(frame, sidebar_area, app);
-    match app.view.layout {
-        ViewMode::Unified => diff_view::render(frame, diff_area, app),
-        ViewMode::SideBySide => sbs_view::render(frame, diff_area, app),
-    }
+    diff_view::render(frame, diff_area, app);
     if let Some(panel_area) = panel_area {
         match app.mode {
             Mode::Staging => staging_panel::render(frame, panel_area, app),
@@ -297,7 +293,6 @@ mod tests {
     use crate::git::RawFilePatch;
     use crate::highlight::TokenKind;
     use crate::lsp::SourceLocation;
-    use crossterm::event::KeyModifiers;
     use ratatui::backend::TestBackend;
 
     fn sample_file() -> FileDiff {
@@ -555,55 +550,6 @@ index 111..222 100644
             has_cursor_bg,
             "expected exactly one cell styled with the column-cursor background"
         );
-    }
-
-    // -- Side-by-side view ----------------------------------------------------
-
-    /// `t` toggles the diff pane between unified and side-by-side, and back
-    /// — a full render happens in each state, and round-tripping lands back
-    /// on unified with the same content visible.
-    #[test]
-    fn toggle_view_round_trips_between_unified_and_side_by_side() {
-        let backend = TestBackend::new(100, 20);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut app = App::new(vec![sample_file()]);
-        let keymap = Keymap::default_map();
-
-        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
-        let unified_buffer = terminal.backend().buffer().clone();
-        let unified_content: String = unified_buffer
-            .content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect();
-        assert!(unified_content.contains("old()"));
-        assert!(unified_content.contains("new()"));
-
-        assert_eq!(
-            keymap.lookup(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)),
-            Some(Action::ToggleView)
-        );
-        app.apply(Action::ToggleView);
-        assert_eq!(app.view.layout, ViewMode::SideBySide);
-
-        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
-        let sbs_buffer = terminal.backend().buffer().clone();
-        let sbs_content: String = sbs_buffer.content().iter().map(|c| c.symbol()).collect();
-        assert!(sbs_content.contains("old()"));
-        assert!(sbs_content.contains("new()"));
-
-        app.apply(Action::ToggleView);
-        assert_eq!(app.view.layout, ViewMode::Unified);
-        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
-        let round_tripped: String = terminal
-            .backend()
-            .buffer()
-            .clone()
-            .content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect();
-        assert_eq!(round_tripped, unified_content);
     }
 
     // -- LSP peek overlay --------------------------------------------------------
