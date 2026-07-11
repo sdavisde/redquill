@@ -6,7 +6,9 @@ use std::path::PathBuf;
 
 use crate::annotate::{AnnotationStore, Side, Target};
 use crate::diff::{FileDiff, LineOrigin};
-use crate::git::{BranchStatus, DiffTarget, RawFilePatch, RemoteOp, StashEntry, remote_command};
+use crate::git::{
+    BranchStatus, CommitSummary, DiffTarget, RawFilePatch, RemoteOp, StashEntry, remote_command,
+};
 use crate::highlight::Highlighter;
 use crate::lsp::RequestId;
 
@@ -89,6 +91,10 @@ pub struct App {
     /// The stash list (newest first) as of the latest refresh; empty in
     /// git-less contexts or when nothing is stashed.
     pub stashes: Vec<StashEntry>,
+    /// A one-line summary of the tip commit (`HEAD`), read at startup and on
+    /// every [`App::refresh`], shown in the git panel's bottom section.
+    /// `None` in git-less contexts, or in a repository with no commits yet.
+    pub last_commit: Option<CommitSummary>,
     /// Repo-relative paths of untracked files among `view.files`, used by
     /// the git panel to split its CHANGES and UNTRACKED sections. Derived on
     /// refresh from which entries have no real patch; empty without git.
@@ -185,6 +191,7 @@ impl App {
             staged: Vec::new(),
             branch: None,
             stashes: Vec::new(),
+            last_commit: None,
             untracked_paths: Vec::new(),
             staging_cursor: 0,
             panel_cursor: 0,
@@ -236,6 +243,9 @@ impl App {
         }
         if let Ok(stashes) = ops.stash_list() {
             self.stashes = stashes;
+        }
+        if let Ok(commit) = ops.last_commit() {
+            self.last_commit = commit;
         }
     }
 

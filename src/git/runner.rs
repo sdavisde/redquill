@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use super::commit::{COMMIT_SUMMARY_FORMAT, CommitSummary, parse_commit_summary};
 use super::diff::{DiffTarget, RawFilePatch, split_patches};
 use super::error::GitError;
 use super::stash::{STASH_LIST_FORMAT, StashEntry, parse_stash_list};
@@ -121,6 +122,19 @@ impl GitRunner {
         let format_arg = format!("--format={STASH_LIST_FORMAT}");
         let out = self.run_utf8(&["stash", "list", &format_arg])?;
         parse_stash_list(&out)
+    }
+
+    /// Returns a one-line summary of the tip commit (`HEAD`): its abbreviated
+    /// hash and subject. `Ok(None)` when the repository has no commits yet —
+    /// `git log` exits non-zero there, which is expected rather than an error,
+    /// so the panel simply shows no last-commit line.
+    pub fn last_commit(&self) -> Result<Option<CommitSummary>, GitError> {
+        let format_arg = format!("--format={COMMIT_SUMMARY_FORMAT}");
+        match self.run_utf8(&["log", "-1", &format_arg]) {
+            Ok(out) => parse_commit_summary(&out),
+            Err(GitError::Command { .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// Reads a file's content at a git revision spec (`git show <spec>`,

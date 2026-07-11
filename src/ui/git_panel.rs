@@ -1,7 +1,8 @@
 //! The git panel: a branch header (name plus `↑N↓M` ahead/behind against the
-//! upstream), then CHANGES / UNTRACKED / STASHES sections, then a footer of
-//! file/staged/note counts — all in the same fixed-width slot the passive
-//! file sidebar used to occupy.
+//! upstream), then CHANGES / UNTRACKED / STASHES sections, then a bottom
+//! section carrying file/staged/note counts, the tip commit's summary, and
+//! the fetch/pull/push keybind hints — all in the same fixed-width slot the
+//! passive file sidebar used to occupy.
 //!
 //! CHANGES preserves the old sidebar's rows exactly: a green `●` staged
 //! marker, a colored change-kind letter, and a dimmed-directory / normal
@@ -16,7 +17,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 
-use crate::git::BranchStatus;
+use crate::git::{BranchStatus, CommitSummary};
 
 use super::app::App;
 use super::theme::Theme;
@@ -125,6 +126,55 @@ fn section_header(text: String, theme: &Theme) -> Line<'static> {
     ))
 }
 
+/// The tip-commit summary line for the bottom section: a dimmed abbreviated
+/// hash followed by the subject, or a dimmed `no commits yet` when there is
+/// none (git-less context, or a repository with no commits). Rendered into a
+/// fixed-width row, so ratatui clips a long subject at the panel edge.
+fn commit_line(commit: Option<&CommitSummary>, theme: &Theme) -> Line<'static> {
+    match commit {
+        Some(commit) => Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                format!("{} ", commit.short_hash),
+                Style::default().fg(theme.dir_prefix),
+            ),
+            Span::styled(
+                commit.subject.clone(),
+                Style::default().fg(theme.footer_text),
+            ),
+        ]),
+        None => Line::from(vec![
+            Span::raw(" "),
+            Span::styled("no commits yet", Style::default().fg(theme.dir_prefix)),
+        ]),
+    }
+}
+
+/// The remote-operation keybind hints for the bottom section: `f fetch`,
+/// `p pull`, `P push`, with each key emphasized in the help-key color and its
+/// label dimmed. These surface the existing bindings (see the panel keymap);
+/// the panel doesn't add any new action.
+fn remote_keys_line(theme: &Theme) -> Line<'static> {
+    let key = |k: &'static str| {
+        Span::styled(
+            k,
+            Style::default()
+                .fg(theme.help_key)
+                .add_modifier(Modifier::BOLD),
+        )
+    };
+    let label = |l: &'static str| Span::styled(l, Style::default().fg(theme.footer_text));
+    Line::from(vec![
+        Span::raw(" "),
+        key("f"),
+        label(" fetch  "),
+        key("p"),
+        label(" pull  "),
+        key("P"),
+        label(" push"),
+    ])
+}
+
 /// The branch header shown as the panel's block title: `git: <name>` plus, if
 /// an upstream exists and either count is nonzero, an `↑N↓M` indicator.
 /// Detached HEAD carries a short oid as its name; no upstream shows no arrows.
@@ -153,9 +203,11 @@ fn branch_title(branch: Option<&BranchStatus>) -> String {
 
 /// Renders the git panel into `area`.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+    // The list fills the panel above a three-row bottom section: counts, the
+    // tip-commit summary, and the fetch/pull/push keybind hints.
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .constraints([Constraint::Min(0), Constraint::Length(3)])
         .split(area);
 
     let theme = &app.theme;
@@ -258,18 +310,31 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_stateful_widget(list, chunks[0], &mut state);
 
     let notes = app.annotations.len();
-    let mut footer_text = format!(" [{} files]", app.view.files.len());
+    let mut counts_text = format!(" [{} files]", app.view.files.len());
     if !app.staged.is_empty() {
-        footer_text.push_str(&format!(" [{} staged]", app.staged.len()));
+        counts_text.push_str(&format!(" [{} staged]", app.staged.len()));
     }
     if notes > 0 {
-        footer_text.push_str(&format!(" [{notes} notes]"));
+        counts_text.push_str(&format!(" [{notes} notes]"));
     }
-    let footer = Line::from(Span::styled(
-        footer_text,
+    let counts = Line::from(Span::styled(
+        counts_text,
         Style::default().fg(theme.footer_text),
     ));
-    frame.render_widget(footer, chunks[1]);
+
+    // The three bottom rows share the fixed-height slot below the list: the
+    // counts, then the tip-commit summary, then the remote keybind hints.
+    let footer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(chunks[1]);
+    frame.render_widget(counts, footer[0]);
+    frame.render_widget(commit_line(app.last_commit.as_ref(), theme), footer[1]);
+    frame.render_widget(remote_keys_line(theme), footer[2]);
 }
 
 #[cfg(test)]
@@ -425,6 +490,36 @@ mod tests {
         let content = render_panel(&app);
         assert!(content.contains("[1 files]"));
         assert!(content.contains("[1 staged]"));
+    }
+
+    // -- Bottom section: last commit + remote keybind hints ----------------
+
+    #[test]
+    fn bottom_section_shows_last_commit_hash_and_subject() {
+        let mut app = App::new(vec![sample_file("session.rs")]);
+        app.last_commit = Some(CommitSummary {
+            short_hash: "a1b2c3d".to_string(),
+            subject: "fix: parser".to_string(),
+        });
+        let content = render_panel(&app);
+        assert!(content.contains("a1b2c3d"));
+        assert!(content.contains("fix: parser"));
+    }
+
+    #[test]
+    fn bottom_section_shows_no_commits_yet_without_a_last_commit() {
+        let app = App::new(vec![sample_file("session.rs")]);
+        let content = render_panel(&app);
+        assert!(content.contains("no commits yet"));
+    }
+
+    #[test]
+    fn bottom_section_shows_fetch_pull_push_keybind_hints() {
+        let app = App::new(vec![sample_file("session.rs")]);
+        let content = render_panel(&app);
+        assert!(content.contains("f fetch"));
+        assert!(content.contains("p pull"));
+        assert!(content.contains("P push"));
     }
 
     // -- Empty states ------------------------------------------------------

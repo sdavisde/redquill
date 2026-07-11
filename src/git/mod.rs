@@ -7,6 +7,8 @@
 //!   [`FileStatus`]es (and, via [`StatusSnapshot`], alongside [`BranchStatus`]).
 //! - [`branch`] parses the `# branch.*` header fields of that same payload
 //!   into [`BranchStatus`] (name/short-oid, upstream, ahead/behind).
+//! - [`commit`] parses `git log -1 --format=<COMMIT_SUMMARY_FORMAT>` into a
+//!   [`CommitSummary`] (abbreviated hash + subject) for the tip commit.
 //! - [`stash`] parses `git stash list --format=<STASH_LIST_FORMAT>` into
 //!   [`StashEntry`] records.
 //! - [`diff`] splits `git diff` output into raw per-file [`RawFilePatch`]es
@@ -18,6 +20,7 @@
 //!   and hunk/line-level via synthetic patches applied with `--cached`.
 
 mod branch;
+mod commit;
 mod diff;
 mod error;
 mod remote;
@@ -27,6 +30,7 @@ mod stash;
 mod status;
 
 pub use branch::{BranchStatus, parse_branch_headers};
+pub use commit::{COMMIT_SUMMARY_FORMAT, CommitSummary, parse_commit_summary};
 pub use diff::{DiffTarget, RawFilePatch, split_patches};
 pub use error::GitError;
 pub use remote::{RemoteOp, remote_command};

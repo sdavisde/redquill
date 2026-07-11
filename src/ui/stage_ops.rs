@@ -10,7 +10,8 @@ use thiserror::Error;
 
 use crate::diff::{DiffParseError, FileChangeKind, FileDiff};
 use crate::git::{
-    BranchStatus, ChangeKind, DiffTarget, FileStatus, GitError, GitRunner, RawFilePatch, StashEntry,
+    BranchStatus, ChangeKind, CommitSummary, DiffTarget, FileStatus, GitError, GitRunner,
+    RawFilePatch, StashEntry,
 };
 
 /// Errors produced while building a [`ReviewSnapshot`].
@@ -61,6 +62,13 @@ pub trait StageOps {
     fn stash_list(&self) -> Result<Vec<StashEntry>, GitError> {
         Ok(Vec::new())
     }
+    /// Reads a one-line summary of the tip commit (see
+    /// [`GitRunner::last_commit`]). The default returns `None`, so
+    /// backend-less or navigation-only fakes need not implement it; the panel
+    /// treats the last commit as best-effort.
+    fn last_commit(&self) -> Result<Option<CommitSummary>, GitError> {
+        Ok(None)
+    }
 }
 
 impl StageOps for GitRunner {
@@ -102,6 +110,10 @@ impl StageOps for GitRunner {
 
     fn stash_list(&self) -> Result<Vec<StashEntry>, GitError> {
         GitRunner::stash_list(self)
+    }
+
+    fn last_commit(&self) -> Result<Option<CommitSummary>, GitError> {
+        GitRunner::last_commit(self)
     }
 }
 
