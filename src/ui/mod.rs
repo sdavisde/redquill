@@ -771,4 +771,74 @@ index 111..222 100644
         assert!(content.contains("hover"));
         assert!(content.contains("this function does nothing interesting"));
     }
+
+    // -- Performance (spec 03, task 5.2/5.3) --------------------------------
+
+    /// A file whose single hunk carries `pairs` removed/added line pairs
+    /// (`2 * pairs` changed lines), each a realistic Rust statement so the
+    /// word-diff pairing runs on non-trivial content.
+    fn perf_file(i: usize, pairs: usize) -> FileDiff {
+        let path = format!("src/module_{i}.rs");
+        let mut raw = format!(
+            "diff --git a/{path} b/{path}\nindex 1..2 100644\n--- a/{path}\n+++ b/{path}\n@@ -1,{pairs} +1,{pairs} @@\n"
+        );
+        for k in 0..pairs {
+            raw.push_str(&format!(
+                "-    let value_{k} = compute_old({k}, factor);\n+    let value_{k} = compute_new({k}, factor);\n"
+            ));
+        }
+        FileDiff::from_patch(&RawFilePatch {
+            path,
+            old_path: None,
+            raw,
+            is_binary: false,
+        })
+        .unwrap()
+    }
+
+    /// Builds a ~5k-changed-line, 15-file multibuffer and scrolls it top to
+    /// bottom a half-page at a time through the real `draw` render path on a
+    /// `TestBackend`, reporting ms/frame. The spec's quantitative proxy for
+    /// "instant-feel scrolling" is ms/frame well under 16ms; the assertion
+    /// uses a generous CI-safe bound (real measured value, recorded in the
+    /// perf proof, is far lower). Run with `--nocapture` to see the numbers.
+    #[test]
+    fn scrolling_a_5k_line_multibuffer_renders_fast() {
+        let files: Vec<FileDiff> = (0..15).map(|i| perf_file(i, 168)).collect();
+        let total_lines: usize = files
+            .iter()
+            .flat_map(|f| f.hunks.iter())
+            .map(|h| h.lines.len())
+            .sum();
+        assert!(
+            total_lines >= 5000,
+            "fixture should be ~5k changed lines, got {total_lines}"
+        );
+
+        let mut app = App::new(files);
+        let total_rows = app.view.rows.len();
+        let keymap = Keymap::default_map();
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        app.view.set_viewport_height(38);
+
+        let mut frames = 0u32;
+        let start = std::time::Instant::now();
+        loop {
+            terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+            frames += 1;
+            if app.view.cursor >= app.view.max_cursor() || frames > 2000 {
+                break;
+            }
+            app.apply(Action::HalfPageDown);
+        }
+        let per_frame = start.elapsed() / frames;
+        println!(
+            "scroll: {frames} frames over {total_rows} rows ({total_lines} changed lines), {per_frame:?}/frame"
+        );
+        assert!(
+            per_frame < std::time::Duration::from_millis(50),
+            "ms/frame {per_frame:?} too slow over {frames} frames / {total_rows} rows"
+        );
+    }
 }

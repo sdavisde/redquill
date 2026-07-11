@@ -231,6 +231,19 @@ impl App {
         self.repo_root = Some(root);
     }
 
+    /// The number of `(path, side)` entries in the highlight cache (test hook).
+    #[cfg(test)]
+    pub(super) fn highlight_cache_len(&self) -> usize {
+        self.highlight_cache.len()
+    }
+
+    /// Whether the highlight cache holds an entry for `(path, side)` (test
+    /// hook — distinguishes "cached, no spans" from "not cached").
+    #[cfg(test)]
+    pub(super) fn highlight_cache_contains(&self, path: &str, side: Side) -> bool {
+        self.highlight_cache.contains(path, side)
+    }
+
     /// Applies one [`Action`] as a state transition.
     ///
     /// `Quit` and `QuitDiscard` are no-ops here — the event loop intercepts
@@ -756,6 +769,14 @@ impl App {
                 .unwrap_or(0),
         );
 
+        // Take the previous files out (rather than clone) so their content
+        // can be compared per path against the incoming snapshot for targeted
+        // highlight-cache invalidation below.
+        let old_by_path: HashMap<String, FileDiff> = std::mem::take(&mut self.view.files)
+            .into_iter()
+            .map(|f| (f.path.clone(), f))
+            .collect();
+
         self.view.files = snapshot.files;
         self.patches = snapshot.patches;
         self.staged = snapshot.staged;
@@ -784,8 +805,23 @@ impl App {
             self.view.set_collapsed(&path, false);
         }
 
-        // Content may have changed underneath every cached (path, side).
-        self.highlight_cache.clear();
+        // Per-file highlight-cache invalidation (spec 03, task 5.1): keep the
+        // cached spans for files whose diff content is byte-identical across
+        // the refresh, invalidate only files whose `FileDiff` changed (or are
+        // newly present), and drop entries for files that left the review so
+        // the cache can't grow without bound. `FileDiff` equality is a sound
+        // and complete proxy for "the highlighted content could have changed":
+        // the diff is a pure function of both sides' whole-file source, so an
+        // unchanged `FileDiff` means unchanged content and still-valid spans
+        // (renames included — `old_path` is part of the compared value). The
+        // cache is keyed by each file's current path, matching `rebuild_rows`.
+        for file in &self.view.files {
+            if old_by_path.get(&file.path) != Some(file) {
+                self.highlight_cache.invalidate_path(&file.path);
+            }
+        }
+        self.highlight_cache
+            .retain_paths(|path| present.contains(path));
         self.rebuild_rows();
         if self.view.rows.is_empty() {
             self.view.cursor = 0;
@@ -2844,6 +2880,147 @@ index 1..2 100644
         app.view.set_collapsed("c.rs", false);
         app.rebuild_rows();
         assert_eq!(*show_calls.borrow(), 4);
+    }
+
+    /// Builds an `App` (Staged target) whose fake reads its refresh diff/status
+    /// through mutable handles and counts `show_file` fetches, so a refresh
+    /// test can change what the next `refresh` sees and observe whether the
+    /// highlight cache was reused or re-fetched. Returns the app, the diff
+    /// handle, and the show-call counter.
+    #[allow(clippy::type_complexity)]
+    fn app_with_counting_fake(
+        initial: Vec<RawFilePatch>,
+    ) -> (App, Rc<RefCell<Vec<RawFilePatch>>>, Rc<RefCell<usize>>) {
+        let show_calls = Rc::new(RefCell::new(0));
+        let diff_h = Rc::new(RefCell::new(initial.clone()));
+        let status_h = Rc::new(RefCell::new(Vec::new()));
+        let fake = FakeGit {
+            diff_override: Some(Rc::clone(&diff_h)),
+            status_override: Some(Rc::clone(&status_h)),
+            show_calls: Rc::clone(&show_calls),
+            show_content: Some("fn old() {}\nfn new() {}\n".to_string()),
+            ..FakeGit::default()
+        };
+        let snapshot = ReviewSnapshot {
+            files: initial
+                .iter()
+                .map(|p| FileDiff::from_patch(p).unwrap())
+                .collect(),
+            patches: initial.into_iter().map(Some).collect(),
+            staged: Vec::new(),
+            staged_states: HashMap::new(),
+        };
+        let app = App::with_git(snapshot, DiffTarget::Staged, Box::new(fake));
+        (app, diff_h, show_calls)
+    }
+
+    #[test]
+    fn refresh_preserves_highlight_cache_for_unchanged_files() {
+        let a = highlight_patch("a.rs");
+        let (mut app, _diff, show_calls) = app_with_counting_fake(vec![a]);
+        // a.rs expanded, both sides -> 2 fetches at build.
+        assert_eq!(*show_calls.borrow(), 2);
+        assert!(app.highlight_cache_contains("a.rs", Side::New));
+
+        // The refresh sees byte-identical diff content -> the cache survives
+        // and nothing is re-fetched.
+        app.refresh();
+        assert_eq!(*show_calls.borrow(), 2);
+        assert!(app.highlight_cache_contains("a.rs", Side::New));
+        assert!(app.highlight_cache_contains("a.rs", Side::Old));
+    }
+
+    #[test]
+    fn refresh_invalidates_highlight_cache_for_changed_files() {
+        let a = highlight_patch("a.rs");
+        let (mut app, diff, show_calls) = app_with_counting_fake(vec![a]);
+        assert_eq!(*show_calls.borrow(), 2);
+
+        // The file's diff content changes underneath us (an external edit):
+        // its cache entry must be invalidated and both sides re-fetched.
+        *diff.borrow_mut() = vec![raw_patch("a.rs", 1)];
+        app.refresh();
+        assert_eq!(*show_calls.borrow(), 4);
+    }
+
+    #[test]
+    fn refresh_drops_highlight_cache_entries_for_removed_files() {
+        let a = highlight_patch("a.rs");
+        let b = highlight_patch("b.rs");
+        let (mut app, diff, show_calls) = app_with_counting_fake(vec![a, b]);
+        // Two expanded files, two sides each -> 4 fetches.
+        assert_eq!(*show_calls.borrow(), 4);
+        assert!(app.highlight_cache_contains("b.rs", Side::New));
+
+        // b.rs leaves the review; its cache entries must be dropped (no
+        // unbounded growth), while a.rs (unchanged) keeps its cached spans.
+        *diff.borrow_mut() = vec![highlight_patch("a.rs")];
+        app.refresh();
+        assert!(app.highlight_cache_contains("a.rs", Side::New));
+        assert!(!app.highlight_cache_contains("b.rs", Side::New));
+        assert!(!app.highlight_cache_contains("b.rs", Side::Old));
+        // a.rs was a cache hit -> no further fetches.
+        assert_eq!(*show_calls.borrow(), 4);
+        assert_eq!(app.highlight_cache_len(), 2);
+    }
+
+    /// A file whose single hunk carries `pairs` removed/added line pairs
+    /// (`2 * pairs` changed lines) of realistic Rust, so the word-diff pairing
+    /// (the dominant per-rebuild cost) runs on non-trivial content.
+    fn perf_file(i: usize, pairs: usize) -> FileDiff {
+        let path = format!("src/module_{i}.rs");
+        let mut raw = format!(
+            "diff --git a/{path} b/{path}\nindex 1..2 100644\n--- a/{path}\n+++ b/{path}\n@@ -1,{pairs} +1,{pairs} @@\n"
+        );
+        for k in 0..pairs {
+            raw.push_str(&format!(
+                "-    let value_{k} = compute_old({k}, factor);\n+    let value_{k} = compute_new({k}, factor);\n"
+            ));
+        }
+        FileDiff::from_patch(&RawFilePatch {
+            path,
+            old_path: None,
+            raw,
+            is_binary: false,
+        })
+        .unwrap()
+    }
+
+    /// A full `rebuild_rows` over a ~5k-changed-line, 15-file multibuffer —
+    /// the exact work every stage/collapse gesture triggers — must be
+    /// imperceptible. Measured well under 10ms (recorded in the perf proof),
+    /// so incremental rebuild is unnecessary. The assertion uses a generous
+    /// CI-safe bound to stay non-flaky; run with `--nocapture` for the number.
+    #[test]
+    fn rebuild_rows_on_a_5k_line_multibuffer_is_fast() {
+        let files: Vec<FileDiff> = (0..15).map(|i| perf_file(i, 168)).collect();
+        let total_lines: usize = files
+            .iter()
+            .flat_map(|f| f.hunks.iter())
+            .map(|h| h.lines.len())
+            .sum();
+        assert!(
+            total_lines >= 5000,
+            "fixture should be ~5k changed lines, got {total_lines}"
+        );
+
+        let mut app = App::new(files);
+        let rows = app.view.rows.len();
+        // Warm up once, then average a handful of full rebuilds.
+        app.rebuild_rows();
+        let iters = 20;
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            app.rebuild_rows();
+        }
+        let per = start.elapsed() / iters;
+        println!(
+            "rebuild_rows: {per:?} avg over {iters} rebuilds, {rows} rows ({total_lines} changed lines)"
+        );
+        assert!(
+            per < std::time::Duration::from_millis(250),
+            "rebuild_rows took {per:?} for {total_lines} lines / {rows} rows"
+        );
     }
 
     // -- Search ----------------------------------------------------------------
