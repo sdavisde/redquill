@@ -11,7 +11,7 @@ use thiserror::Error;
 use crate::diff::{DiffParseError, FileChangeKind, FileDiff};
 use crate::git::{
     BranchStatus, ChangeKind, CommitSummary, DiffTarget, FileStatus, GitError, GitRunner,
-    RawFilePatch, StashEntry,
+    LocalBranch, RawFilePatch, StashEntry, WorktreeEntry,
 };
 
 /// Errors produced while building a [`ReviewSnapshot`].
@@ -69,6 +69,25 @@ pub trait StageOps {
     fn last_commit(&self) -> Result<Option<CommitSummary>, GitError> {
         Ok(None)
     }
+    /// Reads the local branches (see [`GitRunner::branch_list`]). The
+    /// default errors, so backend-less or navigation-only fakes need not
+    /// implement it; the switcher treats this as unavailable rather than
+    /// crashing.
+    fn branch_list(&self) -> Result<Vec<LocalBranch>, GitError> {
+        Err(GitError::Parse("branch list unavailable".into()))
+    }
+    /// Reads every worktree (see [`GitRunner::worktree_list`]). The default
+    /// errors, mirroring [`StageOps::branch_list`].
+    fn worktree_list(&self) -> Result<Vec<WorktreeEntry>, GitError> {
+        Err(GitError::Parse("worktree list unavailable".into()))
+    }
+    /// Switches the working tree to branch `name` (see
+    /// [`GitRunner::switch_branch`]). The default errors, mirroring
+    /// [`StageOps::branch_list`].
+    fn switch_branch(&self, name: &str) -> Result<(), GitError> {
+        let _ = name;
+        Err(GitError::Parse("branch switch unavailable".into()))
+    }
 }
 
 impl StageOps for GitRunner {
@@ -114,6 +133,18 @@ impl StageOps for GitRunner {
 
     fn last_commit(&self) -> Result<Option<CommitSummary>, GitError> {
         GitRunner::last_commit(self)
+    }
+
+    fn branch_list(&self) -> Result<Vec<LocalBranch>, GitError> {
+        GitRunner::branch_list(self)
+    }
+
+    fn worktree_list(&self) -> Result<Vec<WorktreeEntry>, GitError> {
+        GitRunner::worktree_list(self)
+    }
+
+    fn switch_branch(&self, name: &str) -> Result<(), GitError> {
+        GitRunner::switch_branch(self, name)
     }
 }
 

@@ -5,6 +5,8 @@
 //! reads the same NUL-separated payload the status parser consumes, but only
 //! looks at the `# branch.*` header fields, ignoring record lines.
 
+use std::path::PathBuf;
+
 use super::error::GitError;
 
 /// Number of hex characters used for the short oid shown in place of a
@@ -87,6 +89,54 @@ fn parse_ab(rest: &str) -> Result<(u32, u32), GitError> {
     Ok((ahead, behind))
 }
 
+/// Format string passed to `git for-each-ref refs/heads --format=`: the
+/// short branch name, the `%(HEAD)` marker (`*` for the currently checked
+/// out branch, ` ` otherwise), and the path of the worktree it is checked
+/// out in (empty when it isn't checked out anywhere), `%x00`-separated.
+pub const BRANCH_LIST_FORMAT: &str = "%(refname:short)%00%(HEAD)%00%(worktreepath)";
+
+/// A local branch, parsed from one line of `git for-each-ref refs/heads
+/// --format=<BRANCH_LIST_FORMAT>` output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalBranch {
+    /// The branch's short name.
+    pub name: String,
+    /// Whether this is the currently checked-out branch (`%(HEAD)` is `*`).
+    pub is_current: bool,
+    /// The worktree this branch is checked out in, if any (including the
+    /// main worktree, when `is_current`).
+    pub worktree: Option<PathBuf>,
+}
+
+/// Parses `git for-each-ref refs/heads --format=<BRANCH_LIST_FORMAT>`
+/// output into [`LocalBranch`] records, one per line.
+pub fn parse_branch_list(input: &str) -> Result<Vec<LocalBranch>, GitError> {
+    let mut out = Vec::new();
+    for line in input.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let mut fields = line.splitn(3, '\0');
+        let (Some(name), Some(head_marker), Some(worktreepath)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            return Err(GitError::Parse(format!(
+                "malformed branch list line: {line:?}"
+            )));
+        };
+        out.push(LocalBranch {
+            name: name.to_string(),
+            is_current: head_marker == "*",
+            worktree: if worktreepath.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(worktreepath))
+            },
+        });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,5 +213,41 @@ mod tests {
             parse_branch_headers(input),
             Err(GitError::Parse(_))
         ));
+    }
+
+    #[test]
+    fn parses_branch_list_with_current_marker() {
+        let input = "main\0*\0/repo\nfeature\0 \0\n";
+        let branches = parse_branch_list(input).unwrap();
+        assert_eq!(branches.len(), 2);
+        assert_eq!(branches[0].name, "main");
+        assert!(branches[0].is_current);
+        assert_eq!(branches[0].worktree, Some(PathBuf::from("/repo")));
+        assert_eq!(branches[1].name, "feature");
+        assert!(!branches[1].is_current);
+        assert_eq!(branches[1].worktree, None);
+    }
+
+    #[test]
+    fn parses_branch_checked_out_in_another_worktree() {
+        let input = "feature\0 \0/repo/.worktrees/feature\n";
+        let branches = parse_branch_list(input).unwrap();
+        assert_eq!(branches.len(), 1);
+        assert!(!branches[0].is_current);
+        assert_eq!(
+            branches[0].worktree,
+            Some(PathBuf::from("/repo/.worktrees/feature"))
+        );
+    }
+
+    #[test]
+    fn malformed_branch_list_line_errors() {
+        let input = "main\0*\n";
+        assert!(matches!(parse_branch_list(input), Err(GitError::Parse(_))));
+    }
+
+    #[test]
+    fn empty_branch_list_yields_no_entries() {
+        assert!(parse_branch_list("").unwrap().is_empty());
     }
 }

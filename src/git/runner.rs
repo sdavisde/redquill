@@ -3,11 +3,13 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use super::branch::{BRANCH_LIST_FORMAT, LocalBranch, parse_branch_list};
 use super::commit::{COMMIT_SUMMARY_FORMAT, CommitSummary, parse_commit_summary};
 use super::diff::{DiffTarget, RawFilePatch, split_patches};
 use super::error::GitError;
 use super::stash::{STASH_LIST_FORMAT, StashEntry, parse_stash_list};
 use super::status::{FileStatus, StatusSnapshot, parse_porcelain_v2, parse_porcelain_v2_full};
+use super::worktree::{WorktreeEntry, parse_worktree_list};
 
 /// Runs `git` commands against a single repository working tree.
 ///
@@ -122,6 +124,32 @@ impl GitRunner {
         let format_arg = format!("--format={STASH_LIST_FORMAT}");
         let out = self.run_utf8(&["stash", "list", &format_arg])?;
         parse_stash_list(&out)
+    }
+
+    /// Returns the local branches, in `for-each-ref`'s default order,
+    /// marking the currently checked-out branch and (when applicable) which
+    /// worktree each is checked out in.
+    pub fn branch_list(&self) -> Result<Vec<LocalBranch>, GitError> {
+        let format_arg = format!("--format={BRANCH_LIST_FORMAT}");
+        let out = self.run_utf8(&["for-each-ref", "refs/heads", &format_arg])?;
+        parse_branch_list(&out)
+    }
+
+    /// Returns every worktree of this repository (the main worktree first),
+    /// parsed from `git worktree list --porcelain`.
+    pub fn worktree_list(&self) -> Result<Vec<WorktreeEntry>, GitError> {
+        let out = self.run_utf8(&["worktree", "list", "--porcelain"])?;
+        parse_worktree_list(&out)
+    }
+
+    /// Switches the working tree to branch `name` (`git switch -- <name>`).
+    /// Never forces: a dirty tree that would be overwritten, or a branch
+    /// already checked out in another worktree, surfaces as
+    /// [`GitError::Command`] with git's own stderr, and the tree is left
+    /// untouched — the caller decides how to report the failure.
+    pub fn switch_branch(&self, name: &str) -> Result<(), GitError> {
+        self.run_raw(&["switch", "--", name])?;
+        Ok(())
     }
 
     /// Returns a one-line summary of the tip commit (`HEAD`): its abbreviated
