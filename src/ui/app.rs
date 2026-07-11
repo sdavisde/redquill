@@ -2,12 +2,11 @@
 //! performs. No rendering or terminal I/O lives here — these are plain
 //! methods, unit-tested without a terminal.
 
-use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::annotate::{AnnotationStore, Side, Target};
 use crate::diff::{FileDiff, LineOrigin};
-use crate::git::{DiffTarget, RawFilePatch, build_hunk_patch, build_line_patch};
+use crate::git::{DiffTarget, RawFilePatch};
 use crate::highlight::{Highlighter, Lang};
 use crate::lsp::{LspEvent, LspManager, RequestId, SourceLocation};
 
@@ -118,17 +117,6 @@ pub struct App {
     pending_lsp: Option<(RequestId, PeekKind)>,
 }
 
-/// The staging granularity a `space` gesture resolved to.
-enum StageGesture {
-    /// The whole file (file-header/binary rows, and every gesture on a
-    /// synthetic untracked file).
-    WholeFile,
-    /// One hunk, by index into the selected file's hunks.
-    Hunk(usize),
-    /// Selected body-line indices within one hunk (Visual mode).
-    Lines(usize, Vec<usize>),
-}
-
 impl App {
     /// Builds a fresh `App` over `files`, with the first file selected. No
     /// git backend is attached: staging gestures degrade to a footer
@@ -232,7 +220,7 @@ impl App {
             Action::EnterVisual => self.toggle_visual(),
             Action::Compose => self.open_compose(),
             Action::ToggleList => self.toggle_list(),
-            Action::ToggleStage => self.toggle_stage(),
+            Action::ToggleStage => super::staging::toggle_stage(self),
             Action::ToggleStagingPanel => self.toggle_staging_panel(),
             Action::Search => self.enter_search(),
             Action::SearchNext => self.search_advance(true),
@@ -642,174 +630,10 @@ impl App {
         self.status_message = None;
     }
 
-    /// Applies the `space` staging gesture. Direction depends on the diff
-    /// target: working tree stages, staged unstages, range is read-only.
-    /// Granularity depends on the cursor row (Normal: hunk on line/hunk
-    /// rows, whole file on file-header/binary rows) or the Visual selection
-    /// (the selected `+`/`-` lines of a single hunk). Synthetic untracked
-    /// files always stage whole-file — there is no index blob to apply
-    /// hunk/line patches against. Failures and no-op cases set a footer
-    /// message and leave state unchanged.
-    fn toggle_stage(&mut self) {
-        if !matches!(self.mode, Mode::Normal | Mode::Visual { .. }) {
-            return;
-        }
-        if matches!(self.target, DiffTarget::Range(_)) {
-            self.set_status_message("read-only diff target");
-            return;
-        }
-        if self.stage_ops.is_none() {
-            self.set_status_message("staging unavailable (no git backend)");
-            return;
-        }
-        let Some(file) = self.view.files.get(self.view.selected_file) else {
-            return;
-        };
-        let path = file.path.clone();
-        let staging = matches!(self.target, DiffTarget::WorkingTree);
-        let verb = if staging { "staged" } else { "unstaged" };
-
-        let synthetic = self
-            .patches
-            .get(self.view.selected_file)
-            .is_none_or(|p| p.is_none());
-        let gesture = if synthetic {
-            StageGesture::WholeFile
-        } else {
-            match self.mode {
-                Mode::Visual { anchor } => match self.visual_stage_selection(anchor) {
-                    Ok((hunk_index, lines)) => StageGesture::Lines(hunk_index, lines),
-                    Err(message) => {
-                        self.set_status_message(message);
-                        return;
-                    }
-                },
-                _ => match self.view.rows.get(self.view.cursor) {
-                    Some(Row::Line(line)) => StageGesture::Hunk(line.hunk_index),
-                    Some(Row::HunkHeader { hunk_index, .. }) => StageGesture::Hunk(*hunk_index),
-                    Some(Row::FileHeader { .. }) | Some(Row::Binary) => StageGesture::WholeFile,
-                    _ => return,
-                },
-            }
-        };
-
-        let result = self.run_stage_gesture(&gesture, &path, staging, verb);
-        match result {
-            Ok(message) => {
-                if matches!(self.mode, Mode::Visual { .. }) {
-                    self.mode = Mode::Normal;
-                }
-                self.set_status_message(message);
-                self.refresh();
-            }
-            Err(message) => self.set_status_message(message),
-        }
-    }
-
-    /// Executes one resolved [`StageGesture`] against the git backend,
-    /// returning a success echo or a displayable error. Does not mutate
-    /// `self`.
-    fn run_stage_gesture(
-        &self,
-        gesture: &StageGesture,
-        path: &str,
-        staging: bool,
-        verb: &str,
-    ) -> Result<String, String> {
-        let Some(ops) = self.stage_ops.as_deref() else {
-            return Err("staging unavailable (no git backend)".to_string());
-        };
-        match gesture {
-            StageGesture::WholeFile => {
-                let result = if staging {
-                    ops.stage_file(path)
-                } else {
-                    ops.unstage_file(path)
-                };
-                result
-                    .map(|_| format!("{verb} {path}"))
-                    .map_err(|e| e.to_string())
-            }
-            StageGesture::Hunk(hunk_index) => {
-                let Some(Some(raw)) = self.patches.get(self.view.selected_file) else {
-                    return Err("no patch available for this file".to_string());
-                };
-                let patch = build_hunk_patch(raw, *hunk_index).map_err(|e| e.to_string())?;
-                let result = if staging {
-                    ops.apply_cached(&patch)
-                } else {
-                    ops.unapply_cached(&patch)
-                };
-                result
-                    .map(|_| format!("{verb} hunk"))
-                    .map_err(|e| e.to_string())
-            }
-            StageGesture::Lines(hunk_index, lines) => {
-                let Some(Some(raw)) = self.patches.get(self.view.selected_file) else {
-                    return Err("no patch available for this file".to_string());
-                };
-                let patch = build_line_patch(raw, *hunk_index, lines).map_err(|e| e.to_string())?;
-                let result = if staging {
-                    ops.apply_cached(&patch)
-                } else {
-                    ops.unapply_cached(&patch)
-                };
-                let plural = if lines.len() == 1 { "line" } else { "lines" };
-                result
-                    .map(|_| format!("{verb} {} {plural}", lines.len()))
-                    .map_err(|e| e.to_string())
-            }
-        }
-    }
-
-    /// Resolves a Visual selection (`anchor`..cursor, order-independent)
-    /// into `(hunk_index, body-line indices)` for [`build_line_patch`]:
-    /// the indices count every body line of the hunk from 0, and only the
-    /// selected `+`/`-` lines are included (context is always kept by the
-    /// patch builder anyway). Errors if the selection's line rows span more
-    /// than one hunk, or contain no changed lines at all.
-    fn visual_stage_selection(&self, anchor: usize) -> Result<(usize, Vec<usize>), &'static str> {
-        let (lo, hi) = if anchor <= self.view.cursor {
-            (anchor, self.view.cursor)
-        } else {
-            (self.view.cursor, anchor)
-        };
-
-        // Body-line indices are per-hunk positions counted over Row::Line
-        // rows only (annotation display rows are interleaved in `rows` but
-        // are not hunk body lines).
-        let mut body_counters: HashMap<usize, usize> = HashMap::new();
-        let mut hunks_in_span: HashSet<usize> = HashSet::new();
-        let mut selected_hunk: Option<usize> = None;
-        let mut selected_lines: Vec<usize> = Vec::new();
-
-        for (i, row) in self.view.rows.iter().enumerate() {
-            if i > hi {
-                break;
-            }
-            let Row::Line(line) = row else {
-                continue;
-            };
-            let counter = body_counters.entry(line.hunk_index).or_insert(0);
-            let body_index = *counter;
-            *counter += 1;
-            if i < lo {
-                continue;
-            }
-            hunks_in_span.insert(line.hunk_index);
-            if line.origin != LineOrigin::Context {
-                selected_hunk = Some(line.hunk_index);
-                selected_lines.push(body_index);
-            }
-        }
-
-        if hunks_in_span.len() > 1 {
-            return Err("selection spans multiple hunks");
-        }
-        let Some(hunk_index) = selected_hunk else {
-            return Err("no changed lines in selection");
-        };
-        Ok((hunk_index, selected_lines))
+    /// The staging backend, if one is attached, borrowed as a trait object
+    /// for the UI-side staging module. `None` in git-less contexts.
+    pub(super) fn stage_ops(&self) -> Option<&dyn StageOps> {
+        self.stage_ops.as_deref()
     }
 
     /// Re-runs the diff and status for the current target, rebuilds
@@ -819,7 +643,7 @@ impl App {
     /// scroll, and the staging-panel cursor are clamped into range. On any
     /// git/parse error the state is left unchanged and a footer message is
     /// set. A no-op without a git backend.
-    fn refresh(&mut self) {
+    pub(super) fn refresh(&mut self) {
         let snapshot = {
             let Some(ops) = self.stage_ops.as_deref() else {
                 return;

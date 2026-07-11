@@ -32,6 +32,7 @@ mod sbs_view;
 mod search;
 mod sidebar;
 mod stage_ops;
+mod staging;
 mod staging_panel;
 mod syntax;
 mod theme;
