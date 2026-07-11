@@ -16,6 +16,7 @@
 //! blocking event loop — and returns which way the session ended.
 
 mod app;
+mod code_intel;
 mod compose;
 mod compose_modal;
 mod diff_view;
@@ -281,7 +282,7 @@ fn event_loop(
             }
         }
 
-        app.poll_lsp();
+        code_intel::poll(app);
     }
 }
 

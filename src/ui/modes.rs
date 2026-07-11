@@ -120,11 +120,12 @@ pub(super) fn handle_search_key(app: &mut App, key: KeyEvent) {
 /// `Esc`/`q` close back to Normal. Bypasses the [`super::Keymap`] table
 /// entirely.
 pub(super) fn handle_peek_key(app: &mut App, key: KeyEvent) {
+    use super::code_intel;
     match key.code {
-        KeyCode::Char('j') => app.peek_move_down(),
-        KeyCode::Char('k') => app.peek_move_up(),
-        KeyCode::Enter => app.peek_enter(),
-        KeyCode::Char('q') | KeyCode::Esc => app.close_peek(),
+        KeyCode::Char('j') => code_intel::peek_move_down(app),
+        KeyCode::Char('k') => code_intel::peek_move_up(app),
+        KeyCode::Enter => code_intel::peek_enter(app),
+        KeyCode::Char('q') | KeyCode::Esc => code_intel::close_peek(app),
         _ => {}
     }
 }
