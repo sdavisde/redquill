@@ -39,21 +39,27 @@ src/ui/app.rs src/ui/diff_view_state.rs` shows state moved, not duplicated.
 
 Empty the remaining concerns out of `App` so it becomes a coordinator.
 
-- [ ] Extract modal key handlers (`handle_compose_key`, `handle_list_key`,
-      `handle_staging_key`, `handle_search_key`, `handle_peek_key`, currently
-      `src/ui/mod.rs:210-320`) into a `modes` module grouping, driving `App`
-      through its public methods.
-- [ ] Extract the staging gesture logic (`toggle_stage`, `run_stage_gesture`,
-      `visual_stage_selection`, `StageGesture`, `refresh`) into a UI-side
-      staging module operating through the existing `StageOps` trait seam.
-- [ ] Extract the code-intelligence glue (`code_intel_position`,
-      `request_code_intel`, `poll_lsp`, `handle_lsp_event`,
-      `open_peek_locations`, peek-preview correlation) into a dedicated module
-      that takes a view cursor position as input rather than reaching into
-      `App` internals.
-- [ ] Reduce `src/ui/app.rs` to ~800 lines or fewer while keeping the `?`
-      help overlay, keymap table, and all dispatch behavior unchanged.
-- [ ] Relocate the corresponding unit tests alongside the moved code.
+- [x] Extract modal key handlers (`handle_compose_key`, `handle_list_key`,
+      `handle_staging_key`, `handle_search_key`, `handle_peek_key`) into a
+      `modes` module grouping, driving `App` through its public methods.
+- [x] Extract the staging gesture logic (`toggle_stage`, `run_stage_gesture`,
+      `visual_stage_selection`, `StageGesture`) into a UI-side `staging`
+      module operating through the existing `StageOps` trait seam (`refresh`
+      stays in `App` as the highlighting rebuild coordinator, called via
+      `pub(super)`).
+- [x] Extract the code-intelligence glue (`code_intel_position`, `request`,
+      `poll`, `handle_event`, `open_peek_locations`, peek preview/navigation)
+      into a dedicated `code_intel` module that takes a view cursor position
+      as input rather than reaching into `App` internals.
+- [~] `src/ui/app.rs` coordinator *code* is ~880 lines (near the advisory
+      ~800; the target is advisory per Open Question 3). The file total
+      remains larger because App-behavior integration tests (navigation,
+      compose, list, search, staging-via-Action, target derivation) that
+      share fixtures were retained with `App`. Help overlay, keymap table,
+      and all dispatch behavior unchanged.
+- [x] Relocate the moved code's unit tests alongside it (search-handler
+      tests → `modes`; LSP/peek/utf16 tests → `code_intel`; a colocated
+      pure-selection test → `staging`).
 
 **Proof:** `cargo test` / `cargo clippy -- -D warnings` / `cargo fmt --check`
 all green; `wc -l src/ui/app.rs` at or under the target; no keybinding,
