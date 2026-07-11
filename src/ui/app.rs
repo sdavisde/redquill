@@ -2,6 +2,7 @@
 //! performs. No rendering or terminal I/O lives here — these are plain
 //! methods, unit-tested without a terminal.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::annotate::{AnnotationStore, Side, Target};
@@ -19,11 +20,12 @@ use super::diff_view_state::DiffViewState;
 use super::keymap::Action;
 use super::lsp_ops::LspClient;
 use super::peek::{PeekKind, PeekState};
-use super::rows::{
-    LineRow, Row, SyntaxSpans, anchor_row_index, build_rows, build_sbs_rows, hunk_span,
-};
+use super::rows::{LineRow, Row, StagedMarker, SyntaxSpans, build_multibuffer, hunk_span};
 use super::search::SearchState;
-use super::stage_ops::{ReviewSnapshot, StageOps, StagedFile, build_review, staged_from_status};
+use super::stage_ops::{
+    ReviewSnapshot, StageOps, StagedFile, StagedState, build_review, staged_from_status,
+    staged_states_from_status,
+};
 use super::syntax::{self, HighlightCache};
 use super::theme::Theme;
 
@@ -99,6 +101,10 @@ pub struct App {
     /// the git panel to split its CHANGES and UNTRACKED sections. Derived on
     /// refresh from which entries have no real patch; empty without git.
     pub untracked_paths: Vec<String>,
+    /// Per-path [`StagedState`] driving the `●`/`±` section-header and git
+    /// panel markers, refreshed alongside `staged`. Missing entries are
+    /// [`StagedState::Unstaged`].
+    pub staged_states: HashMap<String, StagedState>,
     /// The focused row index into `staged` in the staging panel.
     pub staging_cursor: usize,
     /// The git panel's cursor: an index into the flattened list of navigable
@@ -193,6 +199,7 @@ impl App {
             stashes: Vec::new(),
             last_commit: None,
             untracked_paths: Vec::new(),
+            staged_states: HashMap::new(),
             staging_cursor: 0,
             panel_cursor: 0,
             status_message: None,
@@ -221,11 +228,24 @@ impl App {
         let mut app = App::new(snapshot.files);
         app.patches = snapshot.patches;
         app.staged = snapshot.staged;
+        app.staged_states = snapshot.staged_states;
         app.target = target;
         app.stage_ops = Some(ops);
         app.recompute_untracked();
         app.refresh_repo_state();
         app.highlight_cache.clear();
+        // Initial collapse state: only fully-staged files start collapsed
+        // (there's nothing left to review in them); partially-staged files
+        // keep their unstaged work visible, and everything else is expanded.
+        let full_staged: Vec<String> = app
+            .staged_states
+            .iter()
+            .filter(|(_, state)| **state == StagedState::Full)
+            .map(|(path, _)| path.clone())
+            .collect();
+        for path in full_staged {
+            app.view.set_collapsed(&path, true);
+        }
         app.rebuild_rows();
         app
     }
@@ -270,6 +290,27 @@ impl App {
         self.repo_root = Some(root);
     }
 
+    /// Selects the file whose path is `path`: expands its section if
+    /// collapsed, moves the cursor to its section-header row, and scrolls it
+    /// into view. Returns `false` (changing nothing) for a path not in the
+    /// current diff. This is the narrow select-by-path seam spec 02's git
+    /// panel drives file selection through; the sidebar highlight follows the
+    /// cursor's owning file, so moving the cursor here is what "selects" the
+    /// file everywhere.
+    pub fn select_file_by_path(&mut self, path: &str) -> bool {
+        let Some(index) = self.view.files.iter().position(|f| f.path == path) else {
+            return false;
+        };
+        if self.view.is_collapsed(path) {
+            self.view.set_collapsed(path, false);
+            self.rebuild_rows();
+        }
+        self.view.cursor = self.view.header_row_of_file[index];
+        self.view.scroll = 0;
+        self.view.ensure_visible();
+        true
+    }
+
     /// Takes the LSP client, if one was ever created, so the caller can
     /// shut it down after restoring the terminal. Leaves `None` in its
     /// place; a subsequent `gd`/`gr`/`K` would lazily create a fresh one.
@@ -284,6 +325,19 @@ impl App {
     pub(super) fn inject_lsp_client(&mut self, client: Box<dyn LspClient>, root: PathBuf) {
         self.lsp = Some(client);
         self.repo_root = Some(root);
+    }
+
+    /// The number of `(path, side)` entries in the highlight cache (test hook).
+    #[cfg(test)]
+    pub(super) fn highlight_cache_len(&self) -> usize {
+        self.highlight_cache.len()
+    }
+
+    /// Whether the highlight cache holds an entry for `(path, side)` (test
+    /// hook — distinguishes "cached, no spans" from "not cached").
+    #[cfg(test)]
+    pub(super) fn highlight_cache_contains(&self, path: &str, side: Side) -> bool {
+        self.highlight_cache.contains(path, side)
     }
 
     /// Applies one [`Action`] as a state transition.
@@ -306,20 +360,17 @@ impl App {
             Action::CursorRight => self.view.move_column_right(),
             Action::WordForward => self.view.move_word_forward(),
             Action::WordBackward => self.view.move_word_backward(),
-            Action::NextHunk => self.next_hunk(),
-            Action::PrevHunk => self.prev_hunk(),
-            Action::NextFile => self.switch_file(self.view.selected_file + 1),
-            Action::PrevFile => {
-                if let Some(prev) = self.view.selected_file.checked_sub(1) {
-                    self.switch_file(prev);
-                }
-            }
+            Action::NextHunk => self.view.next_hunk(),
+            Action::PrevHunk => self.view.prev_hunk(),
+            Action::NextFile => self.view.next_section(),
+            Action::PrevFile => self.view.prev_section(),
+            Action::ToggleCollapse => self.toggle_collapse(),
             Action::ToggleHelp => self.help_open = !self.help_open,
-            Action::ToggleView => self.view.toggle_view(),
             Action::EnterVisual => self.toggle_visual(),
             Action::Compose => self.open_compose(),
             Action::ToggleList => self.toggle_list(),
             Action::ToggleStage => super::staging::toggle_stage(self),
+            Action::StageFile => self.stage_file(),
             Action::ToggleStagingPanel => self.toggle_staging_panel(),
             Action::Search => self.enter_search(),
             Action::SearchNext => self.search_advance(true),
@@ -339,19 +390,67 @@ impl App {
         }
     }
 
-    /// Switches to file `index`, resetting cursor and scroll to the top.
-    /// Out-of-range indices are a no-op (this is how `NextFile`/`PrevFile`
-    /// clamp at the first/last file rather than wrapping). Rebuilding rows
-    /// (with highlighting) stays here; the view just holds the result.
-    fn switch_file(&mut self, index: usize) {
-        if index >= self.view.files.len() {
+    /// Toggles the collapse state of the file section under the cursor, then
+    /// rebuilds the buffer and re-clamps the cursor into the (now shorter or
+    /// longer) buffer, keeping it on the toggled file's header. A no-op on an
+    /// empty diff.
+    fn toggle_collapse(&mut self) {
+        let Some(path) = self.view.toggle_collapse_at_cursor() else {
+            return;
+        };
+        self.rebuild_rows();
+        // Keep the cursor on the toggled file's header so a collapse doesn't
+        // strand it inside a section that no longer has body rows.
+        if let Some(index) = self.view.files.iter().position(|f| f.path == path) {
+            self.view.cursor = self.view.header_row_of_file[index];
+            self.view.ensure_visible();
+        }
+    }
+
+    /// Stages or unstages the whole file under the cursor (the `S` gesture),
+    /// then auto-collapses (on stage) or auto-expands (on unstage) its
+    /// section. Direction is decided by the file's [`StagedState`]: a
+    /// fully-staged file unstages and re-expands; an unstaged or partially
+    /// staged file stages and collapses. Reuses the existing [`StageOps`]
+    /// gestures (`stage_file`/`unstage_file`) — no new git-layer code. A
+    /// read-only range target and a missing git backend both degrade to a
+    /// footer message; a git failure leaves state unchanged.
+    fn stage_file(&mut self) {
+        if matches!(self.target, DiffTarget::Range(_)) {
+            self.set_status_message("read-only diff target");
             return;
         }
-        self.view.selected_file = index;
-        self.rebuild_rows();
-        self.view.cursor = 0;
-        self.view.scroll = 0;
-        self.view.sbs_scroll = 0;
+        let Some(file) = self.view.files.get(self.view.file_of_cursor()) else {
+            return;
+        };
+        let path = file.path.clone();
+        let staging =
+            self.staged_states.get(&path).copied().unwrap_or_default() != StagedState::Full;
+
+        let result = {
+            let Some(ops) = self.stage_ops.as_deref() else {
+                self.set_status_message("staging unavailable (no git backend)");
+                return;
+            };
+            if staging {
+                ops.stage_file(&path)
+            } else {
+                ops.unstage_file(&path)
+            }
+        };
+        match result {
+            Ok(()) => {
+                // Collapse on stage / expand on unstage. `refresh` preserves
+                // the collapse map by path and re-applies the auto-expand
+                // rule, so a file that becomes fully staged stays collapsed
+                // and an unstaged one stays open.
+                self.view.set_collapsed(&path, staging);
+                let verb = if staging { "staged" } else { "unstaged" };
+                self.set_status_message(format!("{verb} {path}"));
+                self.refresh();
+            }
+            Err(e) => self.set_status_message(e.to_string()),
+        }
     }
 
     /// Rebuilds `rows` for the currently selected file against the current
@@ -368,117 +467,107 @@ impl App {
         }
     }
 
-    /// Rebuilds the view's `rows` for the currently selected file: lazily
-    /// populates the syntax-highlight cache for whichever side(s) this
-    /// file's hunks actually use (a no-op on a cache hit — highlighting
-    /// happens at most once per `(path, side)` between refreshes), then
-    /// rebuilds the row model against the current annotations and those
-    /// spans. Also recomputes the active search's match positions, since
-    /// they're relative to `rows`. Sets `rows` to empty if `selected_file`
-    /// is out of range (e.g. an empty diff). This is `App`'s side of the
-    /// seam: highlighting and the git backend live here, and the freshly
-    /// built rows are fed into [`DiffViewState`].
+    /// Rebuilds the whole multi-file row buffer: lazily populates the
+    /// syntax-highlight cache for the in-use side(s) of every *expanded*
+    /// file (collapsed files show only a header, so they are never
+    /// highlighted until expanded — a cache miss is highlighted at most once
+    /// per `(path, side)` between refreshes), then concatenates every file's
+    /// rows into one buffer via [`build_multibuffer`], carrying per-file
+    /// collapse state and staged markers. Also recomputes the active
+    /// search's matches and re-derives `selected_file` from the cursor. This
+    /// is `App`'s side of the seam: highlighting and the git backend live
+    /// here, and the built buffer is fed into [`DiffViewState`].
     pub(super) fn rebuild_rows(&mut self) {
-        let Some(file) = self.view.files.get(self.view.selected_file) else {
-            self.view.rows = Vec::new();
-            self.view.sbs_rows = Vec::new();
-            self.view.sbs_visual_of = Vec::new();
-            self.search.recompute(&self.view.rows);
-            return;
-        };
-        let path = file.path.clone();
-        let old_path = file.old_path.clone();
-        let needs_new = syntax::side_in_use(file, Side::New);
-        let needs_old = syntax::side_in_use(file, Side::Old);
-        let synthetic = self
-            .patches
-            .get(self.view.selected_file)
-            .is_none_or(|p| p.is_none());
-
-        if needs_new {
-            syntax::populate_cache(
-                &mut self.highlight_cache,
-                &mut self.highlighter,
-                self.stage_ops.as_deref(),
-                &self.target,
-                &path,
-                old_path.as_deref(),
-                Side::New,
-                synthetic,
-            );
+        // Per-file metadata, collected first (cloning paths) so the cache /
+        // highlighter can be mutably borrowed without also holding `files`.
+        struct Meta {
+            path: String,
+            old_path: Option<String>,
+            collapsed: bool,
+            needs_new: bool,
+            needs_old: bool,
+            synthetic: bool,
         }
-        if needs_old {
-            syntax::populate_cache(
-                &mut self.highlight_cache,
-                &mut self.highlighter,
-                self.stage_ops.as_deref(),
-                &self.target,
-                &path,
-                old_path.as_deref(),
-                Side::Old,
-                synthetic,
-            );
+        let metas: Vec<Meta> = self
+            .view
+            .files
+            .iter()
+            .enumerate()
+            .map(|(i, file)| {
+                let collapsed = self.view.is_collapsed(&file.path);
+                Meta {
+                    path: file.path.clone(),
+                    old_path: file.old_path.clone(),
+                    collapsed,
+                    needs_new: !collapsed && syntax::side_in_use(file, Side::New),
+                    needs_old: !collapsed && syntax::side_in_use(file, Side::Old),
+                    synthetic: self.patches.get(i).is_none_or(|p| p.is_none()),
+                }
+            })
+            .collect();
+
+        for meta in &metas {
+            if meta.needs_new {
+                syntax::populate_cache(
+                    &mut self.highlight_cache,
+                    &mut self.highlighter,
+                    self.stage_ops.as_deref(),
+                    &self.target,
+                    &meta.path,
+                    meta.old_path.as_deref(),
+                    Side::New,
+                    meta.synthetic,
+                );
+            }
+            if meta.needs_old {
+                syntax::populate_cache(
+                    &mut self.highlight_cache,
+                    &mut self.highlighter,
+                    self.stage_ops.as_deref(),
+                    &self.target,
+                    &meta.path,
+                    meta.old_path.as_deref(),
+                    Side::Old,
+                    meta.synthetic,
+                );
+            }
         }
 
-        let new_spans = self.highlight_cache.get(&path, Side::New);
-        let old_spans = self.highlight_cache.get(&path, Side::Old);
-        let file = &self.view.files[self.view.selected_file];
-        let rows = build_rows(
-            file,
+        let collapsed: Vec<bool> = metas.iter().map(|m| m.collapsed).collect();
+        let markers: Vec<StagedMarker> = self
+            .view
+            .files
+            .iter()
+            .map(
+                |f| match self.staged_states.get(&f.path).copied().unwrap_or_default() {
+                    StagedState::Full => StagedMarker::Staged,
+                    StagedState::Partial => StagedMarker::Partial,
+                    StagedState::Unstaged => StagedMarker::None,
+                },
+            )
+            .collect();
+        let syntax: Vec<SyntaxSpans> = self
+            .view
+            .files
+            .iter()
+            .map(|f| SyntaxSpans {
+                new: self.highlight_cache.get(&f.path, Side::New),
+                old: self.highlight_cache.get(&f.path, Side::Old),
+            })
+            .collect();
+
+        let mb = build_multibuffer(
+            &self.view.files,
+            &collapsed,
+            &markers,
             &self.annotations,
-            SyntaxSpans {
-                new: new_spans,
-                old: old_spans,
-            },
+            &syntax,
         );
-        let (sbs_rows, sbs_visual_of) = build_sbs_rows(file, &rows);
-        self.view.rows = rows;
-        self.view.sbs_rows = sbs_rows;
-        self.view.sbs_visual_of = sbs_visual_of;
+        self.view.rows = mb.rows;
+        self.view.file_of_row = mb.file_of_row;
+        self.view.header_row_of_file = mb.header_row_of_file;
+        self.view.selected_file = self.view.file_of_cursor();
         self.search.recompute(&self.view.rows);
-    }
-
-    /// Jumps the cursor to the next hunk header after the cursor, crossing
-    /// into the next file (at its first hunk) if the current file has none
-    /// left. A no-op if there is no next hunk anywhere. The in-file jump and
-    /// the file probe live on [`DiffViewState`]; `App` orchestrates the
-    /// highlighting rebuild between selecting a file and positioning on it.
-    fn next_hunk(&mut self) {
-        if self.view.next_hunk_in_file() {
-            return;
-        }
-        for index in (self.view.selected_file + 1)..self.view.files.len() {
-            if let Some(first) = self.view.probe_first_hunk_row(&self.annotations, index) {
-                self.view.selected_file = index;
-                self.rebuild_rows();
-                self.view.cursor = first;
-                self.view.scroll = 0;
-                self.view.sbs_scroll = 0;
-                self.view.ensure_visible();
-                return;
-            }
-        }
-    }
-
-    /// Jumps the cursor to the previous hunk header before the cursor,
-    /// crossing into the previous file (at its last hunk) if the current
-    /// file has none before the cursor. A no-op if there is no previous
-    /// hunk anywhere.
-    fn prev_hunk(&mut self) {
-        if self.view.prev_hunk_in_file() {
-            return;
-        }
-        for index in (0..self.view.selected_file).rev() {
-            if let Some(last) = self.view.probe_last_hunk_row(&self.annotations, index) {
-                self.view.selected_file = index;
-                self.rebuild_rows();
-                self.view.cursor = last;
-                self.view.scroll = 0;
-                self.view.sbs_scroll = 0;
-                self.view.ensure_visible();
-                return;
-            }
-        }
     }
 
     // -- Visual mode -------------------------------------------------
@@ -506,7 +595,7 @@ impl App {
     /// derivable target (currently only [`Row::Annotation`], which the
     /// cursor never addresses).
     pub fn target_for_cursor(&self) -> Option<Target> {
-        let file = self.view.files.get(self.view.selected_file)?;
+        let file = self.view.files.get(self.view.file_of_cursor())?;
         match self.view.rows.get(self.view.cursor)? {
             Row::Line(line) => line_target(&file.path, line),
             Row::HunkHeader { hunk_index, .. } => self.hunk_target(*hunk_index),
@@ -516,7 +605,7 @@ impl App {
     }
 
     fn hunk_target(&self, hunk_index: usize) -> Option<Target> {
-        let file = self.view.files.get(self.view.selected_file)?;
+        let file = self.view.files.get(self.view.file_of_cursor())?;
         let hunk = file.hunks.get(hunk_index)?;
         let (start, end) = hunk_span(hunk);
         Target::hunk(&file.path, start, end).ok()
@@ -531,7 +620,7 @@ impl App {
     /// numbers of the non-removed rows the selection spans. `None` if the
     /// selection covers no line rows at all.
     pub fn target_for_visual(&self, anchor: usize) -> Option<Target> {
-        let file = self.view.files.get(self.view.selected_file)?;
+        let file = self.view.files.get(self.view.file_of_cursor())?;
         let (lo, hi) = if anchor <= self.view.cursor {
             (anchor, self.view.cursor)
         } else {
@@ -690,12 +779,18 @@ impl App {
         let target = annotation.target.clone();
         let path = target.path().to_string();
         if let Some(index) = self.view.files.iter().position(|f| f.path == path) {
-            self.view.selected_file = index;
+            // Expand the target section so line/hunk anchors are reachable,
+            // then resolve the anchor against the whole buffer (a File target
+            // lands on the section header; line/hunk/range targets resolve
+            // within this file's row span). Fall back to the section header
+            // if the specific anchor row can no longer be found.
+            self.view.set_collapsed(&path, false);
             self.rebuild_rows();
-            self.view.cursor =
-                anchor_row_index(&self.view.files[index], &self.view.rows, &target).unwrap_or(0);
+            self.view.cursor = self
+                .view
+                .anchor_row_in_buffer(&target)
+                .unwrap_or_else(|| self.view.header_row_of_file[index]);
             self.view.scroll = 0;
-            self.view.sbs_scroll = 0;
             self.view.ensure_visible();
         }
         self.mode = Mode::Normal;
@@ -765,33 +860,92 @@ impl App {
             }
         };
 
-        let previous_path = self
-            .view
-            .files
-            .get(self.view.selected_file)
-            .map(|f| f.path.clone());
-        let previous_index = self.view.selected_file;
+        // Remember the cursor's file by path and its offset within that
+        // file's section, so the same spot is restored even if files
+        // reorder or the section shrinks.
+        let cursor_file = self.view.file_of_cursor();
+        let previous_path = self.view.files.get(cursor_file).map(|f| f.path.clone());
+        let local_offset = self.view.cursor.saturating_sub(
+            self.view
+                .header_row_of_file
+                .get(cursor_file)
+                .copied()
+                .unwrap_or(0),
+        );
+
+        // Take the previous files out (rather than clone) so their content
+        // can be compared per path against the incoming snapshot for targeted
+        // highlight-cache invalidation below.
+        let old_by_path: HashMap<String, FileDiff> = std::mem::take(&mut self.view.files)
+            .into_iter()
+            .map(|f| (f.path.clone(), f))
+            .collect();
 
         self.view.files = snapshot.files;
         self.patches = snapshot.patches;
         self.staged = snapshot.staged;
+        self.staged_states = snapshot.staged_states;
         self.recompute_untracked();
         self.refresh_repo_state();
 
-        self.view.selected_file = previous_path
-            .and_then(|path| self.view.files.iter().position(|f| f.path == path))
-            .unwrap_or_else(|| previous_index.min(self.view.files.len().saturating_sub(1)));
-        // Content may have changed underneath every cached (path, side).
-        self.highlight_cache.clear();
+        // Collapse-map maintenance (spec Unit 2, "nothing hides"):
+        // - drop entries for files that left the review, then
+        // - auto-expand any collapsed file that is now *partially* staged
+        //   (staged, then edited again — its fresh unstaged work must not
+        //   stay hidden behind a collapsed header, and it renders `±`).
+        // Fully-staged collapsed files stay collapsed (nothing to review),
+        // and every other file keeps whatever collapse state it had.
+        let present: HashSet<String> = self.view.files.iter().map(|f| f.path.clone()).collect();
+        self.view.retain_collapsed(|path| present.contains(path));
+        let reexpand: Vec<String> = self
+            .view
+            .files
+            .iter()
+            .map(|f| f.path.clone())
+            .filter(|path| self.view.is_collapsed(path))
+            .filter(|path| {
+                self.staged_states.get(path).copied().unwrap_or_default() == StagedState::Partial
+            })
+            .collect();
+        for path in reexpand {
+            self.view.set_collapsed(&path, false);
+        }
+
+        // Per-file highlight-cache invalidation (spec 03, task 5.1): keep the
+        // cached spans for files whose diff content is byte-identical across
+        // the refresh, invalidate only files whose `FileDiff` changed (or are
+        // newly present), and drop entries for files that left the review so
+        // the cache can't grow without bound. `FileDiff` equality is a sound
+        // and complete proxy for "the highlighted content could have changed":
+        // the diff is a pure function of both sides' whole-file source, so an
+        // unchanged `FileDiff` means unchanged content and still-valid spans
+        // (renames included — `old_path` is part of the compared value). The
+        // cache is keyed by each file's current path, matching `rebuild_rows`.
+        for file in &self.view.files {
+            if old_by_path.get(&file.path) != Some(file) {
+                self.highlight_cache.invalidate_path(&file.path);
+            }
+        }
+        self.highlight_cache
+            .retain_paths(|path| present.contains(path));
         self.rebuild_rows();
         if self.view.rows.is_empty() {
             self.view.cursor = 0;
             self.view.scroll = 0;
-            self.view.sbs_scroll = 0;
         } else {
+            let restored = previous_path
+                .as_deref()
+                .and_then(|path| self.view.files.iter().position(|f| f.path == path));
+            let target = match restored {
+                Some(j) => {
+                    let (start, end) = self.view.section_span(j);
+                    (start + local_offset).min(end.saturating_sub(1))
+                }
+                None => self.view.cursor.min(self.view.max_cursor()),
+            };
             self.view.cursor = self
                 .view
-                .nearest_addressable(self.view.cursor.min(self.view.max_cursor()), true);
+                .nearest_addressable(target.min(self.view.max_cursor()), false);
             self.view.scroll = self.view.scroll.min(self.view.cursor);
             self.view.ensure_visible();
         }
@@ -892,26 +1046,17 @@ impl App {
         self.panel_cursor = super::git_panel::moved_cursor(self.panel_cursor, len, false);
     }
 
-    /// Acts on the panel cursor's current row: a file row selects that file
-    /// in the diff and returns focus to it; a stash row (or an out-of-range
-    /// cursor) is a no-op, leaving the panel focused.
+    /// Acts on the panel cursor's current row: a file row scrolls the
+    /// multibuffer to that file's section (via [`App::select_file_by_path`])
+    /// and returns focus to the diff; a stash row (or an out-of-range cursor)
+    /// is a no-op, leaving the panel focused.
     pub fn panel_select(&mut self) {
         let rows = super::git_panel::navigable_rows(self);
         if let Some(super::git_panel::PanelRow::File(i)) = rows.get(self.panel_cursor) {
             let path = self.view.files[*i].path.clone();
             self.select_file_by_path(&path);
+            self.mode = Mode::Normal;
         }
-    }
-
-    /// Selects the diff file at `path` (if present) and returns focus to the
-    /// diff view. The narrow seam the panel calls on Enter; spec 03 can later
-    /// reroute this to "scroll the multibuffer to `path`" without touching
-    /// the panel's navigation.
-    pub fn select_file_by_path(&mut self, path: &str) {
-        if let Some(index) = self.view.files.iter().position(|f| f.path == path) {
-            self.switch_file(index);
-        }
-        self.mode = Mode::Normal;
     }
 
     // -- Remote operations & command log ----------------------------------
@@ -1007,19 +1152,23 @@ impl App {
         }
     }
 
-    /// Best-effort re-read of the staged-file list from `git status`,
-    /// keeping the previous list on any failure.
+    /// Best-effort re-read of the staged-file list (and per-path staged
+    /// states) from `git status`, keeping the previous values on any failure.
     fn refresh_staged_list(&mut self) {
-        let staged = {
+        let (staged, states) = {
             let Some(ops) = self.stage_ops.as_deref() else {
                 return;
             };
             match ops.status() {
-                Ok(status) => staged_from_status(&status),
+                Ok(status) => (
+                    staged_from_status(&status),
+                    staged_states_from_status(&status),
+                ),
                 Err(_) => return,
             }
         };
         self.staged = staged;
+        self.staged_states = states;
     }
 
     // -- Search --------------------------------------------------------------
@@ -1117,7 +1266,6 @@ fn visual_mode_allows(action: Action) -> bool {
             | Action::ToggleStage
             | Action::ToggleStagingPanel
             | Action::ToggleHelp
-            | Action::ToggleView
             | Action::ToggleCommandLog
     )
 }
@@ -1141,8 +1289,6 @@ mod tests {
     use crate::annotate::Classification;
     use crate::git::RawFilePatch;
     use crate::ui::compose::TextBuffer;
-    use crate::ui::diff_view_state::ViewMode;
-    use crate::ui::rows::SbsRow;
 
     fn file(path: &str, hunk_count: usize) -> FileDiff {
         let mut raw = format!(
@@ -1307,13 +1453,17 @@ mod tests {
     }
 
     #[test]
-    fn next_file_switches_and_resets_cursor() {
+    fn next_file_jumps_to_next_section_header() {
         let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
         app.apply(Action::CursorDown);
         app.apply(Action::NextFile);
         assert_eq!(app.view.selected_file, 1);
-        assert_eq!(app.view.cursor, 0);
-        assert_eq!(app.view.scroll, 0);
+        // Cursor lands on b.rs's section header, not row 0.
+        assert_eq!(app.view.cursor, app.view.header_row_of_file[1]);
+        assert!(matches!(
+            app.view.rows[app.view.cursor],
+            Row::FileHeader { file_index: 1, .. }
+        ));
     }
 
     #[test]
@@ -1332,13 +1482,49 @@ mod tests {
     }
 
     #[test]
-    fn prev_file_switches_and_resets_cursor() {
+    fn prev_file_jumps_back_across_sections() {
         let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
-        app.apply(Action::NextFile);
-        app.apply(Action::CursorDown);
+        app.apply(Action::NextFile); // -> b.rs header
+        assert_eq!(app.view.selected_file, 1);
+        // From b.rs's header, prev-section jumps to a.rs's header.
         app.apply(Action::PrevFile);
         assert_eq!(app.view.selected_file, 0);
-        assert_eq!(app.view.cursor, 0);
+        assert_eq!(app.view.cursor, app.view.header_row_of_file[0]);
+    }
+
+    #[test]
+    fn toggle_collapse_collapses_and_expands_file_under_cursor() {
+        let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
+        let expanded_len = app.view.rows.len();
+        // Cursor starts on a.rs's header.
+        app.apply(Action::ToggleCollapse);
+        assert!(app.view.is_collapsed("a.rs"));
+        assert!(app.view.rows.len() < expanded_len);
+        // a.rs now contributes exactly its (collapsed) header row.
+        assert!(matches!(
+            app.view.rows[app.view.header_row_of_file[0]],
+            Row::FileHeader {
+                collapsed: true,
+                file_index: 0,
+                ..
+            }
+        ));
+        // Cursor stays on a.rs's header, still addressable.
+        assert_eq!(app.view.cursor, app.view.header_row_of_file[0]);
+        assert!(app.view.rows[app.view.cursor].is_addressable());
+
+        app.apply(Action::ToggleCollapse);
+        assert!(!app.view.is_collapsed("a.rs"));
+        assert_eq!(app.view.rows.len(), expanded_len);
+    }
+
+    #[test]
+    fn toggle_collapse_targets_the_cursor_file_not_the_first() {
+        let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
+        app.apply(Action::NextFile); // cursor onto b.rs's header
+        app.apply(Action::ToggleCollapse);
+        assert!(app.view.is_collapsed("b.rs"));
+        assert!(!app.view.is_collapsed("a.rs"));
     }
 
     #[test]
@@ -1538,203 +1724,6 @@ Binary files a/img.png and b/img.png differ
         app.apply(Action::CursorDown); // Binary row
         let target = app.target_for_cursor().unwrap();
         assert_eq!(target, Target::file("img.png"));
-    }
-
-    // -- Side-by-side view --------------------------------------------------
-
-    #[test]
-    fn toggle_view_flips_and_round_trips() {
-        let mut app = App::new(vec![file("a.rs", 1)]);
-        assert_eq!(app.view.layout, ViewMode::Unified);
-        app.apply(Action::ToggleView);
-        assert_eq!(app.view.layout, ViewMode::SideBySide);
-        app.apply(Action::ToggleView);
-        assert_eq!(app.view.layout, ViewMode::Unified);
-    }
-
-    #[test]
-    fn toggle_view_is_preserved_across_file_switches() {
-        let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
-        app.apply(Action::ToggleView);
-        assert_eq!(app.view.layout, ViewMode::SideBySide);
-        app.apply(Action::NextFile);
-        assert_eq!(app.view.layout, ViewMode::SideBySide);
-    }
-
-    #[test]
-    fn toggle_view_is_allowed_in_visual_mode() {
-        let mut app = App::new(vec![file("a.rs", 1)]);
-        app.apply(Action::CursorDown); // hunk header
-        app.apply(Action::CursorDown); // line row
-        app.apply(Action::EnterVisual);
-        app.apply(Action::ToggleView);
-        assert_eq!(app.view.layout, ViewMode::SideBySide);
-        assert!(matches!(app.mode, Mode::Visual { .. }));
-    }
-
-    #[test]
-    fn sbs_rows_are_derived_alongside_rows_on_build() {
-        let raw = "\
-diff --git a/f.rs b/f.rs
-index 1..2 100644
---- a/f.rs
-+++ b/f.rs
-@@ -1,2 +1,2 @@
--old1
-+new1
- ctx
-";
-        let app = App::new(vec![file_with_raw("f.rs", raw)]);
-        // rows: FileHeader(0) HunkHeader(1) old1(2) new1(3) ctx(4)
-        assert_eq!(app.view.rows.len(), 5);
-        // sbs_rows: Full(0) Full(1) Paired{2,3} Context(4) -> 4 visual rows.
-        assert_eq!(app.view.sbs_rows.len(), 4);
-        assert_eq!(app.view.sbs_rows[0], SbsRow::Full(0));
-        assert_eq!(app.view.sbs_rows[1], SbsRow::Full(1));
-        assert_eq!(app.view.sbs_rows[2], SbsRow::Paired { old: 2, new: 3 });
-        assert_eq!(app.view.sbs_rows[3], SbsRow::Context(4));
-    }
-
-    /// [`App::ensure_visible`] keeps `sbs_scroll` in visual-row space: a
-    /// tiny viewport whose cursor sits on the paired line must not scroll
-    /// past the (fewer) visual rows even though the source-row cursor has
-    /// advanced past where `scroll` (row-space) would put it.
-    #[test]
-    fn sbs_scroll_tracks_visual_rows_not_source_rows() {
-        let raw = "\
-diff --git a/f.rs b/f.rs
-index 1..2 100644
---- a/f.rs
-+++ b/f.rs
-@@ -1,2 +1,2 @@
--old1
-+new1
- ctx
-";
-        let mut app = App::new(vec![file_with_raw("f.rs", raw)]);
-        app.view.set_viewport_height(2);
-        // Cursor onto the paired "new1" row (source row 3, visual row 2).
-        app.apply(Action::CursorDown); // hunk header, source row 1
-        app.apply(Action::CursorDown); // old1, source row 2
-        app.apply(Action::CursorDown); // new1, source row 3 (visual row 2)
-        assert_eq!(app.view.cursor, 3);
-        // Visual row 2 must be visible within a 2-row viewport: sbs_scroll
-        // in [1, 2].
-        assert!(app.view.sbs_scroll <= 2 && app.view.sbs_scroll + 2 > 2);
-    }
-
-    /// The cursor stays a source-row index in both view modes (see
-    /// [`ViewMode`]'s docs): every gesture that derives an annotation
-    /// target must land on the exact same [`Target`] whether `t` has been
-    /// pressed or not, since side-by-side is purely a rendering-time view
-    /// over the same `rows`.
-    #[test]
-    fn target_for_cursor_is_identical_in_both_views() {
-        let raw = "\
-diff --git a/f.rs b/f.rs
-index 1..2 100644
---- a/f.rs
-+++ b/f.rs
-@@ -1,2 +1,2 @@
--removed
-+added
-";
-        let mut app = App::new(vec![file_with_raw("f.rs", raw)]);
-        app.apply(Action::CursorDown); // hunk header
-        app.apply(Action::CursorDown); // removed line
-        let unified_target = app.target_for_cursor();
-
-        app.apply(Action::ToggleView);
-        let sbs_target = app.target_for_cursor();
-        assert_eq!(unified_target, sbs_target);
-        assert_eq!(unified_target, Some(Target::line("f.rs", 1, Side::Old)));
-    }
-
-    /// Same parity check for the Visual-mode range target.
-    #[test]
-    fn target_for_visual_is_identical_in_both_views() {
-        let mut app = App::new(vec![file("a.rs", 1)]);
-        app.apply(Action::CursorDown); // hunk header
-        app.apply(Action::CursorDown); // removed line
-        let anchor = app.view.cursor;
-        app.apply(Action::EnterVisual);
-        app.apply(Action::CursorDown);
-        let unified_target = app.target_for_visual(anchor);
-
-        app.apply(Action::ToggleView);
-        let sbs_target = app.target_for_visual(anchor);
-        assert_eq!(unified_target, sbs_target);
-    }
-
-    /// Same parity check for the `space` staging gesture: two apps built
-    /// from the same fixture, one toggled to side-by-side before staging,
-    /// must resolve to the exact same patch — the gesture is derived from
-    /// `rows[cursor]`, which side-by-side never touches.
-    #[test]
-    fn staging_gesture_target_is_identical_in_both_views() {
-        let p = raw_patch("a.rs", 1);
-        let (mut unified_app, unified_calls) = app_with_fake(
-            vec![p.clone()],
-            DiffTarget::WorkingTree,
-            vec![p.clone()],
-            vec![],
-        );
-        unified_app.apply(Action::CursorDown); // hunk header
-        unified_app.apply(Action::CursorDown); // line row
-        unified_app.apply(Action::ToggleStage);
-        let StageCall::Apply(unified_patch) = single_call(&unified_calls) else {
-            panic!("expected apply_cached");
-        };
-
-        let (mut sbs_app, sbs_calls) =
-            app_with_fake(vec![p.clone()], DiffTarget::WorkingTree, vec![p], vec![]);
-        sbs_app.apply(Action::ToggleView);
-        sbs_app.apply(Action::CursorDown); // hunk header
-        sbs_app.apply(Action::CursorDown); // line row
-        sbs_app.apply(Action::ToggleStage);
-        let StageCall::Apply(sbs_patch) = single_call(&sbs_calls) else {
-            panic!("expected apply_cached");
-        };
-
-        assert_eq!(unified_patch, sbs_patch);
-    }
-
-    /// Search matches are source-row indices; a match on a source row that
-    /// ends up on the left (old) side of a paired visual row must not also
-    /// be reported for the right (new) side's row, and vice versa — i.e.
-    /// the match set itself is unaffected by which view is active.
-    #[test]
-    fn search_matches_are_source_rows_unaffected_by_view() {
-        let raw = "\
-diff --git a/f.rs b/f.rs
-index 1..2 100644
---- a/f.rs
-+++ b/f.rs
-@@ -1,2 +1,2 @@
--old needle
-+new needle
-";
-        let mut app = App::new(vec![file_with_raw("f.rs", raw)]);
-        app.search.pattern = Some("needle".to_string());
-        app.search.recompute(&app.view.rows);
-        let unified_matches = app.search.matches.clone();
-
-        app.apply(Action::ToggleView);
-        app.search.recompute(&app.view.rows);
-        let sbs_matches = app.search.matches.clone();
-        assert_eq!(unified_matches, sbs_matches);
-        // Both the removed and added rows matched (each contains "needle"),
-        // and they resolve to distinct source rows / distinct sides of the
-        // same paired visual row.
-        assert_eq!(unified_matches.len(), 2);
-        let (Row::Line(old_line), Row::Line(new_line)) = (
-            &app.view.rows[unified_matches[0]],
-            &app.view.rows[unified_matches[1]],
-        ) else {
-            panic!("expected line rows");
-        };
-        assert_eq!(old_line.origin, LineOrigin::Removed);
-        assert_eq!(new_line.origin, LineOrigin::Added);
     }
 
     #[test]
@@ -1951,6 +1940,68 @@ index 1..2 100644
     }
 
     #[test]
+    fn jump_to_annotation_expands_a_collapsed_target_section() {
+        // Jumping to an annotation whose file is collapsed must re-expand
+        // that section so the line/hunk anchor is reachable, then land on it.
+        let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
+        app.annotations
+            .add(
+                Target::line("b.rs", 1, Side::New),
+                Classification::Issue,
+                "note",
+            )
+            .unwrap();
+        app.view.set_collapsed("b.rs", true);
+        app.rebuild_rows();
+        assert!(app.view.is_collapsed("b.rs"));
+
+        app.list_cursor = 0;
+        app.jump_to_focused_annotation();
+
+        assert!(!app.view.is_collapsed("b.rs")); // re-expanded
+        assert_eq!(app.view.selected_file, 1);
+        let Row::Line(line) = &app.view.rows[app.view.cursor] else {
+            panic!("expected cursor on a line row");
+        };
+        assert_eq!(line.new_line, Some(1));
+    }
+
+    // -- Markdown-on-quit output is unchanged by the multibuffer -------------
+
+    #[test]
+    fn multi_section_annotations_emit_unchanged_markdown() {
+        // The stdout markdown is a public API keyed purely off the annotation
+        // store's insertion order — the multibuffer never touches it. Compose
+        // annotations across several sections and assert byte-for-byte output.
+        use crate::annotate::render_markdown;
+        let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1), file("c.rs", 1)]);
+        app.annotations
+            .add(Target::file("a.rs"), Classification::Praise, "clean module")
+            .unwrap();
+        app.annotations
+            .add(
+                Target::line("b.rs", 1, Side::New),
+                Classification::Question,
+                "why new0?",
+            )
+            .unwrap();
+        app.annotations
+            .add(
+                Target::hunk("c.rs", 1, 1).unwrap(),
+                Classification::Nit,
+                "tidy this hunk",
+            )
+            .unwrap();
+        app.rebuild_rows();
+
+        let expected = "\
+## a.rs\n\n[praise] clean module\n\n\
+## b.rs:1 (+)\n\n[question] why new0?\n\n\
+## c.rs:1-1 (+)\n\n[nit] tidy this hunk\n";
+        assert_eq!(render_markdown(&app.annotations), expected);
+    }
+
+    #[test]
     fn edit_focused_annotation_prefills_compose() {
         let mut app = App::new(vec![file("a.rs", 1)]);
         app.annotations
@@ -2018,6 +2069,11 @@ index 1..2 100644
         calls: Rc<RefCell<Vec<StageCall>>>,
         diff: Vec<RawFilePatch>,
         status: Vec<FileStatus>,
+        // Interior-mutable overrides: when set, `diff`/`status` read through
+        // these instead, so a test can mutate the refresh result mid-flow
+        // (e.g. to simulate an external edit landing between operations).
+        diff_override: Option<Rc<RefCell<Vec<RawFilePatch>>>>,
+        status_override: Option<Rc<RefCell<Vec<FileStatus>>>>,
         untracked_content: std::collections::HashMap<String, Vec<u8>>,
         fail_ops: bool,
         show_calls: Rc<RefCell<usize>>,
@@ -2038,11 +2094,17 @@ index 1..2 100644
 
     impl StageOps for FakeGit {
         fn diff(&self, _target: &DiffTarget) -> Result<Vec<RawFilePatch>, GitError> {
-            Ok(self.diff.clone())
+            match &self.diff_override {
+                Some(h) => Ok(h.borrow().clone()),
+                None => Ok(self.diff.clone()),
+            }
         }
 
         fn status(&self) -> Result<Vec<FileStatus>, GitError> {
-            Ok(self.status.clone())
+            match &self.status_override {
+                Some(h) => Ok(h.borrow().clone()),
+                None => Ok(self.status.clone()),
+            }
         }
 
         fn stage_file(&self, path: &str) -> Result<(), GitError> {
@@ -2109,12 +2171,37 @@ index 1..2 100644
         }
     }
 
-    /// A porcelain status entry with staged (index-side) changes only.
+    /// A porcelain status entry with staged (index-side) changes only
+    /// (`M.` → fully staged).
     fn staged_entry(path: &str) -> FileStatus {
         FileStatus {
             kind: ChangeKind::Ordinary,
             staged: StatusCode::Modified,
             unstaged: StatusCode::Unmodified,
+            path: path.to_string(),
+            orig_path: None,
+        }
+    }
+
+    /// A porcelain status entry with both staged and unstaged changes
+    /// (`MM` → partially staged).
+    fn partial_entry(path: &str) -> FileStatus {
+        FileStatus {
+            kind: ChangeKind::Ordinary,
+            staged: StatusCode::Modified,
+            unstaged: StatusCode::Modified,
+            path: path.to_string(),
+            orig_path: None,
+        }
+    }
+
+    /// A porcelain status entry with working-tree-only changes (`.M` →
+    /// unstaged).
+    fn unstaged_entry(path: &str) -> FileStatus {
+        FileStatus {
+            kind: ChangeKind::Ordinary,
+            staged: StatusCode::Unmodified,
+            unstaged: StatusCode::Modified,
             path: path.to_string(),
             orig_path: None,
         }
@@ -2144,6 +2231,7 @@ index 1..2 100644
             files,
             patches: patches.into_iter().map(Some).collect(),
             staged: Vec::new(),
+            staged_states: HashMap::new(),
         };
         (App::with_git(snapshot, target, Box::new(fake)), calls)
     }
@@ -2242,6 +2330,7 @@ Binary files a/img.png and b/img.png differ
             files: vec![FileDiff::synthetic_added("new.rs".to_string(), "x\ny\n")],
             patches: vec![None],
             staged: Vec::new(),
+            staged_states: HashMap::new(),
         };
         let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
         app.apply(Action::CursorDown); // hunk header
@@ -2265,6 +2354,7 @@ Binary files a/img.png and b/img.png differ
             files: vec![FileDiff::synthetic_added("new.rs".to_string(), "x\ny\n")],
             patches: vec![None],
             staged: Vec::new(),
+            staged_states: HashMap::new(),
         };
         let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
         app.apply(Action::CursorDown);
@@ -2505,6 +2595,7 @@ index 1..2 100644
             files: vec![FileDiff::from_patch(&p).unwrap()],
             patches: vec![Some(p)],
             staged: Vec::new(),
+            staged_states: HashMap::new(),
         };
         let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
         // Startup read populated branch/stash state.
@@ -2607,6 +2698,7 @@ index 1..2 100644
             files: vec![FileDiff::from_patch(&p).unwrap()],
             patches: vec![Some(p)],
             staged: Vec::new(),
+            staged_states: HashMap::new(),
         };
         let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
         app.annotations
@@ -2662,6 +2754,7 @@ index 1..2 100644
             files: vec![FileDiff::from_patch(&p).unwrap()],
             patches: vec![Some(p)],
             staged: Vec::new(),
+            staged_states: HashMap::new(),
         };
         let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
         app.apply(Action::CursorDown); // hunk header
@@ -2706,6 +2799,338 @@ index 1..2 100644
         assert_eq!(app.status_message.as_deref(), Some("staged hunk"));
         app.clear_status_message();
         assert!(app.status_message.is_none());
+    }
+
+    // -- Stage-and-collapse review flow (S) ----------------------------------
+
+    /// Builds an `App` whose fake reads its refresh diff/status through
+    /// mutable handles, so a test can change what the next `refresh` sees.
+    /// The snapshot is derived from `initial_status` (staged list + states)
+    /// over `initial_files`.
+    #[allow(clippy::type_complexity)]
+    fn app_with_mutable_fake(
+        initial_files: Vec<RawFilePatch>,
+        initial_status: Vec<FileStatus>,
+        refresh_diff: Vec<RawFilePatch>,
+        refresh_status: Vec<FileStatus>,
+    ) -> (
+        App,
+        Rc<RefCell<Vec<StageCall>>>,
+        Rc<RefCell<Vec<RawFilePatch>>>,
+        Rc<RefCell<Vec<FileStatus>>>,
+    ) {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let diff_h = Rc::new(RefCell::new(refresh_diff));
+        let status_h = Rc::new(RefCell::new(refresh_status));
+        let fake = FakeGit {
+            calls: Rc::clone(&calls),
+            diff_override: Some(Rc::clone(&diff_h)),
+            status_override: Some(Rc::clone(&status_h)),
+            ..FakeGit::default()
+        };
+        let files = initial_files
+            .iter()
+            .map(|p| FileDiff::from_patch(p).unwrap())
+            .collect();
+        let snapshot = ReviewSnapshot {
+            files,
+            patches: initial_files.into_iter().map(Some).collect(),
+            staged: staged_from_status(&initial_status),
+            staged_states: staged_states_from_status(&initial_status),
+        };
+        let app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
+        (app, calls, diff_h, status_h)
+    }
+
+    #[test]
+    fn stage_file_stages_the_file_and_collapses_its_section() {
+        let p = raw_patch("a.rs", 1);
+        // After staging, a.rs is fully staged and gone from the working diff;
+        // decision (A) keeps it as a header-only section from status.
+        let (mut app, calls) = app_with_fake(
+            vec![p],
+            DiffTarget::WorkingTree,
+            vec![], // nothing unstaged left
+            vec![staged_entry("a.rs")],
+        );
+        assert!(!app.view.is_collapsed("a.rs"));
+        app.apply(Action::StageFile);
+        assert_eq!(
+            single_call(&calls),
+            StageCall::StageFile("a.rs".to_string())
+        );
+        assert!(app.view.is_collapsed("a.rs"));
+        // The section persists (never hides), now marked fully staged.
+        assert_eq!(app.view.files.len(), 1);
+        assert_eq!(app.view.files[0].path, "a.rs");
+        assert_eq!(
+            app.staged_states.get("a.rs").copied(),
+            Some(StagedState::Full)
+        );
+        assert_eq!(app.status_message.as_deref(), Some("staged a.rs"));
+    }
+
+    #[test]
+    fn stage_file_on_fully_staged_file_unstages_and_expands() {
+        let p = raw_patch("a.rs", 1);
+        // Start fully staged (collapsed at launch); after unstaging, a.rs is
+        // back in the working diff with nothing staged.
+        let (mut app, calls, _diff, _status) = app_with_mutable_fake(
+            vec![p.clone()],
+            vec![staged_entry("a.rs")],   // initial: M. -> Full
+            vec![p],                      // refresh diff after unstage
+            vec![unstaged_entry("a.rs")], // refresh status: unstaged only
+        );
+        assert!(app.view.is_collapsed("a.rs")); // fully staged starts collapsed
+        // Cursor sits on the collapsed header.
+        app.apply(Action::StageFile);
+        assert_eq!(
+            single_call(&calls),
+            StageCall::UnstageFile("a.rs".to_string())
+        );
+        assert!(!app.view.is_collapsed("a.rs")); // auto-expanded
+        assert_eq!(app.staged_states.get("a.rs").copied(), None); // no longer staged
+        assert_eq!(app.status_message.as_deref(), Some("unstaged a.rs"));
+    }
+
+    #[test]
+    fn stage_file_records_only_stageops_methods() {
+        // Both directions must go through `stage_file`/`unstage_file` — no
+        // new git-layer gestures.
+        let p = raw_patch("a.rs", 1);
+        let (mut app, calls) = app_with_fake(
+            vec![p],
+            DiffTarget::WorkingTree,
+            vec![],
+            vec![staged_entry("a.rs")],
+        );
+        app.apply(Action::StageFile);
+        for call in calls.borrow().iter() {
+            assert!(
+                matches!(call, StageCall::StageFile(_) | StageCall::UnstageFile(_)),
+                "unexpected call {call:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn stage_file_on_read_only_range_is_a_noop_with_message() {
+        let p = raw_patch("a.rs", 1);
+        let (mut app, calls) = app_with_fake(
+            vec![p.clone()],
+            DiffTarget::Range("main..HEAD".to_string()),
+            vec![p],
+            vec![],
+        );
+        app.apply(Action::StageFile);
+        assert!(calls.borrow().is_empty());
+        assert_eq!(app.status_message.as_deref(), Some("read-only diff target"));
+    }
+
+    #[test]
+    fn stage_file_error_sets_message_and_leaves_state_unchanged() {
+        let p = raw_patch("a.rs", 1);
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let fake = FakeGit {
+            calls: Rc::clone(&calls),
+            diff: vec![],
+            fail_ops: true,
+            ..FakeGit::default()
+        };
+        let snapshot = ReviewSnapshot {
+            files: vec![FileDiff::from_patch(&p).unwrap()],
+            patches: vec![Some(p)],
+            staged: Vec::new(),
+            staged_states: HashMap::new(),
+        };
+        let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
+        app.apply(Action::StageFile);
+        // The stage was attempted but failed; nothing collapsed, file kept.
+        assert_eq!(
+            single_call(&calls),
+            StageCall::StageFile("a.rs".to_string())
+        );
+        assert!(!app.view.is_collapsed("a.rs"));
+        assert_eq!(app.view.files.len(), 1);
+        assert!(
+            app.status_message
+                .as_deref()
+                .is_some_and(|m| m.contains("simulated git failure"))
+        );
+    }
+
+    #[test]
+    fn hunk_stage_marks_file_partial_and_keeps_it_expanded() {
+        // Staging one of two hunks leaves the file partially staged: its
+        // header marker becomes `±` and the section stays expanded (its
+        // unstaged work is still visible).
+        let p = raw_patch("a.rs", 2);
+        let (mut app, _calls) = app_with_fake(
+            vec![p.clone()],
+            DiffTarget::WorkingTree,
+            vec![p],                     // still has unstaged content
+            vec![partial_entry("a.rs")], // MM -> Partial
+        );
+        app.apply(Action::NextHunk); // onto a hunk header
+        app.apply(Action::ToggleStage); // stage that hunk, then refresh
+        assert_eq!(
+            app.staged_states.get("a.rs").copied(),
+            Some(StagedState::Partial)
+        );
+        let header = app.view.header_row_of_file[0];
+        let Row::FileHeader { staged_marker, .. } = &app.view.rows[header] else {
+            panic!("expected file header");
+        };
+        assert_eq!(*staged_marker, StagedMarker::Partial);
+        assert!(!app.view.is_collapsed("a.rs"));
+    }
+
+    // -- Refresh collapse-map rules (task 3.3) -------------------------------
+
+    #[test]
+    fn refresh_auto_expands_a_partially_staged_collapsed_file() {
+        // The "nothing hides" guarantee: a fully-staged (collapsed) file that
+        // gets edited again comes back partially staged and must re-expand.
+        let p = raw_patch("a.rs", 1);
+        let (mut app, _calls, _diff, _status) = app_with_mutable_fake(
+            vec![p.clone()],
+            vec![staged_entry("a.rs")],  // initial: Full -> collapsed
+            vec![p],                     // external edit: unstaged diff present
+            vec![partial_entry("a.rs")], // now MM -> Partial
+        );
+        assert!(app.view.is_collapsed("a.rs"));
+        app.refresh(); // picks up the external edit
+        assert!(!app.view.is_collapsed("a.rs")); // re-expanded
+        assert_eq!(
+            app.staged_states.get("a.rs").copied(),
+            Some(StagedState::Partial)
+        );
+        let header = app.view.header_row_of_file[0];
+        let Row::FileHeader { staged_marker, .. } = &app.view.rows[header] else {
+            panic!("expected file header");
+        };
+        assert_eq!(*staged_marker, StagedMarker::Partial); // ±
+    }
+
+    #[test]
+    fn refresh_keeps_a_still_fully_staged_collapsed_file_collapsed() {
+        let p = raw_patch("a.rs", 1);
+        let (mut app, _calls, _diff, _status) = app_with_mutable_fake(
+            vec![p],
+            vec![staged_entry("a.rs")], // Full -> collapsed
+            vec![],                     // still nothing unstaged
+            vec![staged_entry("a.rs")], // still Full
+        );
+        assert!(app.view.is_collapsed("a.rs"));
+        app.refresh();
+        assert!(app.view.is_collapsed("a.rs")); // stays collapsed
+    }
+
+    #[test]
+    fn refresh_preserves_a_manually_collapsed_unstaged_file() {
+        // A file the reviewer collapsed with `za` that has only unstaged
+        // changes keeps its collapse state (it isn't partially staged).
+        let a = raw_patch("a.rs", 1);
+        let b = raw_patch("b.rs", 1);
+        let (mut app, _calls, _diff, _status) = app_with_mutable_fake(
+            vec![a.clone(), b.clone()],
+            vec![],     // nothing staged
+            vec![a, b], // refresh returns the same two files
+            vec![],
+        );
+        app.view.set_collapsed("a.rs", true);
+        app.rebuild_rows();
+        app.refresh();
+        assert!(app.view.is_collapsed("a.rs")); // survives refresh
+        assert!(!app.view.is_collapsed("b.rs"));
+    }
+
+    #[test]
+    fn refresh_drops_collapse_entries_for_departed_files() {
+        // b.rs leaves the review on refresh; its collapse-map entry must be
+        // dropped rather than lingering as stale state.
+        let a = raw_patch("a.rs", 1);
+        let b = raw_patch("b.rs", 1);
+        let (mut app, _calls, _diff, _status) = app_with_mutable_fake(
+            vec![a.clone(), b.clone()],
+            vec![],
+            vec![a], // b.rs gone from the refresh diff
+            vec![],
+        );
+        app.view.set_collapsed("b.rs", true);
+        app.rebuild_rows();
+        app.refresh();
+        assert!(!app.view.collapse_contains("b.rs")); // entry cleaned up
+    }
+
+    #[test]
+    fn nothing_hides_smoke_stage_two_then_edit_one_reexpands() {
+        // Drives the Unit-2 smoke via the FakeGit harness: three files,
+        // stage two (watch them collapse), then an external edit lands on a
+        // staged file; the next refresh re-expands it with `±`.
+        let a = raw_patch("a.rs", 1);
+        let b = raw_patch("b.rs", 1);
+        let c = raw_patch("c.rs", 1);
+        let (mut app, calls, diff_h, status_h) = app_with_mutable_fake(
+            vec![a.clone(), b.clone(), c.clone()],
+            vec![], // nothing staged initially -> all expanded
+            // The fake starts reflecting the state after a.rs is staged.
+            vec![b.clone(), c.clone()],
+            vec![staged_entry("a.rs")],
+        );
+        // All three expanded to start.
+        assert!(!app.view.is_collapsed("a.rs"));
+        assert!(!app.view.is_collapsed("b.rs"));
+        assert!(!app.view.is_collapsed("c.rs"));
+
+        // Stage a.rs (cursor on its header): it collapses.
+        app.apply(Action::StageFile);
+        assert!(app.view.is_collapsed("a.rs"));
+
+        // Now stage b.rs. Update the fake to the post-(a,b)-stage state,
+        // then move the cursor onto b.rs and stage it.
+        *diff_h.borrow_mut() = vec![c.clone()];
+        *status_h.borrow_mut() = vec![staged_entry("a.rs"), staged_entry("b.rs")];
+        app.view.cursor = app.view.header_row_of_file[app
+            .view
+            .files
+            .iter()
+            .position(|f| f.path == "b.rs")
+            .unwrap()];
+        app.apply(Action::StageFile);
+        assert!(app.view.is_collapsed("b.rs"));
+        assert!(app.view.is_collapsed("a.rs"));
+        // Two S gestures, both whole-file stages.
+        assert_eq!(
+            *calls.borrow(),
+            vec![
+                StageCall::StageFile("a.rs".to_string()),
+                StageCall::StageFile("b.rs".to_string()),
+            ]
+        );
+
+        // External edit lands on the staged a.rs: it is now partially staged
+        // and reappears in the working diff. A refresh must re-expand it.
+        *diff_h.borrow_mut() = vec![a.clone(), c.clone()];
+        *status_h.borrow_mut() = vec![partial_entry("a.rs"), staged_entry("b.rs")];
+        app.refresh();
+
+        assert!(!app.view.is_collapsed("a.rs")); // re-expanded — nothing hides
+        assert!(app.view.is_collapsed("b.rs")); // still fully staged, collapsed
+        assert_eq!(
+            app.staged_states.get("a.rs").copied(),
+            Some(StagedState::Partial)
+        );
+        let header = app.view.header_row_of_file[app
+            .view
+            .files
+            .iter()
+            .position(|f| f.path == "a.rs")
+            .unwrap()];
+        let Row::FileHeader { staged_marker, .. } = &app.view.rows[header] else {
+            panic!("expected file header");
+        };
+        assert_eq!(*staged_marker, StagedMarker::Partial); // ±
     }
 
     // -- Staging panel -------------------------------------------------------
@@ -2816,12 +3241,11 @@ index 1..2 100644
         }
     }
 
-    /// Selecting a file's rows highlights each side at most once, even
-    /// across repeated selection (file switches back and forth) — the
-    /// `HighlightCache` keyed by `(path, side)` must be hit, not re-fetched
-    /// and re-highlighted, on every rebuild.
+    /// The multibuffer highlights every *expanded* file's in-use sides once
+    /// at build time, and the `(path, side)`-keyed cache means later motions
+    /// (section jumps back and forth) re-fetch nothing.
     #[test]
-    fn selecting_the_same_file_repeatedly_highlights_each_side_once() {
+    fn multibuffer_highlights_every_expanded_file_once() {
         let a = highlight_patch("a.rs");
         let b = highlight_patch("b.rs");
         let show_calls = Rc::new(RefCell::new(0));
@@ -2838,18 +3262,193 @@ index 1..2 100644
             ],
             patches: vec![Some(a), Some(b)],
             staged: Vec::new(),
+            staged_states: HashMap::new(),
         };
         let mut app = App::with_git(snapshot, DiffTarget::Staged, Box::new(fake));
-        // `with_git`'s initial rebuild already highlighted a.rs's two sides
-        // (it has both an added and a removed line).
+        // Both files expanded -> a.rs (2 sides) + b.rs (2 sides) = 4 fetches.
+        assert_eq!(*show_calls.borrow(), 4);
+
+        app.apply(Action::NextFile); // -> b.rs header: cache hit
+        app.apply(Action::PrevFile); // -> a.rs header: cache hit
+        app.apply(Action::NextFile); // -> b.rs header: cache hit
+        assert_eq!(*show_calls.borrow(), 4);
+    }
+
+    /// A file that starts collapsed (fully staged at launch) is not
+    /// highlighted until it is expanded — the lazy-per-file population rule.
+    #[test]
+    fn collapsed_file_is_not_highlighted_until_expanded() {
+        let a = highlight_patch("a.rs");
+        let c = highlight_patch("c.rs");
+        let show_calls = Rc::new(RefCell::new(0));
+        let fake = FakeGit {
+            diff: vec![a.clone(), c.clone()],
+            show_calls: Rc::clone(&show_calls),
+            show_content: Some("fn old() {}\nfn new() {}\n".to_string()),
+            ..FakeGit::default()
+        };
+        let snapshot = ReviewSnapshot {
+            files: vec![
+                FileDiff::from_patch(&a).unwrap(),
+                FileDiff::from_patch(&c).unwrap(),
+            ],
+            patches: vec![Some(a), Some(c)],
+            // c.rs starts fully staged -> starts collapsed.
+            staged: vec![StagedFile {
+                path: "c.rs".to_string(),
+                letter: 'M',
+            }],
+            staged_states: HashMap::from([("c.rs".to_string(), StagedState::Full)]),
+        };
+        let mut app = App::with_git(snapshot, DiffTarget::Staged, Box::new(fake));
+        // Only a.rs (expanded) is highlighted; collapsed c.rs is skipped.
         assert_eq!(*show_calls.borrow(), 2);
 
-        app.apply(Action::NextFile); // -> b.rs: two fresh fetches
+        // Expanding c.rs highlights its two sides on the rebuild.
+        app.view.set_collapsed("c.rs", false);
+        app.rebuild_rows();
         assert_eq!(*show_calls.borrow(), 4);
-        app.apply(Action::PrevFile); // -> a.rs: cache hit, no new fetches
+    }
+
+    /// Builds an `App` (Staged target) whose fake reads its refresh diff/status
+    /// through mutable handles and counts `show_file` fetches, so a refresh
+    /// test can change what the next `refresh` sees and observe whether the
+    /// highlight cache was reused or re-fetched. Returns the app, the diff
+    /// handle, and the show-call counter.
+    #[allow(clippy::type_complexity)]
+    fn app_with_counting_fake(
+        initial: Vec<RawFilePatch>,
+    ) -> (App, Rc<RefCell<Vec<RawFilePatch>>>, Rc<RefCell<usize>>) {
+        let show_calls = Rc::new(RefCell::new(0));
+        let diff_h = Rc::new(RefCell::new(initial.clone()));
+        let status_h = Rc::new(RefCell::new(Vec::new()));
+        let fake = FakeGit {
+            diff_override: Some(Rc::clone(&diff_h)),
+            status_override: Some(Rc::clone(&status_h)),
+            show_calls: Rc::clone(&show_calls),
+            show_content: Some("fn old() {}\nfn new() {}\n".to_string()),
+            ..FakeGit::default()
+        };
+        let snapshot = ReviewSnapshot {
+            files: initial
+                .iter()
+                .map(|p| FileDiff::from_patch(p).unwrap())
+                .collect(),
+            patches: initial.into_iter().map(Some).collect(),
+            staged: Vec::new(),
+            staged_states: HashMap::new(),
+        };
+        let app = App::with_git(snapshot, DiffTarget::Staged, Box::new(fake));
+        (app, diff_h, show_calls)
+    }
+
+    #[test]
+    fn refresh_preserves_highlight_cache_for_unchanged_files() {
+        let a = highlight_patch("a.rs");
+        let (mut app, _diff, show_calls) = app_with_counting_fake(vec![a]);
+        // a.rs expanded, both sides -> 2 fetches at build.
+        assert_eq!(*show_calls.borrow(), 2);
+        assert!(app.highlight_cache_contains("a.rs", Side::New));
+
+        // The refresh sees byte-identical diff content -> the cache survives
+        // and nothing is re-fetched.
+        app.refresh();
+        assert_eq!(*show_calls.borrow(), 2);
+        assert!(app.highlight_cache_contains("a.rs", Side::New));
+        assert!(app.highlight_cache_contains("a.rs", Side::Old));
+    }
+
+    #[test]
+    fn refresh_invalidates_highlight_cache_for_changed_files() {
+        let a = highlight_patch("a.rs");
+        let (mut app, diff, show_calls) = app_with_counting_fake(vec![a]);
+        assert_eq!(*show_calls.borrow(), 2);
+
+        // The file's diff content changes underneath us (an external edit):
+        // its cache entry must be invalidated and both sides re-fetched.
+        *diff.borrow_mut() = vec![raw_patch("a.rs", 1)];
+        app.refresh();
         assert_eq!(*show_calls.borrow(), 4);
-        app.apply(Action::NextFile); // -> b.rs: cache hit again
+    }
+
+    #[test]
+    fn refresh_drops_highlight_cache_entries_for_removed_files() {
+        let a = highlight_patch("a.rs");
+        let b = highlight_patch("b.rs");
+        let (mut app, diff, show_calls) = app_with_counting_fake(vec![a, b]);
+        // Two expanded files, two sides each -> 4 fetches.
         assert_eq!(*show_calls.borrow(), 4);
+        assert!(app.highlight_cache_contains("b.rs", Side::New));
+
+        // b.rs leaves the review; its cache entries must be dropped (no
+        // unbounded growth), while a.rs (unchanged) keeps its cached spans.
+        *diff.borrow_mut() = vec![highlight_patch("a.rs")];
+        app.refresh();
+        assert!(app.highlight_cache_contains("a.rs", Side::New));
+        assert!(!app.highlight_cache_contains("b.rs", Side::New));
+        assert!(!app.highlight_cache_contains("b.rs", Side::Old));
+        // a.rs was a cache hit -> no further fetches.
+        assert_eq!(*show_calls.borrow(), 4);
+        assert_eq!(app.highlight_cache_len(), 2);
+    }
+
+    /// A file whose single hunk carries `pairs` removed/added line pairs
+    /// (`2 * pairs` changed lines) of realistic Rust, so the word-diff pairing
+    /// (the dominant per-rebuild cost) runs on non-trivial content.
+    fn perf_file(i: usize, pairs: usize) -> FileDiff {
+        let path = format!("src/module_{i}.rs");
+        let mut raw = format!(
+            "diff --git a/{path} b/{path}\nindex 1..2 100644\n--- a/{path}\n+++ b/{path}\n@@ -1,{pairs} +1,{pairs} @@\n"
+        );
+        for k in 0..pairs {
+            raw.push_str(&format!(
+                "-    let value_{k} = compute_old({k}, factor);\n+    let value_{k} = compute_new({k}, factor);\n"
+            ));
+        }
+        FileDiff::from_patch(&RawFilePatch {
+            path,
+            old_path: None,
+            raw,
+            is_binary: false,
+        })
+        .unwrap()
+    }
+
+    /// A full `rebuild_rows` over a ~5k-changed-line, 15-file multibuffer —
+    /// the exact work every stage/collapse gesture triggers — must be
+    /// imperceptible. Measured well under 10ms (recorded in the perf proof),
+    /// so incremental rebuild is unnecessary. The assertion uses a generous
+    /// CI-safe bound to stay non-flaky; run with `--nocapture` for the number.
+    #[test]
+    fn rebuild_rows_on_a_5k_line_multibuffer_is_fast() {
+        let files: Vec<FileDiff> = (0..15).map(|i| perf_file(i, 168)).collect();
+        let total_lines: usize = files
+            .iter()
+            .flat_map(|f| f.hunks.iter())
+            .map(|h| h.lines.len())
+            .sum();
+        assert!(
+            total_lines >= 5000,
+            "fixture should be ~5k changed lines, got {total_lines}"
+        );
+
+        let mut app = App::new(files);
+        let rows = app.view.rows.len();
+        // Warm up once, then average a handful of full rebuilds.
+        app.rebuild_rows();
+        let iters = 20;
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            app.rebuild_rows();
+        }
+        let per = start.elapsed() / iters;
+        println!(
+            "rebuild_rows: {per:?} avg over {iters} rebuilds, {rows} rows ({total_lines} changed lines)"
+        );
+        assert!(
+            per < std::time::Duration::from_millis(250),
+            "rebuild_rows took {per:?} for {total_lines} lines / {rows} rows"
+        );
     }
 
     // -- Search ----------------------------------------------------------------
@@ -3056,6 +3655,126 @@ index 1..2 100644
         assert_eq!(app.search.matches.len(), 1);
     }
 
+    // -- Search across the multibuffer (task 4.2) ---------------------------
+
+    /// A one-hunk file whose added line contains the pattern `needle`.
+    fn needle_file(path: &str) -> FileDiff {
+        let raw = format!(
+            "diff --git a/{path} b/{path}\nindex 1..2 100644\n--- a/{path}\n+++ b/{path}\n@@ -1,1 +1,1 @@\n-old\n+needle here\n"
+        );
+        file_with_raw(path, &raw)
+    }
+
+    fn confirm_needle_search(app: &mut App) {
+        app.apply(Action::Search);
+        for c in "needle".chars() {
+            app.search_input.push(c);
+        }
+        app.confirm_search();
+    }
+
+    #[test]
+    fn search_matches_span_file_boundaries() {
+        let mut app = App::new(vec![needle_file("a.rs"), needle_file("b.rs")]);
+        confirm_needle_search(&mut app);
+        // One match per file's section — the search spans the whole buffer.
+        assert_eq!(app.search.matches.len(), 2);
+        let f0 = app.view.file_of_row[app.search.matches[0]];
+        let f1 = app.view.file_of_row[app.search.matches[1]];
+        assert_ne!(f0, f1);
+    }
+
+    #[test]
+    fn collapsed_section_contributes_no_search_matches() {
+        let mut app = App::new(vec![needle_file("a.rs"), needle_file("b.rs")]);
+        // a.rs collapsed contributes only its header — its needle row is
+        // absent from the buffer, so it cannot match.
+        app.view.set_collapsed("a.rs", true);
+        app.rebuild_rows();
+        confirm_needle_search(&mut app);
+        assert_eq!(app.search.matches.len(), 1);
+        assert_eq!(app.view.file_of_row[app.search.matches[0]], 1);
+    }
+
+    #[test]
+    fn search_next_wraps_across_the_whole_buffer() {
+        let mut app = App::new(vec![needle_file("a.rs"), needle_file("b.rs")]);
+        confirm_needle_search(&mut app);
+        let first = app.view.cursor;
+        assert_eq!(app.view.file_of_cursor(), 0); // first match in a.rs
+
+        app.apply(Action::SearchNext); // -> b.rs's match
+        let second = app.view.cursor;
+        assert_ne!(first, second);
+        assert_eq!(app.view.file_of_cursor(), 1);
+
+        app.apply(Action::SearchNext); // wraps back to a.rs's match
+        assert_eq!(app.view.cursor, first);
+
+        app.apply(Action::SearchPrev); // wraps backward to b.rs's match
+        assert_eq!(app.view.cursor, second);
+    }
+
+    #[test]
+    fn toggling_collapse_recomputes_search_matches_without_stale_indices() {
+        let mut app = App::new(vec![needle_file("a.rs"), needle_file("b.rs")]);
+        confirm_needle_search(&mut app);
+        assert_eq!(app.search.matches.len(), 2);
+
+        // Collapse b.rs via the `za` action; its rows leave the buffer, so
+        // the match set must recompute (no stale row indices survive).
+        app.apply(Action::NextFile); // cursor onto b.rs's header
+        assert_eq!(app.view.file_of_cursor(), 1);
+        app.apply(Action::ToggleCollapse);
+        assert!(app.view.is_collapsed("b.rs"));
+
+        assert_eq!(app.search.matches.len(), 1);
+        for &m in &app.search.matches {
+            assert!(m < app.view.rows.len(), "stale match index {m}");
+            let Row::Line(l) = &app.view.rows[m] else {
+                panic!("match row is not a line row");
+            };
+            assert!(l.content.contains("needle"));
+        }
+    }
+
+    // -- Select-by-path seam (task 4.4) -------------------------------------
+
+    #[test]
+    fn select_file_by_path_moves_cursor_to_section_header() {
+        let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
+        assert!(app.select_file_by_path("b.rs"));
+        assert_eq!(app.view.cursor, app.view.header_row_of_file[1]);
+        assert_eq!(app.view.selected_file, 1);
+        assert!(matches!(
+            app.view.rows[app.view.cursor],
+            Row::FileHeader { file_index: 1, .. }
+        ));
+    }
+
+    #[test]
+    fn select_file_by_path_expands_a_collapsed_target() {
+        let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
+        app.view.set_collapsed("b.rs", true);
+        app.rebuild_rows();
+        assert!(app.view.is_collapsed("b.rs"));
+
+        assert!(app.select_file_by_path("b.rs"));
+        assert!(!app.view.is_collapsed("b.rs")); // expanded on select
+        assert_eq!(app.view.cursor, app.view.header_row_of_file[1]);
+        assert_eq!(app.view.selected_file, 1);
+    }
+
+    #[test]
+    fn select_file_by_path_unknown_path_is_a_noop_returning_false() {
+        let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
+        app.apply(Action::CursorDown);
+        let cursor_before = app.view.cursor;
+        assert!(!app.select_file_by_path("missing.rs"));
+        assert_eq!(app.view.cursor, cursor_before);
+        assert_eq!(app.view.selected_file, 0);
+    }
+
     // -- Column cursor ---------------------------------------------------------
 
     #[test]
@@ -3213,8 +3932,8 @@ index 1..2 100644
         app.apply(Action::PanelSelect);
         assert_eq!(app.view.selected_file, 1);
         assert_eq!(app.mode, Mode::Normal); // focus returned to the diff
-        assert_eq!(app.view.cursor, 0);
-        assert_eq!(app.view.scroll, 0);
+        // Selecting scrolls the multibuffer to that file's section header.
+        assert_eq!(app.view.cursor, app.view.header_row_of_file[1]);
     }
 
     #[test]
@@ -3236,25 +3955,6 @@ index 1..2 100644
         app.apply(Action::PanelSelect);
         assert_eq!(app.view.selected_file, selected_before); // unchanged
         assert_eq!(app.mode, Mode::Panel); // still focused on the panel
-    }
-
-    #[test]
-    fn select_file_by_path_selects_and_returns_focus() {
-        let mut app = panel_app();
-        app.mode = Mode::Panel;
-        app.select_file_by_path("notes.md");
-        assert_eq!(app.view.selected_file, 2);
-        assert_eq!(app.mode, Mode::Normal);
-    }
-
-    #[test]
-    fn select_file_by_path_unknown_path_still_returns_focus() {
-        let mut app = panel_app();
-        app.mode = Mode::Panel;
-        let before = app.view.selected_file;
-        app.select_file_by_path("does-not-exist.rs");
-        assert_eq!(app.view.selected_file, before); // unchanged
-        assert_eq!(app.mode, Mode::Normal); // focus still returns to diff
     }
 
     #[test]

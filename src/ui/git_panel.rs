@@ -20,6 +20,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use crate::git::{BranchStatus, CommitSummary};
 
 use super::app::App;
+use super::stage_ops::StagedState;
 use super::theme::Theme;
 
 /// One navigable panel row: either a diff file (index into `app.view.files`)
@@ -79,21 +80,24 @@ fn split_path(path: &str) -> (&str, &str) {
     }
 }
 
-/// The staged-indicator column: a `●` for files with staged changes, blank
-/// otherwise, so paths stay column-aligned either way.
-fn staged_span(staged: bool, theme: &Theme) -> Span<'static> {
-    if staged {
-        Span::styled("\u{25cf} ", Style::default().fg(theme.staged_indicator))
-    } else {
-        Span::raw("  ")
+/// The staged-indicator column: a `●` for a fully-staged file, `±` for a
+/// partially-staged one, blank otherwise, so paths stay column-aligned
+/// regardless of state.
+fn staged_span(state: StagedState, theme: &Theme) -> Span<'static> {
+    match state {
+        StagedState::Full => Span::styled("\u{25cf} ", Style::default().fg(theme.staged_indicator)),
+        StagedState::Partial => {
+            Span::styled("\u{00b1} ", Style::default().fg(theme.staged_indicator))
+        }
+        StagedState::Unstaged => Span::raw("  "),
     }
 }
 
 /// A CHANGES row: staged marker, change-kind letter, then the split path.
-fn file_line(letter: char, path: &str, staged: bool, theme: &Theme) -> Line<'static> {
+fn file_line(letter: char, path: &str, state: StagedState, theme: &Theme) -> Line<'static> {
     let (dir, base) = split_path(path);
     Line::from(vec![
-        staged_span(staged, theme),
+        staged_span(state, theme),
         Span::styled(
             format!("{letter} "),
             Style::default()
@@ -228,8 +232,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         items.push(ListItem::new(section_header("CHANGES".to_string(), theme)));
         for &i in &tracked {
             let f = &app.view.files[i];
-            let staged = app.staged.iter().any(|s| s.path == f.path);
-            let mut line = file_line(f.kind.letter(), &f.path, staged, theme);
+            let state = app.staged_states.get(&f.path).copied().unwrap_or_default();
+            let mut line = file_line(f.kind.letter(), &f.path, state, theme);
             if let Some(old) = &f.old_path {
                 let (_, old_base) = split_path(old);
                 line.spans.push(Span::styled(
@@ -339,12 +343,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::stage_ops::StagedFile;
+    use super::super::stage_ops::{StagedFile, StagedState};
     use super::*;
     use crate::diff::FileDiff;
     use crate::git::{RawFilePatch, StashEntry};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use std::collections::HashMap;
 
     fn sample_file(path: &str) -> FileDiff {
         let raw = format!(
@@ -442,6 +447,7 @@ mod tests {
             path: "session.rs".to_string(),
             letter: 'M',
         }];
+        app.staged_states = HashMap::from([("session.rs".to_string(), StagedState::Full)]);
         let content = render_panel(&app);
         assert!(content.contains("CHANGES"));
         assert!(content.contains("\u{25cf}")); // staged dot preserved

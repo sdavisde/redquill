@@ -129,10 +129,28 @@ pub(super) struct HighlightCache {
 }
 
 impl HighlightCache {
-    /// Drops every cached entry (called on refresh, since the underlying
-    /// content may have changed).
+    /// Drops every cached entry. Used when the whole diff context changes at
+    /// once (e.g. [`super::App::with_git`] switching target/backend). A plain
+    /// refresh instead invalidates per file (see [`HighlightCache::invalidate_path`]
+    /// / [`HighlightCache::retain_paths`]) so unchanged files keep their spans.
     pub(super) fn clear(&mut self) {
         self.entries.clear();
+    }
+
+    /// Drops both sides' cached spans for one `path` (a `no-op` if neither is
+    /// cached). Called on refresh for a file whose diff content actually
+    /// changed, so only that file is re-highlighted on the next rebuild while
+    /// every other file's spans survive.
+    pub(super) fn invalidate_path(&mut self, path: &str) {
+        self.entries
+            .retain(|(cached_path, _), _| cached_path != path);
+    }
+
+    /// Drops every cached entry whose path fails `keep`, so files that left
+    /// the review on a refresh can't leave their spans behind (unbounded
+    /// growth over a long session).
+    pub(super) fn retain_paths(&mut self, keep: impl Fn(&str) -> bool) {
+        self.entries.retain(|(path, _), _| keep(path));
     }
 
     /// The cached spans for `(path, side)`, or an empty slice if not (yet)
@@ -148,6 +166,14 @@ impl HighlightCache {
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    /// Whether `(path, side)` currently has a cached entry, regardless of
+    /// whether its span list is empty (test hook — distinguishes "cached, no
+    /// spans" from "not cached").
+    #[cfg(test)]
+    pub(super) fn contains(&self, path: &str, side: Side) -> bool {
+        self.entries.contains_key(&(path.to_string(), side))
     }
 }
 
@@ -479,6 +505,70 @@ mod tests {
         );
 
         assert_eq!(*ops.show_calls.borrow(), 2);
+    }
+
+    #[test]
+    fn invalidate_path_drops_both_sides_but_keeps_other_files() {
+        let ops = CountingOps {
+            show_calls: std::cell::RefCell::new(0),
+        };
+        let mut cache = HighlightCache::default();
+        let mut highlighter = Highlighter::new();
+        let target = DiffTarget::Staged;
+        for (path, side) in [
+            ("a.rs", Side::New),
+            ("a.rs", Side::Old),
+            ("b.rs", Side::New),
+        ] {
+            populate_cache(
+                &mut cache,
+                &mut highlighter,
+                Some(&ops),
+                &target,
+                path,
+                None,
+                side,
+                false,
+            );
+        }
+        assert_eq!(cache.len(), 3);
+
+        cache.invalidate_path("a.rs");
+        // Both a.rs sides gone; b.rs untouched.
+        assert!(!cache.contains("a.rs", Side::New));
+        assert!(!cache.contains("a.rs", Side::Old));
+        assert!(cache.contains("b.rs", Side::New));
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn retain_paths_drops_entries_for_absent_paths() {
+        let ops = CountingOps {
+            show_calls: std::cell::RefCell::new(0),
+        };
+        let mut cache = HighlightCache::default();
+        let mut highlighter = Highlighter::new();
+        let target = DiffTarget::Staged;
+        for path in ["a.rs", "b.rs", "c.rs"] {
+            populate_cache(
+                &mut cache,
+                &mut highlighter,
+                Some(&ops),
+                &target,
+                path,
+                None,
+                Side::New,
+                false,
+            );
+        }
+        assert_eq!(cache.len(), 3);
+
+        // Keep only a.rs and c.rs (b.rs left the review).
+        cache.retain_paths(|path| path == "a.rs" || path == "c.rs");
+        assert!(cache.contains("a.rs", Side::New));
+        assert!(!cache.contains("b.rs", Side::New));
+        assert!(cache.contains("c.rs", Side::New));
+        assert_eq!(cache.len(), 2);
     }
 
     #[test]

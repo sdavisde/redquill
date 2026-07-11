@@ -32,7 +32,6 @@ mod modes;
 mod peek;
 mod peek_overlay;
 mod rows;
-mod sbs_view;
 mod search;
 mod stage_ops;
 mod staging;
@@ -41,7 +40,7 @@ mod syntax;
 mod theme;
 
 pub use app::{App, Mode};
-pub use diff_view_state::{DiffViewState, ViewMode};
+pub use diff_view_state::DiffViewState;
 pub use keymap::{Action, Binding, Keymap};
 pub use lsp_ops::LspClient;
 pub use rows::{Row, build_rows};
@@ -195,10 +194,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
     let (diff_area, panel_area) = split_right(right_area, bottom_open(app));
 
     git_panel::render(frame, sidebar_area, app);
-    match app.view.layout {
-        ViewMode::Unified => diff_view::render(frame, diff_area, app),
-        ViewMode::SideBySide => sbs_view::render(frame, diff_area, app),
-    }
+    diff_view::render(frame, diff_area, app);
     if let Some(panel_area) = panel_area {
         // The command log, when open, owns the slot regardless of mode; else
         // the mode's own bottom panel renders.
@@ -240,7 +236,8 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
         frame.render_widget(footer, footer_area);
     }
     if app.help_open {
-        help::render(frame, area, keymap, &app.theme);
+        let staging_allowed = !matches!(app.target, crate::git::DiffTarget::Range(_));
+        help::render(frame, area, keymap, &app.theme, staging_allowed);
     }
     if matches!(app.mode, Mode::Compose) {
         compose_modal::render(frame, area, app);
@@ -392,6 +389,102 @@ index 111..222 100644
         assert!(content.contains("[1 files]"));
     }
 
+    fn multi_file(path: &str) -> FileDiff {
+        let raw = format!(
+            "diff --git a/{path} b/{path}\nindex 111..222 100644\n--- a/{path}\n+++ b/{path}\n@@ -1,1 +1,1 @@\n-old\n+new\n"
+        );
+        FileDiff::from_patch(&RawFilePatch {
+            path: path.to_string(),
+            old_path: None,
+            raw,
+            is_binary: false,
+        })
+        .unwrap()
+    }
+
+    /// The multibuffer renders every file's section header (expanded, ▾
+    /// indicator) with its kind letter and path, all in one buffer.
+    #[test]
+    fn multibuffer_renders_all_section_headers() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let app = App::new(vec![multi_file("a.rs"), multi_file("b.rs")]);
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        // Both section headers present, each with the expanded indicator ▾
+        // and the change-kind letter M, and both files' bodies visible.
+        assert!(content.contains("\u{25be}")); // ▾ expanded indicator
+        assert!(content.contains("M a.rs"));
+        assert!(content.contains("M b.rs"));
+        assert!(content.contains("old"));
+    }
+
+    /// A collapsed section renders exactly one line: its header with the
+    /// collapsed indicator ▸, and none of its body rows (the `old`/`new`
+    /// diff lines are hidden).
+    #[test]
+    fn collapsed_section_renders_header_only_with_collapsed_indicator() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![multi_file("a.rs")]);
+        app.view.set_collapsed("a.rs", true);
+        app.rebuild_rows();
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        assert!(content.contains("\u{25b8}")); // ▸ collapsed indicator
+        assert!(content.contains("M a.rs"));
+        // Body rows are gone while collapsed.
+        assert!(!content.contains("old"));
+        assert!(!content.contains("new"));
+    }
+
+    /// A fully-staged file renders the `●` marker slot in its section
+    /// header; a partially-staged one renders `±`.
+    #[test]
+    fn staged_file_section_header_shows_marker() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![multi_file("a.rs")]);
+        app.staged_states
+            .insert("a.rs".to_string(), stage_ops::StagedState::Full);
+        app.rebuild_rows();
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        assert!(content.contains("M a.rs"));
+        assert!(content.contains("\u{25cf}")); // ● staged marker
+    }
+
+    /// A partially-staged file renders the `±` marker in its section header.
+    #[test]
+    fn partial_file_section_header_shows_partial_marker() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![multi_file("a.rs")]);
+        app.staged_states
+            .insert("a.rs".to_string(), stage_ops::StagedState::Partial);
+        app.rebuild_rows();
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        assert!(content.contains("M a.rs"));
+        assert!(content.contains("\u{00b1}")); // ± partial-staged marker
+    }
+
     #[test]
     fn empty_diff_shows_no_changes_message() {
         let backend = TestBackend::new(80, 20);
@@ -404,6 +497,67 @@ index 111..222 100644
         let buffer = terminal.backend().buffer().clone();
         let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
         assert!(content.contains("no changes"));
+    }
+
+    /// The multibuffer renders for a ref-range target exactly as for the
+    /// working tree — every file's section header and body appear.
+    #[test]
+    fn multibuffer_renders_for_a_range_target() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![multi_file("a.rs"), multi_file("b.rs")]);
+        app.target = crate::git::DiffTarget::Range("main..HEAD".to_string());
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        assert!(content.contains("\u{25be}")); // ▾ expanded indicator
+        assert!(content.contains("M a.rs"));
+        assert!(content.contains("M b.rs"));
+        assert!(content.contains("old"));
+    }
+
+    /// On a read-only range target the help overlay omits the inert
+    /// file/hunk staging gestures, but keeps the still-working staging-panel
+    /// toggle.
+    #[test]
+    fn help_overlay_hides_staging_rows_on_a_range_target() {
+        let backend = TestBackend::new(100, 44);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![sample_file()]);
+        app.help_open = true;
+        app.target = crate::git::DiffTarget::Range("main..HEAD".to_string());
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        assert!(content.contains("help"));
+        assert!(!content.contains("Stage/unstage file under cursor"));
+        assert!(!content.contains("Stage/unstage hunk"));
+        // The staging panel toggle still works on any target, so it stays.
+        assert!(content.contains("Toggle staging panel"));
+    }
+
+    /// On the working-tree target every staging gesture is listed.
+    #[test]
+    fn help_overlay_shows_staging_rows_on_the_working_tree_target() {
+        let backend = TestBackend::new(100, 44);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![sample_file()]);
+        app.help_open = true; // target defaults to WorkingTree
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        assert!(content.contains("Stage/unstage file under cursor"));
+        assert!(content.contains("Stage/unstage hunk"));
+        assert!(content.contains("Toggle staging panel"));
     }
 
     #[test]
@@ -503,6 +657,8 @@ index 111..222 100644
             path: "src/main.rs".to_string(),
             letter: 'M',
         }];
+        app.staged_states
+            .insert("src/main.rs".to_string(), stage_ops::StagedState::Full);
         app.mode = Mode::Staging;
         app.set_status_message("staged hunk");
         let keymap = Keymap::default_map();
@@ -637,55 +793,6 @@ index 111..222 100644
         );
     }
 
-    // -- Side-by-side view ----------------------------------------------------
-
-    /// `t` toggles the diff pane between unified and side-by-side, and back
-    /// — a full render happens in each state, and round-tripping lands back
-    /// on unified with the same content visible.
-    #[test]
-    fn toggle_view_round_trips_between_unified_and_side_by_side() {
-        let backend = TestBackend::new(100, 20);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut app = App::new(vec![sample_file()]);
-        let keymap = Keymap::default_map();
-
-        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
-        let unified_buffer = terminal.backend().buffer().clone();
-        let unified_content: String = unified_buffer
-            .content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect();
-        assert!(unified_content.contains("old()"));
-        assert!(unified_content.contains("new()"));
-
-        assert_eq!(
-            keymap.lookup(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)),
-            Some(Action::ToggleView)
-        );
-        app.apply(Action::ToggleView);
-        assert_eq!(app.view.layout, ViewMode::SideBySide);
-
-        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
-        let sbs_buffer = terminal.backend().buffer().clone();
-        let sbs_content: String = sbs_buffer.content().iter().map(|c| c.symbol()).collect();
-        assert!(sbs_content.contains("old()"));
-        assert!(sbs_content.contains("new()"));
-
-        app.apply(Action::ToggleView);
-        assert_eq!(app.view.layout, ViewMode::Unified);
-        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
-        let round_tripped: String = terminal
-            .backend()
-            .buffer()
-            .clone()
-            .content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect();
-        assert_eq!(round_tripped, unified_content);
-    }
-
     // -- LSP peek overlay --------------------------------------------------------
 
     /// Canned References results plus a preloaded preview cache render both
@@ -763,6 +870,30 @@ index 111..222 100644
         );
         FileDiff::from_patch(&RawFilePatch {
             path: path.to_string(),
+            old_path: None,
+            raw,
+            is_binary: false,
+        })
+        .unwrap()
+    }
+
+    // -- Performance (spec 03, task 5.2/5.3) --------------------------------
+
+    /// A file whose single hunk carries `pairs` removed/added line pairs
+    /// (`2 * pairs` changed lines), each a realistic Rust statement so the
+    /// word-diff pairing runs on non-trivial content.
+    fn perf_file(i: usize, pairs: usize) -> FileDiff {
+        let path = format!("src/module_{i}.rs");
+        let mut raw = format!(
+            "diff --git a/{path} b/{path}\nindex 1..2 100644\n--- a/{path}\n+++ b/{path}\n@@ -1,{pairs} +1,{pairs} @@\n"
+        );
+        for k in 0..pairs {
+            raw.push_str(&format!(
+                "-    let value_{k} = compute_old({k}, factor);\n+    let value_{k} = compute_new({k}, factor);\n"
+            ));
+        }
+        FileDiff::from_patch(&RawFilePatch {
+            path,
             old_path: None,
             raw,
             is_binary: false,
@@ -1388,5 +1519,51 @@ index 111..222 100644
             .join("docs/specs/02-spec-git-panel/02-proofs/02-task-04-smoke.txt");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, out).unwrap();
+    }
+
+    /// Builds a ~5k-changed-line, 15-file multibuffer and scrolls it top to
+    /// bottom a half-page at a time through the real `draw` render path on a
+    /// `TestBackend`, reporting ms/frame. The spec's quantitative proxy for
+    /// "instant-feel scrolling" is ms/frame well under 16ms; the assertion
+    /// uses a generous CI-safe bound (real measured value, recorded in the
+    /// perf proof, is far lower). Run with `--nocapture` to see the numbers.
+    #[test]
+    fn scrolling_a_5k_line_multibuffer_renders_fast() {
+        let files: Vec<FileDiff> = (0..15).map(|i| perf_file(i, 168)).collect();
+        let total_lines: usize = files
+            .iter()
+            .flat_map(|f| f.hunks.iter())
+            .map(|h| h.lines.len())
+            .sum();
+        assert!(
+            total_lines >= 5000,
+            "fixture should be ~5k changed lines, got {total_lines}"
+        );
+
+        let mut app = App::new(files);
+        let total_rows = app.view.rows.len();
+        let keymap = Keymap::default_map();
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        app.view.set_viewport_height(38);
+
+        let mut frames = 0u32;
+        let start = std::time::Instant::now();
+        loop {
+            terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+            frames += 1;
+            if app.view.cursor >= app.view.max_cursor() || frames > 2000 {
+                break;
+            }
+            app.apply(Action::HalfPageDown);
+        }
+        let per_frame = start.elapsed() / frames;
+        println!(
+            "scroll: {frames} frames over {total_rows} rows ({total_lines} changed lines), {per_frame:?}/frame"
+        );
+        assert!(
+            per_frame < std::time::Duration::from_millis(50),
+            "ms/frame {per_frame:?} too slow over {frames} frames / {total_rows} rows"
+        );
     }
 }

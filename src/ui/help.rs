@@ -49,16 +49,31 @@ const PEEK_HINTS: &[(&str, &str)] = &[
     ("Esc / q", "Close"),
 ];
 
+/// The help overlay's group sections, in render order. Every [`Action`]'s
+/// [`group_of`] must be one of these, or its binding would never render — the
+/// `help_overlay_covers_every_keymap_binding` test pins that invariant.
+const GROUP_ORDER: [&str; 8] = [
+    "Navigation",
+    "Annotate",
+    "Stage",
+    "Search",
+    "Panels",
+    "Code intelligence",
+    "Git panel",
+    "Quit",
+];
+
 /// Which help-overlay group an [`Action`] belongs to.
 fn group_of(action: Action) -> &'static str {
     use Action::*;
     match action {
         CursorDown | CursorUp | CursorLeft | CursorRight | WordForward | WordBackward
-        | HalfPageDown | HalfPageUp | NextHunk | PrevHunk | NextFile | PrevFile => "Navigation",
+        | HalfPageDown | HalfPageUp | NextHunk | PrevHunk | NextFile | PrevFile
+        | ToggleCollapse => "Navigation",
         EnterVisual | Compose => "Annotate",
-        ToggleStage | ToggleStagingPanel => "Stage",
+        ToggleStage | StageFile | ToggleStagingPanel => "Stage",
         Search | SearchNext | SearchPrev => "Search",
-        ToggleList | ToggleHelp | ToggleView | FocusGitPanel | ToggleCommandLog => "Panels",
+        ToggleList | ToggleHelp | FocusGitPanel | ToggleCommandLog => "Panels",
         GotoDefinition | GotoReferences | Hover => "Code intelligence",
         PanelCursorDown | PanelCursorUp | PanelSelect | RemoteFetch | RemotePull | RemotePush => {
             "Git panel"
@@ -100,11 +115,28 @@ fn key_line(key: &str, description: &str, key_width: usize, theme: &Theme) -> Li
     ])
 }
 
+/// Whether `action` is a staging *mutation* the current diff target can't
+/// perform, so it must be hidden from the help overlay. On a read-only range
+/// target the file/hunk/line stage gestures are inert no-ops (see
+/// [`super::app::App::stage_file`] / [`super::staging::toggle_stage`]), so
+/// listing them would be untruthful; the staging-panel toggle stays visible
+/// because it still works (it shows the index regardless of target).
+fn binding_hidden(action: Action, staging_allowed: bool) -> bool {
+    !staging_allowed && matches!(action, Action::ToggleStage | Action::StageFile)
+}
+
 /// Renders the help overlay, centered over `area`. Bindings from the
 /// [`Keymap`] table are grouped Navigation / Annotate / Panels / Quit, with
 /// Compose-mode and List-mode hints appended below (those modes bypass the
-/// table entirely, so they aren't in it).
-pub fn render(frame: &mut Frame, area: Rect, keymap: &Keymap, theme: &Theme) {
+/// table entirely, so they aren't in it). `staging_allowed` is `false` on a
+/// read-only range target, hiding the inert file/hunk staging gestures.
+pub fn render(
+    frame: &mut Frame,
+    area: Rect,
+    keymap: &Keymap,
+    theme: &Theme,
+    staging_allowed: bool,
+) {
     let bindings = keymap.bindings();
     let key_width = bindings
         .iter()
@@ -118,18 +150,11 @@ pub fn render(frame: &mut Frame, area: Rect, keymap: &Keymap, theme: &Theme) {
         .unwrap_or(0);
 
     let mut lines: Vec<Line> = Vec::new();
-    for group in [
-        "Navigation",
-        "Annotate",
-        "Stage",
-        "Search",
-        "Panels",
-        "Code intelligence",
-        "Quit",
-    ] {
+    for group in GROUP_ORDER {
         let group_bindings: Vec<&Binding> = bindings
             .iter()
             .filter(|b| b.scope == Scope::Diff && group_of(b.action) == group)
+            .filter(|b| !binding_hidden(b.action, staging_allowed))
             .collect();
         if group_bindings.is_empty() {
             continue;
@@ -196,4 +221,29 @@ pub fn render(frame: &mut Frame, area: Rect, keymap: &Keymap, theme: &Theme) {
         .title_alignment(Alignment::Center);
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, popup);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every binding in the keymap must land in one of the overlay's rendered
+    /// groups (`GROUP_ORDER`). If an action's `group_of` returned a label not
+    /// in that list, its binding would be silently omitted from `?` — the
+    /// "every user-visible action is listed in the `?` help overlay" rule
+    /// (CLAUDE.md). Because `group_of` is an exhaustive match, this also
+    /// guarantees any newly added `Action` is forced into a visible group.
+    #[test]
+    fn help_overlay_covers_every_keymap_binding() {
+        let keymap = Keymap::default_map();
+        for binding in keymap.bindings() {
+            let group = group_of(binding.action);
+            assert!(
+                GROUP_ORDER.contains(&group),
+                "binding {:?} ({}) maps to group {group:?}, which the help overlay never renders",
+                binding.action,
+                binding.key_label(),
+            );
+        }
+    }
 }

@@ -41,14 +41,14 @@ pub enum Action {
     NextHunk,
     /// Jump to the previous hunk, crossing file boundaries if needed.
     PrevHunk,
-    /// Switch to the next file in the sidebar.
+    /// Jump the cursor to the next file's section header.
     NextFile,
-    /// Switch to the previous file in the sidebar.
+    /// Jump the cursor to the previous file's section header.
     PrevFile,
+    /// Toggle the collapse state of the file section under the cursor.
+    ToggleCollapse,
     /// Toggle the help overlay.
     ToggleHelp,
-    /// Toggle the diff pane between unified and side-by-side layout.
-    ToggleView,
     /// Enter Visual mode at the cursor row (Normal), or cancel Visual mode
     /// back to Normal (Visual). No-op on non-line rows in Normal mode.
     EnterVisual,
@@ -62,6 +62,10 @@ pub enum Action {
     /// Visual mode. Stages on the working-tree target, unstages on the
     /// staged target; a no-op with a message on read-only range targets.
     ToggleStage,
+    /// Stage the whole file under the cursor (auto-collapsing its section),
+    /// or unstage it when fully staged (auto-expanding). Stages on the
+    /// working-tree target; a no-op with a message on read-only ranges.
+    StageFile,
     /// Toggle the staging panel (files with staged changes).
     ToggleStagingPanel,
     /// Open the search input, composing a pattern to match against the
@@ -268,15 +272,19 @@ impl Keymap {
                 ),
                 d(KeySeq::one(Char(']'), none), NextHunk, "Next hunk"),
                 d(KeySeq::one(Char('['), none), PrevHunk, "Previous hunk"),
-                d(KeySeq::one(Tab, none), NextFile, "Next file"),
-                d(KeySeq::one(BackTab, none), PrevFile, "Previous file"),
+                d(KeySeq::one(Tab, none), NextFile, "Next file section"),
+                d(
+                    KeySeq::one(BackTab, none),
+                    PrevFile,
+                    "Previous file section",
+                ),
+                d(
+                    KeySeq::two(Char('z'), none, Char('a'), none),
+                    ToggleCollapse,
+                    "Collapse/expand file section",
+                ),
                 d(KeySeq::one(Char('?'), none), ToggleHelp, "Toggle help"),
                 d(KeySeq::one(Esc, none), ToggleHelp, "Close help"),
-                d(
-                    KeySeq::one(Char('t'), none),
-                    ToggleView,
-                    "Toggle side-by-side view",
-                ),
                 d(
                     KeySeq::one(Char('v'), none),
                     EnterVisual,
@@ -296,6 +304,11 @@ impl Keymap {
                     KeySeq::one(Char(' '), none),
                     ToggleStage,
                     "Stage/unstage hunk (lines in visual mode)",
+                ),
+                d(
+                    KeySeq::one(Char('S'), none),
+                    StageFile,
+                    "Stage/unstage file under cursor",
                 ),
                 d(
                     KeySeq::one(Char('s'), none),
@@ -593,18 +606,56 @@ mod tests {
     }
 
     #[test]
-    fn t_resolves_to_toggle_view() {
+    fn shift_s_resolves_to_stage_file_regardless_of_shift_bit() {
         let km = Keymap::default_map();
+        // Uppercase `S` stages/unstages the file under the cursor; matching
+        // strips SHIFT for Char, so both encodings resolve (mirrors K/Q/N).
         assert_eq!(
-            km.lookup(key(KeyCode::Char('t'), KeyModifiers::NONE)),
-            Some(Action::ToggleView)
+            km.lookup(key(KeyCode::Char('S'), KeyModifiers::NONE)),
+            Some(Action::StageFile)
+        );
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('S'), KeyModifiers::SHIFT)),
+            Some(Action::StageFile)
+        );
+        // Lowercase `s` still opens the staging panel, unaffected.
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('s'), KeyModifiers::NONE)),
+            Some(Action::ToggleStagingPanel)
         );
     }
 
     #[test]
-    fn unbound_key_is_none() {
+    fn t_resolves_to_no_action() {
         let km = Keymap::default_map();
+        assert_eq!(km.lookup(key(KeyCode::Char('t'), KeyModifiers::NONE)), None);
+    }
+
+    #[test]
+    fn z_starts_a_sequence_and_za_toggles_collapse() {
+        let km = Keymap::default_map();
+        // `z` is now a two-key prefix, not itself a bound single key.
+        assert!(km.starts_sequence(key(KeyCode::Char('z'), KeyModifiers::NONE)));
         assert_eq!(km.lookup(key(KeyCode::Char('z'), KeyModifiers::NONE)), None);
+        let z = key(KeyCode::Char('z'), KeyModifiers::NONE);
+        assert_eq!(
+            km.lookup_double(z, key(KeyCode::Char('a'), KeyModifiers::NONE)),
+            Some(Action::ToggleCollapse)
+        );
+    }
+
+    #[test]
+    fn resolve_completes_za_across_two_events() {
+        let km = Keymap::default_map();
+        let mut pending = None;
+        assert_eq!(
+            km.resolve(&mut pending, key(KeyCode::Char('z'), KeyModifiers::NONE)),
+            None
+        );
+        assert!(pending.is_some());
+        let action = km.resolve(&mut pending, key(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert_eq!(action, Some(Action::ToggleCollapse));
+        assert_eq!(pending, None);
     }
 
     #[test]
