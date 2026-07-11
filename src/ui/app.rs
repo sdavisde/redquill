@@ -2,31 +2,26 @@
 //! performs. No rendering or terminal I/O lives here — these are plain
 //! methods, unit-tested without a terminal.
 
-use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::annotate::{AnnotationStore, Side, Target};
 use crate::diff::{FileDiff, LineOrigin};
-use crate::git::{DiffTarget, RawFilePatch, build_hunk_patch, build_line_patch};
-use crate::highlight::{Highlighter, Lang};
-use crate::lsp::{LspEvent, LspManager, RequestId, SourceLocation};
+use crate::git::{DiffTarget, RawFilePatch};
+use crate::highlight::Highlighter;
+use crate::lsp::RequestId;
 
 use super::compose::ComposeState;
+use super::diff_view_state::DiffViewState;
 use super::keymap::Action;
 use super::lsp_ops::LspClient;
-use super::peek::{CachedPreview, PeekKind, PeekState};
+use super::peek::{PeekKind, PeekState};
 use super::rows::{
-    LineRow, Row, SbsRow, SyntaxSpans, anchor_row_index, build_rows, build_sbs_rows, hunk_span,
+    LineRow, Row, SyntaxSpans, anchor_row_index, build_rows, build_sbs_rows, hunk_span,
 };
 use super::search::SearchState;
 use super::stage_ops::{ReviewSnapshot, StageOps, StagedFile, build_review, staged_from_status};
 use super::syntax::{self, HighlightCache};
 use super::theme::Theme;
-
-/// A reasonable default viewport height, used until the first frame reports
-/// the real one. Arbitrary but generous enough that half-page motion isn't
-/// degenerate before the first draw.
-const DEFAULT_VIEWPORT_HEIGHT: usize = 20;
 
 /// The interaction mode. Normal/Visual bindings dispatch through the
 /// [`super::keymap::Keymap`] table; Compose, List, and Staging handle their
@@ -52,57 +47,16 @@ pub enum Mode {
     Peek,
 }
 
-/// Which layout the diff pane renders: one column of unified hunks, or two
-/// columns (old left, new right) built as a rendering-time view over the
-/// same source [`Row`]s (see [`super::rows::build_sbs_rows`]). Toggled with
-/// `t`; the choice is preserved across file switches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ViewMode {
-    /// One column, old/new lines interleaved in patch order.
-    #[default]
-    Unified,
-    /// Two columns, old and new lines side by side.
-    SideBySide,
-}
-
-/// The TUI's full state: the diffed files, which one is selected, the
-/// flattened row model for that file, cursor and scroll position, help
-/// overlay visibility, and the annotation store the session accumulates
-/// into (emitted to stdout on quit).
+/// The TUI's full state: the per-view diff state (files, selection, rows,
+/// cursor, scroll, layout — see [`DiffViewState`]), help overlay
+/// visibility, and the annotation store the session accumulates into
+/// (emitted to stdout on quit), plus the modal states and service glue.
 pub struct App {
-    /// Every file in the diff being reviewed.
-    pub files: Vec<FileDiff>,
-    /// Index into `files` of the currently selected file.
-    pub selected_file: usize,
-    /// The flattened row model for `files[selected_file]`.
-    pub rows: Vec<Row>,
-    /// The side-by-side visual row model over `rows` (see
-    /// [`build_sbs_rows`]), rebuilt alongside it. Only consulted when
-    /// `view == ViewMode::SideBySide`.
-    pub sbs_rows: Vec<SbsRow>,
-    /// `rows` index -> `sbs_rows` index, sized to `rows.len()`, rebuilt
-    /// alongside both. Used to keep [`App::sbs_scroll`] following the
-    /// source-row cursor in visual-row space.
-    sbs_visual_of: Vec<usize>,
-    /// The cursor's row index into `rows` — a LINE the user moves with
-    /// j/k, Zed-style. Anchors future annotation/staging commands. Stays a
-    /// source-row index in both view modes (see [`ViewMode`]): every
-    /// gesture that derives an annotation/staging/LSP target, or resolves
-    /// a search match, reads `rows[cursor]` exactly as unified view always
-    /// has, so side-by-side mode adds zero new target-derivation paths.
-    pub cursor: usize,
-    /// The first visible row index into `rows` (the unified viewport
-    /// follows the cursor). Meaningless in `ViewMode::SideBySide` — see
-    /// [`App::sbs_scroll`].
-    pub scroll: usize,
-    /// The first visible row index into `sbs_rows` (the side-by-side
-    /// viewport follows the cursor's paired visual row). Kept in sync with
-    /// `cursor`/`viewport_height` by [`App::ensure_visible`] alongside
-    /// `scroll`, regardless of which view is active, so toggling `t`
-    /// never needs a scroll-position fixup.
-    pub sbs_scroll: usize,
-    /// Which layout the diff pane renders. Preserved across file switches.
-    pub view: ViewMode,
+    /// The per-view diff state: the diffed files, which one is selected, the
+    /// flattened row model for that file, cursor and scroll positions, the
+    /// viewport height, and the layout choice. `App` delegates every
+    /// navigation gesture here and feeds rebuilt rows back in.
+    pub view: DiffViewState,
     /// Whether the help overlay is open.
     pub help_open: bool,
     /// Annotations accumulated this session.
@@ -132,14 +86,12 @@ pub struct App {
     /// git-less contexts (e.g. pure-navigation unit tests), where staging
     /// degrades to a footer message.
     stage_ops: Option<Box<dyn StageOps>>,
-    /// The diff pane's last-known content height, used to size half-page
-    /// motion. Updated once per frame by the render loop.
-    viewport_height: usize,
     /// The color palette every renderer routes through.
     pub theme: Theme,
     /// The tree-sitter highlighting engine. Owned here so its per-language
-    /// config cache persists across selections.
-    highlighter: Highlighter,
+    /// config cache persists across selections. `pub(super)` for the
+    /// code-intelligence module's peek-preview highlighting.
+    pub(super) highlighter: Highlighter,
     /// Highlighted line spans, cached per `(path, side)` and cleared on
     /// every [`App::refresh`] (see [`syntax::HighlightCache`]).
     highlight_cache: HighlightCache,
@@ -148,12 +100,6 @@ pub struct App {
     pub search: SearchState,
     /// The in-progress pattern buffer while [`Mode::Search`] is active.
     pub search_input: String,
-    /// The column cursor: a 0-based char index into the cursor row's
-    /// content, meaningful only on [`Row::Line`] rows. Clamped wherever
-    /// it's read (see [`App::effective_column`]) rather than proactively on
-    /// every vertical motion — a simple clamp, not vim's "desired column"
-    /// memory.
-    pub cursor_col: usize,
     /// The repo root LSP servers are spawned against (from the
     /// [`crate::git::GitRunner`]). `None` in git-less contexts, where
     /// `gd`/`gr`/`K` degrade to a footer message like everything else
@@ -163,24 +109,15 @@ pub struct App {
     /// when the overlay has never been opened, or after it's closed.
     pub peek: Option<PeekState>,
     /// The LSP client backing `gd`/`gr`/`K`, created lazily on first use
-    /// against `repo_root`. `None` until then.
-    lsp: Option<Box<dyn LspClient>>,
+    /// against `repo_root`. `None` until then. `pub(super)` for the
+    /// code-intelligence module.
+    pub(super) lsp: Option<Box<dyn LspClient>>,
     /// The request id + kind `gd`/`gr`/`K` is currently awaiting a
     /// response for. A new request overwrites this (cancelling interest in
-    /// whatever was pending before); an [`LspEvent`] whose id doesn't match
-    /// is ignored.
-    pending_lsp: Option<(RequestId, PeekKind)>,
-}
-
-/// The staging granularity a `space` gesture resolved to.
-enum StageGesture {
-    /// The whole file (file-header/binary rows, and every gesture on a
-    /// synthetic untracked file).
-    WholeFile,
-    /// One hunk, by index into the selected file's hunks.
-    Hunk(usize),
-    /// Selected body-line indices within one hunk (Visual mode).
-    Lines(usize, Vec<usize>),
+    /// whatever was pending before); an [`crate::lsp::LspEvent`] whose id
+    /// doesn't match is ignored. `pub(super)` for the code-intelligence
+    /// module.
+    pub(super) pending_lsp: Option<(RequestId, PeekKind)>,
 }
 
 impl App {
@@ -191,15 +128,7 @@ impl App {
         let annotations = AnnotationStore::new();
         let patches = files.iter().map(|_| None).collect();
         let mut app = App {
-            files,
-            selected_file: 0,
-            rows: Vec::new(),
-            sbs_rows: Vec::new(),
-            sbs_visual_of: Vec::new(),
-            cursor: 0,
-            scroll: 0,
-            sbs_scroll: 0,
-            view: ViewMode::default(),
+            view: DiffViewState::new(files),
             help_open: false,
             annotations,
             mode: Mode::Normal,
@@ -211,13 +140,11 @@ impl App {
             staging_cursor: 0,
             status_message: None,
             stage_ops: None,
-            viewport_height: DEFAULT_VIEWPORT_HEIGHT,
             theme: Theme::default(),
             highlighter: Highlighter::new(),
             highlight_cache: HighlightCache::default(),
             search: SearchState::default(),
             search_input: String::new(),
-            cursor_col: 0,
             repo_root: None,
             peek: None,
             lsp: None,
@@ -240,17 +167,6 @@ impl App {
         app
     }
 
-    /// Records the diff pane's current content height, for half-page
-    /// motion. Called once per frame by the render loop.
-    pub fn set_viewport_height(&mut self, height: usize) {
-        self.viewport_height = height.max(1);
-    }
-
-    /// The last-known viewport height (see [`App::set_viewport_height`]).
-    pub fn viewport_height(&self) -> usize {
-        self.viewport_height
-    }
-
     /// Sets the workspace root `gd`/`gr`/`K` spawn LSP servers against
     /// (the GitRunner's repo root). Without this, code-intelligence
     /// requests degrade to a footer message.
@@ -269,7 +185,7 @@ impl App {
     /// creation of the real [`LspManager`]. Also sets `repo_root` so
     /// `gd`/`gr`/`K` don't short-circuit on a missing root.
     #[cfg(test)]
-    fn inject_lsp_client(&mut self, client: Box<dyn LspClient>, root: PathBuf) {
+    pub(super) fn inject_lsp_client(&mut self, client: Box<dyn LspClient>, root: PathBuf) {
         self.lsp = Some(client);
         self.repo_root = Some(root);
     }
@@ -286,144 +202,52 @@ impl App {
             return;
         }
         match action {
-            Action::CursorDown => {
-                if !self.rows.is_empty() {
-                    let target = (self.cursor + 1).min(self.max_cursor());
-                    self.cursor = self.nearest_addressable(target, true);
-                }
-                self.ensure_visible();
-            }
-            Action::CursorUp => {
-                if !self.rows.is_empty() {
-                    let target = self.cursor.saturating_sub(1);
-                    self.cursor = self.nearest_addressable(target, false);
-                }
-                self.ensure_visible();
-            }
-            Action::HalfPageDown => {
-                if !self.rows.is_empty() {
-                    let step = self.half_page();
-                    let target = (self.cursor + step).min(self.max_cursor());
-                    self.cursor = self.nearest_addressable(target, true);
-                }
-                self.ensure_visible();
-            }
-            Action::HalfPageUp => {
-                if !self.rows.is_empty() {
-                    let step = self.half_page();
-                    let target = self.cursor.saturating_sub(step);
-                    self.cursor = self.nearest_addressable(target, false);
-                }
-                self.ensure_visible();
-            }
-            Action::CursorLeft => self.move_column_left(),
-            Action::CursorRight => self.move_column_right(),
-            Action::WordForward => self.move_word_forward(),
-            Action::WordBackward => self.move_word_backward(),
+            Action::CursorDown => self.view.cursor_down(),
+            Action::CursorUp => self.view.cursor_up(),
+            Action::HalfPageDown => self.view.half_page_down(),
+            Action::HalfPageUp => self.view.half_page_up(),
+            Action::CursorLeft => self.view.move_column_left(),
+            Action::CursorRight => self.view.move_column_right(),
+            Action::WordForward => self.view.move_word_forward(),
+            Action::WordBackward => self.view.move_word_backward(),
             Action::NextHunk => self.next_hunk(),
             Action::PrevHunk => self.prev_hunk(),
-            Action::NextFile => self.switch_file(self.selected_file + 1),
+            Action::NextFile => self.switch_file(self.view.selected_file + 1),
             Action::PrevFile => {
-                if let Some(prev) = self.selected_file.checked_sub(1) {
+                if let Some(prev) = self.view.selected_file.checked_sub(1) {
                     self.switch_file(prev);
                 }
             }
             Action::ToggleHelp => self.help_open = !self.help_open,
-            Action::ToggleView => self.toggle_view(),
+            Action::ToggleView => self.view.toggle_view(),
             Action::EnterVisual => self.toggle_visual(),
             Action::Compose => self.open_compose(),
             Action::ToggleList => self.toggle_list(),
-            Action::ToggleStage => self.toggle_stage(),
+            Action::ToggleStage => super::staging::toggle_stage(self),
             Action::ToggleStagingPanel => self.toggle_staging_panel(),
             Action::Search => self.enter_search(),
             Action::SearchNext => self.search_advance(true),
             Action::SearchPrev => self.search_advance(false),
-            Action::GotoDefinition => self.request_code_intel(PeekKind::Definition),
-            Action::GotoReferences => self.request_code_intel(PeekKind::References),
-            Action::Hover => self.request_code_intel(PeekKind::Hover),
+            Action::GotoDefinition => super::code_intel::request(self, PeekKind::Definition),
+            Action::GotoReferences => super::code_intel::request(self, PeekKind::References),
+            Action::Hover => super::code_intel::request(self, PeekKind::Hover),
             Action::Quit | Action::QuitDiscard => {}
-        }
-    }
-
-    /// Flips between unified and side-by-side layout. The cursor stays a
-    /// source-row index (see [`ViewMode`]'s docs), so nothing else needs to
-    /// change — `scroll` and `sbs_scroll` are already kept in sync by
-    /// [`App::ensure_visible`] regardless of which view is active.
-    fn toggle_view(&mut self) {
-        self.view = match self.view {
-            ViewMode::Unified => ViewMode::SideBySide,
-            ViewMode::SideBySide => ViewMode::Unified,
-        };
-    }
-
-    fn half_page(&self) -> usize {
-        (self.viewport_height / 2).max(1)
-    }
-
-    /// The last addressable row index (skipping trailing
-    /// [`Row::Annotation`] display rows).
-    fn max_cursor(&self) -> usize {
-        self.rows.iter().rposition(Row::is_addressable).unwrap_or(0)
-    }
-
-    /// The nearest addressable row to `idx`, preferring the direction of
-    /// travel (`forward` for downward motion, backward for upward motion)
-    /// so runs of [`Row::Annotation`] display rows are skipped in one hop
-    /// rather than landing on the first non-addressable row.
-    fn nearest_addressable(&self, idx: usize, prefer_forward: bool) -> usize {
-        if self.rows.is_empty() {
-            return 0;
-        }
-        let idx = idx.min(self.rows.len() - 1);
-        if self.rows[idx].is_addressable() {
-            return idx;
-        }
-        let forward = (idx..self.rows.len()).find(|&i| self.rows[i].is_addressable());
-        let backward = (0..=idx).rev().find(|&i| self.rows[i].is_addressable());
-        if prefer_forward {
-            forward.or(backward).unwrap_or(0)
-        } else {
-            backward.or(forward).unwrap_or(0)
-        }
-    }
-
-    /// Scrolls just enough to keep the cursor inside `[scroll, scroll +
-    /// viewport_height)`.
-    fn ensure_visible(&mut self) {
-        if self.rows.is_empty() {
-            self.scroll = 0;
-            self.sbs_scroll = 0;
-            return;
-        }
-        if self.cursor < self.scroll {
-            self.scroll = self.cursor;
-        } else if self.cursor >= self.scroll + self.viewport_height {
-            self.scroll = self.cursor + 1 - self.viewport_height;
-        }
-
-        // Side-by-side scrolls in visual-row space (a paired removed/added
-        // line occupies one visual row, not two), kept in sync here
-        // unconditionally so toggling `t` never needs a fixup.
-        let visual_cursor = self.sbs_visual_of.get(self.cursor).copied().unwrap_or(0);
-        if visual_cursor < self.sbs_scroll {
-            self.sbs_scroll = visual_cursor;
-        } else if visual_cursor >= self.sbs_scroll + self.viewport_height {
-            self.sbs_scroll = visual_cursor + 1 - self.viewport_height;
         }
     }
 
     /// Switches to file `index`, resetting cursor and scroll to the top.
     /// Out-of-range indices are a no-op (this is how `NextFile`/`PrevFile`
-    /// clamp at the first/last file rather than wrapping).
+    /// clamp at the first/last file rather than wrapping). Rebuilding rows
+    /// (with highlighting) stays here; the view just holds the result.
     fn switch_file(&mut self, index: usize) {
-        if index >= self.files.len() {
+        if index >= self.view.files.len() {
             return;
         }
-        self.selected_file = index;
+        self.view.selected_file = index;
         self.rebuild_rows();
-        self.cursor = 0;
-        self.scroll = 0;
-        self.sbs_scroll = 0;
+        self.view.cursor = 0;
+        self.view.scroll = 0;
+        self.view.sbs_scroll = 0;
     }
 
     /// Rebuilds `rows` for the currently selected file against the current
@@ -431,27 +255,31 @@ impl App {
     /// to the annotation store so inline display/gutter markers stay in
     /// sync.
     fn refresh_rows(&mut self) {
-        if self.files.get(self.selected_file).is_some() {
+        if self.view.files.get(self.view.selected_file).is_some() {
             self.rebuild_rows();
-            self.cursor = self.nearest_addressable(self.cursor.min(self.max_cursor()), true);
-            self.ensure_visible();
+            self.view.cursor = self
+                .view
+                .nearest_addressable(self.view.cursor.min(self.view.max_cursor()), true);
+            self.view.ensure_visible();
         }
     }
 
-    /// Rebuilds `self.rows` for the currently selected file: lazily
+    /// Rebuilds the view's `rows` for the currently selected file: lazily
     /// populates the syntax-highlight cache for whichever side(s) this
     /// file's hunks actually use (a no-op on a cache hit — highlighting
     /// happens at most once per `(path, side)` between refreshes), then
     /// rebuilds the row model against the current annotations and those
     /// spans. Also recomputes the active search's match positions, since
     /// they're relative to `rows`. Sets `rows` to empty if `selected_file`
-    /// is out of range (e.g. an empty diff).
-    fn rebuild_rows(&mut self) {
-        let Some(file) = self.files.get(self.selected_file) else {
-            self.rows = Vec::new();
-            self.sbs_rows = Vec::new();
-            self.sbs_visual_of = Vec::new();
-            self.search.recompute(&self.rows);
+    /// is out of range (e.g. an empty diff). This is `App`'s side of the
+    /// seam: highlighting and the git backend live here, and the freshly
+    /// built rows are fed into [`DiffViewState`].
+    pub(super) fn rebuild_rows(&mut self) {
+        let Some(file) = self.view.files.get(self.view.selected_file) else {
+            self.view.rows = Vec::new();
+            self.view.sbs_rows = Vec::new();
+            self.view.sbs_visual_of = Vec::new();
+            self.search.recompute(&self.view.rows);
             return;
         };
         let path = file.path.clone();
@@ -460,7 +288,7 @@ impl App {
         let needs_old = syntax::side_in_use(file, Side::Old);
         let synthetic = self
             .patches
-            .get(self.selected_file)
+            .get(self.view.selected_file)
             .is_none_or(|p| p.is_none());
 
         if needs_new {
@@ -490,8 +318,8 @@ impl App {
 
         let new_spans = self.highlight_cache.get(&path, Side::New);
         let old_spans = self.highlight_cache.get(&path, Side::Old);
-        let file = &self.files[self.selected_file];
-        self.rows = build_rows(
+        let file = &self.view.files[self.view.selected_file];
+        let rows = build_rows(
             file,
             &self.annotations,
             SyntaxSpans {
@@ -499,49 +327,30 @@ impl App {
                 old: old_spans,
             },
         );
-        let (sbs_rows, sbs_visual_of) = build_sbs_rows(file, &self.rows);
-        self.sbs_rows = sbs_rows;
-        self.sbs_visual_of = sbs_visual_of;
-        self.search.recompute(&self.rows);
-    }
-
-    /// Row indices of every `HunkHeader` in `rows`.
-    fn hunk_header_rows(rows: &[Row]) -> Vec<usize> {
-        rows.iter()
-            .enumerate()
-            .filter_map(|(i, r)| matches!(r, Row::HunkHeader { .. }).then_some(i))
-            .collect()
+        let (sbs_rows, sbs_visual_of) = build_sbs_rows(file, &rows);
+        self.view.rows = rows;
+        self.view.sbs_rows = sbs_rows;
+        self.view.sbs_visual_of = sbs_visual_of;
+        self.search.recompute(&self.view.rows);
     }
 
     /// Jumps the cursor to the next hunk header after the cursor, crossing
     /// into the next file (at its first hunk) if the current file has none
-    /// left. A no-op if there is no next hunk anywhere.
+    /// left. A no-op if there is no next hunk anywhere. The in-file jump and
+    /// the file probe live on [`DiffViewState`]; `App` orchestrates the
+    /// highlighting rebuild between selecting a file and positioning on it.
     fn next_hunk(&mut self) {
-        if let Some(&next) = Self::hunk_header_rows(&self.rows)
-            .iter()
-            .find(|&&i| i > self.cursor)
-        {
-            self.cursor = next;
-            self.ensure_visible();
+        if self.view.next_hunk_in_file() {
             return;
         }
-
-        for index in (self.selected_file + 1)..self.files.len() {
-            // A cheap unhighlighted probe just to check whether this file
-            // has any hunk at all; only the file we actually land on gets
-            // its rows rebuilt with real highlighting, via `rebuild_rows`.
-            let probe = build_rows(
-                &self.files[index],
-                &self.annotations,
-                SyntaxSpans::default(),
-            );
-            if let Some(&first) = Self::hunk_header_rows(&probe).first() {
-                self.selected_file = index;
+        for index in (self.view.selected_file + 1)..self.view.files.len() {
+            if let Some(first) = self.view.probe_first_hunk_row(&self.annotations, index) {
+                self.view.selected_file = index;
                 self.rebuild_rows();
-                self.cursor = first;
-                self.scroll = 0;
-                self.sbs_scroll = 0;
-                self.ensure_visible();
+                self.view.cursor = first;
+                self.view.scroll = 0;
+                self.view.sbs_scroll = 0;
+                self.view.ensure_visible();
                 return;
             }
         }
@@ -552,29 +361,17 @@ impl App {
     /// file has none before the cursor. A no-op if there is no previous
     /// hunk anywhere.
     fn prev_hunk(&mut self) {
-        if let Some(&prev) = Self::hunk_header_rows(&self.rows)
-            .iter()
-            .rev()
-            .find(|&&i| i < self.cursor)
-        {
-            self.cursor = prev;
-            self.ensure_visible();
+        if self.view.prev_hunk_in_file() {
             return;
         }
-
-        for index in (0..self.selected_file).rev() {
-            let probe = build_rows(
-                &self.files[index],
-                &self.annotations,
-                SyntaxSpans::default(),
-            );
-            if let Some(&last) = Self::hunk_header_rows(&probe).last() {
-                self.selected_file = index;
+        for index in (0..self.view.selected_file).rev() {
+            if let Some(last) = self.view.probe_last_hunk_row(&self.annotations, index) {
+                self.view.selected_file = index;
                 self.rebuild_rows();
-                self.cursor = last;
-                self.scroll = 0;
-                self.sbs_scroll = 0;
-                self.ensure_visible();
+                self.view.cursor = last;
+                self.view.scroll = 0;
+                self.view.sbs_scroll = 0;
+                self.view.ensure_visible();
                 return;
             }
         }
@@ -585,9 +382,9 @@ impl App {
     fn toggle_visual(&mut self) {
         match self.mode {
             Mode::Normal => {
-                if matches!(self.rows.get(self.cursor), Some(Row::Line(_))) {
+                if matches!(self.view.rows.get(self.view.cursor), Some(Row::Line(_))) {
                     self.mode = Mode::Visual {
-                        anchor: self.cursor,
+                        anchor: self.view.cursor,
                     };
                 }
             }
@@ -605,8 +402,8 @@ impl App {
     /// derivable target (currently only [`Row::Annotation`], which the
     /// cursor never addresses).
     pub fn target_for_cursor(&self) -> Option<Target> {
-        let file = self.files.get(self.selected_file)?;
-        match self.rows.get(self.cursor)? {
+        let file = self.view.files.get(self.view.selected_file)?;
+        match self.view.rows.get(self.view.cursor)? {
             Row::Line(line) => line_target(&file.path, line),
             Row::HunkHeader { hunk_index, .. } => self.hunk_target(*hunk_index),
             Row::FileHeader { .. } | Row::Binary => Some(Target::file(&file.path)),
@@ -615,7 +412,7 @@ impl App {
     }
 
     fn hunk_target(&self, hunk_index: usize) -> Option<Target> {
-        let file = self.files.get(self.selected_file)?;
+        let file = self.view.files.get(self.view.selected_file)?;
         let hunk = file.hunks.get(hunk_index)?;
         let (start, end) = hunk_span(hunk);
         Target::hunk(&file.path, start, end).ok()
@@ -630,13 +427,13 @@ impl App {
     /// numbers of the non-removed rows the selection spans. `None` if the
     /// selection covers no line rows at all.
     pub fn target_for_visual(&self, anchor: usize) -> Option<Target> {
-        let file = self.files.get(self.selected_file)?;
-        let (lo, hi) = if anchor <= self.cursor {
-            (anchor, self.cursor)
+        let file = self.view.files.get(self.view.selected_file)?;
+        let (lo, hi) = if anchor <= self.view.cursor {
+            (anchor, self.view.cursor)
         } else {
-            (self.cursor, anchor)
+            (self.view.cursor, anchor)
         };
-        let lines: Vec<&LineRow> = self.rows[lo..=hi]
+        let lines: Vec<&LineRow> = self.view.rows[lo..=hi]
             .iter()
             .filter_map(|r| match r {
                 Row::Line(l) => Some(l),
@@ -788,13 +585,14 @@ impl App {
         };
         let target = annotation.target.clone();
         let path = target.path().to_string();
-        if let Some(index) = self.files.iter().position(|f| f.path == path) {
-            self.selected_file = index;
+        if let Some(index) = self.view.files.iter().position(|f| f.path == path) {
+            self.view.selected_file = index;
             self.rebuild_rows();
-            self.cursor = anchor_row_index(&self.files[index], &self.rows, &target).unwrap_or(0);
-            self.scroll = 0;
-            self.sbs_scroll = 0;
-            self.ensure_visible();
+            self.view.cursor =
+                anchor_row_index(&self.view.files[index], &self.view.rows, &target).unwrap_or(0);
+            self.view.scroll = 0;
+            self.view.sbs_scroll = 0;
+            self.view.ensure_visible();
         }
         self.mode = Mode::Normal;
     }
@@ -835,174 +633,10 @@ impl App {
         self.status_message = None;
     }
 
-    /// Applies the `space` staging gesture. Direction depends on the diff
-    /// target: working tree stages, staged unstages, range is read-only.
-    /// Granularity depends on the cursor row (Normal: hunk on line/hunk
-    /// rows, whole file on file-header/binary rows) or the Visual selection
-    /// (the selected `+`/`-` lines of a single hunk). Synthetic untracked
-    /// files always stage whole-file — there is no index blob to apply
-    /// hunk/line patches against. Failures and no-op cases set a footer
-    /// message and leave state unchanged.
-    fn toggle_stage(&mut self) {
-        if !matches!(self.mode, Mode::Normal | Mode::Visual { .. }) {
-            return;
-        }
-        if matches!(self.target, DiffTarget::Range(_)) {
-            self.set_status_message("read-only diff target");
-            return;
-        }
-        if self.stage_ops.is_none() {
-            self.set_status_message("staging unavailable (no git backend)");
-            return;
-        }
-        let Some(file) = self.files.get(self.selected_file) else {
-            return;
-        };
-        let path = file.path.clone();
-        let staging = matches!(self.target, DiffTarget::WorkingTree);
-        let verb = if staging { "staged" } else { "unstaged" };
-
-        let synthetic = self
-            .patches
-            .get(self.selected_file)
-            .is_none_or(|p| p.is_none());
-        let gesture = if synthetic {
-            StageGesture::WholeFile
-        } else {
-            match self.mode {
-                Mode::Visual { anchor } => match self.visual_stage_selection(anchor) {
-                    Ok((hunk_index, lines)) => StageGesture::Lines(hunk_index, lines),
-                    Err(message) => {
-                        self.set_status_message(message);
-                        return;
-                    }
-                },
-                _ => match self.rows.get(self.cursor) {
-                    Some(Row::Line(line)) => StageGesture::Hunk(line.hunk_index),
-                    Some(Row::HunkHeader { hunk_index, .. }) => StageGesture::Hunk(*hunk_index),
-                    Some(Row::FileHeader { .. }) | Some(Row::Binary) => StageGesture::WholeFile,
-                    _ => return,
-                },
-            }
-        };
-
-        let result = self.run_stage_gesture(&gesture, &path, staging, verb);
-        match result {
-            Ok(message) => {
-                if matches!(self.mode, Mode::Visual { .. }) {
-                    self.mode = Mode::Normal;
-                }
-                self.set_status_message(message);
-                self.refresh();
-            }
-            Err(message) => self.set_status_message(message),
-        }
-    }
-
-    /// Executes one resolved [`StageGesture`] against the git backend,
-    /// returning a success echo or a displayable error. Does not mutate
-    /// `self`.
-    fn run_stage_gesture(
-        &self,
-        gesture: &StageGesture,
-        path: &str,
-        staging: bool,
-        verb: &str,
-    ) -> Result<String, String> {
-        let Some(ops) = self.stage_ops.as_deref() else {
-            return Err("staging unavailable (no git backend)".to_string());
-        };
-        match gesture {
-            StageGesture::WholeFile => {
-                let result = if staging {
-                    ops.stage_file(path)
-                } else {
-                    ops.unstage_file(path)
-                };
-                result
-                    .map(|_| format!("{verb} {path}"))
-                    .map_err(|e| e.to_string())
-            }
-            StageGesture::Hunk(hunk_index) => {
-                let Some(Some(raw)) = self.patches.get(self.selected_file) else {
-                    return Err("no patch available for this file".to_string());
-                };
-                let patch = build_hunk_patch(raw, *hunk_index).map_err(|e| e.to_string())?;
-                let result = if staging {
-                    ops.apply_cached(&patch)
-                } else {
-                    ops.unapply_cached(&patch)
-                };
-                result
-                    .map(|_| format!("{verb} hunk"))
-                    .map_err(|e| e.to_string())
-            }
-            StageGesture::Lines(hunk_index, lines) => {
-                let Some(Some(raw)) = self.patches.get(self.selected_file) else {
-                    return Err("no patch available for this file".to_string());
-                };
-                let patch = build_line_patch(raw, *hunk_index, lines).map_err(|e| e.to_string())?;
-                let result = if staging {
-                    ops.apply_cached(&patch)
-                } else {
-                    ops.unapply_cached(&patch)
-                };
-                let plural = if lines.len() == 1 { "line" } else { "lines" };
-                result
-                    .map(|_| format!("{verb} {} {plural}", lines.len()))
-                    .map_err(|e| e.to_string())
-            }
-        }
-    }
-
-    /// Resolves a Visual selection (`anchor`..cursor, order-independent)
-    /// into `(hunk_index, body-line indices)` for [`build_line_patch`]:
-    /// the indices count every body line of the hunk from 0, and only the
-    /// selected `+`/`-` lines are included (context is always kept by the
-    /// patch builder anyway). Errors if the selection's line rows span more
-    /// than one hunk, or contain no changed lines at all.
-    fn visual_stage_selection(&self, anchor: usize) -> Result<(usize, Vec<usize>), &'static str> {
-        let (lo, hi) = if anchor <= self.cursor {
-            (anchor, self.cursor)
-        } else {
-            (self.cursor, anchor)
-        };
-
-        // Body-line indices are per-hunk positions counted over Row::Line
-        // rows only (annotation display rows are interleaved in `rows` but
-        // are not hunk body lines).
-        let mut body_counters: HashMap<usize, usize> = HashMap::new();
-        let mut hunks_in_span: HashSet<usize> = HashSet::new();
-        let mut selected_hunk: Option<usize> = None;
-        let mut selected_lines: Vec<usize> = Vec::new();
-
-        for (i, row) in self.rows.iter().enumerate() {
-            if i > hi {
-                break;
-            }
-            let Row::Line(line) = row else {
-                continue;
-            };
-            let counter = body_counters.entry(line.hunk_index).or_insert(0);
-            let body_index = *counter;
-            *counter += 1;
-            if i < lo {
-                continue;
-            }
-            hunks_in_span.insert(line.hunk_index);
-            if line.origin != LineOrigin::Context {
-                selected_hunk = Some(line.hunk_index);
-                selected_lines.push(body_index);
-            }
-        }
-
-        if hunks_in_span.len() > 1 {
-            return Err("selection spans multiple hunks");
-        }
-        let Some(hunk_index) = selected_hunk else {
-            return Err("no changed lines in selection");
-        };
-        Ok((hunk_index, selected_lines))
+    /// The staging backend, if one is attached, borrowed as a trait object
+    /// for the UI-side staging module. `None` in git-less contexts.
+    pub(super) fn stage_ops(&self) -> Option<&dyn StageOps> {
+        self.stage_ops.as_deref()
     }
 
     /// Re-runs the diff and status for the current target, rebuilds
@@ -1012,7 +646,7 @@ impl App {
     /// scroll, and the staging-panel cursor are clamped into range. On any
     /// git/parse error the state is left unchanged and a footer message is
     /// set. A no-op without a git backend.
-    fn refresh(&mut self) {
+    pub(super) fn refresh(&mut self) {
         let snapshot = {
             let Some(ops) = self.stage_ops.as_deref() else {
                 return;
@@ -1027,27 +661,33 @@ impl App {
             }
         };
 
-        let previous_path = self.files.get(self.selected_file).map(|f| f.path.clone());
-        let previous_index = self.selected_file;
+        let previous_path = self
+            .view
+            .files
+            .get(self.view.selected_file)
+            .map(|f| f.path.clone());
+        let previous_index = self.view.selected_file;
 
-        self.files = snapshot.files;
+        self.view.files = snapshot.files;
         self.patches = snapshot.patches;
         self.staged = snapshot.staged;
 
-        self.selected_file = previous_path
-            .and_then(|path| self.files.iter().position(|f| f.path == path))
-            .unwrap_or_else(|| previous_index.min(self.files.len().saturating_sub(1)));
+        self.view.selected_file = previous_path
+            .and_then(|path| self.view.files.iter().position(|f| f.path == path))
+            .unwrap_or_else(|| previous_index.min(self.view.files.len().saturating_sub(1)));
         // Content may have changed underneath every cached (path, side).
         self.highlight_cache.clear();
         self.rebuild_rows();
-        if self.rows.is_empty() {
-            self.cursor = 0;
-            self.scroll = 0;
-            self.sbs_scroll = 0;
+        if self.view.rows.is_empty() {
+            self.view.cursor = 0;
+            self.view.scroll = 0;
+            self.view.sbs_scroll = 0;
         } else {
-            self.cursor = self.nearest_addressable(self.cursor.min(self.max_cursor()), true);
-            self.scroll = self.scroll.min(self.cursor);
-            self.ensure_visible();
+            self.view.cursor = self
+                .view
+                .nearest_addressable(self.view.cursor.min(self.view.max_cursor()), true);
+            self.view.scroll = self.view.scroll.min(self.view.cursor);
+            self.view.ensure_visible();
         }
         self.staging_cursor = self.staging_cursor.min(self.staged.len().saturating_sub(1));
     }
@@ -1163,11 +803,11 @@ impl App {
             return;
         }
         self.search.pattern = Some(pattern);
-        self.search.recompute(&self.rows);
-        match self.search.next_from(self.cursor) {
+        self.search.recompute(&self.view.rows);
+        match self.search.next_from(self.view.cursor) {
             Some(row) => {
-                self.cursor = row;
-                self.ensure_visible();
+                self.view.cursor = row;
+                self.view.ensure_visible();
                 let k = self.search.position_of(row).unwrap_or(1);
                 self.set_status_message(format!("match {k}/{}", self.search.matches.len()));
             }
@@ -1190,344 +830,16 @@ impl App {
             return;
         }
         let next = if forward {
-            self.search.advance_from(self.cursor)
+            self.search.advance_from(self.view.cursor)
         } else {
-            self.search.retreat_from(self.cursor)
+            self.search.retreat_from(self.view.cursor)
         };
         if let Some(row) = next {
-            self.cursor = row;
-            self.ensure_visible();
+            self.view.cursor = row;
+            self.view.ensure_visible();
             let k = self.search.position_of(row).unwrap_or(1);
             self.set_status_message(format!("match {k}/{}", self.search.matches.len()));
         }
-    }
-
-    // -- Column cursor -----------------------------------------------------
-
-    /// The cursor row's content, if it's a [`Row::Line`] (the only rows
-    /// with a meaningful column).
-    fn cursor_line_content(&self) -> Option<&str> {
-        match self.rows.get(self.cursor) {
-            Some(Row::Line(line)) => Some(line.content.as_str()),
-            _ => None,
-        }
-    }
-
-    /// The 0-based char column, clamped into the cursor row's content
-    /// bounds. `None` if the cursor isn't on a [`Row::Line`] row, or that
-    /// row's content is empty (nothing to highlight).
-    pub fn effective_column(&self) -> Option<usize> {
-        let content = self.cursor_line_content()?;
-        let len = content.chars().count();
-        if len == 0 {
-            return None;
-        }
-        Some(self.cursor_col.min(len - 1))
-    }
-
-    fn move_column_left(&mut self) {
-        let Some(col) = self.effective_column() else {
-            return;
-        };
-        self.cursor_col = col.saturating_sub(1);
-    }
-
-    fn move_column_right(&mut self) {
-        let Some(content) = self.cursor_line_content() else {
-            return;
-        };
-        let len = content.chars().count();
-        if len == 0 {
-            return;
-        }
-        let col = self.cursor_col.min(len - 1);
-        self.cursor_col = (col + 1).min(len - 1);
-    }
-
-    fn move_word_forward(&mut self) {
-        let Some(content) = self.cursor_line_content() else {
-            return;
-        };
-        let chars: Vec<char> = content.chars().collect();
-        if chars.is_empty() {
-            return;
-        }
-        let mut i = self.cursor_col.min(chars.len() - 1);
-        if is_word_char(chars[i]) {
-            while i < chars.len() && is_word_char(chars[i]) {
-                i += 1;
-            }
-        }
-        while i < chars.len() && !is_word_char(chars[i]) {
-            i += 1;
-        }
-        self.cursor_col = i.min(chars.len() - 1);
-    }
-
-    fn move_word_backward(&mut self) {
-        let Some(content) = self.cursor_line_content() else {
-            return;
-        };
-        let chars: Vec<char> = content.chars().collect();
-        if chars.is_empty() {
-            return;
-        }
-        let mut i = self.cursor_col.min(chars.len() - 1);
-        if i == 0 {
-            self.cursor_col = 0;
-            return;
-        }
-        i -= 1;
-        while i > 0 && !is_word_char(chars[i]) {
-            i -= 1;
-        }
-        while i > 0 && is_word_char(chars[i - 1]) {
-            i -= 1;
-        }
-        self.cursor_col = i;
-    }
-
-    // -- LSP: request dispatch and event routing ----------------------------
-
-    /// Derives the `(repo-relative path, 0-based line, UTF-16 character)`
-    /// position `gd`/`gr`/`K` would request for the cursor's current
-    /// position. Valid only on [`Row::Line`] rows with a `new_line`
-    /// (Added/Context — a `Removed` line has no position in the file as it
-    /// exists on disk). `None` on any other row.
-    fn code_intel_position(&self) -> Option<(String, u32, u32)> {
-        let file = self.files.get(self.selected_file)?;
-        let Row::Line(line) = self.rows.get(self.cursor)? else {
-            return None;
-        };
-        if !matches!(line.origin, LineOrigin::Added | LineOrigin::Context) {
-            return None;
-        }
-        let new_line = line.new_line?;
-        let col = self.effective_column().unwrap_or(0);
-        let character = utf16_offset(&line.content, col);
-        Some((file.path.clone(), new_line - 1, character))
-    }
-
-    /// Issues a `gd`/`gr`/`K` request for the cursor's current position:
-    /// validates the row and the file's on-disk existence, lazily creates
-    /// the LSP client against `repo_root` on first use, and records the
-    /// request as pending. Sets a footer message either way — `"lsp:
-    /// resolving…"` while awaiting a response, or `"no code intelligence
-    /// here"` for any case that can't even start a request (invalid row,
-    /// no repo root, missing file, or no server available for this
-    /// language). A new request always supersedes interest in whatever was
-    /// previously pending.
-    fn request_code_intel(&mut self, kind: PeekKind) {
-        let Some((path, line, character)) = self.code_intel_position() else {
-            self.set_status_message("no code intelligence here");
-            return;
-        };
-        let Some(root) = self.repo_root.clone() else {
-            self.set_status_message("no code intelligence here");
-            return;
-        };
-        let abs_path = root.join(&path);
-        if !abs_path.is_file() {
-            self.set_status_message("no code intelligence here");
-            return;
-        }
-
-        if self.lsp.is_none() {
-            self.lsp = Some(Box::new(LspManager::new(root)));
-        }
-        // A new request always cancels interest in whatever was pending.
-        self.pending_lsp = None;
-        let Some(lsp) = self.lsp.as_mut() else {
-            return;
-        };
-        let request = match kind {
-            PeekKind::Definition => lsp.request_definition(&abs_path, line, character),
-            PeekKind::References => lsp.request_references(&abs_path, line, character),
-            PeekKind::Hover => lsp.request_hover(&abs_path, line, character),
-        };
-        match request {
-            Some(id) => {
-                self.pending_lsp = Some((id, kind));
-                self.set_status_message("lsp: resolving\u{2026}");
-            }
-            None => self.set_status_message("no code intelligence here"),
-        }
-    }
-
-    /// Drains events from the LSP client (if one exists) and routes them.
-    /// Never blocks; a no-op without a live client. Called once per event
-    /// loop tick, on both a keypress and a timeout, so responses keep
-    /// flowing while the user isn't typing.
-    pub fn poll_lsp(&mut self) {
-        let Some(lsp) = self.lsp.as_mut() else {
-            return;
-        };
-        let events = lsp.poll();
-        for event in events {
-            self.handle_lsp_event(event);
-        }
-    }
-
-    /// Routes one [`LspEvent`]: an id that doesn't match the currently
-    /// pending request is ignored (a stale response, or one superseded by
-    /// a newer request). A matching event opens the peek overlay
-    /// (Definition/References with results, or Hover), or sets a footer
-    /// message instead (`"no results"` for an empty location list,
-    /// `"lsp: failed"` for [`LspEvent::Failed`]).
-    fn handle_lsp_event(&mut self, event: LspEvent) {
-        let Some((pending_id, kind)) = self.pending_lsp else {
-            return;
-        };
-        let id = match &event {
-            LspEvent::Definition { id, .. } => *id,
-            LspEvent::References { id, .. } => *id,
-            LspEvent::Hover { id, .. } => *id,
-            LspEvent::Failed { id } => *id,
-        };
-        if id != pending_id {
-            return;
-        }
-        self.pending_lsp = None;
-
-        match event {
-            LspEvent::Definition { locations, .. } => {
-                self.open_peek_locations(kind, locations);
-            }
-            LspEvent::References { locations, .. } => {
-                self.open_peek_locations(kind, locations);
-            }
-            LspEvent::Hover { contents, .. } => {
-                self.peek = Some(PeekState::hover(contents));
-                self.mode = Mode::Peek;
-            }
-            LspEvent::Failed { .. } => self.set_status_message("lsp: failed"),
-        }
-    }
-
-    fn open_peek_locations(&mut self, kind: PeekKind, locations: Vec<SourceLocation>) {
-        if locations.is_empty() {
-            self.set_status_message("no results");
-            return;
-        }
-        self.peek = Some(PeekState::locations(kind, locations));
-        self.mode = Mode::Peek;
-        self.refresh_peek_preview();
-    }
-
-    // -- Peek overlay --------------------------------------------------------
-
-    /// Populates the preview cache for the currently selected location, if
-    /// it isn't already cached: reads the file from disk and highlights it
-    /// (best-effort — an unreadable file or unsupported language leaves it
-    /// uncached, and the overlay shows "(preview unavailable)"). A no-op
-    /// for Hover (no location list) or once a path is already cached.
-    fn refresh_peek_preview(&mut self) {
-        let Some(peek) = self.peek.as_ref() else {
-            return;
-        };
-        if matches!(peek.kind, PeekKind::Hover) {
-            return;
-        }
-        let Some(loc) = peek.locations.get(peek.selected) else {
-            return;
-        };
-        let path = loc.path.clone();
-        if peek.preview_cache.contains_key(&path) {
-            return;
-        }
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            return;
-        };
-        let lines: Vec<String> = content.lines().map(str::to_string).collect();
-        let spans = match path.to_str().and_then(Lang::from_path) {
-            Some(lang) => self.highlighter.highlight_lines(lang, &content),
-            None => Vec::new(),
-        };
-        if let Some(peek) = self.peek.as_mut() {
-            peek.preview_cache
-                .insert(path, CachedPreview { lines, spans });
-        }
-    }
-
-    /// Moves the peek selection down one result (Definition/References), or
-    /// scrolls the hover text down one line. A no-op if no overlay is open.
-    pub fn peek_move_down(&mut self) {
-        let Some(peek) = self.peek.as_mut() else {
-            return;
-        };
-        match peek.kind {
-            PeekKind::Hover => {
-                let max = peek.hover_line_count().saturating_sub(1);
-                peek.hover_scroll = (peek.hover_scroll + 1).min(max);
-            }
-            PeekKind::Definition | PeekKind::References => {
-                if !peek.locations.is_empty() {
-                    peek.selected = (peek.selected + 1).min(peek.locations.len() - 1);
-                }
-                self.refresh_peek_preview();
-            }
-        }
-    }
-
-    /// Moves the peek selection up one result, or scrolls hover text up one
-    /// line. A no-op if no overlay is open.
-    pub fn peek_move_up(&mut self) {
-        let Some(peek) = self.peek.as_mut() else {
-            return;
-        };
-        match peek.kind {
-            PeekKind::Hover => peek.hover_scroll = peek.hover_scroll.saturating_sub(1),
-            PeekKind::Definition | PeekKind::References => {
-                peek.selected = peek.selected.saturating_sub(1);
-                self.refresh_peek_preview();
-            }
-        }
-    }
-
-    /// Closes the peek overlay, returning to [`Mode::Normal`].
-    pub fn close_peek(&mut self) {
-        self.peek = None;
-        self.mode = Mode::Normal;
-    }
-
-    /// Applies the Peek-mode `Enter` gesture: for Definition/References,
-    /// jumps the diff cursor to the closest row for the selected result's
-    /// new-side line and closes the overlay if the result's file is one of
-    /// the diff's files, or sets a `"not in diff"` footer message
-    /// (v1 — full cross-file browsing is out of scope) otherwise. A no-op
-    /// for Hover.
-    pub fn peek_enter(&mut self) {
-        let Some(peek) = &self.peek else {
-            return;
-        };
-        if !matches!(peek.kind, PeekKind::Definition | PeekKind::References) {
-            return;
-        }
-        let Some(loc) = peek.locations.get(peek.selected) else {
-            return;
-        };
-        let target_path = loc.path.clone();
-        let target_line = loc.line + 1; // 0-based LSP line -> 1-based new_line
-
-        let file_index = self.files.iter().position(|f| {
-            self.repo_root
-                .as_ref()
-                .map(|root| root.join(&f.path) == target_path)
-                .unwrap_or(false)
-        });
-
-        let Some(file_index) = file_index else {
-            self.set_status_message("not in diff");
-            return;
-        };
-
-        self.selected_file = file_index;
-        self.rebuild_rows();
-        self.cursor = closest_row_for_new_line(&self.rows, target_line).unwrap_or(0);
-        self.scroll = 0;
-        self.sbs_scroll = 0;
-        self.ensure_visible();
-        self.close_peek();
     }
 }
 
@@ -1566,45 +878,14 @@ fn line_target(path: &str, line: &LineRow) -> Option<Target> {
     }
 }
 
-/// Whether `c` is part of a "word" for `w`/`b` column motion: alphanumeric
-/// or underscore.
-fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
-}
-
-/// Converts a 0-based char index within `content` to its UTF-16 code-unit
-/// offset, matching the LSP position convention (`gd`/`gr`/`K` requests use
-/// this to convert the column cursor's char index into a wire position).
-/// Characters outside the Basic Multilingual Plane (e.g. most emoji) count
-/// as 2 UTF-16 units, per [`char::len_utf16`].
-fn utf16_offset(content: &str, char_index: usize) -> u32 {
-    content
-        .chars()
-        .take(char_index)
-        .map(char::len_utf16)
-        .sum::<usize>() as u32
-}
-
-/// The row in `rows` whose `new_line` is closest to `target_line` (ties
-/// broken toward the earlier row). `None` if `rows` has no `Line` row with
-/// a `new_line` at all.
-fn closest_row_for_new_line(rows: &[Row], target_line: u32) -> Option<usize> {
-    rows.iter()
-        .enumerate()
-        .filter_map(|(i, r)| match r {
-            Row::Line(l) => l.new_line.map(|n| (i, n)),
-            _ => None,
-        })
-        .min_by_key(|&(_, n)| (i64::from(n) - i64::from(target_line)).abs())
-        .map(|(i, _)| i)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::annotate::Classification;
     use crate::git::RawFilePatch;
     use crate::ui::compose::TextBuffer;
+    use crate::ui::diff_view_state::ViewMode;
+    use crate::ui::rows::SbsRow;
 
     fn file(path: &str, hunk_count: usize) -> FileDiff {
         let mut raw = format!(
@@ -1636,27 +917,27 @@ mod tests {
     #[test]
     fn cursor_down_clamps_at_last_row() {
         let mut app = App::new(vec![file("a.rs", 1)]);
-        let last = app.rows.len() - 1;
+        let last = app.view.rows.len() - 1;
         for _ in 0..20 {
             app.apply(Action::CursorDown);
         }
-        assert_eq!(app.cursor, last);
+        assert_eq!(app.view.cursor, last);
     }
 
     #[test]
     fn cursor_up_clamps_at_zero() {
         let mut app = App::new(vec![file("a.rs", 1)]);
         app.apply(Action::CursorUp);
-        assert_eq!(app.cursor, 0);
+        assert_eq!(app.view.cursor, 0);
     }
 
     #[test]
     fn cursor_motion_on_empty_diff_stays_at_zero() {
         let mut app = App::new(vec![]);
         app.apply(Action::CursorDown);
-        assert_eq!(app.cursor, 0);
+        assert_eq!(app.view.cursor, 0);
         app.apply(Action::HalfPageDown);
-        assert_eq!(app.cursor, 0);
+        assert_eq!(app.view.cursor, 0);
     }
 
     #[test]
@@ -1664,58 +945,58 @@ mod tests {
         // 5 hunks -> 1 + 5*3 = 16 rows, plenty of headroom for a
         // half-page-of-10 step in either direction.
         let mut app = App::new(vec![file("a.rs", 5)]);
-        app.set_viewport_height(10);
+        app.view.set_viewport_height(10);
         app.apply(Action::HalfPageDown);
-        assert_eq!(app.cursor, 5);
+        assert_eq!(app.view.cursor, 5);
         app.apply(Action::HalfPageUp);
-        assert_eq!(app.cursor, 0);
+        assert_eq!(app.view.cursor, 0);
     }
 
     #[test]
     fn half_page_never_steps_by_zero_on_tiny_viewport() {
         let mut app = App::new(vec![file("a.rs", 1)]);
-        app.set_viewport_height(1);
+        app.view.set_viewport_height(1);
         app.apply(Action::HalfPageDown);
-        assert_eq!(app.cursor, 1);
+        assert_eq!(app.view.cursor, 1);
     }
 
     #[test]
     fn ensure_visible_scrolls_down_to_follow_cursor() {
         let mut app = App::new(vec![file("a.rs", 3)]);
-        app.set_viewport_height(3);
+        app.view.set_viewport_height(3);
         for _ in 0..6 {
             app.apply(Action::CursorDown);
         }
-        assert_eq!(app.cursor, 6);
-        assert!(app.scroll <= app.cursor);
-        assert!(app.cursor < app.scroll + 3);
+        assert_eq!(app.view.cursor, 6);
+        assert!(app.view.scroll <= app.view.cursor);
+        assert!(app.view.cursor < app.view.scroll + 3);
     }
 
     #[test]
     fn ensure_visible_scrolls_up_to_follow_cursor() {
         let mut app = App::new(vec![file("a.rs", 3)]);
-        app.set_viewport_height(3);
+        app.view.set_viewport_height(3);
         for _ in 0..6 {
             app.apply(Action::CursorDown);
         }
         for _ in 0..6 {
             app.apply(Action::CursorUp);
         }
-        assert_eq!(app.cursor, 0);
-        assert_eq!(app.scroll, 0);
+        assert_eq!(app.view.cursor, 0);
+        assert_eq!(app.view.scroll, 0);
     }
 
     #[test]
     fn next_hunk_jumps_within_file() {
         let mut app = App::new(vec![file("a.rs", 2)]);
         app.apply(Action::NextHunk);
-        let Row::HunkHeader { hunk_index, .. } = &app.rows[app.cursor] else {
+        let Row::HunkHeader { hunk_index, .. } = &app.view.rows[app.view.cursor] else {
             panic!("expected hunk header at cursor");
         };
         assert_eq!(*hunk_index, 0);
 
         app.apply(Action::NextHunk);
-        let Row::HunkHeader { hunk_index, .. } = &app.rows[app.cursor] else {
+        let Row::HunkHeader { hunk_index, .. } = &app.view.rows[app.view.cursor] else {
             panic!("expected hunk header at cursor");
         };
         assert_eq!(*hunk_index, 1);
@@ -1728,38 +1009,44 @@ mod tests {
         // header is row 1.
         app.apply(Action::NextHunk); // -> a's only hunk header
         app.apply(Action::NextHunk); // -> should cross into b.rs
-        assert_eq!(app.selected_file, 1);
-        assert!(matches!(app.rows[app.cursor], Row::HunkHeader { .. }));
+        assert_eq!(app.view.selected_file, 1);
+        assert!(matches!(
+            app.view.rows[app.view.cursor],
+            Row::HunkHeader { .. }
+        ));
     }
 
     #[test]
     fn next_hunk_at_last_file_last_hunk_is_no_op() {
         let mut app = App::new(vec![file("a.rs", 1)]);
         app.apply(Action::NextHunk);
-        let cursor_before = app.cursor;
-        let file_before = app.selected_file;
+        let cursor_before = app.view.cursor;
+        let file_before = app.view.selected_file;
         app.apply(Action::NextHunk);
-        assert_eq!(app.cursor, cursor_before);
-        assert_eq!(app.selected_file, file_before);
+        assert_eq!(app.view.cursor, cursor_before);
+        assert_eq!(app.view.selected_file, file_before);
     }
 
     #[test]
     fn prev_hunk_crosses_file_boundary_backwards() {
         let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
         app.apply(Action::NextFile); // move to b.rs, cursor reset to top (FileHeader)
-        assert_eq!(app.selected_file, 1);
+        assert_eq!(app.view.selected_file, 1);
         app.apply(Action::PrevHunk); // no hunk header before cursor in b.rs -> cross back
-        assert_eq!(app.selected_file, 0);
-        assert!(matches!(app.rows[app.cursor], Row::HunkHeader { .. }));
+        assert_eq!(app.view.selected_file, 0);
+        assert!(matches!(
+            app.view.rows[app.view.cursor],
+            Row::HunkHeader { .. }
+        ));
     }
 
     #[test]
     fn prev_hunk_at_first_file_before_first_hunk_is_no_op() {
         let mut app = App::new(vec![file("a.rs", 1)]);
-        let cursor_before = app.cursor;
+        let cursor_before = app.view.cursor;
         app.apply(Action::PrevHunk);
-        assert_eq!(app.cursor, cursor_before);
-        assert_eq!(app.selected_file, 0);
+        assert_eq!(app.view.cursor, cursor_before);
+        assert_eq!(app.view.selected_file, 0);
     }
 
     #[test]
@@ -1767,9 +1054,9 @@ mod tests {
         let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
         app.apply(Action::CursorDown);
         app.apply(Action::NextFile);
-        assert_eq!(app.selected_file, 1);
-        assert_eq!(app.cursor, 0);
-        assert_eq!(app.scroll, 0);
+        assert_eq!(app.view.selected_file, 1);
+        assert_eq!(app.view.cursor, 0);
+        assert_eq!(app.view.scroll, 0);
     }
 
     #[test]
@@ -1777,14 +1064,14 @@ mod tests {
         let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
         app.apply(Action::NextFile);
         app.apply(Action::NextFile);
-        assert_eq!(app.selected_file, 1);
+        assert_eq!(app.view.selected_file, 1);
     }
 
     #[test]
     fn prev_file_clamps_at_first_file() {
         let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
         app.apply(Action::PrevFile);
-        assert_eq!(app.selected_file, 0);
+        assert_eq!(app.view.selected_file, 0);
     }
 
     #[test]
@@ -1793,8 +1080,8 @@ mod tests {
         app.apply(Action::NextFile);
         app.apply(Action::CursorDown);
         app.apply(Action::PrevFile);
-        assert_eq!(app.selected_file, 0);
-        assert_eq!(app.cursor, 0);
+        assert_eq!(app.view.selected_file, 0);
+        assert_eq!(app.view.cursor, 0);
     }
 
     #[test]
@@ -1811,10 +1098,10 @@ mod tests {
     fn quit_actions_are_no_ops_on_state() {
         let mut app = App::new(vec![file("a.rs", 1)]);
         app.apply(Action::CursorDown);
-        let cursor = app.cursor;
+        let cursor = app.view.cursor;
         app.apply(Action::Quit);
         app.apply(Action::QuitDiscard);
-        assert_eq!(app.cursor, cursor);
+        assert_eq!(app.view.cursor, cursor);
     }
 
     // -- Visual mode ------------------------------------------------------
@@ -1824,8 +1111,8 @@ mod tests {
         let mut app = App::new(vec![file("a.rs", 1)]);
         app.apply(Action::CursorDown); // hunk header
         app.apply(Action::CursorDown); // onto a line row
-        let cursor = app.cursor;
-        assert!(matches!(app.rows[cursor], Row::Line(_)));
+        let cursor = app.view.cursor;
+        assert!(matches!(app.view.rows[cursor], Row::Line(_)));
         app.apply(Action::EnterVisual);
         assert_eq!(app.mode, Mode::Visual { anchor: cursor });
     }
@@ -1833,7 +1120,7 @@ mod tests {
     #[test]
     fn enter_visual_on_header_row_is_a_no_op() {
         let mut app = App::new(vec![file("a.rs", 1)]);
-        assert!(matches!(app.rows[0], Row::FileHeader { .. }));
+        assert!(matches!(app.view.rows[0], Row::FileHeader { .. }));
         app.apply(Action::EnterVisual);
         assert_eq!(app.mode, Mode::Normal);
     }
@@ -1855,11 +1142,11 @@ mod tests {
         app.apply(Action::CursorDown); // hunk header
         app.apply(Action::CursorDown); // line row
         app.apply(Action::EnterVisual);
-        let cursor_before = app.cursor;
+        let cursor_before = app.view.cursor;
         app.apply(Action::NextHunk);
         app.apply(Action::NextFile);
         app.apply(Action::HalfPageDown);
-        assert_eq!(app.cursor, cursor_before);
+        assert_eq!(app.view.cursor, cursor_before);
         assert!(matches!(app.mode, Mode::Visual { .. }));
     }
 
@@ -1868,11 +1155,11 @@ mod tests {
         let mut app = App::new(vec![file("a.rs", 1)]);
         app.apply(Action::CursorDown); // hunk header
         app.apply(Action::CursorDown); // first line row
-        let anchor = app.cursor;
+        let anchor = app.view.cursor;
         app.apply(Action::EnterVisual);
         app.apply(Action::CursorDown);
         assert_eq!(app.mode, Mode::Visual { anchor });
-        assert!(app.cursor > anchor);
+        assert!(app.view.cursor > anchor);
     }
 
     // -- Target derivation --------------------------------------------------
@@ -2001,20 +1288,20 @@ Binary files a/img.png and b/img.png differ
     #[test]
     fn toggle_view_flips_and_round_trips() {
         let mut app = App::new(vec![file("a.rs", 1)]);
-        assert_eq!(app.view, ViewMode::Unified);
+        assert_eq!(app.view.layout, ViewMode::Unified);
         app.apply(Action::ToggleView);
-        assert_eq!(app.view, ViewMode::SideBySide);
+        assert_eq!(app.view.layout, ViewMode::SideBySide);
         app.apply(Action::ToggleView);
-        assert_eq!(app.view, ViewMode::Unified);
+        assert_eq!(app.view.layout, ViewMode::Unified);
     }
 
     #[test]
     fn toggle_view_is_preserved_across_file_switches() {
         let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
         app.apply(Action::ToggleView);
-        assert_eq!(app.view, ViewMode::SideBySide);
+        assert_eq!(app.view.layout, ViewMode::SideBySide);
         app.apply(Action::NextFile);
-        assert_eq!(app.view, ViewMode::SideBySide);
+        assert_eq!(app.view.layout, ViewMode::SideBySide);
     }
 
     #[test]
@@ -2024,7 +1311,7 @@ Binary files a/img.png and b/img.png differ
         app.apply(Action::CursorDown); // line row
         app.apply(Action::EnterVisual);
         app.apply(Action::ToggleView);
-        assert_eq!(app.view, ViewMode::SideBySide);
+        assert_eq!(app.view.layout, ViewMode::SideBySide);
         assert!(matches!(app.mode, Mode::Visual { .. }));
     }
 
@@ -2042,13 +1329,13 @@ index 1..2 100644
 ";
         let app = App::new(vec![file_with_raw("f.rs", raw)]);
         // rows: FileHeader(0) HunkHeader(1) old1(2) new1(3) ctx(4)
-        assert_eq!(app.rows.len(), 5);
+        assert_eq!(app.view.rows.len(), 5);
         // sbs_rows: Full(0) Full(1) Paired{2,3} Context(4) -> 4 visual rows.
-        assert_eq!(app.sbs_rows.len(), 4);
-        assert_eq!(app.sbs_rows[0], SbsRow::Full(0));
-        assert_eq!(app.sbs_rows[1], SbsRow::Full(1));
-        assert_eq!(app.sbs_rows[2], SbsRow::Paired { old: 2, new: 3 });
-        assert_eq!(app.sbs_rows[3], SbsRow::Context(4));
+        assert_eq!(app.view.sbs_rows.len(), 4);
+        assert_eq!(app.view.sbs_rows[0], SbsRow::Full(0));
+        assert_eq!(app.view.sbs_rows[1], SbsRow::Full(1));
+        assert_eq!(app.view.sbs_rows[2], SbsRow::Paired { old: 2, new: 3 });
+        assert_eq!(app.view.sbs_rows[3], SbsRow::Context(4));
     }
 
     /// [`App::ensure_visible`] keeps `sbs_scroll` in visual-row space: a
@@ -2068,15 +1355,15 @@ index 1..2 100644
  ctx
 ";
         let mut app = App::new(vec![file_with_raw("f.rs", raw)]);
-        app.set_viewport_height(2);
+        app.view.set_viewport_height(2);
         // Cursor onto the paired "new1" row (source row 3, visual row 2).
         app.apply(Action::CursorDown); // hunk header, source row 1
         app.apply(Action::CursorDown); // old1, source row 2
         app.apply(Action::CursorDown); // new1, source row 3 (visual row 2)
-        assert_eq!(app.cursor, 3);
+        assert_eq!(app.view.cursor, 3);
         // Visual row 2 must be visible within a 2-row viewport: sbs_scroll
         // in [1, 2].
-        assert!(app.sbs_scroll <= 2 && app.sbs_scroll + 2 > 2);
+        assert!(app.view.sbs_scroll <= 2 && app.view.sbs_scroll + 2 > 2);
     }
 
     /// The cursor stays a source-row index in both view modes (see
@@ -2112,7 +1399,7 @@ index 1..2 100644
         let mut app = App::new(vec![file("a.rs", 1)]);
         app.apply(Action::CursorDown); // hunk header
         app.apply(Action::CursorDown); // removed line
-        let anchor = app.cursor;
+        let anchor = app.view.cursor;
         app.apply(Action::EnterVisual);
         app.apply(Action::CursorDown);
         let unified_target = app.target_for_visual(anchor);
@@ -2172,20 +1459,21 @@ index 1..2 100644
 ";
         let mut app = App::new(vec![file_with_raw("f.rs", raw)]);
         app.search.pattern = Some("needle".to_string());
-        app.search.recompute(&app.rows);
+        app.search.recompute(&app.view.rows);
         let unified_matches = app.search.matches.clone();
 
         app.apply(Action::ToggleView);
-        app.search.recompute(&app.rows);
+        app.search.recompute(&app.view.rows);
         let sbs_matches = app.search.matches.clone();
         assert_eq!(unified_matches, sbs_matches);
         // Both the removed and added rows matched (each contains "needle"),
         // and they resolve to distinct source rows / distinct sides of the
         // same paired visual row.
         assert_eq!(unified_matches.len(), 2);
-        let (Row::Line(old_line), Row::Line(new_line)) =
-            (&app.rows[unified_matches[0]], &app.rows[unified_matches[1]])
-        else {
+        let (Row::Line(old_line), Row::Line(new_line)) = (
+            &app.view.rows[unified_matches[0]],
+            &app.view.rows[unified_matches[1]],
+        ) else {
             panic!("expected line rows");
         };
         assert_eq!(old_line.origin, LineOrigin::Removed);
@@ -2207,7 +1495,7 @@ index 1..2 100644
         let mut app = App::new(vec![file_with_raw("f.rs", raw)]);
         app.apply(Action::CursorDown); // hunk header
         app.apply(Action::CursorDown); // line a
-        let anchor = app.cursor;
+        let anchor = app.view.cursor;
         app.apply(Action::EnterVisual);
         app.apply(Action::CursorDown); // line b
         app.apply(Action::CursorDown); // line c
@@ -2231,7 +1519,7 @@ index 1..2 100644
         let mut app = App::new(vec![file_with_raw("f.rs", raw)]);
         app.apply(Action::CursorDown); // hunk header
         app.apply(Action::CursorDown); // removed "old"
-        let anchor = app.cursor;
+        let anchor = app.view.cursor;
         app.apply(Action::EnterVisual);
         app.apply(Action::CursorDown); // new1
         app.apply(Action::CursorDown); // new2
@@ -2318,7 +1606,7 @@ index 1..2 100644
         assert_eq!(app.annotations.iter().next().unwrap().body, "looks good");
         // Row model was rebuilt: the FileHeader row is now flagged annotated.
         assert!(matches!(
-            app.rows[0],
+            app.view.rows[0],
             Row::FileHeader {
                 annotated: true,
                 ..
@@ -2398,8 +1686,8 @@ index 1..2 100644
         app.list_cursor = 0;
         app.jump_to_focused_annotation();
         assert_eq!(app.mode, Mode::Normal);
-        assert_eq!(app.selected_file, 1);
-        let Row::Line(line) = &app.rows[app.cursor] else {
+        assert_eq!(app.view.selected_file, 1);
+        let Row::Line(line) = &app.view.rows[app.view.cursor] else {
             panic!("expected cursor on a line row");
         };
         assert_eq!(line.old_line, Some(1));
@@ -2430,7 +1718,7 @@ index 1..2 100644
         app.delete_focused_annotation();
         assert!(app.annotations.is_empty());
         assert!(matches!(
-            app.rows[0],
+            app.view.rows[0],
             Row::FileHeader {
                 annotated: false,
                 ..
@@ -2622,7 +1910,7 @@ index 1..2 100644
             app_with_fake(vec![p.clone()], DiffTarget::WorkingTree, vec![p], vec![]);
         app.apply(Action::CursorDown); // hunk header
         app.apply(Action::CursorDown); // line row
-        assert!(matches!(app.rows[app.cursor], Row::Line(_)));
+        assert!(matches!(app.view.rows[app.view.cursor], Row::Line(_)));
         app.apply(Action::ToggleStage);
         let StageCall::Apply(patch) = single_call(&calls) else {
             panic!("expected apply_cached");
@@ -2636,7 +1924,10 @@ index 1..2 100644
         let p = raw_patch("a.rs", 1);
         let (mut app, calls) =
             app_with_fake(vec![p.clone()], DiffTarget::WorkingTree, vec![p], vec![]);
-        assert!(matches!(app.rows[app.cursor], Row::FileHeader { .. }));
+        assert!(matches!(
+            app.view.rows[app.view.cursor],
+            Row::FileHeader { .. }
+        ));
         app.apply(Action::ToggleStage);
         assert_eq!(
             single_call(&calls),
@@ -2661,7 +1952,7 @@ Binary files a/img.png and b/img.png differ
         let (mut app, calls) =
             app_with_fake(vec![p.clone()], DiffTarget::WorkingTree, vec![p], vec![]);
         app.apply(Action::CursorDown); // Binary row
-        assert!(matches!(app.rows[app.cursor], Row::Binary));
+        assert!(matches!(app.view.rows[app.view.cursor], Row::Binary));
         app.apply(Action::ToggleStage);
         assert_eq!(
             single_call(&calls),
@@ -2686,7 +1977,7 @@ Binary files a/img.png and b/img.png differ
         let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
         app.apply(Action::CursorDown); // hunk header
         app.apply(Action::CursorDown); // line row
-        assert!(matches!(app.rows[app.cursor], Row::Line(_)));
+        assert!(matches!(app.view.rows[app.view.cursor], Row::Line(_)));
         app.apply(Action::ToggleStage);
         assert_eq!(
             single_call(&calls),
@@ -2748,11 +2039,11 @@ Binary files a/img.png and b/img.png differ
             vec![p],
             vec![],
         );
-        let files_before = app.files.len();
+        let files_before = app.view.files.len();
         app.apply(Action::ToggleStage);
         assert!(calls.borrow().is_empty());
         assert_eq!(app.status_message.as_deref(), Some("read-only diff target"));
-        assert_eq!(app.files.len(), files_before);
+        assert_eq!(app.view.files.len(), files_before);
     }
 
     #[test]
@@ -2859,8 +2150,8 @@ index 1..2 100644
         );
         app.apply(Action::NextFile); // select b.rs (index 1)
         app.apply(Action::ToggleStage); // stage b.rs whole-file, then refresh
-        assert_eq!(app.files[app.selected_file].path, "b.rs");
-        assert_eq!(app.selected_file, 0); // b.rs moved to index 0
+        assert_eq!(app.view.files[app.view.selected_file].path, "b.rs");
+        assert_eq!(app.view.selected_file, 0); // b.rs moved to index 0
     }
 
     #[test]
@@ -2872,9 +2163,9 @@ index 1..2 100644
             app_with_fake(vec![a.clone(), b], DiffTarget::WorkingTree, vec![a], vec![]);
         app.apply(Action::NextFile); // select b.rs (index 1)
         app.apply(Action::ToggleStage);
-        assert_eq!(app.selected_file, 0);
-        assert_eq!(app.files[app.selected_file].path, "a.rs");
-        assert!(app.cursor <= app.rows.len().saturating_sub(1));
+        assert_eq!(app.view.selected_file, 0);
+        assert_eq!(app.view.files[app.view.selected_file].path, "a.rs");
+        assert!(app.view.cursor <= app.view.rows.len().saturating_sub(1));
     }
 
     #[test]
@@ -2886,10 +2177,10 @@ index 1..2 100644
         for _ in 0..9 {
             app.apply(Action::CursorDown);
         }
-        assert_eq!(app.cursor, 9);
+        assert_eq!(app.view.cursor, 9);
         app.apply(Action::ToggleStage); // hunk op + refresh to the small diff
-        assert!(app.cursor < app.rows.len());
-        assert_eq!(app.rows.len(), 4);
+        assert!(app.view.cursor < app.view.rows.len());
+        assert_eq!(app.view.rows.len(), 4);
     }
 
     #[test]
@@ -2898,10 +2189,10 @@ index 1..2 100644
         let (mut app, _calls) = app_with_fake(vec![p], DiffTarget::WorkingTree, vec![], vec![]);
         app.apply(Action::CursorDown);
         app.apply(Action::ToggleStage);
-        assert!(app.files.is_empty());
-        assert_eq!(app.cursor, 0);
-        assert_eq!(app.scroll, 0);
-        assert_eq!(app.selected_file, 0);
+        assert!(app.view.files.is_empty());
+        assert_eq!(app.view.cursor, 0);
+        assert_eq!(app.view.scroll, 0);
+        assert_eq!(app.view.selected_file, 0);
     }
 
     #[test]
@@ -2939,10 +2230,10 @@ index 1..2 100644
         };
         let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
         app.apply(Action::CursorDown); // hunk header
-        let cursor_before = app.cursor;
+        let cursor_before = app.view.cursor;
         app.apply(Action::ToggleStage);
-        assert_eq!(app.files.len(), 1);
-        assert_eq!(app.cursor, cursor_before);
+        assert_eq!(app.view.files.len(), 1);
+        assert_eq!(app.view.cursor, cursor_before);
         assert!(
             app.status_message
                 .as_deref()
@@ -3170,7 +2461,7 @@ index 1..2 100644
         }
         app.confirm_search();
         assert_eq!(app.mode, Mode::Normal);
-        let Row::Line(line) = &app.rows[app.cursor] else {
+        let Row::Line(line) = &app.view.rows[app.view.cursor] else {
             panic!("expected cursor on a line row");
         };
         assert_eq!(line.content, "gamma");
@@ -3244,21 +2535,21 @@ index 1..2 100644
             app.search_input.push(c);
         }
         app.confirm_search();
-        let first = app.cursor;
+        let first = app.view.cursor;
 
         app.apply(Action::SearchNext);
-        let second = app.cursor;
+        let second = app.view.cursor;
         assert_ne!(first, second);
 
         app.apply(Action::SearchNext);
-        let third = app.cursor;
+        let third = app.view.cursor;
         assert_ne!(second, third);
 
         app.apply(Action::SearchNext); // wraps forward back to the first match
-        assert_eq!(app.cursor, first);
+        assert_eq!(app.view.cursor, first);
 
         app.apply(Action::SearchPrev); // wraps backward to the last match
-        assert_eq!(app.cursor, third);
+        assert_eq!(app.view.cursor, third);
     }
 
     #[test]
@@ -3301,7 +2592,10 @@ index 1..2 100644
             app.search_input.push(c);
         }
         app.confirm_search();
-        assert!(matches!(app.rows[app.cursor], Row::HunkHeader { .. }));
+        assert!(matches!(
+            app.view.rows[app.view.cursor],
+            Row::HunkHeader { .. }
+        ));
     }
 
     #[test]
@@ -3342,25 +2636,25 @@ index 1..2 100644
         let mut app = App::new(vec![file_with_raw("f.rs", raw)]);
         app.apply(Action::CursorDown); // hunk header
         app.apply(Action::CursorDown); // line "abcde"
-        assert_eq!(app.effective_column(), Some(0));
+        assert_eq!(app.view.effective_column(), Some(0));
         app.apply(Action::CursorRight);
         app.apply(Action::CursorRight);
-        assert_eq!(app.effective_column(), Some(2));
+        assert_eq!(app.view.effective_column(), Some(2));
         for _ in 0..10 {
             app.apply(Action::CursorRight);
         }
-        assert_eq!(app.effective_column(), Some(4)); // clamped at last char
+        assert_eq!(app.view.effective_column(), Some(4)); // clamped at last char
         for _ in 0..10 {
             app.apply(Action::CursorLeft);
         }
-        assert_eq!(app.effective_column(), Some(0));
+        assert_eq!(app.view.effective_column(), Some(0));
     }
 
     #[test]
     fn column_is_hidden_on_header_rows() {
         let app = App::new(vec![file("a.rs", 1)]);
-        assert!(matches!(app.rows[0], Row::FileHeader { .. }));
-        assert_eq!(app.effective_column(), None);
+        assert!(matches!(app.view.rows[0], Row::FileHeader { .. }));
+        assert_eq!(app.view.effective_column(), None);
     }
 
     #[test]
@@ -3376,15 +2670,15 @@ index 1..2 100644
         let mut app = App::new(vec![file_with_raw("f.rs", raw)]);
         app.apply(Action::CursorDown);
         app.apply(Action::CursorDown);
-        assert_eq!(app.effective_column(), Some(0)); // 'f' of foo
+        assert_eq!(app.view.effective_column(), Some(0)); // 'f' of foo
         app.apply(Action::WordForward);
-        assert_eq!(app.effective_column(), Some(4)); // 'b' of bar_baz (word = alnum/_)
+        assert_eq!(app.view.effective_column(), Some(4)); // 'b' of bar_baz (word = alnum/_)
         app.apply(Action::WordForward);
-        assert_eq!(app.effective_column(), Some(13)); // 'q' of qux
+        assert_eq!(app.view.effective_column(), Some(13)); // 'q' of qux
         app.apply(Action::WordBackward);
-        assert_eq!(app.effective_column(), Some(4));
+        assert_eq!(app.view.effective_column(), Some(4));
         app.apply(Action::WordBackward);
-        assert_eq!(app.effective_column(), Some(0));
+        assert_eq!(app.view.effective_column(), Some(0));
     }
 
     #[test]
@@ -3405,9 +2699,9 @@ index 1..2 100644
         for _ in 0..40 {
             app.apply(Action::CursorRight);
         }
-        assert_eq!(app.effective_column(), Some(long_line_last_col));
+        assert_eq!(app.view.effective_column(), Some(long_line_last_col));
         app.apply(Action::CursorDown); // short line "x"
-        assert_eq!(app.effective_column(), Some(0));
+        assert_eq!(app.view.effective_column(), Some(0));
     }
 
     #[test]
@@ -3415,507 +2709,6 @@ index 1..2 100644
         let mut app = App::new(vec![file("a.rs", 1)]);
         app.apply(Action::CursorRight);
         app.apply(Action::WordForward);
-        assert_eq!(app.effective_column(), None);
-    }
-
-    // -- UTF-16 offset conversion (for LSP position derivation) ----------------
-
-    #[test]
-    fn utf16_offset_ascii_matches_char_index() {
-        assert_eq!(utf16_offset("hello", 3), 3);
-    }
-
-    #[test]
-    fn utf16_offset_multibyte_bmp_char_counts_as_one_unit() {
-        // 'é' is 2 bytes in UTF-8 but a single UTF-16 code unit.
-        assert_eq!(utf16_offset("café", 4), 4);
-    }
-
-    #[test]
-    fn utf16_offset_surrogate_pair_counts_as_two_units() {
-        // An emoji outside the BMP is one `char` but 2 UTF-16 code units.
-        let content = "a\u{1F600}b";
-        assert_eq!(utf16_offset(content, 0), 0); // before 'a'
-        assert_eq!(utf16_offset(content, 1), 1); // before the emoji
-        assert_eq!(utf16_offset(content, 2), 3); // after the emoji (1 + 2)
-    }
-
-    // -- LSP: gd/gr/K request routing and event handling ------------------------
-
-    #[derive(Debug, Clone, PartialEq)]
-    enum LspCall {
-        Definition(PathBuf, u32, u32),
-        References(PathBuf, u32, u32),
-        Hover(PathBuf, u32, u32),
-    }
-
-    struct FakeLsp {
-        calls: Rc<RefCell<Vec<LspCall>>>,
-        next_id: u64,
-        deny: bool,
-        poll_queue: Rc<RefCell<std::collections::VecDeque<Vec<LspEvent>>>>,
-        shutdown_called: Rc<RefCell<bool>>,
-    }
-
-    impl FakeLsp {
-        fn record(&mut self, call: LspCall) -> Option<RequestId> {
-            if self.deny {
-                return None;
-            }
-            self.next_id += 1;
-            self.calls.borrow_mut().push(call);
-            Some(RequestId(self.next_id))
-        }
-    }
-
-    impl LspClient for FakeLsp {
-        fn request_definition(
-            &mut self,
-            path: &std::path::Path,
-            line: u32,
-            character: u32,
-        ) -> Option<RequestId> {
-            self.record(LspCall::Definition(path.to_path_buf(), line, character))
-        }
-
-        fn request_references(
-            &mut self,
-            path: &std::path::Path,
-            line: u32,
-            character: u32,
-        ) -> Option<RequestId> {
-            self.record(LspCall::References(path.to_path_buf(), line, character))
-        }
-
-        fn request_hover(
-            &mut self,
-            path: &std::path::Path,
-            line: u32,
-            character: u32,
-        ) -> Option<RequestId> {
-            self.record(LspCall::Hover(path.to_path_buf(), line, character))
-        }
-
-        fn poll(&mut self) -> Vec<LspEvent> {
-            self.poll_queue.borrow_mut().pop_front().unwrap_or_default()
-        }
-
-        fn shutdown(self: Box<Self>) {
-            *self.shutdown_called.borrow_mut() = true;
-        }
-    }
-
-    /// A diff over `path` with rows: FileHeader(0) HunkHeader(1)
-    /// context "fn main() {" new_line=1 (2) removed "    old();" (3) added
-    /// "    new();" new_line=2 (4).
-    fn lsp_fixture_raw() -> &'static str {
-        "\
-diff --git a/src/main.rs b/src/main.rs
-index 1..2 100644
---- a/src/main.rs
-+++ b/src/main.rs
-@@ -1,2 +1,2 @@
- fn main() {
--    old();
-+    new();
-"
-    }
-
-    /// An `App` over `src/main.rs`, whose path also exists as a real file
-    /// under a fresh tempdir (`gd`/`gr`/`K` check the file exists on disk),
-    /// wired to a `FakeLsp` via `inject_lsp_client`. Returns the app, the
-    /// tempdir (kept alive so the file keeps existing), and handles to
-    /// inspect issued calls / feed scripted `poll()` responses.
-    #[allow(clippy::type_complexity)]
-    fn lsp_test_app() -> (
-        App,
-        tempfile::TempDir,
-        Rc<RefCell<Vec<LspCall>>>,
-        Rc<RefCell<std::collections::VecDeque<Vec<LspEvent>>>>,
-    ) {
-        let tmp = tempfile::TempDir::new().expect("tempdir");
-        std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir");
-        std::fs::write(
-            tmp.path().join("src/main.rs"),
-            "fn main() {\n    new();\n}\n",
-        )
-        .expect("write fixture");
-
-        let mut app = App::new(vec![file_with_raw("src/main.rs", lsp_fixture_raw())]);
-        let calls = Rc::new(RefCell::new(Vec::new()));
-        let poll_queue = Rc::new(RefCell::new(std::collections::VecDeque::new()));
-        let fake = FakeLsp {
-            calls: Rc::clone(&calls),
-            next_id: 0,
-            deny: false,
-            poll_queue: Rc::clone(&poll_queue),
-            shutdown_called: Rc::new(RefCell::new(false)),
-        };
-        app.inject_lsp_client(Box::new(fake), tmp.path().to_path_buf());
-        (app, tmp, calls, poll_queue)
-    }
-
-    /// Moves the cursor onto the fixture's added line (`    new();`,
-    /// new_line 2) — the only row `code_intel_position` accepts.
-    fn move_to_added_line(app: &mut App) {
-        for _ in 0..4 {
-            app.apply(Action::CursorDown);
-        }
-    }
-
-    #[test]
-    fn gd_on_removed_line_sets_no_code_intelligence_message() {
-        let (mut app, _tmp, calls, _poll) = lsp_test_app();
-        app.apply(Action::CursorDown); // hunk header
-        app.apply(Action::CursorDown); // context line
-        app.apply(Action::CursorDown); // removed line
-        assert!(matches!(
-            app.rows[app.cursor],
-            Row::Line(LineRow {
-                origin: LineOrigin::Removed,
-                ..
-            })
-        ));
-        app.apply(Action::GotoDefinition);
-        assert!(calls.borrow().is_empty());
-        assert_eq!(
-            app.status_message.as_deref(),
-            Some("no code intelligence here")
-        );
-    }
-
-    #[test]
-    fn gd_on_header_row_sets_no_code_intelligence_message() {
-        let (mut app, _tmp, calls, _poll) = lsp_test_app();
-        assert!(matches!(app.rows[app.cursor], Row::FileHeader { .. }));
-        app.apply(Action::GotoDefinition);
-        assert!(calls.borrow().is_empty());
-        assert_eq!(
-            app.status_message.as_deref(),
-            Some("no code intelligence here")
-        );
-    }
-
-    #[test]
-    fn gd_on_missing_file_sets_no_code_intelligence_message() {
-        let tmp = tempfile::TempDir::new().expect("tempdir");
-        // Deliberately no file written under `tmp` at "src/main.rs".
-        let mut app = App::new(vec![file_with_raw("src/main.rs", lsp_fixture_raw())]);
-        let calls = Rc::new(RefCell::new(Vec::new()));
-        let fake = FakeLsp {
-            calls: Rc::clone(&calls),
-            next_id: 0,
-            deny: false,
-            poll_queue: Rc::new(RefCell::new(std::collections::VecDeque::new())),
-            shutdown_called: Rc::new(RefCell::new(false)),
-        };
-        app.inject_lsp_client(Box::new(fake), tmp.path().to_path_buf());
-        move_to_added_line(&mut app);
-        app.apply(Action::GotoDefinition);
-        assert!(calls.borrow().is_empty());
-        assert_eq!(
-            app.status_message.as_deref(),
-            Some("no code intelligence here")
-        );
-    }
-
-    #[test]
-    fn gd_without_repo_root_sets_no_code_intelligence_message() {
-        let mut app = App::new(vec![file_with_raw("src/main.rs", lsp_fixture_raw())]);
-        move_to_added_line(&mut app);
-        app.apply(Action::GotoDefinition);
-        assert_eq!(
-            app.status_message.as_deref(),
-            Some("no code intelligence here")
-        );
-    }
-
-    #[test]
-    fn gd_on_valid_row_dispatches_request_and_sets_resolving_message() {
-        let (mut app, tmp, calls, _poll) = lsp_test_app();
-        move_to_added_line(&mut app);
-        app.apply(Action::GotoDefinition);
-        assert_eq!(
-            calls.borrow()[0],
-            LspCall::Definition(tmp.path().join("src/main.rs"), 1, 0)
-        );
-        assert_eq!(
-            app.status_message.as_deref(),
-            Some("lsp: resolving\u{2026}")
-        );
-    }
-
-    /// `gd`'s LSP position is derived from `rows[cursor]`/the column
-    /// cursor, exactly like every other target-derivation gesture — toggling
-    /// side-by-side must not change the requested position.
-    #[test]
-    fn gd_position_is_identical_in_both_views() {
-        let (mut app, tmp, calls, _poll) = lsp_test_app();
-        move_to_added_line(&mut app);
-        app.apply(Action::ToggleView);
-        app.apply(Action::GotoDefinition);
-        assert_eq!(
-            calls.borrow()[0],
-            LspCall::Definition(tmp.path().join("src/main.rs"), 1, 0)
-        );
-    }
-
-    #[test]
-    fn gr_and_k_dispatch_their_own_request_kinds() {
-        let (mut app, tmp, calls, _poll) = lsp_test_app();
-        move_to_added_line(&mut app);
-        app.apply(Action::GotoReferences);
-        assert_eq!(
-            calls.borrow()[0],
-            LspCall::References(tmp.path().join("src/main.rs"), 1, 0)
-        );
-        app.apply(Action::Hover);
-        assert_eq!(
-            calls.borrow()[1],
-            LspCall::Hover(tmp.path().join("src/main.rs"), 1, 0)
-        );
-    }
-
-    #[test]
-    fn gd_uses_the_column_cursor_for_the_character_offset() {
-        let (mut app, tmp, calls, _poll) = lsp_test_app();
-        move_to_added_line(&mut app); // "    new();" -- col 4 is 'n'
-        for _ in 0..4 {
-            app.apply(Action::CursorRight);
-        }
-        app.apply(Action::GotoDefinition);
-        assert_eq!(
-            calls.borrow()[0],
-            LspCall::Definition(tmp.path().join("src/main.rs"), 1, 4)
-        );
-    }
-
-    #[test]
-    fn second_request_supersedes_interest_in_the_first_pending_id() {
-        let (mut app, _tmp, _calls, poll_queue) = lsp_test_app();
-        move_to_added_line(&mut app);
-
-        app.apply(Action::GotoDefinition);
-        let first_id = app.pending_lsp.expect("pending after gd").0;
-        app.apply(Action::GotoReferences);
-        let second_id = app.pending_lsp.expect("pending after gr").0;
-        assert_ne!(first_id, second_id);
-
-        // A response for the superseded first id must be ignored.
-        poll_queue
-            .borrow_mut()
-            .push_back(vec![LspEvent::Definition {
-                id: first_id,
-                locations: vec![SourceLocation {
-                    path: PathBuf::from("/tmp/unused.rs"),
-                    line: 0,
-                    character: 0,
-                }],
-            }]);
-        app.poll_lsp();
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(app.peek.is_none());
-
-        // The second (References) request's own response still opens the
-        // overlay.
-        poll_queue
-            .borrow_mut()
-            .push_back(vec![LspEvent::References {
-                id: second_id,
-                locations: vec![SourceLocation {
-                    path: PathBuf::from("/tmp/unused.rs"),
-                    line: 0,
-                    character: 0,
-                }],
-            }]);
-        app.poll_lsp();
-        assert_eq!(app.mode, Mode::Peek);
-    }
-
-    #[test]
-    fn unrelated_event_id_is_ignored() {
-        let (mut app, _tmp, _calls, poll_queue) = lsp_test_app();
-        move_to_added_line(&mut app);
-        app.apply(Action::GotoDefinition);
-        let real_id = app.pending_lsp.expect("pending after gd").0;
-
-        poll_queue
-            .borrow_mut()
-            .push_back(vec![LspEvent::Definition {
-                id: RequestId(real_id.0 + 999),
-                locations: vec![SourceLocation {
-                    path: PathBuf::from("/tmp/unused.rs"),
-                    line: 0,
-                    character: 0,
-                }],
-            }]);
-        app.poll_lsp();
-        assert_eq!(app.mode, Mode::Normal);
-        assert_eq!(app.pending_lsp.map(|(id, _)| id), Some(real_id));
-    }
-
-    #[test]
-    fn empty_definition_result_sets_no_results_message() {
-        let (mut app, _tmp, _calls, poll_queue) = lsp_test_app();
-        move_to_added_line(&mut app);
-        app.apply(Action::GotoDefinition);
-        let id = app.pending_lsp.expect("pending after gd").0;
-
-        poll_queue
-            .borrow_mut()
-            .push_back(vec![LspEvent::Definition {
-                id,
-                locations: vec![],
-            }]);
-        app.poll_lsp();
-        assert_eq!(app.mode, Mode::Normal);
-        assert_eq!(app.status_message.as_deref(), Some("no results"));
-    }
-
-    #[test]
-    fn failed_event_sets_footer_message_and_does_not_open_overlay() {
-        let (mut app, _tmp, _calls, poll_queue) = lsp_test_app();
-        move_to_added_line(&mut app);
-        app.apply(Action::Hover);
-        let id = app.pending_lsp.expect("pending after K").0;
-
-        poll_queue
-            .borrow_mut()
-            .push_back(vec![LspEvent::Failed { id }]);
-        app.poll_lsp();
-        assert_eq!(app.mode, Mode::Normal);
-        assert_eq!(app.status_message.as_deref(), Some("lsp: failed"));
-    }
-
-    #[test]
-    fn hover_event_opens_peek_overlay_with_contents() {
-        let (mut app, _tmp, _calls, poll_queue) = lsp_test_app();
-        move_to_added_line(&mut app);
-        app.apply(Action::Hover);
-        let id = app.pending_lsp.expect("pending after K").0;
-
-        poll_queue.borrow_mut().push_back(vec![LspEvent::Hover {
-            id,
-            contents: "some docs".to_string(),
-        }]);
-        app.poll_lsp();
-        assert_eq!(app.mode, Mode::Peek);
-        assert_eq!(app.peek.as_ref().unwrap().hover_text, "some docs");
-    }
-
-    #[test]
-    fn take_lsp_client_returns_the_injected_client_once() {
-        let (mut app, _tmp, _calls, _poll) = lsp_test_app();
-        assert!(app.take_lsp_client().is_some());
-        assert!(app.take_lsp_client().is_none());
-    }
-
-    // -- Peek overlay -------------------------------------------------------
-
-    fn source_loc(path: &std::path::Path, line: u32) -> SourceLocation {
-        SourceLocation {
-            path: path.to_path_buf(),
-            line,
-            character: 0,
-        }
-    }
-
-    #[test]
-    fn peek_move_down_and_up_clamp_selection() {
-        let mut app = App::new(vec![file("a.rs", 1)]);
-        app.peek = Some(PeekState::locations(
-            PeekKind::References,
-            vec![
-                source_loc(std::path::Path::new("/tmp/a.rs"), 0),
-                source_loc(std::path::Path::new("/tmp/b.rs"), 1),
-            ],
-        ));
-        app.mode = Mode::Peek;
-
-        app.peek_move_down();
-        assert_eq!(app.peek.as_ref().unwrap().selected, 1);
-        app.peek_move_down(); // clamped at last
-        assert_eq!(app.peek.as_ref().unwrap().selected, 1);
-        app.peek_move_up();
-        assert_eq!(app.peek.as_ref().unwrap().selected, 0);
-        app.peek_move_up(); // clamped at first
-        assert_eq!(app.peek.as_ref().unwrap().selected, 0);
-    }
-
-    #[test]
-    fn hover_scroll_moves_and_clamps() {
-        let mut app = App::new(vec![file("a.rs", 1)]);
-        app.peek = Some(PeekState::hover("one\ntwo\nthree".to_string()));
-        app.mode = Mode::Peek;
-
-        app.peek_move_down();
-        assert_eq!(app.peek.as_ref().unwrap().hover_scroll, 1);
-        for _ in 0..5 {
-            app.peek_move_down();
-        }
-        assert_eq!(app.peek.as_ref().unwrap().hover_scroll, 2); // clamped
-        app.peek_move_up();
-        assert_eq!(app.peek.as_ref().unwrap().hover_scroll, 1);
-        app.peek_move_up();
-        app.peek_move_up();
-        assert_eq!(app.peek.as_ref().unwrap().hover_scroll, 0); // clamped at 0
-    }
-
-    #[test]
-    fn close_peek_returns_to_normal() {
-        let mut app = App::new(vec![file("a.rs", 1)]);
-        app.peek = Some(PeekState::hover("x".to_string()));
-        app.mode = Mode::Peek;
-        app.close_peek();
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(app.peek.is_none());
-    }
-
-    #[test]
-    fn peek_enter_jumps_into_diff_when_path_matches_a_diff_file() {
-        let tmp = tempfile::TempDir::new().expect("tempdir");
-        let mut app = App::new(vec![file_with_raw("src/main.rs", lsp_fixture_raw())]);
-        app.set_repo_root(tmp.path().to_path_buf());
-        app.peek = Some(PeekState::locations(
-            PeekKind::Definition,
-            vec![source_loc(&tmp.path().join("src/main.rs"), 1)], // 0-based -> new_line 2
-        ));
-        app.mode = Mode::Peek;
-
-        app.peek_enter();
-
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(app.peek.is_none());
-        let Row::Line(line) = &app.rows[app.cursor] else {
-            panic!("expected cursor on a line row");
-        };
-        assert_eq!(line.new_line, Some(2));
-    }
-
-    #[test]
-    fn peek_enter_on_unrelated_path_shows_not_in_diff_and_stays_open() {
-        let tmp = tempfile::TempDir::new().expect("tempdir");
-        let mut app = App::new(vec![file_with_raw("src/main.rs", lsp_fixture_raw())]);
-        app.set_repo_root(tmp.path().to_path_buf());
-        app.peek = Some(PeekState::locations(
-            PeekKind::Definition,
-            vec![source_loc(&tmp.path().join("other.rs"), 0)],
-        ));
-        app.mode = Mode::Peek;
-
-        app.peek_enter();
-
-        assert_eq!(app.mode, Mode::Peek);
-        assert_eq!(app.status_message.as_deref(), Some("not in diff"));
-    }
-
-    #[test]
-    fn peek_enter_is_a_noop_for_hover() {
-        let mut app = App::new(vec![file("a.rs", 1)]);
-        app.peek = Some(PeekState::hover("docs".to_string()));
-        app.mode = Mode::Peek;
-        app.peek_enter();
-        assert_eq!(app.mode, Mode::Peek);
-        assert!(app.peek.is_some());
+        assert_eq!(app.view.effective_column(), None);
     }
 }

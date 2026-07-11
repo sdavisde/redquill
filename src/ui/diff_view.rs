@@ -342,18 +342,19 @@ pub(super) fn row_line(
 }
 
 /// Renders the diff pane into `area`: a bordered block titled with the
-/// selected file's path, containing the visible slice of `app.rows`
-/// starting at `app.scroll`. Renders a centered "no changes" message when
+/// selected file's path, containing the visible slice of `app.view.rows`
+/// starting at `app.view.scroll`. Renders a centered "no changes" message when
 /// there are no files at all.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let title = app
+        .view
         .files
-        .get(app.selected_file)
+        .get(app.view.selected_file)
         .map(|f| f.path.as_str())
         .unwrap_or("diff");
     let block = Block::default().borders(Borders::ALL).title(title);
 
-    if app.files.is_empty() {
+    if app.view.files.is_empty() {
         let paragraph = Paragraph::new("no changes")
             .block(block)
             .alignment(Alignment::Center);
@@ -362,14 +363,23 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     let inner_height = area.height.saturating_sub(2) as usize;
-    let start = app.scroll;
-    let end = (start + inner_height.max(1)).min(app.rows.len());
+    let start = app.view.scroll;
+    let end = (start + inner_height.max(1)).min(app.view.rows.len());
     let matches: HashSet<usize> = app.search.matches.iter().copied().collect();
-    let cursor_col = app.effective_column();
-    let lines: Vec<Line<'static>> = app.rows[start..end]
+    let cursor_col = app.view.effective_column();
+    let lines: Vec<Line<'static>> = app.view.rows[start..end]
         .iter()
         .enumerate()
-        .map(|(i, row)| row_line(row, start + i, app.cursor, &matches, cursor_col, &app.theme))
+        .map(|(i, row)| {
+            row_line(
+                row,
+                start + i,
+                app.view.cursor,
+                &matches,
+                cursor_col,
+                &app.theme,
+            )
+        })
         .collect();
 
     let paragraph = Paragraph::new(lines).block(block);

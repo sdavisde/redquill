@@ -16,13 +16,17 @@
 //! blocking event loop — and returns which way the session ended.
 
 mod app;
+mod background;
+mod code_intel;
 mod compose;
 mod compose_modal;
 mod diff_view;
+mod diff_view_state;
 mod help;
 mod keymap;
 mod list_panel;
 mod lsp_ops;
+mod modes;
 mod peek;
 mod peek_overlay;
 mod rows;
@@ -30,11 +34,13 @@ mod sbs_view;
 mod search;
 mod sidebar;
 mod stage_ops;
+mod staging;
 mod staging_panel;
 mod syntax;
 mod theme;
 
-pub use app::{App, Mode, ViewMode};
+pub use app::{App, Mode};
+pub use diff_view_state::{DiffViewState, ViewMode};
 pub use keymap::{Action, Binding, Keymap};
 pub use lsp_ops::LspClient;
 pub use rows::{Row, build_rows};
@@ -44,7 +50,7 @@ pub use theme::Theme;
 use std::io::{self, Stderr};
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -119,7 +125,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
     let (diff_area, panel_area) = split_right(right_area, panel_open(app.mode));
 
     sidebar::render(frame, sidebar_area, app);
-    match app.view {
+    match app.view.layout {
         ViewMode::Unified => diff_view::render(frame, diff_area, app),
         ViewMode::SideBySide => sbs_view::render(frame, diff_area, app),
     }
@@ -203,122 +209,6 @@ pub fn run(app: &mut App) -> anyhow::Result<QuitOutcome> {
     outcome
 }
 
-/// Handles one key event while [`Mode::Compose`] is active: printable chars
-/// insert, Backspace deletes, arrow keys move within the text, `Ctrl-j`
-/// inserts a newline, `Enter` submits, `Esc` cancels. Bypasses the
-/// [`Keymap`] table entirely (see the module docs).
-fn handle_compose_key(app: &mut App, key: KeyEvent) {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    match key.code {
-        KeyCode::Esc => app.cancel_compose(),
-        KeyCode::Enter => app.submit_compose(),
-        KeyCode::Char('j') if ctrl => {
-            if let Some(compose) = app.compose.as_mut() {
-                compose.buffer.newline();
-            }
-        }
-        KeyCode::Char('t') if ctrl => {
-            if let Some(compose) = app.compose.as_mut() {
-                compose.classification = compose.classification.cycle();
-            }
-        }
-        KeyCode::Backspace => {
-            if let Some(compose) = app.compose.as_mut() {
-                compose.buffer.backspace();
-            }
-        }
-        KeyCode::Left => {
-            if let Some(compose) = app.compose.as_mut() {
-                compose.buffer.move_left();
-            }
-        }
-        KeyCode::Right => {
-            if let Some(compose) = app.compose.as_mut() {
-                compose.buffer.move_right();
-            }
-        }
-        KeyCode::Up => {
-            if let Some(compose) = app.compose.as_mut() {
-                compose.buffer.move_up();
-            }
-        }
-        KeyCode::Down => {
-            if let Some(compose) = app.compose.as_mut() {
-                compose.buffer.move_down();
-            }
-        }
-        KeyCode::Char(c) if !ctrl => {
-            if let Some(compose) = app.compose.as_mut() {
-                compose.buffer.insert_char(c);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Handles one key event while [`Mode::List`] is active: `j`/`k` move
-/// focus, `Enter` jumps to the annotation and closes the panel, `e` edits
-/// it, `d` deletes it, `a`/`Esc` close the panel. Bypasses the [`Keymap`]
-/// table entirely (see the module docs).
-fn handle_list_key(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Char('j') => app.list_move_down(),
-        KeyCode::Char('k') => app.list_move_up(),
-        KeyCode::Enter => app.jump_to_focused_annotation(),
-        KeyCode::Char('e') => app.edit_focused_annotation(),
-        KeyCode::Char('d') => app.delete_focused_annotation(),
-        KeyCode::Char('a') | KeyCode::Esc => app.close_list(),
-        _ => {}
-    }
-}
-
-/// Handles one key event while [`Mode::Staging`] is active: `j`/`k` move
-/// focus, `Space`/`Enter` unstage the focused file (the panel stays open),
-/// `s`/`Esc` close the panel. Bypasses the [`Keymap`] table entirely (see
-/// the module docs).
-fn handle_staging_key(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Char('j') => app.staging_move_down(),
-        KeyCode::Char('k') => app.staging_move_up(),
-        KeyCode::Char(' ') | KeyCode::Enter => app.unstage_focused_file(),
-        KeyCode::Char('s') | KeyCode::Esc => app.close_staging(),
-        _ => {}
-    }
-}
-
-/// Handles one key event while [`Mode::Search`] is active: printable chars
-/// insert into the pattern buffer, Backspace deletes, `Enter` confirms
-/// (jumping to the first match at-or-after the cursor), `Esc` cancels
-/// (clearing the active pattern only if the buffer was left empty).
-/// Bypasses the [`Keymap`] table entirely (see the module docs).
-fn handle_search_key(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Esc => app.cancel_search(),
-        KeyCode::Enter => app.confirm_search(),
-        KeyCode::Backspace => {
-            app.search_input.pop();
-        }
-        KeyCode::Char(c) => app.search_input.push(c),
-        _ => {}
-    }
-}
-
-/// Handles one key event while [`Mode::Peek`] is active: `j`/`k` move
-/// through results (or scroll hover text), `Enter` jumps the diff cursor to
-/// a Definition/References result that's one of the diff's files (closing
-/// the overlay) or sets `not in diff` otherwise (a no-op for Hover),
-/// `Esc`/`q` close back to Normal. Bypasses the [`Keymap`] table entirely
-/// (see the module docs).
-fn handle_peek_key(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Char('j') => app.peek_move_down(),
-        KeyCode::Char('k') => app.peek_move_up(),
-        KeyCode::Enter => app.peek_enter(),
-        KeyCode::Char('q') | KeyCode::Esc => app.close_peek(),
-        _ => {}
-    }
-}
-
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stderr>>,
     app: &mut App,
@@ -334,7 +224,8 @@ fn event_loop(
         let (main_area, _) = split_footer(full_area);
         let (_, right_area) = split_layout(main_area);
         let (diff_area, _) = split_right(right_area, panel_open(app.mode));
-        app.set_viewport_height(diff_view::viewport_height(diff_area));
+        app.view
+            .set_viewport_height(diff_view::viewport_height(diff_area));
 
         terminal.draw(|frame| draw(frame, app, keymap))?;
 
@@ -348,11 +239,11 @@ fn event_loop(
                     // keypress (whatever this key does may set a fresh one).
                     app.clear_status_message();
                     match app.mode {
-                        Mode::Compose => handle_compose_key(app, key),
-                        Mode::List => handle_list_key(app, key),
-                        Mode::Staging => handle_staging_key(app, key),
-                        Mode::Search => handle_search_key(app, key),
-                        Mode::Peek => handle_peek_key(app, key),
+                        Mode::Compose => modes::handle_compose_key(app, key),
+                        Mode::List => modes::handle_list_key(app, key),
+                        Mode::Staging => modes::handle_staging_key(app, key),
+                        Mode::Search => modes::handle_search_key(app, key),
+                        Mode::Peek => modes::handle_peek_key(app, key),
                         Mode::Normal | Mode::Visual { .. } => {
                             let had_pending = pending_prefix.is_some();
                             let action = keymap.resolve(&mut pending_prefix, key);
@@ -392,7 +283,7 @@ fn event_loop(
             }
         }
 
-        app.poll_lsp();
+        code_intel::poll(app);
     }
 }
 
@@ -406,6 +297,7 @@ mod tests {
     use crate::git::RawFilePatch;
     use crate::highlight::TokenKind;
     use crate::lsp::SourceLocation;
+    use crossterm::event::KeyModifiers;
     use ratatui::backend::TestBackend;
 
     fn sample_file() -> FileDiff {
@@ -497,8 +389,8 @@ index 111..222 100644
         // App::new built `rows` before this annotation existed; rebuild so
         // the inline display row/gutter marker reflect it (this is what
         // `App::submit_compose` does internally on a real compose flow).
-        app.rows = build_rows(
-            &app.files[0],
+        app.view.rows = build_rows(
+            &app.view.files[0],
             &app.annotations,
             rows::SyntaxSpans::default(),
         );
@@ -575,7 +467,7 @@ index 111..222 100644
         let mut app = App::new(vec![sample_file()]);
         let theme = app.theme;
 
-        let Some(Row::Line(line)) = app.rows.get_mut(2) else {
+        let Some(Row::Line(line)) = app.view.rows.get_mut(2) else {
             panic!("expected a line row at index 2");
         };
         assert_eq!(line.content, "fn main() {");
@@ -596,42 +488,6 @@ index 111..222 100644
     }
 
     // -- Search ---------------------------------------------------------------
-
-    #[test]
-    fn search_input_editing_via_handle_search_key() {
-        let mut app = App::new(vec![sample_file()]);
-        app.mode = Mode::Search;
-        handle_search_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
-        );
-        handle_search_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
-        );
-        handle_search_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
-        );
-        assert_eq!(app.search_input, "old");
-        handle_search_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
-        );
-        assert_eq!(app.search_input, "ol");
-        handle_search_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(app.mode, Mode::Normal);
-        assert_eq!(app.search.pattern.as_deref(), Some("ol"));
-    }
-
-    #[test]
-    fn search_esc_cancels_mode() {
-        let mut app = App::new(vec![sample_file()]);
-        app.mode = Mode::Search;
-        app.search_input.push('x');
-        handle_search_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        assert_eq!(app.mode, Mode::Normal);
-    }
 
     /// An active search shows the `/pattern` footer prompt while typing,
     /// and — once confirmed — the matched row's text renders with the
@@ -659,7 +515,7 @@ index 111..222 100644
         app.confirm_search();
         assert_eq!(app.mode, Mode::Normal);
         assert_eq!(app.search.matches.len(), 2);
-        assert_ne!(app.cursor, app.search.matches[1]);
+        assert_ne!(app.view.cursor, app.search.matches[1]);
 
         terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -728,7 +584,7 @@ index 111..222 100644
             Some(Action::ToggleView)
         );
         app.apply(Action::ToggleView);
-        assert_eq!(app.view, ViewMode::SideBySide);
+        assert_eq!(app.view.layout, ViewMode::SideBySide);
 
         terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
         let sbs_buffer = terminal.backend().buffer().clone();
@@ -737,7 +593,7 @@ index 111..222 100644
         assert!(sbs_content.contains("new()"));
 
         app.apply(Action::ToggleView);
-        assert_eq!(app.view, ViewMode::Unified);
+        assert_eq!(app.view.layout, ViewMode::Unified);
         terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
         let round_tripped: String = terminal
             .backend()
