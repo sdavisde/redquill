@@ -16,6 +16,7 @@
 //! blocking event loop — and returns which way the session ended.
 
 mod app;
+mod background;
 mod code_intel;
 mod compose;
 mod compose_modal;

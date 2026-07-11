@@ -72,15 +72,19 @@ render tick" primitive spec 02 needs, generalized from `LspManager`'s thread +
 mpsc channel + non-blocking poll pattern. Transport-agnostic (runs closures /
 commands); no git or LSP types. Ships with no production callers.
 
-- [ ] Create a background-task module under `src/ui/` with a poller that
-      `spawn`s a task on a background thread, returns a task id immediately,
-      and drains completed results via a non-blocking `poll()`.
-- [ ] Report failure (command exit status + stderr, or a panicked closure) as
-      a value, never a panic; no `unwrap`/`expect` outside tests.
-- [ ] Unit tests with synthetic tasks covering success, failure, and
-      not-yet-complete (pending) polling.
-- [ ] Allow `dead_code` narrowly if needed so it compiles clean with no
-      callers other than tests.
+- [x] Create `src/ui/background.rs` with `BackgroundTasks<T>`: `spawn` runs a
+      closure on a background thread and returns a `TaskId` immediately;
+      `poll()` non-blockingly drains completed results (thread + `mpsc`
+      channel + per-tick drain, mirroring `LspManager`).
+- [x] Report failure as a value, never a panic: a nonzero command exit +
+      stderr is a `CommandOutcome { success: false, .. }` (via `run_command`),
+      and a panicking closure is caught and delivered as `Err(TaskPanic)`.
+      No `unwrap`/`expect` outside tests.
+- [x] Unit tests with synthetic tasks covering success, error-as-value,
+      panic-as-value, not-yet-complete (gated pending) polling, and
+      command-outcome mapping.
+- [x] Module-scoped `#![allow(dead_code)]` (seam for spec 02) so it compiles
+      clean with no callers other than tests.
 
 **Proof:** new poller unit tests passing under `cargo test`; utility compiles
 with no non-test callers under `cargo clippy -- -D warnings`.
