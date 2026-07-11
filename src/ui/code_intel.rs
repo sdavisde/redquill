@@ -810,4 +810,87 @@ index 1..2 100644
         assert_eq!(app.mode, Mode::Peek);
         assert!(app.peek.is_some());
     }
+
+    // -- Multibuffer LSP integration (task 4.3) -----------------------------
+
+    /// A two-line hunk (`fn main() {` context, `old()`->`new()`) for `path`,
+    /// whose added line has `new_line == 2` — the row `code_intel_position`
+    /// accepts.
+    fn added_line_raw(path: &str) -> String {
+        format!(
+            "diff --git a/{path} b/{path}\nindex 1..2 100644\n--- a/{path}\n+++ b/{path}\n@@ -1,2 +1,2 @@\n fn main() {{\n-    old();\n+    new();\n"
+        )
+    }
+
+    #[test]
+    fn code_intel_position_derives_path_from_the_cursor_row_owning_file() {
+        // The cursor in the *second* section must issue its request against
+        // the second file's path, not the first's.
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir");
+        std::fs::write(tmp.path().join("src/a.rs"), "fn main() {\n    new();\n}\n")
+            .expect("write a");
+        std::fs::write(tmp.path().join("src/b.rs"), "fn main() {\n    new();\n}\n")
+            .expect("write b");
+
+        let mut app = App::new(vec![
+            file_with_raw("src/a.rs", &added_line_raw("src/a.rs")),
+            file_with_raw("src/b.rs", &added_line_raw("src/b.rs")),
+        ]);
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let fake = FakeLsp {
+            calls: Rc::clone(&calls),
+            next_id: 0,
+            deny: false,
+            poll_queue: Rc::new(RefCell::new(std::collections::VecDeque::new())),
+            shutdown_called: Rc::new(RefCell::new(false)),
+        };
+        app.inject_lsp_client(Box::new(fake), tmp.path().to_path_buf());
+
+        app.apply(Action::NextFile); // cursor onto b.rs's section header
+        for _ in 0..4 {
+            app.apply(Action::CursorDown); // down to b.rs's added line
+        }
+        let Row::Line(l) = &app.view.rows[app.view.cursor] else {
+            panic!("expected cursor on a line row");
+        };
+        assert_eq!(l.new_line, Some(2));
+
+        app.apply(Action::GotoDefinition);
+        assert_eq!(
+            calls.borrow()[0],
+            LspCall::Definition(tmp.path().join("src/b.rs"), 1, 0)
+        );
+    }
+
+    #[test]
+    fn peek_enter_expands_a_collapsed_target_section() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let mut app = App::new(vec![
+            file("a.rs", 1),
+            file_with_raw("src/main.rs", lsp_fixture_raw()),
+        ]);
+        app.set_repo_root(tmp.path().to_path_buf());
+        // Collapse the target section; peek_enter must re-expand it, scroll
+        // to it, and land the cursor on the target line within its span.
+        app.view.set_collapsed("src/main.rs", true);
+        app.rebuild_rows();
+        assert!(app.view.is_collapsed("src/main.rs"));
+
+        app.peek = Some(PeekState::locations(
+            PeekKind::Definition,
+            vec![source_loc(&tmp.path().join("src/main.rs"), 1)], // 0-based -> new_line 2
+        ));
+        app.mode = Mode::Peek;
+
+        peek_enter(&mut app);
+
+        assert!(!app.view.is_collapsed("src/main.rs")); // expanded on jump
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.view.file_of_cursor(), 1);
+        let Row::Line(line) = &app.view.rows[app.view.cursor] else {
+            panic!("expected cursor on a line row");
+        };
+        assert_eq!(line.new_line, Some(2));
+    }
 }

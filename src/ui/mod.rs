@@ -151,7 +151,8 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
         frame.render_widget(footer, footer_area);
     }
     if app.help_open {
-        help::render(frame, area, keymap, &app.theme);
+        let staging_allowed = !matches!(app.target, crate::git::DiffTarget::Range(_));
+        help::render(frame, area, keymap, &app.theme, staging_allowed);
     }
     if matches!(app.mode, Mode::Compose) {
         compose_modal::render(frame, area, app);
@@ -444,6 +445,67 @@ index 111..222 100644
         let buffer = terminal.backend().buffer().clone();
         let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
         assert!(content.contains("no changes"));
+    }
+
+    /// The multibuffer renders for a ref-range target exactly as for the
+    /// working tree — every file's section header and body appear.
+    #[test]
+    fn multibuffer_renders_for_a_range_target() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![multi_file("a.rs"), multi_file("b.rs")]);
+        app.target = crate::git::DiffTarget::Range("main..HEAD".to_string());
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        assert!(content.contains("\u{25be}")); // ▾ expanded indicator
+        assert!(content.contains("M a.rs"));
+        assert!(content.contains("M b.rs"));
+        assert!(content.contains("old"));
+    }
+
+    /// On a read-only range target the help overlay omits the inert
+    /// file/hunk staging gestures, but keeps the still-working staging-panel
+    /// toggle.
+    #[test]
+    fn help_overlay_hides_staging_rows_on_a_range_target() {
+        let backend = TestBackend::new(100, 44);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![sample_file()]);
+        app.help_open = true;
+        app.target = crate::git::DiffTarget::Range("main..HEAD".to_string());
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        assert!(content.contains("help"));
+        assert!(!content.contains("Stage/unstage file under cursor"));
+        assert!(!content.contains("Stage/unstage hunk"));
+        // The staging panel toggle still works on any target, so it stays.
+        assert!(content.contains("Toggle staging panel"));
+    }
+
+    /// On the working-tree target every staging gesture is listed.
+    #[test]
+    fn help_overlay_shows_staging_rows_on_the_working_tree_target() {
+        let backend = TestBackend::new(100, 44);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(vec![sample_file()]);
+        app.help_open = true; // target defaults to WorkingTree
+        let keymap = Keymap::default_map();
+
+        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        assert!(content.contains("Stage/unstage file under cursor"));
+        assert!(content.contains("Stage/unstage hunk"));
+        assert!(content.contains("Toggle staging panel"));
     }
 
     #[test]

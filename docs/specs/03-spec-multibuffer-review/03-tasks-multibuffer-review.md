@@ -83,7 +83,7 @@ Ordering rationale: the side-by-side removal comes first because `rows` and `sbs
 - [x] 3.3 In `App::refresh`, preserve the collapse map by path across refreshes, auto-expand any collapsed file whose new status has unstaged changes, keep fully-staged collapsed files collapsed, and drop map entries for files that left the diff; app-level tests for the auto-expand rule and collapse-state survival.
 - [x] 3.4 Keep `space`/visual-mode hunk-line staging working with the file derived from the cursor row (`src/ui/staging.rs`), update header + sidebar markers to `±`/`●` per `StagedState`, extend `src/ui/help.rs` + README.md with `S`, run the four gates, record `03-proofs/03-task-03-proofs.md`, and commit `feat: stage-and-collapse review flow`.
 
-### [ ] 4.0 Full-surface integration across all diff targets
+### [x] 4.0 Full-surface integration across all diff targets
 
 #### 4.0 Proof Artifact(s)
 
@@ -93,11 +93,11 @@ Ordering rationale: the side-by-side removal comes first because `rows` and `sbs
 
 #### 4.0 Tasks
 
-- [ ] 4.1 (TDD) Generalize `anchor_row_index` in `src/ui/rows.rs` to the multibuffer: `Target::File` maps to that file's section-header row (not row 0), line/range/hunk targets resolve within the owning file's row span; annotation gutter rows splice correctly in every section; `jump_to_annotation` scrolls the buffer and expands a collapsed target section; markdown-on-quit assertions unchanged.
-- [ ] 4.2 Make search span the buffer: `SearchState::recompute` already runs over the full row Vec — add tests that matches cross file boundaries, skip collapsed sections (their rows are absent), and that `n`/`N` wrap over the whole buffer; recompute on collapse toggle.
-- [ ] 4.3 In `src/ui/code_intel.rs`, derive `code_intel_position` path from the cursor row's owning file; make `peek_enter` jump-to-location scroll the multibuffer to the target file's section, expanding it if collapsed; extend inline tests.
-- [ ] 4.4 Add the narrow select-by-path seam from spec 02: `App::select_file_by_path(&Path)` expands (if collapsed) and scrolls to that file's section header, and route sidebar/git-panel selection through it; unit tests including the unknown-path case.
-- [ ] 4.5 Render the multibuffer for `--staged` and ref-range targets; for ranges, make staging actions no-ops absent from contextual help (`src/ui/help.rs` gains target-aware filtering); tests per target; run the four gates, record `03-proofs/03-task-04-proofs.md`, and commit `feat: multibuffer across all diff targets with full review surface`.
+- [x] 4.1 (TDD) Generalize `anchor_row_index` in `src/ui/rows.rs` to the multibuffer: `Target::File` maps to that file's section-header row (not row 0), line/range/hunk targets resolve within the owning file's row span; annotation gutter rows splice correctly in every section; `jump_to_annotation` scrolls the buffer and expands a collapsed target section; markdown-on-quit assertions unchanged.
+- [x] 4.2 Make search span the buffer: `SearchState::recompute` already runs over the full row Vec — add tests that matches cross file boundaries, skip collapsed sections (their rows are absent), and that `n`/`N` wrap over the whole buffer; recompute on collapse toggle.
+- [x] 4.3 In `src/ui/code_intel.rs`, derive `code_intel_position` path from the cursor row's owning file; make `peek_enter` jump-to-location scroll the multibuffer to the target file's section, expanding it if collapsed; extend inline tests.
+- [x] 4.4 Add the narrow select-by-path seam from spec 02: `App::select_file_by_path(&Path)` expands (if collapsed) and scrolls to that file's section header, and route sidebar/git-panel selection through it; unit tests including the unknown-path case.
+- [x] 4.5 Render the multibuffer for `--staged` and ref-range targets; for ranges, make staging actions no-ops absent from contextual help (`src/ui/help.rs` gains target-aware filtering); tests per target; run the four gates, record `03-proofs/03-task-04-proofs.md`, and commit `feat: multibuffer across all diff targets with full review surface`.
 
 ### [ ] 5.0 Performance hardening and keymap/docs finalization
 

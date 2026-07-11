@@ -13,9 +13,10 @@
 
 use std::collections::HashMap;
 
+use crate::annotate::Target;
 use crate::diff::FileDiff;
 
-use super::rows::Row;
+use super::rows::{Row, anchor_row_index};
 
 /// A reasonable default viewport height, used until the first frame reports
 /// the real one. Arbitrary but generous enough that half-page motion isn't
@@ -131,6 +132,22 @@ impl DiffViewState {
             .copied()
             .unwrap_or(self.rows.len());
         (start, end)
+    }
+
+    /// Resolves `target`'s anchor row in the whole multibuffer: a
+    /// [`Target::File`] maps to its section-header row, and line/hunk/range
+    /// targets resolve within the owning file's row span (so a line number
+    /// that also appears in another file's section can never be matched).
+    /// `None` if the target's file isn't in the buffer, or the specific
+    /// hunk/line the target names no longer exists in that section. The
+    /// caller is responsible for expanding a collapsed target section first
+    /// (a collapsed file contributes only its header, so only a File target
+    /// would resolve).
+    pub fn anchor_row_in_buffer(&self, target: &Target) -> Option<usize> {
+        let index = self.files.iter().position(|f| f.path == target.path())?;
+        let (start, end) = self.section_span(index);
+        let local = anchor_row_index(&self.files[index], &self.rows[start..end], target)?;
+        Some(start + local)
     }
 
     /// Records the diff pane's current content height, for half-page
@@ -387,7 +404,7 @@ fn is_word_char(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::annotate::AnnotationStore;
+    use crate::annotate::{AnnotationStore, Side, Target};
     use crate::git::RawFilePatch;
     use crate::ui::rows::{StagedMarker, SyntaxSpans, build_multibuffer};
 
@@ -623,6 +640,45 @@ index 1..2 100644
         assert_eq!(path, "b.rs");
         assert!(view.is_collapsed("b.rs"));
         assert!(!view.is_collapsed("a.rs"));
+    }
+
+    #[test]
+    fn anchor_row_in_buffer_resolves_targets_within_owning_section() {
+        let files = vec![
+            file_with_raw("a.rs", &one_hunk_raw("a.rs")),
+            file_with_raw("b.rs", &one_hunk_raw("b.rs")),
+        ];
+        let view = multibuffer_view(files, &[false, false]);
+
+        // A File target maps to that file's section-header row.
+        assert_eq!(
+            view.anchor_row_in_buffer(&Target::file("b.rs")),
+            Some(view.header_row_of_file[1])
+        );
+
+        // A Line target resolves within the owning file's span — b.rs's new
+        // line 1, never a.rs's identically-numbered line.
+        let (b_start, _) = view.section_span(1);
+        let expected = view.rows[b_start..]
+            .iter()
+            .position(|r| matches!(r, Row::Line(l) if l.new_line == Some(1)))
+            .map(|i| b_start + i)
+            .unwrap();
+        assert_eq!(
+            view.anchor_row_in_buffer(&Target::line("b.rs", 1, Side::New)),
+            Some(expected)
+        );
+        assert!(expected >= view.header_row_of_file[1]);
+
+        // A Hunk target resolves to b.rs's hunk header.
+        let hunk = view
+            .anchor_row_in_buffer(&Target::hunk("b.rs", 1, 1).unwrap())
+            .unwrap();
+        assert!(matches!(view.rows[hunk], Row::HunkHeader { .. }));
+        assert_eq!(view.file_of_row[hunk], 1);
+
+        // An unknown path resolves to nothing.
+        assert_eq!(view.anchor_row_in_buffer(&Target::file("missing.rs")), None);
     }
 
     #[test]

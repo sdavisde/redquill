@@ -16,9 +16,7 @@ use super::diff_view_state::DiffViewState;
 use super::keymap::Action;
 use super::lsp_ops::LspClient;
 use super::peek::{PeekKind, PeekState};
-use super::rows::{
-    LineRow, Row, StagedMarker, SyntaxSpans, anchor_row_index, build_multibuffer, hunk_span,
-};
+use super::rows::{LineRow, Row, StagedMarker, SyntaxSpans, build_multibuffer, hunk_span};
 use super::search::SearchState;
 use super::stage_ops::{
     ReviewSnapshot, StageOps, StagedFile, StagedState, build_review, staged_from_status,
@@ -194,6 +192,27 @@ impl App {
     /// requests degrade to a footer message.
     pub fn set_repo_root(&mut self, root: PathBuf) {
         self.repo_root = Some(root);
+    }
+
+    /// Selects the file whose path is `path`: expands its section if
+    /// collapsed, moves the cursor to its section-header row, and scrolls it
+    /// into view. Returns `false` (changing nothing) for a path not in the
+    /// current diff. This is the narrow select-by-path seam spec 02's git
+    /// panel drives file selection through; the sidebar highlight follows the
+    /// cursor's owning file, so moving the cursor here is what "selects" the
+    /// file everywhere.
+    pub fn select_file_by_path(&mut self, path: &str) -> bool {
+        let Some(index) = self.view.files.iter().position(|f| f.path == path) else {
+            return false;
+        };
+        if self.view.is_collapsed(path) {
+            self.view.set_collapsed(path, false);
+            self.rebuild_rows();
+        }
+        self.view.cursor = self.view.header_row_of_file[index];
+        self.view.scroll = 0;
+        self.view.ensure_visible();
+        true
     }
 
     /// Takes the LSP client, if one was ever created, so the caller can
@@ -644,17 +663,16 @@ impl App {
         let path = target.path().to_string();
         if let Some(index) = self.view.files.iter().position(|f| f.path == path) {
             // Expand the target section so line/hunk anchors are reachable,
-            // then resolve the anchor within that file's row span.
+            // then resolve the anchor against the whole buffer (a File target
+            // lands on the section header; line/hunk/range targets resolve
+            // within this file's row span). Fall back to the section header
+            // if the specific anchor row can no longer be found.
             self.view.set_collapsed(&path, false);
             self.rebuild_rows();
-            let (start, end) = self.view.section_span(index);
-            let local = anchor_row_index(
-                &self.view.files[index],
-                &self.view.rows[start..end],
-                &target,
-            )
-            .unwrap_or(0);
-            self.view.cursor = start + local;
+            self.view.cursor = self
+                .view
+                .anchor_row_in_buffer(&target)
+                .unwrap_or_else(|| self.view.header_row_of_file[index]);
             self.view.scroll = 0;
             self.view.ensure_visible();
         }
@@ -1635,6 +1653,68 @@ index 1..2 100644
             panic!("expected cursor on a line row");
         };
         assert_eq!(line.old_line, Some(1));
+    }
+
+    #[test]
+    fn jump_to_annotation_expands_a_collapsed_target_section() {
+        // Jumping to an annotation whose file is collapsed must re-expand
+        // that section so the line/hunk anchor is reachable, then land on it.
+        let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
+        app.annotations
+            .add(
+                Target::line("b.rs", 1, Side::New),
+                Classification::Issue,
+                "note",
+            )
+            .unwrap();
+        app.view.set_collapsed("b.rs", true);
+        app.rebuild_rows();
+        assert!(app.view.is_collapsed("b.rs"));
+
+        app.list_cursor = 0;
+        app.jump_to_focused_annotation();
+
+        assert!(!app.view.is_collapsed("b.rs")); // re-expanded
+        assert_eq!(app.view.selected_file, 1);
+        let Row::Line(line) = &app.view.rows[app.view.cursor] else {
+            panic!("expected cursor on a line row");
+        };
+        assert_eq!(line.new_line, Some(1));
+    }
+
+    // -- Markdown-on-quit output is unchanged by the multibuffer -------------
+
+    #[test]
+    fn multi_section_annotations_emit_unchanged_markdown() {
+        // The stdout markdown is a public API keyed purely off the annotation
+        // store's insertion order — the multibuffer never touches it. Compose
+        // annotations across several sections and assert byte-for-byte output.
+        use crate::annotate::render_markdown;
+        let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1), file("c.rs", 1)]);
+        app.annotations
+            .add(Target::file("a.rs"), Classification::Praise, "clean module")
+            .unwrap();
+        app.annotations
+            .add(
+                Target::line("b.rs", 1, Side::New),
+                Classification::Question,
+                "why new0?",
+            )
+            .unwrap();
+        app.annotations
+            .add(
+                Target::hunk("c.rs", 1, 1).unwrap(),
+                Classification::Nit,
+                "tidy this hunk",
+            )
+            .unwrap();
+        app.rebuild_rows();
+
+        let expected = "\
+## a.rs\n\n[praise] clean module\n\n\
+## b.rs:1 (+)\n\n[question] why new0?\n\n\
+## c.rs:1-1 (+)\n\n[nit] tidy this hunk\n";
+        assert_eq!(render_markdown(&app.annotations), expected);
     }
 
     #[test]
@@ -2968,6 +3048,126 @@ index 1..2 100644
 
         assert_eq!(app.search.pattern.as_deref(), Some("gamma"));
         assert_eq!(app.search.matches.len(), 1);
+    }
+
+    // -- Search across the multibuffer (task 4.2) ---------------------------
+
+    /// A one-hunk file whose added line contains the pattern `needle`.
+    fn needle_file(path: &str) -> FileDiff {
+        let raw = format!(
+            "diff --git a/{path} b/{path}\nindex 1..2 100644\n--- a/{path}\n+++ b/{path}\n@@ -1,1 +1,1 @@\n-old\n+needle here\n"
+        );
+        file_with_raw(path, &raw)
+    }
+
+    fn confirm_needle_search(app: &mut App) {
+        app.apply(Action::Search);
+        for c in "needle".chars() {
+            app.search_input.push(c);
+        }
+        app.confirm_search();
+    }
+
+    #[test]
+    fn search_matches_span_file_boundaries() {
+        let mut app = App::new(vec![needle_file("a.rs"), needle_file("b.rs")]);
+        confirm_needle_search(&mut app);
+        // One match per file's section — the search spans the whole buffer.
+        assert_eq!(app.search.matches.len(), 2);
+        let f0 = app.view.file_of_row[app.search.matches[0]];
+        let f1 = app.view.file_of_row[app.search.matches[1]];
+        assert_ne!(f0, f1);
+    }
+
+    #[test]
+    fn collapsed_section_contributes_no_search_matches() {
+        let mut app = App::new(vec![needle_file("a.rs"), needle_file("b.rs")]);
+        // a.rs collapsed contributes only its header — its needle row is
+        // absent from the buffer, so it cannot match.
+        app.view.set_collapsed("a.rs", true);
+        app.rebuild_rows();
+        confirm_needle_search(&mut app);
+        assert_eq!(app.search.matches.len(), 1);
+        assert_eq!(app.view.file_of_row[app.search.matches[0]], 1);
+    }
+
+    #[test]
+    fn search_next_wraps_across_the_whole_buffer() {
+        let mut app = App::new(vec![needle_file("a.rs"), needle_file("b.rs")]);
+        confirm_needle_search(&mut app);
+        let first = app.view.cursor;
+        assert_eq!(app.view.file_of_cursor(), 0); // first match in a.rs
+
+        app.apply(Action::SearchNext); // -> b.rs's match
+        let second = app.view.cursor;
+        assert_ne!(first, second);
+        assert_eq!(app.view.file_of_cursor(), 1);
+
+        app.apply(Action::SearchNext); // wraps back to a.rs's match
+        assert_eq!(app.view.cursor, first);
+
+        app.apply(Action::SearchPrev); // wraps backward to b.rs's match
+        assert_eq!(app.view.cursor, second);
+    }
+
+    #[test]
+    fn toggling_collapse_recomputes_search_matches_without_stale_indices() {
+        let mut app = App::new(vec![needle_file("a.rs"), needle_file("b.rs")]);
+        confirm_needle_search(&mut app);
+        assert_eq!(app.search.matches.len(), 2);
+
+        // Collapse b.rs via the `za` action; its rows leave the buffer, so
+        // the match set must recompute (no stale row indices survive).
+        app.apply(Action::NextFile); // cursor onto b.rs's header
+        assert_eq!(app.view.file_of_cursor(), 1);
+        app.apply(Action::ToggleCollapse);
+        assert!(app.view.is_collapsed("b.rs"));
+
+        assert_eq!(app.search.matches.len(), 1);
+        for &m in &app.search.matches {
+            assert!(m < app.view.rows.len(), "stale match index {m}");
+            let Row::Line(l) = &app.view.rows[m] else {
+                panic!("match row is not a line row");
+            };
+            assert!(l.content.contains("needle"));
+        }
+    }
+
+    // -- Select-by-path seam (task 4.4) -------------------------------------
+
+    #[test]
+    fn select_file_by_path_moves_cursor_to_section_header() {
+        let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
+        assert!(app.select_file_by_path("b.rs"));
+        assert_eq!(app.view.cursor, app.view.header_row_of_file[1]);
+        assert_eq!(app.view.selected_file, 1);
+        assert!(matches!(
+            app.view.rows[app.view.cursor],
+            Row::FileHeader { file_index: 1, .. }
+        ));
+    }
+
+    #[test]
+    fn select_file_by_path_expands_a_collapsed_target() {
+        let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
+        app.view.set_collapsed("b.rs", true);
+        app.rebuild_rows();
+        assert!(app.view.is_collapsed("b.rs"));
+
+        assert!(app.select_file_by_path("b.rs"));
+        assert!(!app.view.is_collapsed("b.rs")); // expanded on select
+        assert_eq!(app.view.cursor, app.view.header_row_of_file[1]);
+        assert_eq!(app.view.selected_file, 1);
+    }
+
+    #[test]
+    fn select_file_by_path_unknown_path_is_a_noop_returning_false() {
+        let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
+        app.apply(Action::CursorDown);
+        let cursor_before = app.view.cursor;
+        assert!(!app.select_file_by_path("missing.rs"));
+        assert_eq!(app.view.cursor, cursor_before);
+        assert_eq!(app.view.selected_file, 0);
     }
 
     // -- Column cursor ---------------------------------------------------------

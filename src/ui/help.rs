@@ -98,11 +98,28 @@ fn key_line(key: &str, description: &str, key_width: usize, theme: &Theme) -> Li
     ])
 }
 
+/// Whether `action` is a staging *mutation* the current diff target can't
+/// perform, so it must be hidden from the help overlay. On a read-only range
+/// target the file/hunk/line stage gestures are inert no-ops (see
+/// [`super::app::App::stage_file`] / [`super::staging::toggle_stage`]), so
+/// listing them would be untruthful; the staging-panel toggle stays visible
+/// because it still works (it shows the index regardless of target).
+fn binding_hidden(action: Action, staging_allowed: bool) -> bool {
+    !staging_allowed && matches!(action, Action::ToggleStage | Action::StageFile)
+}
+
 /// Renders the help overlay, centered over `area`. Bindings from the
 /// [`Keymap`] table are grouped Navigation / Annotate / Panels / Quit, with
 /// Compose-mode and List-mode hints appended below (those modes bypass the
-/// table entirely, so they aren't in it).
-pub fn render(frame: &mut Frame, area: Rect, keymap: &Keymap, theme: &Theme) {
+/// table entirely, so they aren't in it). `staging_allowed` is `false` on a
+/// read-only range target, hiding the inert file/hunk staging gestures.
+pub fn render(
+    frame: &mut Frame,
+    area: Rect,
+    keymap: &Keymap,
+    theme: &Theme,
+    staging_allowed: bool,
+) {
     let bindings = keymap.bindings();
     let key_width = bindings
         .iter()
@@ -128,6 +145,7 @@ pub fn render(frame: &mut Frame, area: Rect, keymap: &Keymap, theme: &Theme) {
         let group_bindings: Vec<&Binding> = bindings
             .iter()
             .filter(|b| group_of(b.action) == group)
+            .filter(|b| !binding_hidden(b.action, staging_allowed))
             .collect();
         if group_bindings.is_empty() {
             continue;

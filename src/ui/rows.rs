@@ -1164,6 +1164,61 @@ index 1..2 100644
     }
 
     #[test]
+    fn multibuffer_splices_annotation_gutter_rows_in_each_section() {
+        // An annotation in each of two files must splice its display row
+        // inside that file's own section (not offset into a neighbor), and
+        // flag the anchored line in the owning section.
+        let files = vec![
+            file_diff(raw_two_line_hunk(), "a.rs", false),
+            file_diff(raw_two_line_hunk(), "b.rs", false),
+        ];
+        let mut store = AnnotationStore::new();
+        store
+            .add(
+                Target::line("a.rs", 1, Side::New),
+                Classification::Question,
+                "why a?",
+            )
+            .unwrap();
+        store
+            .add(
+                Target::line("b.rs", 1, Side::New),
+                Classification::Issue,
+                "why b?",
+            )
+            .unwrap();
+        let collapsed = vec![false; files.len()];
+        let markers = vec![StagedMarker::None; files.len()];
+        let syntax = vec![SyntaxSpans::default(); files.len()];
+        let mb = build_multibuffer(&files, &collapsed, &markers, &store, &syntax);
+
+        // The a.rs annotation splices inside a.rs's section span.
+        let (a_start, a_end) = (mb.header_row_of_file[0], mb.header_row_of_file[1]);
+        assert!(mb.rows[a_start..a_end].iter().any(|r| matches!(
+            r,
+            Row::Annotation { text, .. } if text == "why a?"
+        )));
+        // And the b.rs annotation only after b.rs's header, never before it.
+        let b_start = mb.header_row_of_file[1];
+        assert!(mb.rows[b_start..].iter().any(|r| matches!(
+            r,
+            Row::Annotation { text, .. } if text == "why b?"
+        )));
+        assert!(!mb.rows[..b_start].iter().any(|r| matches!(
+            r,
+            Row::Annotation { text, .. } if text == "why b?"
+        )));
+        // Every spliced Annotation row still maps to its owning file.
+        for (i, row) in mb.rows.iter().enumerate() {
+            if let Row::Annotation { text, .. } = row {
+                let owner = mb.file_of_row[i];
+                let expected = if text == "why a?" { 0 } else { 1 };
+                assert_eq!(owner, expected);
+            }
+        }
+    }
+
+    #[test]
     fn multibuffer_zero_content_file_is_header_only_but_addressable() {
         // A file with no hunks (e.g. fully staged later) renders header-only
         // yet stays expandable and addressable.
