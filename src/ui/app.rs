@@ -41,6 +41,9 @@ pub enum Mode {
     List,
     /// The staging panel is open and focused.
     Staging,
+    /// The git panel (sidebar) holds focus: its cursor navigates the
+    /// CHANGES/UNTRACKED/STASHES sections, bypassing the diff-scope keymap.
+    Panel,
     /// The search input is open in the footer, composing a pattern.
     Search,
     /// The LSP peek overlay (`gd`/`gr`/`K` results) is open.
@@ -90,6 +93,11 @@ pub struct App {
     pub untracked_paths: Vec<String>,
     /// The focused row index into `staged` in the staging panel.
     pub staging_cursor: usize,
+    /// The git panel's cursor: an index into the flattened list of navigable
+    /// panel rows (CHANGES + UNTRACKED files, then STASHES; section headers
+    /// are skipped). Only meaningful while `mode == Mode::Panel`; clamped on
+    /// render so a stale index never points past the list.
+    pub panel_cursor: usize,
     /// A transient one-line message for the status footer (errors, no-op
     /// explanations, success echoes). Cleared on the next keypress.
     pub status_message: Option<String>,
@@ -152,6 +160,7 @@ impl App {
             stashes: Vec::new(),
             untracked_paths: Vec::new(),
             staging_cursor: 0,
+            panel_cursor: 0,
             status_message: None,
             stage_ops: None,
             theme: Theme::default(),
@@ -277,6 +286,10 @@ impl App {
             Action::GotoDefinition => super::code_intel::request(self, PeekKind::Definition),
             Action::GotoReferences => super::code_intel::request(self, PeekKind::References),
             Action::Hover => super::code_intel::request(self, PeekKind::Hover),
+            Action::FocusGitPanel => self.toggle_git_panel(),
+            Action::PanelCursorDown => self.panel_move_down(),
+            Action::PanelCursorUp => self.panel_move_up(),
+            Action::PanelSelect => self.panel_select(),
             Action::Quit | Action::QuitDiscard => {}
         }
     }
@@ -584,7 +597,7 @@ impl App {
     fn toggle_list(&mut self) {
         match self.mode {
             Mode::List => self.mode = Mode::Normal,
-            Mode::Compose | Mode::Staging | Mode::Search | Mode::Peek => {}
+            Mode::Compose | Mode::Staging | Mode::Panel | Mode::Search | Mode::Peek => {}
             Mode::Normal | Mode::Visual { .. } => {
                 if !self.annotations.is_empty() {
                     self.list_cursor = self.list_cursor.min(self.annotations.len() - 1);
@@ -749,7 +762,7 @@ impl App {
     fn toggle_staging_panel(&mut self) {
         match self.mode {
             Mode::Staging => self.mode = Mode::Normal,
-            Mode::Compose | Mode::List | Mode::Search | Mode::Peek => {}
+            Mode::Compose | Mode::List | Mode::Panel | Mode::Search | Mode::Peek => {}
             Mode::Normal | Mode::Visual { .. } => {
                 self.refresh_staged_list();
                 self.staging_cursor = self.staging_cursor.min(self.staged.len().saturating_sub(1));
@@ -797,6 +810,63 @@ impl App {
             }
             Err(e) => self.set_status_message(e.to_string()),
         }
+    }
+
+    // -- Git panel focus & navigation -------------------------------------
+
+    /// Whether the git panel currently holds focus (drives border emphasis
+    /// and which pane's cursor renders).
+    pub fn git_panel_focused(&self) -> bool {
+        matches!(self.mode, Mode::Panel)
+    }
+
+    /// Toggles git-panel focus: from Normal/Visual it focuses the panel
+    /// (resetting its cursor to the top); from the focused panel it returns
+    /// to Normal. A no-op while another modal (Compose/List/Staging/Search/
+    /// Peek) owns the keyboard, mirroring the other panel toggles.
+    fn toggle_git_panel(&mut self) {
+        match self.mode {
+            Mode::Panel => self.mode = Mode::Normal,
+            Mode::Compose | Mode::List | Mode::Staging | Mode::Search | Mode::Peek => {}
+            Mode::Normal | Mode::Visual { .. } => {
+                self.panel_cursor = 0;
+                self.mode = Mode::Panel;
+            }
+        }
+    }
+
+    /// Moves the panel cursor down one navigable row, clamped at the last.
+    pub fn panel_move_down(&mut self) {
+        let len = super::git_panel::navigable_rows(self).len();
+        self.panel_cursor = super::git_panel::moved_cursor(self.panel_cursor, len, true);
+    }
+
+    /// Moves the panel cursor up one navigable row, clamped at the first.
+    pub fn panel_move_up(&mut self) {
+        let len = super::git_panel::navigable_rows(self).len();
+        self.panel_cursor = super::git_panel::moved_cursor(self.panel_cursor, len, false);
+    }
+
+    /// Acts on the panel cursor's current row: a file row selects that file
+    /// in the diff and returns focus to it; a stash row (or an out-of-range
+    /// cursor) is a no-op, leaving the panel focused.
+    pub fn panel_select(&mut self) {
+        let rows = super::git_panel::navigable_rows(self);
+        if let Some(super::git_panel::PanelRow::File(i)) = rows.get(self.panel_cursor) {
+            let path = self.view.files[*i].path.clone();
+            self.select_file_by_path(&path);
+        }
+    }
+
+    /// Selects the diff file at `path` (if present) and returns focus to the
+    /// diff view. The narrow seam the panel calls on Enter; spec 03 can later
+    /// reroute this to "scroll the multibuffer to `path`" without touching
+    /// the panel's navigation.
+    pub fn select_file_by_path(&mut self, path: &str) {
+        if let Some(index) = self.view.files.iter().position(|f| f.path == path) {
+            self.switch_file(index);
+        }
+        self.mode = Mode::Normal;
     }
 
     /// Best-effort re-read of the staged-file list from `git status`,
@@ -2816,5 +2886,123 @@ index 1..2 100644
         app.apply(Action::CursorRight);
         app.apply(Action::WordForward);
         assert_eq!(app.view.effective_column(), None);
+    }
+
+    // -- Git panel focus & navigation --------------------------------------
+
+    /// Builds a panel fixture: two tracked files, one untracked, two stashes.
+    fn panel_app() -> App {
+        let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1), file("notes.md", 1)]);
+        app.untracked_paths = vec!["notes.md".to_string()];
+        app.stashes = vec![
+            StashEntry {
+                stash_ref: "stash@{0}".to_string(),
+                branch: Some("main".to_string()),
+                message: "wip".to_string(),
+            },
+            StashEntry {
+                stash_ref: "stash@{1}".to_string(),
+                branch: Some("main".to_string()),
+                message: "spike".to_string(),
+            },
+        ];
+        app
+    }
+
+    #[test]
+    fn focus_git_panel_toggles_mode_both_ways() {
+        let mut app = panel_app();
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(!app.git_panel_focused());
+        app.apply(Action::FocusGitPanel);
+        assert_eq!(app.mode, Mode::Panel);
+        assert!(app.git_panel_focused());
+        app.apply(Action::FocusGitPanel);
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(!app.git_panel_focused());
+    }
+
+    #[test]
+    fn focusing_the_panel_resets_its_cursor_to_top() {
+        let mut app = panel_app();
+        app.panel_cursor = 3;
+        app.apply(Action::FocusGitPanel);
+        assert_eq!(app.panel_cursor, 0);
+    }
+
+    #[test]
+    fn panel_cursor_moves_and_clamps_across_sections() {
+        let mut app = panel_app();
+        app.apply(Action::FocusGitPanel);
+        // 5 navigable rows: a.rs, b.rs, notes.md, stash0, stash1.
+        assert_eq!(app.panel_cursor, 0);
+        app.apply(Action::PanelCursorUp); // clamps at top
+        assert_eq!(app.panel_cursor, 0);
+        for _ in 0..10 {
+            app.apply(Action::PanelCursorDown);
+        }
+        assert_eq!(app.panel_cursor, 4); // clamps at bottom (last stash)
+        app.apply(Action::PanelCursorUp);
+        assert_eq!(app.panel_cursor, 3);
+    }
+
+    #[test]
+    fn panel_enter_on_file_selects_it_and_returns_focus_to_diff() {
+        let mut app = panel_app();
+        app.apply(Action::FocusGitPanel);
+        app.apply(Action::PanelCursorDown); // -> b.rs (index 1)
+        app.apply(Action::PanelSelect);
+        assert_eq!(app.view.selected_file, 1);
+        assert_eq!(app.mode, Mode::Normal); // focus returned to the diff
+        assert_eq!(app.view.cursor, 0);
+        assert_eq!(app.view.scroll, 0);
+    }
+
+    #[test]
+    fn panel_enter_on_untracked_file_selects_it() {
+        let mut app = panel_app();
+        app.apply(Action::FocusGitPanel);
+        app.panel_cursor = 2; // notes.md, the lone UNTRACKED row
+        app.apply(Action::PanelSelect);
+        assert_eq!(app.view.selected_file, 2);
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn panel_enter_on_stash_is_a_no_op_and_stays_focused() {
+        let mut app = panel_app();
+        app.apply(Action::FocusGitPanel);
+        app.panel_cursor = 3; // first stash row
+        let selected_before = app.view.selected_file;
+        app.apply(Action::PanelSelect);
+        assert_eq!(app.view.selected_file, selected_before); // unchanged
+        assert_eq!(app.mode, Mode::Panel); // still focused on the panel
+    }
+
+    #[test]
+    fn select_file_by_path_selects_and_returns_focus() {
+        let mut app = panel_app();
+        app.mode = Mode::Panel;
+        app.select_file_by_path("notes.md");
+        assert_eq!(app.view.selected_file, 2);
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn select_file_by_path_unknown_path_still_returns_focus() {
+        let mut app = panel_app();
+        app.mode = Mode::Panel;
+        let before = app.view.selected_file;
+        app.select_file_by_path("does-not-exist.rs");
+        assert_eq!(app.view.selected_file, before); // unchanged
+        assert_eq!(app.mode, Mode::Normal); // focus still returns to diff
+    }
+
+    #[test]
+    fn focus_toggle_is_a_no_op_while_a_modal_owns_the_keyboard() {
+        let mut app = panel_app();
+        app.mode = Mode::Search;
+        app.apply(Action::FocusGitPanel);
+        assert_eq!(app.mode, Mode::Search); // unchanged: Search still owns keys
     }
 }

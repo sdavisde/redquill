@@ -113,6 +113,19 @@ pub(super) fn handle_search_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// Handles one key event while [`super::Mode::Panel`] is active (the git
+/// panel holds focus): keys resolve through the [`super::Keymap`] table in
+/// panel scope (`` ` `` toggles focus back, `j`/`k` move the panel cursor,
+/// `Enter` opens the cursor's file). Unlike the other modal handlers this one
+/// stays keymap-driven — panel navigation is a first-class, scoped part of
+/// the keymap, not an ad-hoc match — so anything not bound in panel scope is
+/// ignored (the review-loop keys never fire while the panel is focused).
+pub(super) fn handle_panel_key(app: &mut App, key: KeyEvent, keymap: &super::Keymap) {
+    if let Some(action) = keymap.lookup_in(super::keymap::Scope::Panel, key) {
+        app.apply(action);
+    }
+}
+
 /// Handles one key event while [`super::Mode::Peek`] is active: `j`/`k` move
 /// through results (or scroll hover text), `Enter` jumps the diff cursor to
 /// a Definition/References result that's one of the diff's files (closing

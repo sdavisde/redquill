@@ -50,10 +50,19 @@ Vim-grammar keybindings, fully remappable. Draft default map:
 | `c` | Comment on line (visual select `v` for ranges) |
 | `space` | Stage/unstage hunk (line in visual mode) |
 | `s` | Toggle staging panel |
+| `` ` `` | Focus / unfocus the git panel |
 | `gd` / `gr` / `K` | Go to definition / references / hover docs |
 | `a` | Annotation list |
 | `?` | Help |
 | `q` / `Q` | Quit and emit annotations / quit and discard |
+
+**Git panel** (while focused, after `` ` ``):
+
+| Key | Action |
+|---|---|
+| `` ` `` | Return focus to the diff view |
+| `j` / `k` | Move the panel cursor through CHANGES / UNTRACKED / STASHES |
+| `Enter` | Open the cursor's file in the diff (stash / header rows: no-op) |
 
 Layout sketch:
 

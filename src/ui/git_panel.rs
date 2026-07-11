@@ -21,6 +21,54 @@ use crate::git::BranchStatus;
 use super::app::App;
 use super::theme::Theme;
 
+/// One navigable panel row: either a diff file (index into `app.view.files`)
+/// or a stash (index into `app.stashes`). Section-header and branch-title
+/// rows are not navigable and never appear here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PanelRow {
+    /// A CHANGES or UNTRACKED file entry.
+    File(usize),
+    /// A STASHES entry (view-only: Enter is a no-op).
+    Stash(usize),
+}
+
+/// Flattens the panel's three sections into the ordered list of navigable
+/// rows, in exactly the order [`render`] lays them out: tracked CHANGES
+/// files, then UNTRACKED files, then STASHES. Section headers are skipped, so
+/// the panel cursor can never land on one, and `j`/`k` cross section
+/// boundaries seamlessly. The single source of truth shared by the cursor
+/// motion helpers and the render highlight.
+pub(super) fn navigable_rows(app: &App) -> Vec<PanelRow> {
+    let mut rows = Vec::new();
+    for i in 0..app.view.files.len() {
+        if !app.untracked_paths.contains(&app.view.files[i].path) {
+            rows.push(PanelRow::File(i));
+        }
+    }
+    for i in 0..app.view.files.len() {
+        if app.untracked_paths.contains(&app.view.files[i].path) {
+            rows.push(PanelRow::File(i));
+        }
+    }
+    for i in 0..app.stashes.len() {
+        rows.push(PanelRow::Stash(i));
+    }
+    rows
+}
+
+/// Steps a panel cursor by one row within a `len`-row navigable list,
+/// clamping at both ends. An empty list pins the cursor at 0.
+pub(super) fn moved_cursor(cursor: usize, len: usize, down: bool) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    if down {
+        (cursor + 1).min(len - 1)
+    } else {
+        cursor.saturating_sub(1)
+    }
+}
+
 /// Splits `path` into a dimmed directory prefix and a normal-weight
 /// basename, e.g. `"src/auth/"` + `"session.rs"`.
 fn split_path(path: &str) -> (&str, &str) {
@@ -111,10 +159,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .split(area);
 
     let theme = &app.theme;
+    let focused = app.git_panel_focused();
     let mut items: Vec<ListItem> = Vec::new();
-    // Flat index (into `items`) of the currently selected diff file, so the
-    // passive panel still highlights it the way the old sidebar did.
+    // Flat index (into `items`) of the currently selected diff file, used to
+    // highlight it when the panel is *not* focused (as the old sidebar did).
     let mut selected_row: Option<usize> = None;
+    // `items` index of each navigable row (parallel to `navigable_rows`), used
+    // to highlight the panel cursor when the panel *is* focused.
+    let mut nav_item_indices: Vec<usize> = Vec::new();
 
     // CHANGES: tracked files (those with a real patch), in display order.
     let tracked: Vec<usize> = (0..app.view.files.len())
@@ -136,6 +188,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             if i == app.view.selected_file {
                 selected_row = Some(items.len());
             }
+            nav_item_indices.push(items.len());
             items.push(ListItem::new(line));
         }
     }
@@ -154,6 +207,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             if i == app.view.selected_file {
                 selected_row = Some(items.len());
             }
+            nav_item_indices.push(items.len());
             items.push(ListItem::new(untracked_line(&f.path, theme)));
         }
     }
@@ -165,6 +219,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             theme,
         )));
         for (i, stash) in app.stashes.iter().enumerate() {
+            nav_item_indices.push(items.len());
             items.push(ListItem::new(Line::from(vec![
                 Span::raw("  "),
                 Span::styled(format!("{i} "), Style::default().fg(theme.dir_prefix)),
@@ -173,15 +228,33 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    let block = Block::default()
+    // When focused, the panel cursor drives the highlight; otherwise the
+    // selected diff file does (the old passive behavior).
+    let highlight = if focused {
+        let cursor = app
+            .panel_cursor
+            .min(nav_item_indices.len().saturating_sub(1));
+        nav_item_indices.get(cursor).copied()
+    } else {
+        selected_row
+    };
+
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .title(branch_title(app.branch.as_ref()));
+    if focused {
+        block = block.border_style(
+            Style::default()
+                .fg(theme.focused_border)
+                .add_modifier(Modifier::BOLD),
+        );
+    }
     let list = List::new(items)
         .block(block)
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
     let mut state = ListState::default();
-    state.select(selected_row);
+    state.select(highlight);
     frame.render_stateful_widget(list, chunks[0], &mut state);
 
     let notes = app.annotations.len();
@@ -371,5 +444,100 @@ mod tests {
         // The tracked file still appears under CHANGES.
         assert!(content.contains("CHANGES"));
         assert!(content.contains("session.rs"));
+    }
+
+    // -- Cursor model (flattening + clamping) ------------------------------
+
+    /// An app with two tracked files, one untracked file, and two stashes —
+    /// the fixture the flattening/clamping tests share.
+    fn mixed_app() -> App {
+        let mut app = App::new(vec![
+            sample_file("a.rs"),
+            sample_file("b.rs"),
+            sample_file("notes.md"),
+        ]);
+        app.untracked_paths = vec!["notes.md".to_string()];
+        app.stashes = vec![
+            StashEntry {
+                stash_ref: "stash@{0}".to_string(),
+                branch: Some("main".to_string()),
+                message: "wip: parser".to_string(),
+            },
+            StashEntry {
+                stash_ref: "stash@{1}".to_string(),
+                branch: Some("main".to_string()),
+                message: "spike: tabs".to_string(),
+            },
+        ];
+        app
+    }
+
+    /// The three sections flatten into files-then-stashes, in render order,
+    /// with no header rows present (headers are not a `PanelRow` variant).
+    #[test]
+    fn navigable_rows_flatten_sections_in_render_order() {
+        let app = mixed_app();
+        let rows = navigable_rows(&app);
+        assert_eq!(
+            rows,
+            vec![
+                PanelRow::File(0), // a.rs   (CHANGES)
+                PanelRow::File(1), // b.rs   (CHANGES)
+                PanelRow::File(2), // notes.md (UNTRACKED)
+                PanelRow::Stash(0),
+                PanelRow::Stash(1),
+            ]
+        );
+    }
+
+    #[test]
+    fn moved_cursor_clamps_at_the_top() {
+        // Already at 0, moving up stays at 0.
+        assert_eq!(moved_cursor(0, 5, false), 0);
+    }
+
+    #[test]
+    fn moved_cursor_clamps_at_the_bottom() {
+        // At the last row (len 5 -> index 4), moving down stays at 4.
+        assert_eq!(moved_cursor(4, 5, true), 4);
+    }
+
+    #[test]
+    fn moved_cursor_crosses_section_boundaries() {
+        // With mixed_app's 5 navigable rows, stepping down from the last
+        // CHANGES row (index 1) lands on the UNTRACKED file (index 2), and
+        // from there onto the first STASH (index 3) — the flat list makes
+        // section boundaries invisible to motion.
+        let app = mixed_app();
+        let rows = navigable_rows(&app);
+        let len = rows.len();
+        let after_changes = moved_cursor(1, len, true);
+        assert_eq!(after_changes, 2);
+        assert_eq!(rows[after_changes], PanelRow::File(2));
+        let into_stashes = moved_cursor(2, len, true);
+        assert_eq!(into_stashes, 3);
+        assert_eq!(rows[into_stashes], PanelRow::Stash(0));
+    }
+
+    #[test]
+    fn moved_cursor_on_empty_list_stays_at_zero() {
+        // No files, no stashes -> nothing navigable; both directions pin 0.
+        let app = App::new(vec![]);
+        let len = navigable_rows(&app).len();
+        assert_eq!(len, 0);
+        assert_eq!(moved_cursor(0, len, true), 0);
+        assert_eq!(moved_cursor(0, len, false), 0);
+    }
+
+    #[test]
+    fn navigable_rows_with_empty_stash_section_omit_stash_rows() {
+        let mut app = mixed_app();
+        app.stashes.clear();
+        let rows = navigable_rows(&app);
+        assert_eq!(
+            rows,
+            vec![PanelRow::File(0), PanelRow::File(1), PanelRow::File(2)]
+        );
+        assert!(rows.iter().all(|r| matches!(r, PanelRow::File(_))));
     }
 }

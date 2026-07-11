@@ -10,7 +10,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-use super::keymap::{Action, Binding, Keymap};
+use super::keymap::{Action, Binding, Keymap, Scope};
 use super::theme::Theme;
 
 /// Static key hints for a mode that isn't driven by the [`Keymap`] table.
@@ -58,8 +58,9 @@ fn group_of(action: Action) -> &'static str {
         EnterVisual | Compose => "Annotate",
         ToggleStage | ToggleStagingPanel => "Stage",
         Search | SearchNext | SearchPrev => "Search",
-        ToggleList | ToggleHelp | ToggleView => "Panels",
+        ToggleList | ToggleHelp | ToggleView | FocusGitPanel => "Panels",
         GotoDefinition | GotoReferences | Hover => "Code intelligence",
+        PanelCursorDown | PanelCursorUp | PanelSelect => "Git panel",
         Quit | QuitDiscard => "Quit",
     }
 }
@@ -126,13 +127,28 @@ pub fn render(frame: &mut Frame, area: Rect, keymap: &Keymap, theme: &Theme) {
     ] {
         let group_bindings: Vec<&Binding> = bindings
             .iter()
-            .filter(|b| group_of(b.action) == group)
+            .filter(|b| b.scope == Scope::Diff && group_of(b.action) == group)
             .collect();
         if group_bindings.is_empty() {
             continue;
         }
         lines.push(section_header(group, theme));
         for b in group_bindings {
+            lines.push(key_line(&b.key_label(), b.description, key_width, theme));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // Panel-scope bindings: shown as their own section so `` ` `` /`j`/`k`/
+    // Enter are documented in the context where they apply (the git panel
+    // focused), grouped by scope per this spec.
+    let panel_bindings: Vec<&Binding> = bindings
+        .iter()
+        .filter(|b| b.scope == Scope::Panel)
+        .collect();
+    if !panel_bindings.is_empty() {
+        lines.push(section_header("Git panel (focused)", theme));
+        for b in panel_bindings {
             lines.push(key_line(&b.key_label(), b.description, key_width, theme));
         }
         lines.push(Line::from(""));

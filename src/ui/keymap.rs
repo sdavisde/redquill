@@ -77,6 +77,15 @@ pub enum Action {
     GotoReferences,
     /// Request `textDocument/hover` for the cursor's position.
     Hover,
+    /// Toggle focus between the diff view and the git panel.
+    FocusGitPanel,
+    /// Move the git panel's cursor down one navigable row (panel scope).
+    PanelCursorDown,
+    /// Move the git panel's cursor up one navigable row (panel scope).
+    PanelCursorUp,
+    /// Open the git panel cursor's file in the diff and return focus to it;
+    /// a no-op on stash/header rows (panel scope).
+    PanelSelect,
     /// Quit, emitting annotations to stdout.
     Quit,
     /// Quit, discarding annotations.
@@ -130,6 +139,19 @@ impl KeyChord {
     }
 }
 
+/// The input context a [`Binding`] resolves in. Every binding that existed
+/// before the git panel is [`Scope::Diff`]; panel-focused navigation lives in
+/// [`Scope::Panel`]. Resolution filters by scope so the same physical key
+/// (`j`, `` ` ``) can mean different things depending on which pane is
+/// focused, and so the focus toggle is bindable in both directions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// The diff view (Normal/Visual): every pre-existing binding.
+    Diff,
+    /// The git panel while it holds focus.
+    Panel,
+}
+
 /// The key sequence a [`Binding`] triggers on: one key (every binding
 /// before `gd`/`gr` existed) or two (a `g`-prefixed sequence).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,6 +180,9 @@ pub struct Binding {
     pub action: Action,
     /// Human-readable description shown in the help overlay.
     pub description: &'static str,
+    /// The input context this binding resolves in (diff view vs. focused
+    /// git panel).
+    pub scope: Scope,
 }
 
 impl Binding {
@@ -185,153 +210,149 @@ impl Keymap {
         use KeyCode::*;
         let none = KeyModifiers::NONE;
         let ctrl = KeyModifiers::CONTROL;
+        // Diff- and panel-scope binding constructors, so the table below
+        // reads as data and every entry declares its scope by construction.
+        let d = |keys: KeySeq, action: Action, description: &'static str| Binding {
+            keys,
+            action,
+            description,
+            scope: Scope::Diff,
+        };
+        let p = |keys: KeySeq, action: Action, description: &'static str| Binding {
+            keys,
+            action,
+            description,
+            scope: Scope::Panel,
+        };
         Keymap {
             bindings: vec![
-                Binding {
-                    keys: KeySeq::one(Char('j'), none),
-                    action: CursorDown,
-                    description: "Move cursor down",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('k'), none),
-                    action: CursorUp,
-                    description: "Move cursor up",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('h'), none),
-                    action: CursorLeft,
-                    description: "Move column cursor left",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('l'), none),
-                    action: CursorRight,
-                    description: "Move column cursor right",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('w'), none),
-                    action: WordForward,
-                    description: "Jump column cursor to next word",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('b'), none),
-                    action: WordBackward,
-                    description: "Jump column cursor to previous word",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('d'), ctrl),
-                    action: HalfPageDown,
-                    description: "Scroll half page down",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('u'), ctrl),
-                    action: HalfPageUp,
-                    description: "Scroll half page up",
-                },
-                Binding {
-                    keys: KeySeq::one(Char(']'), none),
-                    action: NextHunk,
-                    description: "Next hunk",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('['), none),
-                    action: PrevHunk,
-                    description: "Previous hunk",
-                },
-                Binding {
-                    keys: KeySeq::one(Tab, none),
-                    action: NextFile,
-                    description: "Next file",
-                },
-                Binding {
-                    keys: KeySeq::one(BackTab, none),
-                    action: PrevFile,
-                    description: "Previous file",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('?'), none),
-                    action: ToggleHelp,
-                    description: "Toggle help",
-                },
-                Binding {
-                    keys: KeySeq::one(Esc, none),
-                    action: ToggleHelp,
-                    description: "Close help",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('t'), none),
-                    action: ToggleView,
-                    description: "Toggle side-by-side view",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('v'), none),
-                    action: EnterVisual,
-                    description: "Enter visual selection / cancel",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('c'), none),
-                    action: Compose,
-                    description: "Comment on line/hunk/file (or visual selection)",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('a'), none),
-                    action: ToggleList,
-                    description: "Toggle annotation list panel",
-                },
-                Binding {
-                    keys: KeySeq::one(Char(' '), none),
-                    action: ToggleStage,
-                    description: "Stage/unstage hunk (lines in visual mode)",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('s'), none),
-                    action: ToggleStagingPanel,
-                    description: "Toggle staging panel",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('/'), none),
-                    action: Search,
-                    description: "Search",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('n'), none),
-                    action: SearchNext,
-                    description: "Next search match",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('N'), none),
-                    action: SearchPrev,
-                    description: "Previous search match",
-                },
-                Binding {
-                    keys: KeySeq::two(Char('g'), none, Char('d'), none),
-                    action: GotoDefinition,
-                    description: "Go to definition",
-                },
-                Binding {
-                    keys: KeySeq::two(Char('g'), none, Char('r'), none),
-                    action: GotoReferences,
-                    description: "Find references",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('K'), none),
-                    action: Hover,
-                    description: "Hover docs",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('q'), none),
-                    action: Quit,
-                    description: "Quit and emit annotations",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('Q'), none),
-                    action: QuitDiscard,
-                    description: "Quit and discard annotations",
-                },
-                Binding {
-                    keys: KeySeq::one(Char('c'), ctrl),
-                    action: QuitDiscard,
-                    description: "Quit and discard annotations",
-                },
+                d(KeySeq::one(Char('j'), none), CursorDown, "Move cursor down"),
+                d(KeySeq::one(Char('k'), none), CursorUp, "Move cursor up"),
+                d(
+                    KeySeq::one(Char('h'), none),
+                    CursorLeft,
+                    "Move column cursor left",
+                ),
+                d(
+                    KeySeq::one(Char('l'), none),
+                    CursorRight,
+                    "Move column cursor right",
+                ),
+                d(
+                    KeySeq::one(Char('w'), none),
+                    WordForward,
+                    "Jump column cursor to next word",
+                ),
+                d(
+                    KeySeq::one(Char('b'), none),
+                    WordBackward,
+                    "Jump column cursor to previous word",
+                ),
+                d(
+                    KeySeq::one(Char('d'), ctrl),
+                    HalfPageDown,
+                    "Scroll half page down",
+                ),
+                d(
+                    KeySeq::one(Char('u'), ctrl),
+                    HalfPageUp,
+                    "Scroll half page up",
+                ),
+                d(KeySeq::one(Char(']'), none), NextHunk, "Next hunk"),
+                d(KeySeq::one(Char('['), none), PrevHunk, "Previous hunk"),
+                d(KeySeq::one(Tab, none), NextFile, "Next file"),
+                d(KeySeq::one(BackTab, none), PrevFile, "Previous file"),
+                d(KeySeq::one(Char('?'), none), ToggleHelp, "Toggle help"),
+                d(KeySeq::one(Esc, none), ToggleHelp, "Close help"),
+                d(
+                    KeySeq::one(Char('t'), none),
+                    ToggleView,
+                    "Toggle side-by-side view",
+                ),
+                d(
+                    KeySeq::one(Char('v'), none),
+                    EnterVisual,
+                    "Enter visual selection / cancel",
+                ),
+                d(
+                    KeySeq::one(Char('c'), none),
+                    Compose,
+                    "Comment on line/hunk/file (or visual selection)",
+                ),
+                d(
+                    KeySeq::one(Char('a'), none),
+                    ToggleList,
+                    "Toggle annotation list panel",
+                ),
+                d(
+                    KeySeq::one(Char(' '), none),
+                    ToggleStage,
+                    "Stage/unstage hunk (lines in visual mode)",
+                ),
+                d(
+                    KeySeq::one(Char('s'), none),
+                    ToggleStagingPanel,
+                    "Toggle staging panel",
+                ),
+                d(
+                    KeySeq::one(Char('`'), none),
+                    FocusGitPanel,
+                    "Focus git panel",
+                ),
+                d(KeySeq::one(Char('/'), none), Search, "Search"),
+                d(
+                    KeySeq::one(Char('n'), none),
+                    SearchNext,
+                    "Next search match",
+                ),
+                d(
+                    KeySeq::one(Char('N'), none),
+                    SearchPrev,
+                    "Previous search match",
+                ),
+                d(
+                    KeySeq::two(Char('g'), none, Char('d'), none),
+                    GotoDefinition,
+                    "Go to definition",
+                ),
+                d(
+                    KeySeq::two(Char('g'), none, Char('r'), none),
+                    GotoReferences,
+                    "Find references",
+                ),
+                d(KeySeq::one(Char('K'), none), Hover, "Hover docs"),
+                d(
+                    KeySeq::one(Char('q'), none),
+                    Quit,
+                    "Quit and emit annotations",
+                ),
+                d(
+                    KeySeq::one(Char('Q'), none),
+                    QuitDiscard,
+                    "Quit and discard annotations",
+                ),
+                d(
+                    KeySeq::one(Char('c'), ctrl),
+                    QuitDiscard,
+                    "Quit and discard annotations",
+                ),
+                // -- Panel scope: resolved only while the git panel is focused.
+                p(
+                    KeySeq::one(Char('`'), none),
+                    FocusGitPanel,
+                    "Return focus to diff",
+                ),
+                p(
+                    KeySeq::one(Char('j'), none),
+                    PanelCursorDown,
+                    "Move panel cursor down",
+                ),
+                p(
+                    KeySeq::one(Char('k'), none),
+                    PanelCursorUp,
+                    "Move panel cursor up",
+                ),
+                p(KeySeq::one(Enter, none), PanelSelect, "Open file in diff"),
             ],
         }
     }
@@ -341,31 +362,57 @@ impl Keymap {
         &self.bindings
     }
 
-    /// Resolves a single key event to an [`Action`], matching only
-    /// [`KeySeq::One`] bindings — unchanged behavior from before two-key
-    /// sequences existed. Two-key sequences (`gd`, `gr`) can't be resolved
-    /// from one event; see [`Keymap::resolve`].
+    /// Resolves a single key event to an [`Action`] in [`Scope::Diff`],
+    /// matching only [`KeySeq::One`] bindings — unchanged behavior from
+    /// before scopes existed (every pre-existing binding is diff-scope).
+    /// Two-key sequences (`gd`, `gr`) can't be resolved from one event; see
+    /// [`Keymap::resolve`].
     pub fn lookup(&self, key: KeyEvent) -> Option<Action> {
+        self.lookup_in(Scope::Diff, key)
+    }
+
+    /// Resolves a single key event within `scope`. Bindings in other scopes
+    /// are invisible here, so the same physical key resolves differently
+    /// depending on which pane is focused.
+    pub fn lookup_in(&self, scope: Scope, key: KeyEvent) -> Option<Action> {
         self.bindings.iter().find_map(|b| match b.keys {
-            KeySeq::One(chord) if chord.matches(key) => Some(b.action),
+            KeySeq::One(chord) if b.scope == scope && chord.matches(key) => Some(b.action),
             _ => None,
         })
     }
 
-    /// Whether `key` is the first key of some bound two-key sequence.
+    /// Whether `key` is the first key of some bound two-key sequence in
+    /// [`Scope::Diff`].
     pub fn starts_sequence(&self, key: KeyEvent) -> bool {
-        self.bindings
-            .iter()
-            .any(|b| matches!(b.keys, KeySeq::Two(first, _) if first.matches(key)))
+        self.starts_sequence_in(Scope::Diff, key)
     }
 
-    /// Resolves a two-key sequence: `first` is the already-consumed pending
-    /// prefix, `second` the key that completes it. `None` if no binding
-    /// matches both — the caller silently cancels the pending prefix in
-    /// that case.
+    /// Whether `key` starts a bound two-key sequence within `scope`.
+    pub fn starts_sequence_in(&self, scope: Scope, key: KeyEvent) -> bool {
+        self.bindings.iter().any(|b| {
+            b.scope == scope && matches!(b.keys, KeySeq::Two(first, _) if first.matches(key))
+        })
+    }
+
+    /// Resolves a two-key sequence in [`Scope::Diff`]: `first` is the
+    /// already-consumed pending prefix, `second` the key that completes it.
+    /// `None` if no binding matches both — the caller silently cancels the
+    /// pending prefix in that case.
     pub fn lookup_double(&self, first: KeyEvent, second: KeyEvent) -> Option<Action> {
+        self.lookup_double_in(Scope::Diff, first, second)
+    }
+
+    /// Resolves a two-key sequence within `scope`.
+    pub fn lookup_double_in(
+        &self,
+        scope: Scope,
+        first: KeyEvent,
+        second: KeyEvent,
+    ) -> Option<Action> {
         self.bindings.iter().find_map(|b| match b.keys {
-            KeySeq::Two(f, s) if f.matches(first) && s.matches(second) => Some(b.action),
+            KeySeq::Two(f, s) if b.scope == scope && f.matches(first) && s.matches(second) => {
+                Some(b.action)
+            }
             _ => None,
         })
     }
@@ -388,20 +435,33 @@ impl Keymap {
     /// event loop's own Esc handling (closing help / canceling Visual mode)
     /// runs on top of this, not through the keymap table.
     pub fn resolve(&self, pending: &mut Option<KeyEvent>, key: KeyEvent) -> Option<Action> {
+        self.resolve_in(Scope::Diff, pending, key)
+    }
+
+    /// [`Keymap::resolve`], but resolving within `scope`. Panel scope carries
+    /// no two-key sequences today, so this reduces to a single-key
+    /// [`Keymap::lookup_in`] there; the pending-prefix machinery is exercised
+    /// only in diff scope.
+    pub fn resolve_in(
+        &self,
+        scope: Scope,
+        pending: &mut Option<KeyEvent>,
+        key: KeyEvent,
+    ) -> Option<Action> {
         if let Some(prefix) = pending.take() {
             if key.code == KeyCode::Esc {
                 return None;
             }
-            return self.lookup_double(prefix, key);
+            return self.lookup_double_in(scope, prefix, key);
         }
         if key.code == KeyCode::Esc {
             return None;
         }
-        if self.starts_sequence(key) {
+        if self.starts_sequence_in(scope, key) {
             *pending = Some(key);
             return None;
         }
-        self.lookup(key)
+        self.lookup_in(scope, key)
     }
 }
 
@@ -667,5 +727,90 @@ mod tests {
         let action = km.resolve(&mut pending, key(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(action, None);
         assert_eq!(pending, None);
+    }
+
+    // -- Scopes (diff vs. panel) --------------------------------------------
+
+    /// Every pre-existing binding is diff-scope, so the scope-agnostic
+    /// `lookup` and the diff-scoped `lookup_in` must agree for every
+    /// single-key binding in the table — the "unfocused behavior is
+    /// unchanged" guarantee, proven binding-by-binding.
+    #[test]
+    fn every_preexisting_single_key_binding_resolves_unchanged_in_diff_scope() {
+        let km = Keymap::default_map();
+        for b in km.bindings() {
+            if b.scope != Scope::Diff {
+                continue;
+            }
+            if let KeySeq::One(chord) = b.keys {
+                let ev = key(chord.code, chord.mods);
+                assert_eq!(
+                    km.lookup(ev),
+                    km.lookup_in(Scope::Diff, ev),
+                    "diff-scope binding {:?} must resolve identically via lookup and lookup_in",
+                    b.action
+                );
+                assert_eq!(km.lookup_in(Scope::Diff, ev), Some(b.action));
+            }
+        }
+    }
+
+    #[test]
+    fn backtick_focuses_panel_in_diff_scope() {
+        let km = Keymap::default_map();
+        assert_eq!(
+            km.lookup_in(Scope::Diff, key(KeyCode::Char('`'), KeyModifiers::NONE)),
+            Some(Action::FocusGitPanel)
+        );
+    }
+
+    #[test]
+    fn backtick_toggles_focus_back_in_panel_scope() {
+        let km = Keymap::default_map();
+        assert_eq!(
+            km.lookup_in(Scope::Panel, key(KeyCode::Char('`'), KeyModifiers::NONE)),
+            Some(Action::FocusGitPanel)
+        );
+    }
+
+    /// `j`/`k` mean panel-cursor motion in panel scope but diff-cursor motion
+    /// in diff scope — the scope dimension in action.
+    #[test]
+    fn jk_resolve_to_panel_motion_only_in_panel_scope() {
+        let km = Keymap::default_map();
+        let j = key(KeyCode::Char('j'), KeyModifiers::NONE);
+        let k = key(KeyCode::Char('k'), KeyModifiers::NONE);
+        assert_eq!(km.lookup_in(Scope::Panel, j), Some(Action::PanelCursorDown));
+        assert_eq!(km.lookup_in(Scope::Panel, k), Some(Action::PanelCursorUp));
+        assert_eq!(km.lookup_in(Scope::Diff, j), Some(Action::CursorDown));
+        assert_eq!(km.lookup_in(Scope::Diff, k), Some(Action::CursorUp));
+    }
+
+    #[test]
+    fn enter_selects_file_only_in_panel_scope() {
+        let km = Keymap::default_map();
+        let enter = key(KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(km.lookup_in(Scope::Panel, enter), Some(Action::PanelSelect));
+        assert_eq!(km.lookup_in(Scope::Diff, enter), None);
+    }
+
+    /// A diff-only binding (`space` → stage) is invisible in panel scope, so
+    /// the focused panel never fires review-loop actions.
+    #[test]
+    fn diff_only_bindings_do_not_resolve_in_panel_scope() {
+        let km = Keymap::default_map();
+        assert_eq!(
+            km.lookup_in(Scope::Diff, key(KeyCode::Char(' '), KeyModifiers::NONE)),
+            Some(Action::ToggleStage)
+        );
+        assert_eq!(
+            km.lookup_in(Scope::Panel, key(KeyCode::Char(' '), KeyModifiers::NONE)),
+            None
+        );
+        // `s` (staging panel) is likewise diff-only.
+        assert_eq!(
+            km.lookup_in(Scope::Panel, key(KeyCode::Char('s'), KeyModifiers::NONE)),
+            None
+        );
     }
 }

@@ -64,6 +64,9 @@ pub struct Theme {
     pub staged_indicator: Color,
     pub dir_prefix: Color,
     pub footer_text: Color,
+    /// The border color of whichever pane currently holds focus (diff pane
+    /// by default, the git panel while it is focused).
+    pub focused_border: Color,
 
     // -- Help overlay --
     pub help_section_header: Color,
@@ -118,6 +121,7 @@ impl Default for Theme {
             staged_indicator: Color::Green,
             dir_prefix: Color::DarkGray,
             footer_text: Color::DarkGray,
+            focused_border: Color::Cyan,
 
             help_section_header: Color::Yellow,
             help_key: Color::Cyan,

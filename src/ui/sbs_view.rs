@@ -274,7 +274,15 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .get(app.view.selected_file)
         .map(|f| f.path.as_str())
         .unwrap_or("diff");
-    let block = Block::default().borders(Borders::ALL).title(title);
+    let mut block = Block::default().borders(Borders::ALL).title(title);
+    // The diff pane is the focused pane whenever the git panel is not.
+    if !app.git_panel_focused() {
+        block = block.border_style(
+            Style::default()
+                .fg(app.theme.focused_border)
+                .add_modifier(Modifier::BOLD),
+        );
+    }
 
     if app.view.files.is_empty() {
         let paragraph = Paragraph::new("no changes")

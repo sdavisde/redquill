@@ -1,0 +1,61 @@
+Task 3.0 smoke transcript — git panel focus & navigation
+Driver: real crossterm KeyEvents through ui::dispatch_key
+(the same handler the blocking event loop calls).
+tmux unavailable on this host; headless TestBackend fallback.
+
+step 0: initial (diff focused)
+  mode=Normal focus=diff view panel_cursor=0 selected_file=0 diff_cursor=0
+  frame shows: CHANGES=true UNTRACKED=true STASHES=true branch_hdr=true
+
+step 1: press ` — focus git panel
+  mode=Panel focus=git panel panel_cursor=0 selected_file=0 diff_cursor=0
+  frame shows: CHANGES=true UNTRACKED=true STASHES=true branch_hdr=true
+
+step 2: press j — CHANGES row 2 (src/b.rs)
+  mode=Panel focus=git panel panel_cursor=1 selected_file=0 diff_cursor=0
+  frame shows: CHANGES=true UNTRACKED=true STASHES=true branch_hdr=true
+
+step 3: press j — cross into UNTRACKED (notes.md)
+  mode=Panel focus=git panel panel_cursor=2 selected_file=0 diff_cursor=0
+  frame shows: CHANGES=true UNTRACKED=true STASHES=true branch_hdr=true
+
+step 4: press j — cross into STASHES (stash 0)
+  mode=Panel focus=git panel panel_cursor=3 selected_file=0 diff_cursor=0
+  frame shows: CHANGES=true UNTRACKED=true STASHES=true branch_hdr=true
+
+step 5: press j — STASHES (stash 1)
+  mode=Panel focus=git panel panel_cursor=4 selected_file=0 diff_cursor=0
+  frame shows: CHANGES=true UNTRACKED=true STASHES=true branch_hdr=true
+
+step 6: press Enter on stash — no-op, stays focused
+  mode=Panel focus=git panel panel_cursor=4 selected_file=0 diff_cursor=0
+  frame shows: CHANGES=true UNTRACKED=true STASHES=true branch_hdr=true
+
+step 7: press k — back up
+  mode=Panel focus=git panel panel_cursor=3 selected_file=0 diff_cursor=0
+  frame shows: CHANGES=true UNTRACKED=true STASHES=true branch_hdr=true
+
+step 8: press k — onto UNTRACKED (notes.md)
+  mode=Panel focus=git panel panel_cursor=2 selected_file=0 diff_cursor=0
+  frame shows: CHANGES=true UNTRACKED=true STASHES=true branch_hdr=true
+
+step 9: press k — onto CHANGES (src/b.rs)
+  mode=Panel focus=git panel panel_cursor=1 selected_file=0 diff_cursor=0
+  frame shows: CHANGES=true UNTRACKED=true STASHES=true branch_hdr=true
+
+step 10: press Enter on file — jump diff, return focus
+  mode=Normal focus=diff view panel_cursor=1 selected_file=1 diff_cursor=0
+  frame shows: CHANGES=true UNTRACKED=true STASHES=true branch_hdr=true
+
+step 11: press j (unfocused) — diff cursor scrolls
+  mode=Normal focus=diff view panel_cursor=1 selected_file=1 diff_cursor=1
+  frame shows: CHANGES=true UNTRACKED=true STASHES=true branch_hdr=true
+
+step 12: press s (unfocused) — staging panel opens
+  mode=Staging focus=diff view panel_cursor=1 selected_file=1 diff_cursor=1
+  frame shows: CHANGES=true UNTRACKED=true STASHES=true branch_hdr=true
+
+step 13: press s — staging panel closes
+  mode=Normal focus=diff view panel_cursor=1 selected_file=1 diff_cursor=1
+  frame shows: CHANGES=true UNTRACKED=true STASHES=true branch_hdr=true
+

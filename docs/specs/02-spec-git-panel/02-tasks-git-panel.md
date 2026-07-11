@@ -76,7 +76,7 @@ Evolve the passive `sidebar.rs` into the git panel's visual form in the same 32-
 - [x] 2.6 Manual smoke: `cargo run` in a scratch fixture repo (upstream + two stashes + mixed staged/unstaged/untracked files) and record the transcript/screenshot of the populated panel.
 - [x] 2.7 Run all four gates.
 
-### [ ] 3.0 Panel focus and keyboard navigation
+### [x] 3.0 Panel focus and keyboard navigation
 
 Add a scope/context dimension to `keymap.rs`'s `Binding` (diff scope vs. panel scope — additive), a `` ` `` focus toggle between diff and panel, a panel cursor moving through all CHANGES/UNTRACKED/STASHES entries with `j`/`k`, and Enter-on-file selecting that file in the diff view via a narrow "select file by path" call and returning focus. Focused pane gets border emphasis; stash/branch rows are navigable no-ops. Help overlay groups bindings by scope; README keymap table updated with the ratified focus-toggle key.
 
@@ -89,15 +89,15 @@ Add a scope/context dimension to `keymap.rs`'s `Binding` (diff scope vs. panel s
 
 #### 3.0 Tasks
 
-- [ ] 3.1 Ratify the focus-toggle key in README.md's keymap table first: confirm `` ` `` conflicts with nothing in the existing map, add a "Git panel" section to the table documenting `` ` `` (focus toggle), `j`/`k` (move cursor), and Enter (open file in diff).
-- [ ] 3.2 Add a scope dimension to `Binding` in `src/ui/keymap.rs` (e.g. `Scope::Diff` / `Scope::Panel`), defaulting every existing binding to diff scope; write keymap unit tests proving resolution respects scope and that all pre-existing bindings resolve unchanged in diff scope.
-- [ ] 3.3 Add panel focus state to `App` (following the existing mode-based handling pattern in `modes.rs`), a `FocusGitPanel` toggle action bound to `` ` `` in both scopes, and focused-pane border emphasis consistent with existing overlay styling; add a `TestBackend` assertion for the emphasized border on each side of the toggle.
-- [ ] 3.4 Write failing unit tests for the panel cursor model in `src/ui/git_panel.rs`: flattening the three sections into navigable rows, `j`/`k` clamping at both ends and across section boundaries, skipping section-header rows, and behavior with an empty section.
-- [ ] 3.5 Implement the cursor model and panel-focused key handling (in `modes.rs`, following the existing modal-handler pattern), rendering the cursor row with the `ListState`/`REVERSED` pattern used by `staging_panel.rs`/`list_panel.rs`; tests from 3.4 pass.
-- [ ] 3.6 Implement Enter-on-file: a narrow `select_file_by_path(&mut self, path)` on `App` that selects the file in the diff view and returns focus to the diff; Enter on stash/branch/header rows is a no-op; unit tests for both.
-- [ ] 3.7 Update the `?` help overlay (`src/ui/help.rs`) to group bindings by scope, including the panel-scope section; verify every new action appears.
-- [ ] 3.8 Manual smoke transcript: toggle focus, traverse all three sections, Enter on a file jumps the diff and returns focus, then confirm a sample of pre-existing bindings (`j`/`k` scroll, `space` stage, `s` staging panel, `gd`) behave exactly as before when the panel is unfocused.
-- [ ] 3.9 Run all four gates.
+- [x] 3.1 Ratify the focus-toggle key in README.md's keymap table first: confirm `` ` `` conflicts with nothing in the existing map, add a "Git panel" section to the table documenting `` ` `` (focus toggle), `j`/`k` (move cursor), and Enter (open file in diff).
+- [x] 3.2 Add a scope dimension to `Binding` in `src/ui/keymap.rs` (e.g. `Scope::Diff` / `Scope::Panel`), defaulting every existing binding to diff scope; write keymap unit tests proving resolution respects scope and that all pre-existing bindings resolve unchanged in diff scope.
+- [x] 3.3 Add panel focus state to `App` (following the existing mode-based handling pattern in `modes.rs`), a `FocusGitPanel` toggle action bound to `` ` `` in both scopes, and focused-pane border emphasis consistent with existing overlay styling; add a `TestBackend` assertion for the emphasized border on each side of the toggle.
+- [x] 3.4 Write failing unit tests for the panel cursor model in `src/ui/git_panel.rs`: flattening the three sections into navigable rows, `j`/`k` clamping at both ends and across section boundaries, skipping section-header rows, and behavior with an empty section.
+- [x] 3.5 Implement the cursor model and panel-focused key handling (in `modes.rs`, following the existing modal-handler pattern), rendering the cursor row with the `ListState`/`REVERSED` pattern used by `staging_panel.rs`/`list_panel.rs`; tests from 3.4 pass.
+- [x] 3.6 Implement Enter-on-file: a narrow `select_file_by_path(&mut self, path)` on `App` that selects the file in the diff view and returns focus to the diff; Enter on stash/branch/header rows is a no-op; unit tests for both.
+- [x] 3.7 Update the `?` help overlay (`src/ui/help.rs`) to group bindings by scope, including the panel-scope section; verify every new action appears.
+- [x] 3.8 Manual smoke transcript: toggle focus, traverse all three sections, Enter on a file jumps the diff and returns focus, then confirm a sample of pre-existing bindings (`j`/`k` scroll, `space` stage, `s` staging panel, `gd`) behave exactly as before when the panel is unfocused.
+- [x] 3.9 Run all four gates.
 
 ### [ ] 4.0 Async remote operations (fetch/pull/push) and command log pane
 

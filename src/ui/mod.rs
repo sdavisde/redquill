@@ -115,6 +115,67 @@ fn panel_open(mode: Mode) -> bool {
     matches!(mode, Mode::List | Mode::Staging)
 }
 
+/// What the event loop should do after dispatching one key.
+enum Flow {
+    /// Keep looping.
+    Continue,
+    /// End the session with this outcome (`q`/`Q`/Ctrl-C).
+    Quit(QuitOutcome),
+}
+
+/// Dispatches one key-press event, mutating `app`. This is the single entry
+/// point the blocking event loop and the headless key-driver tests both go
+/// through, so tests exercise the *real* dispatch path (mode routing, the
+/// diff-scope pending-prefix machine, panel-scope resolution, Esc handling)
+/// rather than a copy of it. `pending` carries a `g`-prefix across calls in
+/// diff scope (see [`Keymap::resolve`]).
+fn dispatch_key(
+    app: &mut App,
+    keymap: &Keymap,
+    pending: &mut Option<KeyEvent>,
+    key: KeyEvent,
+) -> Flow {
+    // Transient footer messages last exactly until the next keypress
+    // (whatever this key does may set a fresh one).
+    app.clear_status_message();
+    match app.mode {
+        Mode::Compose => modes::handle_compose_key(app, key),
+        Mode::List => modes::handle_list_key(app, key),
+        Mode::Staging => modes::handle_staging_key(app, key),
+        Mode::Panel => modes::handle_panel_key(app, key, keymap),
+        Mode::Search => modes::handle_search_key(app, key),
+        Mode::Peek => modes::handle_peek_key(app, key),
+        Mode::Normal | Mode::Visual { .. } => {
+            let had_pending = pending.is_some();
+            let action = keymap.resolve(pending, key);
+
+            // Esc only ever closes an already-open help overlay or cancels
+            // an in-progress Visual selection; it is never bound to opening
+            // help, unlike `?` (see keymap.rs). This runs only when nothing
+            // was pending — an Esc that cancelled a pending `g` prefix
+            // (handled inside `resolve`) stops there instead.
+            if key.code == KeyCode::Esc && !had_pending {
+                if app.help_open {
+                    app.help_open = false;
+                } else if matches!(app.mode, Mode::Visual { .. }) {
+                    app.apply(Action::EnterVisual);
+                }
+                return Flow::Continue;
+            }
+
+            let Some(action) = action else {
+                return Flow::Continue;
+            };
+            match action {
+                Action::Quit => return Flow::Quit(QuitOutcome::Emit),
+                Action::QuitDiscard => return Flow::Quit(QuitOutcome::Discard),
+                other => app.apply(other),
+            }
+        }
+    }
+    Flow::Continue
+}
+
 /// Draws one frame: git panel, diff pane, bottom panel (annotation list or
 /// staging panel, if open), status footer, help overlay (if open), and the
 /// Compose modal (if open).
@@ -235,44 +296,9 @@ fn event_loop(
         if event::poll(POLL_INTERVAL)? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    // Transient footer messages last exactly until the next
-                    // keypress (whatever this key does may set a fresh one).
-                    app.clear_status_message();
-                    match app.mode {
-                        Mode::Compose => modes::handle_compose_key(app, key),
-                        Mode::List => modes::handle_list_key(app, key),
-                        Mode::Staging => modes::handle_staging_key(app, key),
-                        Mode::Search => modes::handle_search_key(app, key),
-                        Mode::Peek => modes::handle_peek_key(app, key),
-                        Mode::Normal | Mode::Visual { .. } => {
-                            let had_pending = pending_prefix.is_some();
-                            let action = keymap.resolve(&mut pending_prefix, key);
-
-                            // Esc only ever closes an already-open help
-                            // overlay or cancels an in-progress Visual
-                            // selection; it is never bound to opening help,
-                            // unlike `?` (see keymap.rs). This runs only
-                            // when nothing was pending — an Esc that
-                            // cancelled a pending `g` prefix (handled inside
-                            // `resolve`) stops there instead.
-                            if key.code == KeyCode::Esc && !had_pending {
-                                if app.help_open {
-                                    app.help_open = false;
-                                } else if matches!(app.mode, Mode::Visual { .. }) {
-                                    app.apply(Action::EnterVisual);
-                                }
-                                continue;
-                            }
-
-                            let Some(action) = action else {
-                                continue;
-                            };
-                            match action {
-                                Action::Quit => return Ok(QuitOutcome::Emit),
-                                Action::QuitDiscard => return Ok(QuitOutcome::Discard),
-                                other => app.apply(other),
-                            }
-                        }
+                    match dispatch_key(app, keymap, &mut pending_prefix, key) {
+                        Flow::Quit(outcome) => return Ok(outcome),
+                        Flow::Continue => {}
                     }
                 }
                 Event::Resize(_, _) => {
@@ -664,5 +690,317 @@ index 111..222 100644
 
         assert!(content.contains("hover"));
         assert!(content.contains("this function does nothing interesting"));
+    }
+
+    // -- Git panel focus -----------------------------------------------------
+
+    /// A diff file with several rows (so `j` visibly scrolls the cursor),
+    /// parametrized by path so the panel can list more than one entry.
+    fn named_file(path: &str) -> FileDiff {
+        let raw = format!(
+            "diff --git a/{path} b/{path}\n\
+             index 111..222 100644\n\
+             --- a/{path}\n\
+             +++ b/{path}\n\
+             @@ -1,2 +1,2 @@\n\
+             -old\n\
+             +new\n\
+             \x20ctx\n"
+        );
+        FileDiff::from_patch(&RawFilePatch {
+            path: path.to_string(),
+            old_path: None,
+            raw,
+            is_binary: false,
+        })
+        .unwrap()
+    }
+
+    /// An `App` populated like a real review session with panel state:
+    /// two tracked files, one untracked, a branch header, and two stashes.
+    fn panel_smoke_app() -> App {
+        let mut app = App::new(vec![
+            named_file("src/a.rs"),
+            named_file("src/b.rs"),
+            named_file("notes.md"),
+        ]);
+        app.untracked_paths = vec!["notes.md".to_string()];
+        app.branch = Some(crate::git::BranchStatus {
+            name: "main".to_string(),
+            detached: false,
+            upstream: Some("origin/main".to_string()),
+            ahead_behind: Some((2, 1)),
+        });
+        app.stashes = vec![
+            crate::git::StashEntry {
+                stash_ref: "stash@{0}".to_string(),
+                branch: Some("main".to_string()),
+                message: "wip: parser".to_string(),
+            },
+            crate::git::StashEntry {
+                stash_ref: "stash@{1}".to_string(),
+                branch: Some("main".to_string()),
+                message: "spike: tabs".to_string(),
+            },
+        ];
+        app
+    }
+
+    /// Scans the top border row (y = 0) for cells painted with the
+    /// focused-border color, returning `(diff_side_hot, panel_side_hot)`. The
+    /// diff pane occupies `x < panel_start`; the panel occupies the rest.
+    fn top_border_hot(
+        terminal: &Terminal<TestBackend>,
+        focus: ratatui::style::Color,
+        width: usize,
+        panel_start: usize,
+    ) -> (bool, bool) {
+        let binding = terminal.backend().buffer().clone();
+        let content = binding.content();
+        let mut diff_hot = false;
+        let mut panel_hot = false;
+        for (x, cell) in content.iter().enumerate().take(width) {
+            if cell.fg == focus {
+                if x < panel_start {
+                    diff_hot = true;
+                } else {
+                    panel_hot = true;
+                }
+            }
+        }
+        (diff_hot, panel_hot)
+    }
+
+    /// The focused pane's border is emphasized, and the toggle moves that
+    /// emphasis from the diff pane to the git panel and back.
+    #[test]
+    fn focused_pane_border_emphasis_follows_the_toggle() {
+        let width = 80usize;
+        let panel_start = width - 32;
+        let backend = TestBackend::new(width as u16, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = panel_smoke_app();
+        let focus = app.theme.focused_border;
+        let keymap = Keymap::default_map();
+
+        // Diff focused (Normal): diff border emphasized, panel border plain.
+        terminal.draw(|f| draw(f, &app, &keymap)).unwrap();
+        let (diff_hot, panel_hot) = top_border_hot(&terminal, focus, width, panel_start);
+        assert!(
+            diff_hot,
+            "diff border should be emphasized when diff focused"
+        );
+        assert!(!panel_hot, "panel border should be plain when diff focused");
+
+        // Panel focused: emphasis moves to the panel border.
+        app.apply(Action::FocusGitPanel);
+        assert_eq!(app.mode, Mode::Panel);
+        terminal.draw(|f| draw(f, &app, &keymap)).unwrap();
+        let (diff_hot, panel_hot) = top_border_hot(&terminal, focus, width, panel_start);
+        assert!(
+            panel_hot,
+            "panel border should be emphasized when panel focused"
+        );
+        assert!(!diff_hot, "diff border should be plain when panel focused");
+    }
+
+    /// Drives real `KeyEvent`s through `dispatch_key` — the exact path the
+    /// blocking event loop uses — proving the focus toggle, panel `j`/`k`
+    /// traversal across all three sections, Enter-on-file, and that the
+    /// diff-scope keys still dispatch identically while the panel is
+    /// unfocused. tmux is unavailable on this host, so this headless driver
+    /// stands in for the manual smoke transcript (see 02-task-03-smoke.txt).
+    #[test]
+    fn panel_focus_key_dispatch_smoke() {
+        let keymap = Keymap::default_map();
+        let mut pending: Option<KeyEvent> = None;
+        let mut app = panel_smoke_app();
+        let press = |app: &mut App, pending: &mut Option<KeyEvent>, code: KeyCode| {
+            let _ = dispatch_key(
+                app,
+                &keymap,
+                pending,
+                KeyEvent::new(code, KeyModifiers::NONE),
+            );
+        };
+
+        // Focus the panel.
+        assert_eq!(app.mode, Mode::Normal);
+        press(&mut app, &mut pending, KeyCode::Char('`'));
+        assert_eq!(app.mode, Mode::Panel);
+        assert_eq!(app.panel_cursor, 0); // src/a.rs (CHANGES)
+
+        // Traverse all three sections with `j`: a.rs -> b.rs -> notes.md
+        // (UNTRACKED) -> stash0 -> stash1, clamping at the last stash.
+        press(&mut app, &mut pending, KeyCode::Char('j'));
+        assert_eq!(app.panel_cursor, 1); // src/b.rs
+        press(&mut app, &mut pending, KeyCode::Char('j'));
+        assert_eq!(app.panel_cursor, 2); // notes.md (crossed into UNTRACKED)
+        press(&mut app, &mut pending, KeyCode::Char('j'));
+        assert_eq!(app.panel_cursor, 3); // stash0 (crossed into STASHES)
+        press(&mut app, &mut pending, KeyCode::Char('j'));
+        assert_eq!(app.panel_cursor, 4); // stash1
+        press(&mut app, &mut pending, KeyCode::Char('j'));
+        assert_eq!(app.panel_cursor, 4); // clamped at the bottom
+        press(&mut app, &mut pending, KeyCode::Char('k'));
+        assert_eq!(app.panel_cursor, 3); // back up onto a stash
+
+        // Enter on a stash is a no-op; still focused.
+        press(&mut app, &mut pending, KeyCode::Enter);
+        assert_eq!(app.mode, Mode::Panel);
+
+        // Move onto src/b.rs and Enter: selects it, focus returns to the diff.
+        press(&mut app, &mut pending, KeyCode::Char('k')); // -> notes.md (2)
+        press(&mut app, &mut pending, KeyCode::Char('k')); // -> src/b.rs (1)
+        assert_eq!(app.panel_cursor, 1);
+        press(&mut app, &mut pending, KeyCode::Enter);
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.view.selected_file, 1); // src/b.rs
+
+        // With the panel unfocused, the diff-scope keys dispatch as before.
+        let cursor_before = app.view.cursor;
+        press(&mut app, &mut pending, KeyCode::Char('j')); // CursorDown
+        assert_eq!(app.view.cursor, cursor_before + 1);
+        press(&mut app, &mut pending, KeyCode::Char('k')); // CursorUp
+        assert_eq!(app.view.cursor, cursor_before);
+        press(&mut app, &mut pending, KeyCode::Char('s')); // staging panel
+        assert_eq!(app.mode, Mode::Staging);
+        press(&mut app, &mut pending, KeyCode::Char('s')); // close it
+        assert_eq!(app.mode, Mode::Normal);
+        // `space` (ToggleStage) and `gd` still dispatch (no git/LSP backend
+        // here, so they degrade to a footer message rather than acting) —
+        // the point is they resolve and run without panicking, unchanged.
+        press(&mut app, &mut pending, KeyCode::Char(' '));
+        assert_eq!(app.mode, Mode::Normal);
+        press(&mut app, &mut pending, KeyCode::Char('g'));
+        press(&mut app, &mut pending, KeyCode::Char('d'));
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    /// Regenerates `02-proofs/02-task-03-smoke.txt` from a real key-dispatch
+    /// run, rendering a `TestBackend` frame at each step and recording the
+    /// observed state. Ignored by default (it writes into the repo); run with
+    /// `cargo test capture_task_03_smoke_transcript -- --ignored` to refresh.
+    #[test]
+    #[ignore = "writes the smoke transcript proof artifact; run explicitly"]
+    fn capture_task_03_smoke_transcript() {
+        use std::fmt::Write as _;
+
+        let keymap = Keymap::default_map();
+        let mut pending: Option<KeyEvent> = None;
+        let mut app = panel_smoke_app();
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let mut out = String::new();
+        out.push_str("Task 3.0 smoke transcript — git panel focus & navigation\n");
+        out.push_str("Driver: real crossterm KeyEvents through ui::dispatch_key\n");
+        out.push_str("(the same handler the blocking event loop calls).\n");
+        out.push_str("tmux unavailable on this host; headless TestBackend fallback.\n\n");
+
+        let mut step = 0;
+        // One flat closure: optionally dispatch a key, render a frame, and
+        // record observed state. All mutable state is passed in as params so
+        // nothing aliases across calls.
+        let mut do_step = |app: &mut App,
+                           pending: &mut Option<KeyEvent>,
+                           terminal: &mut Terminal<TestBackend>,
+                           out: &mut String,
+                           code: Option<KeyCode>,
+                           label: &str| {
+            if let Some(code) = code {
+                let _ = dispatch_key(
+                    app,
+                    &keymap,
+                    pending,
+                    KeyEvent::new(code, KeyModifiers::NONE),
+                );
+            }
+            terminal.draw(|f| draw(f, app, &keymap)).unwrap();
+            let buf = terminal.backend().buffer().clone();
+            let text: String = buf.content().iter().map(|c| c.symbol()).collect();
+            let pane = if app.git_panel_focused() {
+                "git panel"
+            } else {
+                "diff view"
+            };
+            writeln!(out, "step {step}: {label}").unwrap();
+            writeln!(
+                out,
+                "  mode={:?} focus={pane} panel_cursor={} selected_file={} diff_cursor={}",
+                app.mode, app.panel_cursor, app.view.selected_file, app.view.cursor
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "  frame shows: CHANGES={} UNTRACKED={} STASHES={} branch_hdr={}",
+                text.contains("CHANGES"),
+                text.contains("UNTRACKED"),
+                text.contains("STASHES"),
+                text.contains("git: main")
+            )
+            .unwrap();
+            out.push('\n');
+            step += 1;
+        };
+
+        let steps: &[(Option<KeyCode>, &str)] = &[
+            (None, "initial (diff focused)"),
+            (Some(KeyCode::Char('`')), "press ` — focus git panel"),
+            (
+                Some(KeyCode::Char('j')),
+                "press j — CHANGES row 2 (src/b.rs)",
+            ),
+            (
+                Some(KeyCode::Char('j')),
+                "press j — cross into UNTRACKED (notes.md)",
+            ),
+            (
+                Some(KeyCode::Char('j')),
+                "press j — cross into STASHES (stash 0)",
+            ),
+            (Some(KeyCode::Char('j')), "press j — STASHES (stash 1)"),
+            (
+                Some(KeyCode::Enter),
+                "press Enter on stash — no-op, stays focused",
+            ),
+            (Some(KeyCode::Char('k')), "press k — back up"),
+            (
+                Some(KeyCode::Char('k')),
+                "press k — onto UNTRACKED (notes.md)",
+            ),
+            (
+                Some(KeyCode::Char('k')),
+                "press k — onto CHANGES (src/b.rs)",
+            ),
+            (
+                Some(KeyCode::Enter),
+                "press Enter on file — jump diff, return focus",
+            ),
+            (
+                Some(KeyCode::Char('j')),
+                "press j (unfocused) — diff cursor scrolls",
+            ),
+            (
+                Some(KeyCode::Char('s')),
+                "press s (unfocused) — staging panel opens",
+            ),
+            (Some(KeyCode::Char('s')), "press s — staging panel closes"),
+        ];
+        for (code, label) in steps {
+            do_step(
+                &mut app,
+                &mut pending,
+                &mut terminal,
+                &mut out,
+                *code,
+                label,
+            );
+        }
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/specs/02-spec-git-panel/02-proofs/02-task-03-smoke.txt");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, out).unwrap();
     }
 }
