@@ -46,9 +46,12 @@ pub enum Mode {
     List,
     /// The staging panel is open and focused.
     Staging,
-    /// The git panel (sidebar) holds focus: its cursor navigates the
-    /// CHANGES/UNTRACKED/STASHES sections, bypassing the diff-scope keymap.
-    Panel,
+    /// The git panel (sidebar) holds focus: `cursor` navigates the
+    /// CHANGES/UNTRACKED/STASHES sections (an index into the flattened list
+    /// of navigable panel rows), bypassing the diff-scope keymap. Reset to 0
+    /// on entry; only exists while the panel is focused, so it can never carry
+    /// a stale index while inactive.
+    Panel { cursor: usize },
     /// The search input is open in the footer, composing a pattern.
     Search,
     /// The LSP peek overlay (`gd`/`gr`/`K` results) is open.
@@ -115,11 +118,6 @@ pub struct App {
     pub staged_states: HashMap<String, StagedState>,
     /// The focused row index into `staged` in the staging panel.
     pub staging_cursor: usize,
-    /// The git panel's cursor: an index into the flattened list of navigable
-    /// panel rows (CHANGES + UNTRACKED files, then STASHES; section headers
-    /// are skipped). Only meaningful while `mode == Mode::Panel`; clamped on
-    /// render so a stale index never points past the list.
-    pub panel_cursor: usize,
     /// A transient one-line message for the status footer (errors, no-op
     /// explanations, success echoes). Cleared on the next keypress.
     pub status_message: Option<String>,
@@ -225,7 +223,6 @@ impl App {
             untracked_paths: Vec::new(),
             staged_states: HashMap::new(),
             staging_cursor: 0,
-            panel_cursor: 0,
             status_message: None,
             stage_ops: None,
             theme: Theme::default(),
@@ -315,6 +312,17 @@ impl App {
     /// requests degrade to a footer message.
     pub fn set_repo_root(&mut self, root: PathBuf) {
         self.repo_root = Some(root);
+    }
+
+    /// Whether a keyboard-capturing overlay is currently up: the help overlay
+    /// (`help_open`), the Compose modal, or the LSP peek overlay. While one
+    /// is, it shadows the diff keymap and `q` is inert — an open overlay never
+    /// quits the app. A single predicate so this "is an overlay up?" check,
+    /// otherwise spread across `mode` and `help_open`, can't drift between
+    /// call sites. The command-log pane is deliberately excluded: it is a
+    /// bottom pane, not a full-screen overlay, and never captures `q`.
+    pub(super) fn overlay_active(&self) -> bool {
+        self.help_open || matches!(self.mode, Mode::Compose | Mode::Peek)
     }
 
     /// Selects the file whose path is `path`: expands its section if

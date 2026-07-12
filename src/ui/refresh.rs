@@ -283,5 +283,15 @@ impl App {
             self.view.ensure_visible();
         }
         self.staging_cursor = self.staging_cursor.min(self.staged.len().saturating_sub(1));
+        // The git panel's navigable rows (files + stashes) can shrink on a
+        // refresh; re-clamp the focused panel cursor here — the single place
+        // it needs clamping outside its own motion helpers — so the panel
+        // renderer can trust it. Inactive (unfocused) panels carry no cursor.
+        if matches!(self.mode, Mode::Panel { .. }) {
+            let len = super::git_panel::navigable_rows(self).len();
+            if let Mode::Panel { cursor } = &mut self.mode {
+                *cursor = (*cursor).min(len.saturating_sub(1));
+            }
+        }
     }
 }

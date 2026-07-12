@@ -683,7 +683,7 @@ fn focused_pane_border_emphasis_follows_the_toggle() {
 
     // Panel focused: emphasis moves to the panel border.
     app.apply(Action::FocusGitPanel);
-    assert_eq!(app.mode, Mode::Panel);
+    assert!(matches!(app.mode, Mode::Panel { .. }));
     terminal.draw(|f| draw(f, &app, &keymap)).unwrap();
     let (diff_hot, panel_hot) = top_border_hot(&terminal, focus, width, panel_start);
     assert!(
@@ -716,32 +716,32 @@ fn panel_focus_key_dispatch_smoke() {
     // Focus the panel.
     assert_eq!(app.mode, Mode::Normal);
     press(&mut app, &mut pending, KeyCode::Char('`'));
-    assert_eq!(app.mode, Mode::Panel);
-    assert_eq!(app.panel_cursor, 0); // src/a.rs (CHANGES)
+    assert!(matches!(app.mode, Mode::Panel { .. }));
+    assert_eq!(app.panel_cursor(), 0); // src/a.rs (CHANGES)
 
     // Traverse all three sections with `j`: a.rs -> b.rs -> notes.md
     // (UNTRACKED) -> stash0 -> stash1, clamping at the last stash.
     press(&mut app, &mut pending, KeyCode::Char('j'));
-    assert_eq!(app.panel_cursor, 1); // src/b.rs
+    assert_eq!(app.panel_cursor(), 1); // src/b.rs
     press(&mut app, &mut pending, KeyCode::Char('j'));
-    assert_eq!(app.panel_cursor, 2); // notes.md (crossed into UNTRACKED)
+    assert_eq!(app.panel_cursor(), 2); // notes.md (crossed into UNTRACKED)
     press(&mut app, &mut pending, KeyCode::Char('j'));
-    assert_eq!(app.panel_cursor, 3); // stash0 (crossed into STASHES)
+    assert_eq!(app.panel_cursor(), 3); // stash0 (crossed into STASHES)
     press(&mut app, &mut pending, KeyCode::Char('j'));
-    assert_eq!(app.panel_cursor, 4); // stash1
+    assert_eq!(app.panel_cursor(), 4); // stash1
     press(&mut app, &mut pending, KeyCode::Char('j'));
-    assert_eq!(app.panel_cursor, 4); // clamped at the bottom
+    assert_eq!(app.panel_cursor(), 4); // clamped at the bottom
     press(&mut app, &mut pending, KeyCode::Char('k'));
-    assert_eq!(app.panel_cursor, 3); // back up onto a stash
+    assert_eq!(app.panel_cursor(), 3); // back up onto a stash
 
     // Enter on a stash is a no-op; still focused.
     press(&mut app, &mut pending, KeyCode::Enter);
-    assert_eq!(app.mode, Mode::Panel);
+    assert!(matches!(app.mode, Mode::Panel { .. }));
 
     // Move onto src/b.rs and Enter: selects it, focus returns to the diff.
     press(&mut app, &mut pending, KeyCode::Char('k')); // -> notes.md (2)
     press(&mut app, &mut pending, KeyCode::Char('k')); // -> src/b.rs (1)
-    assert_eq!(app.panel_cursor, 1);
+    assert_eq!(app.panel_cursor(), 1);
     press(&mut app, &mut pending, KeyCode::Enter);
     assert_eq!(app.mode, Mode::Normal);
     assert_eq!(app.view.selected_file, 1); // src/b.rs
@@ -790,7 +790,7 @@ fn quit_family_quits_from_focused_panel() {
     for (ev, want) in cases {
         let mut app = panel_smoke_app();
         app.apply(Action::FocusGitPanel);
-        assert_eq!(app.mode, Mode::Panel);
+        assert!(matches!(app.mode, Mode::Panel { .. }));
         match dispatch_key(&mut app, &keymap, &mut pending, ev) {
             Flow::Quit(outcome) => assert_eq!(outcome, want, "wrong quit outcome for {ev:?}"),
             Flow::Continue => panic!("{ev:?} should quit from the focused panel"),
@@ -874,11 +874,11 @@ fn at_toggles_command_log_from_both_scopes_and_renders_in_bottom_slot() {
 
     // Panel scope toggles it too: focus the panel, then `@`.
     dispatch_key(&mut app, &keymap, &mut pending, backtick);
-    assert_eq!(app.mode, Mode::Panel);
+    assert!(matches!(app.mode, Mode::Panel { .. }));
     dispatch_key(&mut app, &keymap, &mut pending, at);
     assert!(app.command_log_open);
     // Still focused on the panel — the log toggle is orthogonal to focus.
-    assert_eq!(app.mode, Mode::Panel);
+    assert!(matches!(app.mode, Mode::Panel { .. }));
 }
 
 /// The running indicator shows in the footer while a remote op is in
@@ -972,7 +972,10 @@ fn capture_task_03_smoke_transcript() {
         writeln!(
             out,
             "  mode={:?} focus={pane} panel_cursor={} selected_file={} diff_cursor={}",
-            app.mode, app.panel_cursor, app.view.selected_file, app.view.cursor
+            app.mode,
+            app.panel_cursor(),
+            app.view.selected_file,
+            app.view.cursor
         )
         .unwrap();
         writeln!(

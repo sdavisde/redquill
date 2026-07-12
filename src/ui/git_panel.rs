@@ -286,12 +286,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     // When focused, the panel cursor drives the highlight; otherwise the
-    // selected diff file does (the old passive behavior).
+    // selected diff file does (the old passive behavior). The panel cursor is
+    // kept in range at its mutation points and re-clamped on every refresh
+    // (see `App::apply_snapshot`), so no clamp is needed here.
     let highlight = if focused {
-        let cursor = app
-            .panel_cursor
-            .min(nav_item_indices.len().saturating_sub(1));
-        nav_item_indices.get(cursor).copied()
+        nav_item_indices.get(app.panel_cursor()).copied()
     } else {
         selected_row
     };
@@ -349,34 +348,47 @@ impl App {
     /// Whether the git panel currently holds focus (drives border emphasis
     /// and which pane's cursor renders).
     pub fn git_panel_focused(&self) -> bool {
-        matches!(self.mode, Mode::Panel)
+        matches!(self.mode, Mode::Panel { .. })
+    }
+
+    /// The git panel's cursor when the panel is focused, else 0. The cursor
+    /// lives in [`Mode::Panel`], so an unfocused panel has none to go stale;
+    /// [`render`] and [`App::panel_select`] read it only while focused.
+    pub(super) fn panel_cursor(&self) -> usize {
+        match self.mode {
+            Mode::Panel { cursor } => cursor,
+            _ => 0,
+        }
     }
 
     /// Toggles git-panel focus: from Normal/Visual it focuses the panel
-    /// (resetting its cursor to the top); from the focused panel it returns
+    /// (its cursor starts at the top); from the focused panel it returns
     /// to Normal. A no-op while another modal (Compose/List/Staging/Search/
     /// Peek) owns the keyboard, mirroring the other panel toggles.
     pub(super) fn toggle_git_panel(&mut self) {
         match self.mode {
-            Mode::Panel => self.mode = Mode::Normal,
+            Mode::Panel { .. } => self.mode = Mode::Normal,
             Mode::Compose | Mode::List | Mode::Staging | Mode::Search | Mode::Peek => {}
-            Mode::Normal | Mode::Visual { .. } => {
-                self.panel_cursor = 0;
-                self.mode = Mode::Panel;
-            }
+            Mode::Normal | Mode::Visual { .. } => self.mode = Mode::Panel { cursor: 0 },
         }
     }
 
     /// Moves the panel cursor down one navigable row, clamped at the last.
+    /// A no-op unless the panel is focused.
     pub fn panel_move_down(&mut self) {
         let len = navigable_rows(self).len();
-        self.panel_cursor = moved_cursor(self.panel_cursor, len, true);
+        if let Mode::Panel { cursor } = &mut self.mode {
+            *cursor = moved_cursor(*cursor, len, true);
+        }
     }
 
     /// Moves the panel cursor up one navigable row, clamped at the first.
+    /// A no-op unless the panel is focused.
     pub fn panel_move_up(&mut self) {
         let len = navigable_rows(self).len();
-        self.panel_cursor = moved_cursor(self.panel_cursor, len, false);
+        if let Mode::Panel { cursor } = &mut self.mode {
+            *cursor = moved_cursor(*cursor, len, false);
+        }
     }
 
     /// Acts on the panel cursor's current row: a file row scrolls the
@@ -385,7 +397,7 @@ impl App {
     /// is a no-op, leaving the panel focused.
     pub fn panel_select(&mut self) {
         let rows = navigable_rows(self);
-        if let Some(PanelRow::File(i)) = rows.get(self.panel_cursor) {
+        if let Some(PanelRow::File(i)) = rows.get(self.panel_cursor()) {
             let path = self.view.files[*i].path.clone();
             self.select_file_by_path(&path);
             self.mode = Mode::Normal;

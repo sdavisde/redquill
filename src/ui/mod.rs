@@ -161,17 +161,18 @@ fn dispatch_key(
         Mode::Compose => modes::handle_compose_key(app, key),
         Mode::List => modes::handle_list_key(app, key),
         Mode::Staging => modes::handle_staging_key(app, key),
-        Mode::Panel => return modes::handle_panel_key(app, key, keymap),
+        Mode::Panel { .. } => return modes::handle_panel_key(app, key, keymap),
         Mode::Search => modes::handle_search_key(app, key),
         Mode::Peek => modes::handle_peek_key(app, key),
         Mode::Normal | Mode::Visual { .. } => {
-            // While the help overlay is open it captures keys: navigation
-            // keys scroll it (it can outgrow the screen), Esc/Enter/`?` close
-            // it (`q` is inert — an open overlay never quits the app). This
-            // shadows the diff keymap so `j`/`k` scroll the
-            // overlay rather than the diff underneath. Any pending `g` prefix
-            // is irrelevant here, so drop it.
-            if app.help_open {
+            // While an overlay is open it captures keys — here that overlay
+            // can only be the help overlay, since Compose and Peek have their
+            // own match arms above. Navigation keys scroll it (it can outgrow
+            // the screen), Esc/Enter/`?` close it (`q` is inert — an open
+            // overlay never quits the app). This shadows the diff keymap so
+            // `j`/`k` scroll the overlay rather than the diff underneath. Any
+            // pending `g` prefix is irrelevant here, so drop it.
+            if app.overlay_active() {
                 *pending = None;
                 handle_help_key(app, key);
                 return Flow::Continue;
