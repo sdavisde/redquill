@@ -6,8 +6,13 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::annotate::{AnnotationStore, Side, Target};
-use crate::diff::{FileDiff, LineOrigin};
+use crate::annotate::{AnnotationStore, Target};
+// `Side` is only referenced by test-only helpers here (and by the `super::*`
+// re-export the `tests` module relies on), so gate it to avoid an unused
+// import in the production build.
+#[cfg(test)]
+use crate::annotate::Side;
+use crate::diff::FileDiff;
 use crate::git::{
     BranchStatus, CommitSummary, DiffTarget, RawFilePatch, RemoteOp, StashEntry, remote_command,
 };
@@ -22,10 +27,11 @@ use super::keymap::Action;
 use super::lsp_ops::LspClient;
 use super::peek::{PeekKind, PeekState};
 use super::refresh::InFlightRefresh;
-use super::rows::{LineRow, Row, hunk_span};
+use super::rows::Row;
 use super::search::SearchState;
 use super::stage_ops::{ReviewSnapshot, StageOps, StagedFile, StagedState};
 use super::syntax::HighlightCache;
+use super::targeting;
 use super::theme::Theme;
 
 /// The interaction mode. Normal/Visual bindings dispatch through the
@@ -46,9 +52,12 @@ pub enum Mode {
     List,
     /// The staging panel is open and focused.
     Staging,
-    /// The git panel (sidebar) holds focus: its cursor navigates the
-    /// CHANGES/UNTRACKED/STASHES sections, bypassing the diff-scope keymap.
-    Panel,
+    /// The git panel (sidebar) holds focus: `cursor` navigates the
+    /// CHANGES/UNTRACKED/STASHES sections (an index into the flattened list
+    /// of navigable panel rows), bypassing the diff-scope keymap. Reset to 0
+    /// on entry; only exists while the panel is focused, so it can never carry
+    /// a stale index while inactive.
+    Panel { cursor: usize },
     /// The search input is open in the footer, composing a pattern.
     Search,
     /// The LSP peek overlay (`gd`/`gr`/`K` results) is open.
@@ -115,11 +124,6 @@ pub struct App {
     pub staged_states: HashMap<String, StagedState>,
     /// The focused row index into `staged` in the staging panel.
     pub staging_cursor: usize,
-    /// The git panel's cursor: an index into the flattened list of navigable
-    /// panel rows (CHANGES + UNTRACKED files, then STASHES; section headers
-    /// are skipped). Only meaningful while `mode == Mode::Panel`; clamped on
-    /// render so a stale index never points past the list.
-    pub panel_cursor: usize,
     /// A transient one-line message for the status footer (errors, no-op
     /// explanations, success echoes). Cleared on the next keypress.
     pub status_message: Option<String>,
@@ -225,7 +229,6 @@ impl App {
             untracked_paths: Vec::new(),
             staged_states: HashMap::new(),
             staging_cursor: 0,
-            panel_cursor: 0,
             status_message: None,
             stage_ops: None,
             theme: Theme::default(),
@@ -315,6 +318,17 @@ impl App {
     /// requests degrade to a footer message.
     pub fn set_repo_root(&mut self, root: PathBuf) {
         self.repo_root = Some(root);
+    }
+
+    /// Whether a keyboard-capturing overlay is currently up: the help overlay
+    /// (`help_open`), the Compose modal, or the LSP peek overlay. While one
+    /// is, it shadows the diff keymap and `q` is inert — an open overlay never
+    /// quits the app. A single predicate so this "is an overlay up?" check,
+    /// otherwise spread across `mode` and `help_open`, can't drift between
+    /// call sites. The command-log pane is deliberately excluded: it is a
+    /// bottom pane, not a full-screen overlay, and never captures `q`.
+    pub(super) fn overlay_active(&self) -> bool {
+        self.help_open || matches!(self.mode, Mode::Compose | Mode::Peek)
     }
 
     /// Selects the file whose path is `path`: expands its section if
@@ -510,62 +524,15 @@ impl App {
     /// cursor never addresses).
     pub fn target_for_cursor(&self) -> Option<Target> {
         let file = self.view.files.get(self.view.file_of_cursor())?;
-        match self.view.rows.get(self.view.cursor)? {
-            Row::Line(line) => line_target(&file.path, line),
-            Row::HunkHeader { hunk_index, .. } => self.hunk_target(*hunk_index),
-            Row::FileHeader { .. } | Row::Binary => Some(Target::file(&file.path)),
-            Row::Annotation { .. } => None,
-        }
-    }
-
-    fn hunk_target(&self, hunk_index: usize) -> Option<Target> {
-        let file = self.view.files.get(self.view.file_of_cursor())?;
-        let hunk = file.hunks.get(hunk_index)?;
-        let (start, end) = hunk_span(hunk);
-        Target::hunk(&file.path, start, end).ok()
+        targeting::target_for_cursor(file, &self.view.rows, self.view.cursor)
     }
 
     /// The annotation target for a [`Mode::Visual`] selection between
-    /// `anchor` and the cursor (inclusive, order-independent). Only
-    /// `Row::Line` rows in the span count; selections spanning hunk/file
-    /// headers clamp to the line rows within them. If every selected line
-    /// is `Removed`, the target uses the old side and old-side line
-    /// numbers; otherwise it uses the new side and the new-side line
-    /// numbers of the non-removed rows the selection spans. `None` if the
-    /// selection covers no line rows at all.
+    /// `anchor` and the cursor. Gathers the selected file and cursor and
+    /// delegates to [`targeting::target_for_visual`].
     pub fn target_for_visual(&self, anchor: usize) -> Option<Target> {
         let file = self.view.files.get(self.view.file_of_cursor())?;
-        let (lo, hi) = if anchor <= self.view.cursor {
-            (anchor, self.view.cursor)
-        } else {
-            (self.view.cursor, anchor)
-        };
-        let lines: Vec<&LineRow> = self.view.rows[lo..=hi]
-            .iter()
-            .filter_map(|r| match r {
-                Row::Line(l) => Some(l),
-                _ => None,
-            })
-            .collect();
-        if lines.is_empty() {
-            return None;
-        }
-
-        if lines.iter().all(|l| l.origin == LineOrigin::Removed) {
-            let nums: Vec<u32> = lines.iter().filter_map(|l| l.old_line).collect();
-            let start = *nums.iter().min()?;
-            let end = *nums.iter().max()?;
-            Target::range(&file.path, start, end, Side::Old).ok()
-        } else {
-            let nums: Vec<u32> = lines
-                .iter()
-                .filter(|l| l.origin != LineOrigin::Removed)
-                .filter_map(|l| l.new_line)
-                .collect();
-            let start = *nums.iter().min()?;
-            let end = *nums.iter().max()?;
-            Target::range(&file.path, start, end, Side::New).ok()
-        }
+        targeting::target_for_visual(file, &self.view.rows, self.view.cursor, anchor)
     }
 
     // -- Compose ---------------------------------------------------------
@@ -851,19 +818,10 @@ fn visual_mode_allows(action: Action) -> bool {
     )
 }
 
-/// The `Line` target for a diff line row: `Removed` lines anchor to the old
-/// side/number, `Added`/`Context` lines to the new side/number. `None` only
-/// if the row's own invariant (removed lines always carry `old_line`,
-/// non-removed lines always carry `new_line`) is somehow violated.
-fn line_target(path: &str, line: &LineRow) -> Option<Target> {
-    match line.origin {
-        LineOrigin::Removed => line.old_line.map(|n| Target::line(path, n, Side::Old)),
-        LineOrigin::Added | LineOrigin::Context => {
-            line.new_line.map(|n| Target::line(path, n, Side::New))
-        }
-    }
-}
-
 #[cfg(test)]
 #[path = "app_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "perf_tests.rs"]
+mod perf_tests;

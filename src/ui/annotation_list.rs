@@ -12,7 +12,7 @@ impl App {
     pub(super) fn toggle_list(&mut self) {
         match self.mode {
             Mode::List => self.mode = Mode::Normal,
-            Mode::Compose | Mode::Staging | Mode::Panel | Mode::Search | Mode::Peek => {}
+            Mode::Compose | Mode::Staging | Mode::Panel { .. } | Mode::Search | Mode::Peek => {}
             Mode::Normal | Mode::Visual { .. } => {
                 if !self.annotations.is_empty() {
                     self.list_cursor = self.list_cursor.min(self.annotations.len() - 1);

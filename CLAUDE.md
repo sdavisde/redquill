@@ -45,12 +45,15 @@ Keep these boundaries clean; they're the seams for testing and for future work:
 
 ## Conventions
 
-- TDD where the code is pure (git output parsing, diff model, annotation serialization): write the failing test first, commit tests with the code.
-- Integration tests build throwaway git repos in tempdirs via `std::process::Command` git calls; never test against the host repo.
-- No `unwrap()`/`expect()` outside tests; errors via `thiserror` in libraries, `anyhow` at the binary edge.
-- Every user-visible action must be reachable from the keymap and listed in the `?` help overlay — no hidden features.
-- Performance target: instant feel on a 5k-line diff; if a change makes scrolling or hunk-jumping perceptibly slower, it's a regression.
-- Conventional commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`).
+Generic Rust discipline (error handling, layering, state design, testing, concurrency, subprocess hygiene, commit gates) lives in the imported file below and applies in full:
+
+@docs/rust-best-practices.md
+
+Project-specific rules on top of it:
+
+- TDD applies to this repo's pure code: git output parsing, diff model, annotation serialization.
+- Every user-visible action must be reachable from the keymap and listed in the `?` help overlay — no hidden features. Modal key handlers and help hints are driven from the shared tables in `src/ui/modal_keys.rs`; add keys there, never as loose match arms.
+- Performance target: instant feel on a 5k-line diff; if a change makes scrolling or hunk-jumping perceptibly slower, it's a regression. The wall-clock tripwire tests in `src/ui/perf_tests.rs` enforce the complexity class — keep them passing, don't loosen budgets to make a regression fit.
 
 ## Roadmap order (work in this order unless told otherwise)
 

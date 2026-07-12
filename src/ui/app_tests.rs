@@ -2908,7 +2908,7 @@ fn focus_git_panel_toggles_mode_both_ways() {
     assert_eq!(app.mode, Mode::Normal);
     assert!(!app.git_panel_focused());
     app.apply(Action::FocusGitPanel);
-    assert_eq!(app.mode, Mode::Panel);
+    assert_eq!(app.mode, Mode::Panel { cursor: 0 });
     assert!(app.git_panel_focused());
     app.apply(Action::FocusGitPanel);
     assert_eq!(app.mode, Mode::Normal);
@@ -2918,9 +2918,15 @@ fn focus_git_panel_toggles_mode_both_ways() {
 #[test]
 fn focusing_the_panel_resets_its_cursor_to_top() {
     let mut app = panel_app();
-    app.panel_cursor = 3;
+    // The cursor lives in `Mode::Panel`, so entering panel mode always starts
+    // it at the top: focus, move it off the top, unfocus, then refocus.
     app.apply(Action::FocusGitPanel);
-    assert_eq!(app.panel_cursor, 0);
+    app.apply(Action::PanelCursorDown);
+    app.apply(Action::PanelCursorDown);
+    assert_eq!(app.panel_cursor(), 2);
+    app.apply(Action::FocusGitPanel); // unfocus
+    app.apply(Action::FocusGitPanel); // refocus
+    assert_eq!(app.panel_cursor(), 0);
 }
 
 #[test]
@@ -2928,15 +2934,15 @@ fn panel_cursor_moves_and_clamps_across_sections() {
     let mut app = panel_app();
     app.apply(Action::FocusGitPanel);
     // 5 navigable rows: a.rs, b.rs, notes.md, stash0, stash1.
-    assert_eq!(app.panel_cursor, 0);
+    assert_eq!(app.panel_cursor(), 0);
     app.apply(Action::PanelCursorUp); // clamps at top
-    assert_eq!(app.panel_cursor, 0);
+    assert_eq!(app.panel_cursor(), 0);
     for _ in 0..10 {
         app.apply(Action::PanelCursorDown);
     }
-    assert_eq!(app.panel_cursor, 4); // clamps at bottom (last stash)
+    assert_eq!(app.panel_cursor(), 4); // clamps at bottom (last stash)
     app.apply(Action::PanelCursorUp);
-    assert_eq!(app.panel_cursor, 3);
+    assert_eq!(app.panel_cursor(), 3);
 }
 
 #[test]
@@ -2955,7 +2961,7 @@ fn panel_enter_on_file_selects_it_and_returns_focus_to_diff() {
 fn panel_enter_on_untracked_file_selects_it() {
     let mut app = panel_app();
     app.apply(Action::FocusGitPanel);
-    app.panel_cursor = 2; // notes.md, the lone UNTRACKED row
+    app.mode = Mode::Panel { cursor: 2 }; // notes.md, the lone UNTRACKED row
     app.apply(Action::PanelSelect);
     assert_eq!(app.view.selected_file, 2);
     assert_eq!(app.mode, Mode::Normal);
@@ -2965,11 +2971,11 @@ fn panel_enter_on_untracked_file_selects_it() {
 fn panel_enter_on_stash_is_a_no_op_and_stays_focused() {
     let mut app = panel_app();
     app.apply(Action::FocusGitPanel);
-    app.panel_cursor = 3; // first stash row
+    app.mode = Mode::Panel { cursor: 3 }; // first stash row
     let selected_before = app.view.selected_file;
     app.apply(Action::PanelSelect);
     assert_eq!(app.view.selected_file, selected_before); // unchanged
-    assert_eq!(app.mode, Mode::Panel); // still focused on the panel
+    assert_eq!(app.mode, Mode::Panel { cursor: 3 }); // still focused on the panel
 }
 
 #[test]

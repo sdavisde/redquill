@@ -229,7 +229,7 @@ impl App {
     pub(super) fn toggle_staging_panel(&mut self) {
         match self.mode {
             Mode::Staging => self.mode = Mode::Normal,
-            Mode::Compose | Mode::List | Mode::Panel | Mode::Search | Mode::Peek => {}
+            Mode::Compose | Mode::List | Mode::Panel { .. } | Mode::Search | Mode::Peek => {}
             Mode::Normal | Mode::Visual { .. } => {
                 self.refresh_staged_list();
                 self.staging_cursor = self.staging_cursor.min(self.staged.len().saturating_sub(1));

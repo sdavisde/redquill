@@ -286,12 +286,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     // When focused, the panel cursor drives the highlight; otherwise the
-    // selected diff file does (the old passive behavior).
+    // selected diff file does (the old passive behavior). The panel cursor is
+    // kept in range at its mutation points and re-clamped on every refresh
+    // (see `App::apply_snapshot`), so no clamp is needed here.
     let highlight = if focused {
-        let cursor = app
-            .panel_cursor
-            .min(nav_item_indices.len().saturating_sub(1));
-        nav_item_indices.get(cursor).copied()
+        nav_item_indices.get(app.panel_cursor()).copied()
     } else {
         selected_row
     };
@@ -349,36 +348,51 @@ impl App {
     /// Whether the git panel currently holds focus (drives border emphasis
     /// and which pane's cursor renders).
     pub fn git_panel_focused(&self) -> bool {
-        matches!(self.mode, Mode::Panel)
+        matches!(self.mode, Mode::Panel { .. })
+    }
+
+    /// The git panel's cursor when the panel is focused, else 0. The cursor
+    /// lives in [`Mode::Panel`], so an unfocused panel has none to go stale;
+    /// [`render`] and [`App::panel_select`] read it only while focused.
+    pub(super) fn panel_cursor(&self) -> usize {
+        match self.mode {
+            Mode::Panel { cursor } => cursor,
+            _ => 0,
+        }
     }
 
     /// Toggles git-panel focus: from Normal/Visual it focuses the panel
-    /// (resetting its cursor to the top); from the focused panel it returns
+    /// (its cursor starts at the top); from the focused panel it returns
     /// to Normal. A no-op while another modal (Compose/List/Staging/Search/
     /// Peek) owns the keyboard, mirroring the other panel toggles.
     pub(super) fn toggle_git_panel(&mut self) {
         match self.mode {
-            Mode::Panel => self.mode = Mode::Normal,
+            Mode::Panel { .. } => self.mode = Mode::Normal,
             Mode::Compose | Mode::List | Mode::Staging | Mode::Search | Mode::Peek => {}
             Mode::Normal | Mode::Visual { .. } => {
-                self.panel_cursor = 0;
-                self.mode = Mode::Panel;
+                self.mode = Mode::Panel { cursor: 0 };
                 self.panel_follow();
             }
         }
     }
 
     /// Moves the panel cursor down one navigable row, clamped at the last.
+    /// A no-op unless the panel is focused.
     pub fn panel_move_down(&mut self) {
         let len = navigable_rows(self).len();
-        self.panel_cursor = moved_cursor(self.panel_cursor, len, true);
+        if let Mode::Panel { cursor } = &mut self.mode {
+            *cursor = moved_cursor(*cursor, len, true);
+        }
         self.panel_follow();
     }
 
     /// Moves the panel cursor up one navigable row, clamped at the first.
+    /// A no-op unless the panel is focused.
     pub fn panel_move_up(&mut self) {
         let len = navigable_rows(self).len();
-        self.panel_cursor = moved_cursor(self.panel_cursor, len, false);
+        if let Mode::Panel { cursor } = &mut self.mode {
+            *cursor = moved_cursor(*cursor, len, false);
+        }
         self.panel_follow();
     }
 
@@ -391,7 +405,7 @@ impl App {
     /// whether to also move focus (see [`App::panel_select`]).
     pub(super) fn panel_follow(&mut self) {
         let rows = navigable_rows(self);
-        if let Some(PanelRow::File(i)) = rows.get(self.panel_cursor)
+        if let Some(PanelRow::File(i)) = rows.get(self.panel_cursor())
             && *i != self.view.selected_file
         {
             let path = self.view.files[*i].path.clone();
@@ -405,7 +419,7 @@ impl App {
     /// panel focused.
     pub fn panel_select(&mut self) {
         let rows = navigable_rows(self);
-        if let Some(PanelRow::File(_)) = rows.get(self.panel_cursor) {
+        if let Some(PanelRow::File(_)) = rows.get(self.panel_cursor()) {
             self.panel_follow();
             self.mode = Mode::Normal;
         }
@@ -720,12 +734,11 @@ mod tests {
     #[test]
     fn panel_cursor_motion_follows_file_rows() {
         let mut app = mixed_app();
-        app.mode = Mode::Panel;
-        app.panel_cursor = 0; // a.rs, already selected (selected_file starts at 0)
+        app.mode = Mode::Panel { cursor: 0 }; // a.rs, already selected (selected_file starts at 0)
         app.panel_move_down(); // -> b.rs
-        assert_eq!(app.panel_cursor, 1);
+        assert_eq!(app.panel_cursor(), 1);
         assert_eq!(app.view.selected_file, 1);
-        assert_eq!(app.mode, Mode::Panel);
+        assert!(matches!(app.mode, Mode::Panel { .. }));
     }
 
     /// Moving onto a stash row leaves the diff's file selection exactly
@@ -733,14 +746,13 @@ mod tests {
     #[test]
     fn panel_cursor_on_stash_row_leaves_diff_selection() {
         let mut app = mixed_app();
-        app.mode = Mode::Panel;
-        app.panel_cursor = 1;
+        app.mode = Mode::Panel { cursor: 1 };
         app.panel_follow(); // -> b.rs selected
         assert_eq!(app.view.selected_file, 1);
         app.panel_move_down(); // -> notes.md
         assert_eq!(app.view.selected_file, 2);
         app.panel_move_down(); // -> stash 0, nothing to follow to
-        assert_eq!(app.panel_cursor, 3);
+        assert_eq!(app.panel_cursor(), 3);
         assert_eq!(app.view.selected_file, 2); // unchanged from the last file row
     }
 
@@ -748,9 +760,9 @@ mod tests {
     #[test]
     fn panel_follow_on_empty_panel_is_noop() {
         let mut app = App::new(vec![]);
-        app.mode = Mode::Panel;
+        app.mode = Mode::Panel { cursor: 0 };
         app.panel_follow();
-        assert_eq!(app.panel_cursor, 0);
+        assert_eq!(app.panel_cursor(), 0);
         assert_eq!(app.view.selected_file, 0);
     }
 
@@ -763,8 +775,8 @@ mod tests {
         assert!(app.select_file_by_path("b.rs"));
         assert_eq!(app.view.selected_file, 1);
         app.toggle_git_panel();
-        assert_eq!(app.mode, Mode::Panel);
-        assert_eq!(app.panel_cursor, 0);
+        assert!(matches!(app.mode, Mode::Panel { .. }));
+        assert_eq!(app.panel_cursor(), 0);
         assert_eq!(app.view.selected_file, 0); // followed back to a.rs
     }
 
@@ -776,10 +788,9 @@ mod tests {
         app.view.set_collapsed("b.rs", true);
         app.rebuild_rows();
         assert!(app.view.is_collapsed("b.rs"));
-        app.mode = Mode::Panel;
-        app.panel_cursor = 0;
+        app.mode = Mode::Panel { cursor: 0 };
         app.panel_move_down(); // onto b.rs's row
-        assert_eq!(app.panel_cursor, 1);
+        assert_eq!(app.panel_cursor(), 1);
         assert_eq!(app.view.selected_file, 1);
         assert!(!app.view.is_collapsed("b.rs"));
     }
@@ -788,8 +799,7 @@ mod tests {
     #[test]
     fn enter_on_file_row_returns_focus_with_file_selected() {
         let mut app = mixed_app();
-        app.mode = Mode::Panel;
-        app.panel_cursor = 1; // b.rs
+        app.mode = Mode::Panel { cursor: 1 }; // b.rs
         app.panel_select();
         assert_eq!(app.mode, Mode::Normal);
         assert_eq!(app.view.selected_file, 1);
@@ -799,9 +809,8 @@ mod tests {
     #[test]
     fn enter_on_stash_row_is_noop_keeping_panel_focus() {
         let mut app = mixed_app();
-        app.mode = Mode::Panel;
-        app.panel_cursor = 3; // stash 0
+        app.mode = Mode::Panel { cursor: 3 }; // stash 0
         app.panel_select();
-        assert_eq!(app.mode, Mode::Panel);
+        assert!(matches!(app.mode, Mode::Panel { .. }));
     }
 }
