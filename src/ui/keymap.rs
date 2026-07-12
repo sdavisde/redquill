@@ -323,7 +323,7 @@ impl Keymap {
                 d(
                     KeySeq::one(Char('`'), none),
                     FocusGitPanel,
-                    "Focus git panel",
+                    "Open git panel",
                 ),
                 d(
                     KeySeq::one(Char('@'), none),
@@ -376,7 +376,7 @@ impl Keymap {
                 p(
                     KeySeq::one(Char('`'), none),
                     FocusGitPanel,
-                    "Return focus to diff",
+                    "Close git panel",
                 ),
                 p(
                     KeySeq::one(Char('j'), none),

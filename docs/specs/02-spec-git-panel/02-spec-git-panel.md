@@ -82,7 +82,7 @@ The goal is that a reviewer never leaves redquill to answer "what branch am I on
 
 ## Design Considerations
 
-Panel layout (replacing the current sidebar in its existing slot and width):
+Panel layout (replacing the current sidebar in its existing slot and width). **Ratified update:** the panel occupies that slot only while focused (`Mode::Panel`) — it is hidden by default, showing/hiding exactly follows focus (backtick to open+focus, backtick or Enter-on-file to close+hide), and the diff pane takes the full width whenever the panel is closed. A persistent footer hint (`` ` git panel``) keeps the binding discoverable while the panel is hidden.
 
 ```
 ┌─ git: main ↑2↓1 ─┐

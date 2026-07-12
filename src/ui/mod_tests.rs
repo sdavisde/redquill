@@ -29,10 +29,12 @@ index 111..222 100644
     .unwrap()
 }
 
-/// Renders a small `App` to a `TestBackend` and asserts the sidebar and
-/// diff pane both show expected content. No real terminal is touched.
+/// Renders a small `App` to a `TestBackend` and asserts the diff pane shows
+/// expected content. No real terminal is touched. The git panel sidebar is
+/// hidden by default (see `sidebar_hidden_in_normal_mode_shown_when_panel_focused`
+/// below), so it has nothing to assert here.
 #[test]
-fn renders_sidebar_and_diff_pane_content() {
+fn renders_diff_pane_content() {
     let backend = TestBackend::new(80, 20);
     let mut terminal = Terminal::new(backend).unwrap();
     let app = App::new(vec![sample_file()]);
@@ -43,10 +45,33 @@ fn renders_sidebar_and_diff_pane_content() {
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
 
-    assert!(content.contains("files"));
     assert!(content.contains("src/main.rs"));
     assert!(content.contains("old()"));
     assert!(content.contains("new()"));
+}
+
+/// The git panel sidebar is hidden by default (`Mode::Normal`) — the diff
+/// pane gets the full width and none of the sidebar's content (its
+/// `[N files]` footer) renders — and appears only once the panel is
+/// focused (`Mode::Panel`, entered via the backtick toggle).
+#[test]
+fn sidebar_hidden_in_normal_mode_shown_when_panel_focused() {
+    let backend = TestBackend::new(80, 20);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+
+    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+    assert!(!content.contains("[1 files]"));
+
+    app.apply(Action::FocusGitPanel);
+    assert!(matches!(app.mode, Mode::Panel { .. }));
+
+    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
     assert!(content.contains("[1 files]"));
 }
 
@@ -467,15 +492,19 @@ fn annotation_renders_inline_and_in_list_panel() {
     // Inline display row in the diff pane.
     assert!(content.contains("question"));
     assert!(content.contains("why swap old() for new()?"));
-    // List panel entry (mode is List, so the panel is rendered).
+    // List panel entry (mode is List, so the panel is rendered). The
+    // `[1 notes]` count lives in the git panel sidebar, which is hidden
+    // here since List mode isn't Mode::Panel — see
+    // `sidebar_hidden_in_normal_mode_shown_when_panel_focused`.
     assert!(content.contains("src/main.rs"));
-    assert!(content.contains("[1 notes]"));
 }
 
-/// With a staged file present and the staging panel open, one frame
-/// shows all three staging surfaces: the sidebar's staged `●`
-/// indicator and `[N staged]` footer count, the staging panel entry,
-/// and the transient status-footer message.
+/// With a staged file present and the staging panel open, one frame shows
+/// both staging surfaces: the staging panel entry and the transient
+/// status-footer message. The git panel sidebar's staged `●` indicator and
+/// `[N staged]` footer count are covered separately (Staging mode isn't
+/// Mode::Panel, so the sidebar is hidden here) — see
+/// `sidebar_staged_indicator_renders_when_panel_focused`.
 #[test]
 fn staging_panel_indicator_and_footer_render() {
     let backend = TestBackend::new(100, 30);
@@ -496,11 +525,36 @@ fn staging_panel_indicator_and_footer_render() {
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
 
-    assert!(content.contains("\u{25cf}")); // sidebar staged indicator
-    assert!(content.contains("[1 staged]")); // sidebar footer count
     assert!(content.contains("staged")); // staging panel title
     assert!(content.contains("M src/main.rs")); // panel entry
     assert!(content.contains("staged hunk")); // status footer message
+}
+
+/// The sidebar's staged `●` indicator and `[N staged]` footer count render
+/// once the git panel is focused (`Mode::Panel`) — the sidebar's only
+/// visibility condition post-hide-by-default.
+#[test]
+fn sidebar_staged_indicator_renders_when_panel_focused() {
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    app.staged = vec![StagedFile {
+        path: "src/main.rs".to_string(),
+        letter: 'M',
+    }];
+    app.staged_states
+        .insert("src/main.rs".to_string(), stage_ops::StagedState::Full);
+    app.apply(Action::FocusGitPanel);
+    assert!(matches!(app.mode, Mode::Panel { .. }));
+    let keymap = Keymap::default_map();
+
+    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+    assert!(content.contains("\u{25cf}")); // sidebar staged indicator
+    assert!(content.contains("[1 staged]")); // sidebar footer count
 }
 
 #[test]
@@ -785,7 +839,9 @@ fn top_border_hot(
 }
 
 /// The focused pane's border is emphasized, and the toggle moves that
-/// emphasis from the diff pane to the git panel and back.
+/// emphasis from the diff pane to the git panel and back. Since the panel
+/// is hidden unless focused (see `split_layout`), this also exercises the
+/// sidebar appearing/disappearing across the same toggle.
 #[test]
 fn focused_pane_border_emphasis_follows_the_toggle() {
     let width = 80usize;
@@ -796,25 +852,49 @@ fn focused_pane_border_emphasis_follows_the_toggle() {
     let focus = app.theme.focused_border;
     let keymap = Keymap::default_map();
 
-    // Diff focused (Normal): diff border emphasized, panel border plain.
+    // Diff focused (Normal): the sidebar is hidden entirely, so the diff
+    // pane spans the full width with its border emphasized.
     terminal.draw(|f| draw(f, &app, &keymap)).unwrap();
-    let (diff_hot, panel_hot) = top_border_hot(&terminal, focus, width, panel_start);
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+    assert!(
+        !content.contains("git: main"),
+        "sidebar should be hidden when diff focused"
+    );
+    let (diff_hot, _) = top_border_hot(&terminal, focus, width, panel_start);
     assert!(
         diff_hot,
         "diff border should be emphasized when diff focused"
     );
-    assert!(!panel_hot, "panel border should be plain when diff focused");
 
-    // Panel focused: emphasis moves to the panel border.
+    // Panel focused: the sidebar reappears at its fixed width, and emphasis
+    // moves to the panel border.
     app.apply(Action::FocusGitPanel);
     assert!(matches!(app.mode, Mode::Panel { .. }));
     terminal.draw(|f| draw(f, &app, &keymap)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+    assert!(
+        content.contains("git: main"),
+        "sidebar should render when panel focused"
+    );
     let (diff_hot, panel_hot) = top_border_hot(&terminal, focus, width, panel_start);
     assert!(
         panel_hot,
         "panel border should be emphasized when panel focused"
     );
     assert!(!diff_hot, "diff border should be plain when panel focused");
+
+    // Toggling back to the diff hides the sidebar again.
+    app.apply(Action::FocusGitPanel);
+    assert!(matches!(app.mode, Mode::Normal));
+    terminal.draw(|f| draw(f, &app, &keymap)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+    assert!(
+        !content.contains("git: main"),
+        "sidebar should hide again once focus returns to the diff"
+    );
 }
 
 /// Drives real `KeyEvent`s through `dispatch_key` — the exact path the
@@ -1161,6 +1241,62 @@ fn running_indicator_renders_while_a_remote_op_is_in_flight() {
     assert!(
         content.contains("fetch"),
         "footer should show the running fetch indicator"
+    );
+}
+
+/// With no search input, remote-op indicator, or transient status message
+/// active, the footer falls back to the persistent idle hint advertising the
+/// backtick binding — the git panel's only discoverability surface now that
+/// it's hidden by default (besides the `?` help overlay).
+#[test]
+fn idle_footer_hint_renders_when_nothing_else_occupies_the_footer() {
+    let keymap = Keymap::default_map();
+    let app = App::new(vec![sample_file()]);
+
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| draw(f, &app, &keymap)).unwrap();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .clone()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(
+        content.contains("git panel"),
+        "idle footer should hint at the backtick binding"
+    );
+    assert!(
+        content.contains("help"),
+        "idle footer should hint at the help overlay"
+    );
+}
+
+/// A transient status message takes priority over the idle footer hint —
+/// the hint only shows once the message clears.
+#[test]
+fn status_message_replaces_the_idle_footer_hint() {
+    let keymap = Keymap::default_map();
+    let mut app = App::new(vec![sample_file()]);
+    app.set_status_message("staged hunk");
+
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| draw(f, &app, &keymap)).unwrap();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .clone()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(content.contains("staged hunk"));
+    assert!(
+        !content.contains("git panel"),
+        "status message should displace the idle hint"
     );
 }
 

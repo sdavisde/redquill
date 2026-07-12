@@ -18,7 +18,7 @@ Zed's git panel and diff viewer are the quality bar for the review experience. l
 ## Core features
 
 **v1 — the review loop**
-- Working-tree diff viewer: all changed files in one scrollable multibuffer of collapsible per-file sections, unified view, syntax highlighting, word-level intra-line diff, file tree sidebar
+- Working-tree diff viewer: all changed files in one scrollable multibuffer of collapsible per-file sections, unified view, syntax highlighting, word-level intra-line diff, file tree sidebar (hidden by default; opens when the git panel is focused)
 - Hunk/line navigation: jump between files, hunks, and changed regions without touching the mouse
 - Staging: stage/unstage at file, hunk, and line granularity; staging a file collapses its section out of the way (hidden panel by default; toggle it in)
 - Annotations: comment on any line, range, hunk, or file; classify (issue / question / nit / praise); browse all annotations in one list
@@ -51,7 +51,7 @@ Vim-grammar keybindings, designed to be remappable (config layer planned — see
 | `space` | Stage/unstage hunk (line in visual mode) |
 | `S` | Stage/unstage the file under the cursor (collapses on stage, expands on unstage) |
 | `s` | Toggle staging panel |
-| `` ` `` | Focus / unfocus the git panel |
+| `` ` `` | Open the git panel (hidden by default) and focus it |
 | `@` | Toggle the git command log pane |
 | `R` | Refresh the diff from the working tree (edits made outside redquill are also picked up automatically every couple of seconds) |
 | `gd` / `gr` / `K` | Go to definition / references / hover docs |
@@ -63,9 +63,9 @@ Vim-grammar keybindings, designed to be remappable (config layer planned — see
 
 | Key | Action |
 |---|---|
-| `` ` `` | Return focus to the diff view |
+| `` ` `` | Return focus to the diff view (also hides the panel again) |
 | `j` / `k` | Move the panel cursor through CHANGES / UNTRACKED / STASHES; the diff follows file rows as you move |
-| `Enter` | Return focus to the diff at the cursor's file (stash / header rows: no-op) |
+| `Enter` | Return focus to the diff at the cursor's file (also hides the panel; stash / header rows: no-op) |
 | `f` | Fetch from the upstream remote (background, non-blocking) |
 | `p` | Pull from the upstream remote (background, non-blocking) |
 | `P` | Push to the upstream remote (background, non-blocking) |
@@ -91,7 +91,7 @@ Vim-grammar keybindings, designed to be remappable (config layer planned — see
 | `Enter` | Switch to the selected branch, or re-root onto the selected worktree |
 | `Esc` | Close the switcher, returning to the git panel at the row it had before the switcher opened |
 
-Layout sketch — every changed file is one collapsible section in a single scrollable **multibuffer** (`▾` expanded / `▸` collapsed; `●` fully staged / `±` partially staged); staging a file collapses it out of the way, unstaging on its header brings it back:
+Layout sketch (git panel shown focused via `` ` `` — it's hidden by default, so a diff-focused session gets the full width) — every changed file is one collapsible section in a single scrollable **multibuffer** (`▾` expanded / `▸` collapsed; `●` fully staged / `±` partially staged); staging a file collapses it out of the way, unstaging on its header brings it back:
 
 ```
 ┌─ files ──────┬─ uncommitted changes ─────────────────────────────────┐

@@ -101,14 +101,21 @@ fn split_footer(area: Rect) -> (Rect, Rect) {
 }
 
 /// Splits the main content area into the sidebar and diff-pane rects. The
-/// sidebar renders on the right; see `docs/config-layer.md` for making this
-/// (and its width) configurable.
-fn split_layout(area: Rect) -> (Rect, Rect) {
+/// sidebar is hidden by default and only occupies its slot while the git
+/// panel is focused (`Mode::Panel`) — visibility coincides exactly with
+/// focus, no separate state field. Mirrors [`split_right`]'s
+/// `(area, None)`-when-hidden pattern; when hidden the diff pane gets the
+/// full width. The sidebar renders on the right when shown; see
+/// `docs/config-layer.md` for making this (and its width) configurable.
+fn split_layout(area: Rect, show_sidebar: bool) -> (Option<Rect>, Rect) {
+    if !show_sidebar {
+        return (None, area);
+    }
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(0), Constraint::Length(32)])
         .split(area);
-    (chunks[1], chunks[0])
+    (Some(chunks[1]), chunks[0])
 }
 
 /// Splits the right-hand area into the diff pane and (when `show_panel`) a
@@ -293,16 +300,35 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// The idle footer hint: `` ` git panel · ? help ``, shown whenever no
+/// search input, remote-op indicator, or transient status message occupies
+/// the footer strip. Since the git panel (see `split_layout`) is hidden
+/// unless focused, this is its persistent discoverability surface — mirrors
+/// the key/label emphasis established by `git_panel::remote_keys_line`.
+fn idle_footer_hint(theme: &Theme) -> Line<'static> {
+    let key = |k: &'static str| Span::styled(k, Style::default().fg(theme.help_key));
+    let label = |l: &'static str| Span::styled(l, Style::default().fg(theme.footer_text));
+    Line::from(vec![
+        Span::raw(" "),
+        key("`"),
+        label(" git panel \u{b7} "),
+        key("?"),
+        label(" help"),
+    ])
+}
+
 /// Draws one frame: git panel, diff pane, bottom panel (annotation list or
 /// staging panel, if open), status footer, help overlay (if open), and the
 /// Compose modal (if open).
 fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
     let area = frame.area();
     let (main_area, footer_area) = split_footer(area);
-    let (sidebar_area, right_area) = split_layout(main_area);
+    let (sidebar_area, right_area) = split_layout(main_area, app.git_panel_focused());
     let (diff_area, panel_area) = split_right(right_area, bottom_open(app));
 
-    git_panel::render(frame, sidebar_area, app);
+    if let Some(sidebar_area) = sidebar_area {
+        git_panel::render(frame, sidebar_area, app);
+    }
     diff_view::render(frame, diff_area, app);
     if let Some(panel_area) = panel_area {
         // The command log, when open, owns the slot regardless of mode; else
@@ -343,6 +369,12 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
             Style::default().fg(app.theme.status_message),
         ));
         frame.render_widget(footer, footer_area);
+    } else {
+        // Lowest priority: no search/remote-op/status message is active, so
+        // show a persistent idle hint. The git panel is hidden by default
+        // (see `split_layout`), so this is its only discoverability surface
+        // outside the `?` help overlay.
+        frame.render_widget(idle_footer_hint(&app.theme), footer_area);
     }
     if app.help_open {
         let staging_allowed = !matches!(app.target, crate::git::DiffTarget::Range(_));
@@ -428,7 +460,7 @@ fn event_loop(
         let size = terminal.size()?;
         let full_area = Rect::new(0, 0, size.width, size.height);
         let (main_area, _) = split_footer(full_area);
-        let (_, right_area) = split_layout(main_area);
+        let (_, right_area) = split_layout(main_area, app.git_panel_focused());
         let (diff_area, _) = split_right(right_area, bottom_open(app));
         app.view
             .set_viewport_height(diff_view::viewport_height(diff_area));
