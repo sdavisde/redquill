@@ -212,14 +212,63 @@ fn dispatch_key(
     Flow::Continue
 }
 
-/// Handles one key while the help overlay is open. Scrolls the overlay
-/// (`j`/`k`/arrows by a line, PageUp/PageDown by a viewport, `g`/`G`/Home/End
-/// to the ends) or closes it (Esc/Enter/`?`). The scroll offset is only
-/// advanced here; [`help::render`] clamps it to the content each frame, so
-/// setting `u16::MAX` for "end" is safe. Paging uses the viewport height
-/// `render` recorded last frame.
+/// Handles one key while the help overlay is open.
+///
+/// Behavior depends on [`App::help_search`], a lazygit-style keybind filter:
+/// - `None` (no filter): keys resolve through [`modal_keys::HELP_KEYS`] —
+///   `j`/`k`/arrows scroll by a line, PageUp/PageDown by a viewport,
+///   `g`/`G`/Home/End jump to the ends, Esc/Enter/`?` close the overlay, and
+///   `/` starts filter-editing (`Some((String::new(), true))`, scroll reset
+///   to 0). The scroll offset is only advanced here; [`help::render`] clamps
+///   it to the (possibly filtered) content each frame, so setting `u16::MAX`
+///   for "end" is safe. Paging uses the viewport height `render` recorded
+///   last frame.
+/// - `Some((_, true))` (filter-editing): free-text input, like
+///   [`modes::handle_search_key`] — printable chars extend the query,
+///   Backspace shortens it, scroll keys are inert. `Enter` locks the filter
+///   in (`Some((query, false))`, handing control back to the scroll keys);
+///   `Esc` clears it entirely (`None`).
+/// - `Some((query, false))` (a locked filter): scroll keys resolve exactly as
+///   in the `None` case (including Enter/`?` closing the overlay), except
+///   `/` re-opens editing on the existing `query`, and `Esc` clears the
+///   filter (`None`) instead of closing — so a second `Esc` (now with no
+///   filter) is what closes help.
 fn handle_help_key(app: &mut App, key: KeyEvent) {
     use modal_keys::HelpAction;
+
+    if let Some((mut query, editing)) = app.help_search.clone() {
+        if editing {
+            match key.code {
+                KeyCode::Esc => app.help_search = None,
+                KeyCode::Enter => app.help_search = Some((query, false)),
+                KeyCode::Backspace => {
+                    query.pop();
+                    app.help_search = Some((query, true));
+                }
+                KeyCode::Char(c) => {
+                    query.push(c);
+                    app.help_search = Some((query, true));
+                }
+                _ => {}
+            }
+            return;
+        }
+        // Locked filter: `/` resumes editing it, `Esc` clears it before it
+        // can reach the `Close` action below — everything else (including
+        // Enter/`?`) falls through to the ordinary scroll-key resolution.
+        match key.code {
+            KeyCode::Char('/') => {
+                app.help_search = Some((query, true));
+                return;
+            }
+            KeyCode::Esc => {
+                app.help_search = None;
+                return;
+            }
+            _ => {}
+        }
+    }
+
     let Some(action) = modal_keys::resolve(modal_keys::HELP_KEYS, key) else {
         return;
     };
@@ -229,6 +278,7 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
         HelpAction::Close => {
             app.help_open = false;
             app.help_scroll.set(0);
+            app.help_search = None;
         }
         HelpAction::ScrollDown => app.help_scroll.set(cur.saturating_add(1)),
         HelpAction::ScrollUp => app.help_scroll.set(cur.saturating_sub(1)),
@@ -236,6 +286,10 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
         HelpAction::PageUp => app.help_scroll.set(cur.saturating_sub(page)),
         HelpAction::Top => app.help_scroll.set(0),
         HelpAction::Bottom => app.help_scroll.set(u16::MAX),
+        HelpAction::Search => {
+            app.help_search = Some((String::new(), true));
+            app.help_scroll.set(0);
+        }
     }
 }
 
@@ -292,15 +346,16 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
     }
     if app.help_open {
         let staging_allowed = !matches!(app.target, crate::git::DiffTarget::Range(_));
-        help::render(
-            frame,
-            area,
-            keymap,
-            &app.theme,
-            staging_allowed,
-            &app.help_scroll,
-            &app.help_viewport,
-        );
+        let search = app
+            .help_search
+            .as_ref()
+            .map(|(q, editing)| (q.as_str(), *editing));
+        let state = help::HelpViewState {
+            scroll: &app.help_scroll,
+            viewport: &app.help_viewport,
+            search,
+        };
+        help::render(frame, area, keymap, &app.theme, staging_allowed, &state);
     }
     if matches!(app.mode, Mode::Compose) {
         compose_modal::render(frame, area, app);

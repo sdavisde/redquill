@@ -12,11 +12,17 @@
 //! drive it from [`super::handle_help_key`]. The scroll offset lives in
 //! [`super::app::App::help_scroll`]; this renderer clamps it to the content
 //! each frame and writes the clamped value back.
+//!
+//! `/` filters the list, lazygit-style (state in
+//! [`super::app::App::help_search`], driven by [`super::handle_help_key`]):
+//! typing narrows every section to rows whose key label or description
+//! smartcase-matches the query ([`row_matches`]), dropping sections that end
+//! up empty, and a locked-in filter shows in place of the subtitle.
 
 use std::cell::Cell;
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Flex, Layout, Rect};
+use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
@@ -25,8 +31,10 @@ use ratatui::widgets::{
 
 use super::keymap::{Action, Binding, Keymap, Scope};
 use super::modal_keys::{
-    COMPOSE_HINTS, LIST_KEYS, ModalBinding, PEEK_KEYS, SEARCH_HINTS, STAGING_KEYS, SWITCHER_KEYS,
+    COMPOSE_HINTS, HELP_SEARCH_HINTS, LIST_KEYS, ModalBinding, PEEK_KEYS, SEARCH_HINTS,
+    STAGING_KEYS, SWITCHER_KEYS,
 };
+use super::search;
 use super::theme::Theme;
 
 /// The help overlay's group sections, in render order. Every [`Action`]'s
@@ -115,8 +123,11 @@ fn modal_hints<A>(table: &'static [ModalBinding<A>]) -> Vec<(&'static str, &'sta
 /// paired with the rows of its shared key table. The same tables drive the
 /// modal handlers' dispatch, so the overlay can't document keys the handlers
 /// don't accept (and vice versa — the `modal_keys` cross-check test pins the
-/// handler side).
-fn modal_sections() -> [(&'static str, Vec<(&'static str, &'static str)>); 6] {
+/// handler side). `HELP_SEARCH_HINTS` (the overlay's own `/` filter, a
+/// free-text input like Compose/Search) gets a section here for the same
+/// reason those do; `HELP_KEYS` doesn't, since it's the enum-dispatch table
+/// for the overlay's own scroll/close keys, already documented on the footer.
+fn modal_sections() -> [(&'static str, Vec<(&'static str, &'static str)>); 7] {
     [
         ("Compose mode", modal_hints(COMPOSE_HINTS)),
         ("List mode", modal_hints(LIST_KEYS)),
@@ -124,7 +135,38 @@ fn modal_sections() -> [(&'static str, Vec<(&'static str, &'static str)>); 6] {
         ("Search input", modal_hints(SEARCH_HINTS)),
         ("Peek mode", modal_hints(PEEK_KEYS)),
         ("Branch/worktree switcher", modal_hints(SWITCHER_KEYS)),
+        ("Help filter (/)", modal_hints(HELP_SEARCH_HINTS)),
     ]
+}
+
+/// Whether a keybind row (`label`, `description`) should be kept under the
+/// help overlay's `/` filter: a smartcase substring match against either the
+/// key label or the description (see [`search::smartcase_contains`]). An
+/// empty query keeps everything, so this is a no-op filter when no search is
+/// active.
+fn row_matches(label: &str, description: &str, query: &str) -> bool {
+    query.is_empty()
+        || search::smartcase_contains(label, query)
+        || search::smartcase_contains(description, query)
+}
+
+/// The overlay's scroll/filter state, owned by the caller ([`App`]) and
+/// threaded through [`render`] each frame. Grouped into one struct rather
+/// than three loose parameters to keep `render`'s argument count sane.
+pub struct HelpViewState<'a> {
+    /// The vertical scroll offset (advanced by [`super::handle_help_key`]);
+    /// `render` clamps it to the (possibly filtered) content and writes the
+    /// clamped value back.
+    pub scroll: &'a Cell<u16>,
+    /// The scrollable region's height, recorded by `render` each frame so the
+    /// key handler can page by a real viewport (PageUp/PageDown).
+    pub viewport: &'a Cell<u16>,
+    /// Mirrors [`super::app::App::help_search`]: `Some((query, editing))`
+    /// filters every section to rows matching `query` (dropping sections
+    /// that end up empty) and shows the query in place of the subtitle —
+    /// with a live text cursor while `editing`, or a "locked" hint once
+    /// `Enter` has confirmed it. `None` renders the unfiltered list.
+    pub search: Option<(&'a str, bool)>,
 }
 
 /// Renders the help overlay, centered over `area`. Bindings from the
@@ -133,22 +175,26 @@ fn modal_sections() -> [(&'static str, Vec<(&'static str, &'static str)>); 6] {
 /// table entirely, so they aren't in it). `staging_allowed` is `false` on a
 /// read-only range target, hiding the inert file/hunk staging gestures.
 ///
-/// The box caps its height to ~4/5 of `area` and scrolls the overflow:
-/// `scroll` is the caller-owned offset (advanced by
-/// [`super::handle_help_key`]); this fn clamps it to the content and writes
-/// the clamped value back, and records the scrollable region's height in
-/// `viewport` so the key handler can page by a real viewport.
+/// The box caps its height to ~4/5 of `area` and scrolls the overflow; see
+/// [`HelpViewState`] for the scroll/filter fields `state` carries.
 pub fn render(
     frame: &mut Frame,
     area: Rect,
     keymap: &Keymap,
     theme: &Theme,
     staging_allowed: bool,
-    scroll: &Cell<u16>,
-    viewport: &Cell<u16>,
+    state: &HelpViewState,
 ) {
+    let scroll = state.scroll;
+    let viewport = state.viewport;
+    let search = state.search;
+    let query = search.map_or("", |(q, _)| q);
+    let editing = search.is_some_and(|(_, editing)| editing);
+
     let sections = modal_sections();
     let bindings = keymap.bindings();
+    // Column width is computed from the unfiltered rows, so it never jumps
+    // around as the query narrows what's actually shown.
     let key_width = bindings
         .iter()
         .map(|b| b.key_label().len())
@@ -161,15 +207,18 @@ pub fn render(
         .unwrap_or(0);
 
     let mut lines: Vec<Line> = Vec::new();
+    let mut any_match = false;
     for group in GROUP_ORDER {
         let group_bindings: Vec<&Binding> = bindings
             .iter()
             .filter(|b| b.scope == Scope::Diff && group_of(b.action) == group)
             .filter(|b| !binding_hidden(b.action, staging_allowed))
+            .filter(|b| row_matches(&b.key_label(), b.description, query))
             .collect();
         if group_bindings.is_empty() {
             continue;
         }
+        any_match = true;
         lines.push(section_header(group, theme));
         for b in group_bindings {
             lines.push(key_line(&b.key_label(), b.description, key_width, theme));
@@ -183,8 +232,10 @@ pub fn render(
     let panel_bindings: Vec<&Binding> = bindings
         .iter()
         .filter(|b| b.scope == Scope::Panel)
+        .filter(|b| row_matches(&b.key_label(), b.description, query))
         .collect();
     if !panel_bindings.is_empty() {
+        any_match = true;
         lines.push(section_header("Git panel (focused)", theme));
         for b in panel_bindings {
             lines.push(key_line(&b.key_label(), b.description, key_width, theme));
@@ -192,21 +243,50 @@ pub fn render(
         lines.push(Line::from(""));
     }
 
-    for (i, (title, hints)) in sections.iter().enumerate() {
+    let filtered_sections: Vec<(&str, Vec<(&str, &str)>)> = sections
+        .iter()
+        .map(|(title, hints)| {
+            let hints: Vec<(&str, &str)> = hints
+                .iter()
+                .filter(|(k, d)| row_matches(k, d, query))
+                .copied()
+                .collect();
+            (*title, hints)
+        })
+        .filter(|(_, hints)| !hints.is_empty())
+        .collect();
+    for (i, (title, hints)) in filtered_sections.iter().enumerate() {
+        any_match = true;
         lines.push(section_header(title, theme));
         for (key, desc) in hints {
             lines.push(key_line(key, desc, key_width, theme));
         }
-        if i + 1 < sections.len() {
+        if i + 1 < filtered_sections.len() {
             lines.push(Line::from(""));
         }
     }
 
+    if !query.is_empty() && !any_match {
+        lines.push(Line::from(Span::styled(
+            format!("no matches for \"{query}\""),
+            Style::default().fg(theme.status_message),
+        )));
+    }
+
     // The chrome around the scrollable list, herdr-style: a dim subtitle
     // under the title, a blank spacer, then the list; the "how to drive it"
-    // hint rides the bottom border.
-    let subtitle = "available commands and configured shortcuts";
-    let footer = "j/k scroll  \u{00b7}  pgup/pgdn page  \u{00b7}  g/G ends  \u{00b7}  esc close";
+    // hint rides the bottom border. The subtitle doubles as the filter box:
+    // `/query` with a live cursor while editing, a "locked" reminder once
+    // `Enter` has confirmed it, or the plain description when no filter is
+    // active.
+    let subtitle = match search {
+        Some((q, true)) => format!("/{q}"),
+        Some((q, false)) if !q.is_empty() => {
+            format!("filter: /{q}  (/ to edit \u{00b7} esc to clear)")
+        }
+        _ => "available commands and configured shortcuts".to_string(),
+    };
+    let footer = "j/k scroll  \u{00b7}  pgup/pgdn page  \u{00b7}  g/G ends  \u{00b7}  / filter  \u{00b7}  esc close";
     let total = lines.len() as u16;
 
     // Width: fit the widest content line (or the subtitle/footer), plus a
@@ -264,13 +344,29 @@ pub fn render(
     ])
     .areas(inner);
 
+    // Active/locked filters read in the search-prompt color so they stand out
+    // from the plain description text.
+    let subtitle_color = if search.is_some() {
+        theme.search_prompt
+    } else {
+        theme.footer_text
+    };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            subtitle,
-            Style::default().fg(theme.footer_text),
+            subtitle.clone(),
+            Style::default().fg(subtitle_color),
         ))),
         subtitle_area,
     );
+    if editing {
+        // A live text cursor at the end of the query, like the diff-view
+        // search prompt (`mod.rs`'s footer render for `Mode::Search`).
+        let cursor_x = subtitle_area
+            .x
+            .saturating_add(subtitle.chars().count() as u16)
+            .min(subtitle_area.x + subtitle_area.width.saturating_sub(1));
+        frame.set_cursor_position(Position::new(cursor_x, subtitle_area.y));
+    }
 
     // Clamp the caller's scroll offset to the content now that the viewport
     // height is known, and record that height for PageUp/PageDown paging.

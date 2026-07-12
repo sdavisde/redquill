@@ -72,6 +72,16 @@ Vim-grammar keybindings, designed to be remappable (config layer planned — see
 | `b` | Open the branch/worktree switcher |
 | `@` | Toggle the command log pane (also works from the diff view) |
 
+**Help modal** (`?`):
+
+| Key | Action |
+|---|---|
+| `j` / `k` (also arrow keys) | Scroll |
+| `PgUp` / `PgDn` | Page up / down |
+| `g` / `G` (also `Home` / `End`) | Jump to the top / bottom |
+| `/` | Filter the keybind list (lazygit-style): type to filter live, `Enter` locks the filter in (scroll keys resume), `Esc` clears it |
+| `Esc` / `Enter` / `?` | Close the help modal (with a locked filter active, `Esc` first clears the filter, then a second `Esc` closes) |
+
 **Branch/worktree switcher** (`b` from the git panel):
 
 | Key | Action |

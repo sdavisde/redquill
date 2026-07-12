@@ -88,6 +88,16 @@ pub struct App {
     /// [`super::help::render`] each frame so the key handler can page by a
     /// real viewport (PageUp/PageDown) rather than a guessed constant.
     pub(super) help_viewport: Cell<u16>,
+    /// The help overlay's keybind filter (`/`), lazygit-style. `None`: no
+    /// filter, the overlay's scroll keys dispatch normally. `Some((query,
+    /// editing))`: a filter is active; `editing` is `true` while capturing
+    /// free-text keystrokes (just after `/`, or still typing) — during which
+    /// scroll keys are inert, like `Mode::Search` — and `false` once `Enter`
+    /// locks the query in and hands control back to the scroll keys
+    /// (mirroring lazygit: `Enter` commits the filter, a subsequent `Esc`
+    /// clears it, and only a second `Esc` closes the overlay). Reset to
+    /// `None` wherever help closes or reopens.
+    pub(super) help_search: Option<(String, bool)>,
     /// Annotations accumulated this session.
     pub annotations: AnnotationStore,
     /// The current interaction mode.
@@ -223,6 +233,7 @@ impl App {
             help_open: false,
             help_scroll: Cell::new(0),
             help_viewport: Cell::new(0),
+            help_search: None,
             annotations,
             mode: Mode::Normal,
             compose: None,
@@ -418,6 +429,7 @@ impl App {
             Action::ToggleHelp => {
                 self.help_open = !self.help_open;
                 self.help_scroll.set(0);
+                self.help_search = None;
             }
             Action::EnterVisual => self.toggle_visual(),
             Action::Compose => self.open_compose(),

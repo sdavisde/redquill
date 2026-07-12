@@ -303,6 +303,8 @@ pub(super) enum HelpAction {
     PageUp,
     Top,
     Bottom,
+    /// Starts filtering the keybind list (see [`super::App::help_search`]).
+    Search,
 }
 
 pub(super) const HELP_KEYS: &[ModalBinding<HelpAction>] = &[
@@ -363,6 +365,42 @@ pub(super) const HELP_KEYS: &[ModalBinding<HelpAction>] = &[
             ModalKey::plain(KeyCode::End),
         ],
         action: HelpAction::Bottom,
+    },
+    ModalBinding {
+        label: "/",
+        description: "Filter keybinds",
+        keys: &[ModalKey::plain(KeyCode::Char('/'))],
+        action: HelpAction::Search,
+    },
+];
+
+// -- Help overlay filter (hint-only) ---------------------------------------
+
+/// Help-filter control keys, for the overlay's own hint text only. Filtering
+/// is free-text input like Compose/Search, so [`super::handle_help_key`]'s
+/// editing branch keeps a hand-written match; this table documents the
+/// non-text keys and the drift cross-check test feeds them back through that
+/// handler. Unlike `COMPOSE_HINTS`/`SEARCH_HINTS`, `Enter` here doesn't
+/// submit-and-leave — it locks the filter in and hands control back to
+/// `HELP_KEYS`' scroll keys, so its description says that explicitly.
+pub(super) const HELP_SEARCH_HINTS: &[ModalBinding<()>] = &[
+    ModalBinding {
+        label: "Enter",
+        description: "Lock in the filter (scroll keys resume)",
+        keys: &[ModalKey::plain(KeyCode::Enter)],
+        action: (),
+    },
+    ModalBinding {
+        label: "Esc",
+        description: "Clear the filter",
+        keys: &[ModalKey::plain(KeyCode::Esc)],
+        action: (),
+    },
+    ModalBinding {
+        label: "Backspace",
+        description: "Delete character",
+        keys: &[ModalKey::plain(KeyCode::Backspace)],
+        action: (),
     },
 ];
 
@@ -782,8 +820,78 @@ index 111..222 100644
                     HelpAction::Bottom => {
                         assert_eq!(app.help_scroll.get(), u16::MAX, "Help {label}: to bottom")
                     }
+                    HelpAction::Search => {
+                        assert_eq!(
+                            app.help_search,
+                            Some((String::new(), true)),
+                            "Help {label}: must start filter-editing with an empty query"
+                        );
+                        assert_eq!(app.help_scroll.get(), 0, "Help {label}: must reset scroll");
+                    }
                 }
             }
+        }
+    }
+
+    /// An `App` mid-help-filter with a non-empty query, so every documented
+    /// control key produces an observable state change.
+    fn help_search_app() -> App {
+        let mut app = app();
+        app.help_open = true;
+        app.help_search = Some(("ab".to_string(), true));
+        app
+    }
+
+    #[test]
+    fn every_help_search_hint_key_is_consumed_by_the_handler() {
+        for binding in HELP_SEARCH_HINTS {
+            for key in binding.keys {
+                let mut app = help_search_app();
+                let before = app.help_search.clone();
+                handle_help_key(&mut app, key.event());
+                assert_ne!(
+                    before, app.help_search,
+                    "Help filter {}: documented key must be consumed by handle_help_key",
+                    binding.label
+                );
+            }
+        }
+    }
+
+    /// Reverse drift check for the help filter: non-text keys outside the
+    /// hint table must do nothing while editing — the scroll keys stay inert
+    /// mid-filter, same as `Mode::Search`. Chars are exempt (free-text input).
+    #[test]
+    fn help_search_handler_ignores_control_keys_absent_from_its_table() {
+        let universe: Vec<KeyEvent> = [
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Home,
+            KeyCode::End,
+            KeyCode::PageUp,
+            KeyCode::PageDown,
+            KeyCode::Tab,
+            KeyCode::BackTab,
+            KeyCode::Delete,
+            KeyCode::Insert,
+            KeyCode::F(1),
+        ]
+        .into_iter()
+        .map(|code| KeyEvent::new(code, KeyModifiers::NONE))
+        .collect();
+        for ev in universe {
+            if resolve(HELP_SEARCH_HINTS, ev).is_some() {
+                continue;
+            }
+            let mut app = help_search_app();
+            let before = app.help_search.clone();
+            handle_help_key(&mut app, ev);
+            assert_eq!(
+                before, app.help_search,
+                "handle_help_key consumed {ev:?} while filter-editing, which HELP_SEARCH_HINTS doesn't document"
+            );
         }
     }
 
@@ -950,5 +1058,6 @@ index 111..222 100644
         assert!(resolve(COMPOSE_HINTS, ev).is_none());
         assert!(resolve(SEARCH_HINTS, ev).is_none());
         assert!(resolve(SWITCHER_KEYS, ev).is_none());
+        assert!(resolve(HELP_SEARCH_HINTS, ev).is_none());
     }
 }

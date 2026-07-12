@@ -284,7 +284,7 @@ fn help_overlay_scrolls_to_reveal_lower_sections() {
     let keymap = Keymap::default_map();
 
     // First frame renders the top of the list (and records the viewport
-    // height the pager needs). The last section (Peek mode) is far below.
+    // height the pager needs). The last section (Help filter) is far below.
     terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
     let top: String = terminal
         .backend()
@@ -295,7 +295,7 @@ fn help_overlay_scrolls_to_reveal_lower_sections() {
         .map(|c| c.symbol())
         .collect();
     assert!(top.contains("Move cursor down"));
-    assert!(!top.contains("Jump to location (definition/references)"));
+    assert!(!top.contains("Clear the filter"));
 
     // Jump to the bottom through the real dispatch path, then redraw.
     let mut pending = None;
@@ -310,8 +310,127 @@ fn help_overlay_scrolls_to_reveal_lower_sections() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(bottom.contains("Jump to location (definition/references)"));
+    assert!(bottom.contains("Clear the filter"));
     assert!(!bottom.contains("Move cursor down"));
+}
+
+/// The full lazygit-style filter lifecycle, driven through the real
+/// dispatch path: `/` starts editing with an empty query, typing extends it,
+/// `Enter` locks it in (handing control back to the scroll keys without
+/// closing the overlay), a first `Esc` clears the locked filter (still
+/// without closing), and only a second `Esc` (now with no filter left)
+/// closes help.
+#[test]
+fn help_filter_enter_locks_and_two_escapes_close() {
+    let mut app = App::new(vec![sample_file()]);
+    app.help_open = true;
+    let keymap = Keymap::default_map();
+    let mut pending = None;
+
+    let slash = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
+    dispatch_key(&mut app, &keymap, &mut pending, slash);
+    assert_eq!(app.help_search, Some((String::new(), true)));
+
+    for c in ['q', 'u', 'i', 't'] {
+        let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        dispatch_key(&mut app, &keymap, &mut pending, key);
+    }
+    assert_eq!(app.help_search, Some(("quit".to_string(), true)));
+
+    let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+    dispatch_key(&mut app, &keymap, &mut pending, enter);
+    assert_eq!(app.help_search, Some(("quit".to_string(), false)));
+    assert!(
+        app.help_open,
+        "locking the filter must not close the overlay"
+    );
+
+    let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+    dispatch_key(&mut app, &keymap, &mut pending, esc);
+    assert_eq!(app.help_search, None, "first Esc clears the locked filter");
+    assert!(
+        app.help_open,
+        "clearing the filter must not close the overlay"
+    );
+
+    dispatch_key(&mut app, &keymap, &mut pending, esc);
+    assert!(
+        !app.help_open,
+        "second Esc, with no filter left, closes the overlay"
+    );
+}
+
+/// Closing the help overlay (either `?` or the overlay's own Close action)
+/// always resets an in-progress or locked filter, so reopening starts clean.
+#[test]
+fn closing_help_resets_the_filter() {
+    let mut app = App::new(vec![sample_file()]);
+    app.apply(Action::ToggleHelp);
+    assert!(app.help_open);
+    app.help_search = Some(("foo".to_string(), true));
+
+    app.apply(Action::ToggleHelp);
+    assert!(!app.help_open);
+    assert_eq!(app.help_search, None, "closing help must clear the filter");
+
+    app.apply(Action::ToggleHelp);
+    assert_eq!(
+        app.help_search, None,
+        "reopening help must start with no filter"
+    );
+}
+
+/// A locked filter narrows the rendered list to rows whose key label or
+/// description match the query, dropping section headers (e.g.
+/// "Navigation") whose section ends up with no matching rows.
+#[test]
+fn help_filter_narrows_rendered_bindings_to_matching_rows() {
+    let backend = TestBackend::new(120, 50);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    app.help_open = true;
+    app.help_search = Some(("quit".to_string(), false));
+    let keymap = Keymap::default_map();
+
+    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .clone()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(content.contains("Quit and emit annotations"));
+    assert!(
+        !content.contains("Navigation"),
+        "a section with no matching rows must be dropped entirely"
+    );
+    assert!(!content.contains("Move cursor down"));
+}
+
+/// A query with no matches anywhere in the overlay shows a "no matches"
+/// line instead of an empty list.
+#[test]
+fn help_filter_shows_no_matches_message_when_nothing_matches() {
+    let backend = TestBackend::new(120, 50);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    app.help_open = true;
+    app.help_search = Some(("zzznomatchzzz".to_string(), false));
+    let keymap = Keymap::default_map();
+
+    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .clone()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(content.contains("no matches for"));
+    assert!(content.contains("zzznomatchzzz"));
 }
 
 /// An annotation present on the selected file renders both its inline
