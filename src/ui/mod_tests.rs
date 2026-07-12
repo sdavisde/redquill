@@ -695,10 +695,11 @@ fn focused_pane_border_emphasis_follows_the_toggle() {
 
 /// Drives real `KeyEvent`s through `dispatch_key` — the exact path the
 /// blocking event loop uses — proving the focus toggle, panel `j`/`k`
-/// traversal across all three sections, Enter-on-file, and that the
-/// diff-scope keys still dispatch identically while the panel is
-/// unfocused. tmux is unavailable on this host, so this headless driver
-/// stands in for the manual smoke transcript (see 02-task-03-smoke.txt).
+/// traversal across all three sections (with the diff auto-following file
+/// rows as the cursor moves), Enter-on-file, and that the diff-scope keys
+/// still dispatch identically while the panel is unfocused. tmux is
+/// unavailable on this host, so this headless driver stands in for the
+/// manual smoke transcript (see 02-task-03-smoke.txt).
 #[test]
 fn panel_focus_key_dispatch_smoke() {
     let keymap = Keymap::default_map();
@@ -713,22 +714,29 @@ fn panel_focus_key_dispatch_smoke() {
         );
     };
 
-    // Focus the panel.
+    // Focus the panel: cursor resets to the top and follows to src/a.rs
+    // (already selected, since `selected_file` starts at 0).
     assert_eq!(app.mode, Mode::Normal);
     press(&mut app, &mut pending, KeyCode::Char('`'));
     assert_eq!(app.mode, Mode::Panel);
     assert_eq!(app.panel_cursor, 0); // src/a.rs (CHANGES)
+    assert_eq!(app.view.selected_file, 0); // src/a.rs
 
     // Traverse all three sections with `j`: a.rs -> b.rs -> notes.md
-    // (UNTRACKED) -> stash0 -> stash1, clamping at the last stash.
+    // (UNTRACKED) -> stash0 -> stash1, clamping at the last stash. The diff
+    // follows each file row; stash rows leave the last-followed file alone.
     press(&mut app, &mut pending, KeyCode::Char('j'));
     assert_eq!(app.panel_cursor, 1); // src/b.rs
+    assert_eq!(app.view.selected_file, 1); // followed to src/b.rs
     press(&mut app, &mut pending, KeyCode::Char('j'));
     assert_eq!(app.panel_cursor, 2); // notes.md (crossed into UNTRACKED)
+    assert_eq!(app.view.selected_file, 2); // followed to notes.md
     press(&mut app, &mut pending, KeyCode::Char('j'));
     assert_eq!(app.panel_cursor, 3); // stash0 (crossed into STASHES)
+    assert_eq!(app.view.selected_file, 2); // unchanged: nothing to follow
     press(&mut app, &mut pending, KeyCode::Char('j'));
     assert_eq!(app.panel_cursor, 4); // stash1
+    assert_eq!(app.view.selected_file, 2); // still unchanged
     press(&mut app, &mut pending, KeyCode::Char('j'));
     assert_eq!(app.panel_cursor, 4); // clamped at the bottom
     press(&mut app, &mut pending, KeyCode::Char('k'));
@@ -738,10 +746,13 @@ fn panel_focus_key_dispatch_smoke() {
     press(&mut app, &mut pending, KeyCode::Enter);
     assert_eq!(app.mode, Mode::Panel);
 
-    // Move onto src/b.rs and Enter: selects it, focus returns to the diff.
+    // Move onto src/b.rs (following along the way) and Enter: focus
+    // returns to the diff, already on src/b.rs from the follow.
     press(&mut app, &mut pending, KeyCode::Char('k')); // -> notes.md (2)
+    assert_eq!(app.view.selected_file, 2);
     press(&mut app, &mut pending, KeyCode::Char('k')); // -> src/b.rs (1)
     assert_eq!(app.panel_cursor, 1);
+    assert_eq!(app.view.selected_file, 1); // followed to src/b.rs
     press(&mut app, &mut pending, KeyCode::Enter);
     assert_eq!(app.mode, Mode::Normal);
     assert_eq!(app.view.selected_file, 1); // src/b.rs

@@ -386,7 +386,11 @@ impl Keymap {
                     PanelCursorUp,
                     "Move panel cursor up",
                 ),
-                p(KeySeq::one(Enter, none), PanelSelect, "Open file in diff"),
+                p(
+                    KeySeq::one(Enter, none),
+                    PanelSelect,
+                    "Focus diff on this file",
+                ),
                 p(
                     KeySeq::one(Char('f'), none),
                     RemoteFetch,
