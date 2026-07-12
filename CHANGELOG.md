@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.0](https://github.com/sdavisde/redquill/compare/v0.3.0...v0.4.0) (2026-07-12)
+
+
+### Features
+
+* **diff:** auto-refresh the diff from the working tree, plus `R` to reload ([30f5a6d](https://github.com/sdavisde/redquill/commit/30f5a6d333bbbbfa1e9ce13c8e0a1d7f74ea57ab))
+* **ui:** add branch/worktree switcher modal shell ([95c7878](https://github.com/sdavisde/redquill/commit/95c787815cb88d7e68da753cb833711ac900b83c))
+* **ui:** follow the git panel cursor in the diff view ([b93dd79](https://github.com/sdavisde/redquill/commit/b93dd79d79a7e7d5939ef1357feacb357fe46f9c))
+* **ui:** make the help overlay shorter and scrollable ([ee0558f](https://github.com/sdavisde/redquill/commit/ee0558f70852c6f88a640afafa27eaa59fbd6a5e))
+* **ui:** quit with `q` from the git panel; keep it inert over overlays ([af8a7a6](https://github.com/sdavisde/redquill/commit/af8a7a67c61d7f8afda599b2e57800dcaea001f0))
+* **ui:** switch branches and re-root onto worktrees from the switcher ([fd7c769](https://github.com/sdavisde/redquill/commit/fd7c769cf11c1dd1951fa3acb6fb02fc743e1a33))
+
+
+### Performance Improvements
+
+* **diff:** poll the working tree off the render thread ([9169151](https://github.com/sdavisde/redquill/commit/916915196709e05403f65e52835394b354a326c2))
+
 ## [0.3.0](https://github.com/sdavisde/redquill/compare/v0.2.0...v0.3.0) (2026-07-11)
 
 
