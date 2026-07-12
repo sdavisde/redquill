@@ -774,6 +774,7 @@ enum StageCall {
     UnstageFile(String),
     Apply(String),
     Unapply(String),
+    SwitchBranch(String),
 }
 
 /// A recording [`StageOps`] fake: staging calls are appended to a
@@ -795,6 +796,15 @@ struct FakeGit {
     show_content: Option<String>,
     branch: Option<BranchStatus>,
     stashes: Vec<StashEntry>,
+    // `None` (the default) means "unavailable", mirroring the `StageOps`
+    // trait default (an error) so tests can exercise the switcher's
+    // read-error path without a separate flag.
+    branches: Option<Vec<crate::git::LocalBranch>>,
+    worktrees: Option<Vec<crate::git::WorktreeEntry>>,
+    // `None` (the default) means `switch_branch` succeeds; `Some(stderr)`
+    // simulates a `git switch` rejection (dirty tree, checked out
+    // elsewhere, ...) with that stderr text.
+    switch_branch_error: Option<String>,
 }
 
 impl FakeGit {
@@ -867,6 +877,32 @@ impl StageOps for FakeGit {
 
     fn stash_list(&self) -> Result<Vec<StashEntry>, GitError> {
         Ok(self.stashes.clone())
+    }
+
+    fn branch_list(&self) -> Result<Vec<crate::git::LocalBranch>, GitError> {
+        self.branches
+            .clone()
+            .ok_or_else(|| GitError::Parse("no branches".into()))
+    }
+
+    fn worktree_list(&self) -> Result<Vec<crate::git::WorktreeEntry>, GitError> {
+        self.worktrees
+            .clone()
+            .ok_or_else(|| GitError::Parse("no worktrees".into()))
+    }
+
+    fn switch_branch(&self, name: &str) -> Result<(), GitError> {
+        self.calls
+            .borrow_mut()
+            .push(StageCall::SwitchBranch(name.to_string()));
+        match &self.switch_branch_error {
+            None => Ok(()),
+            Some(stderr) => Err(GitError::Command {
+                command: format!("switch -- {name}"),
+                code: "1".to_string(),
+                stderr: stderr.clone(),
+            }),
+        }
     }
 }
 
@@ -2078,6 +2114,54 @@ mod async_refresh {
             "must not rebuild while a Visual selection is active"
         );
     }
+
+    /// Mirrors the race fix `App::reroot` (spec 03 Unit 3) relies on: a
+    /// worktree re-root bumps `refresh_generation` and clears
+    /// `refresh_in_flight` directly (not via a foreground `refresh()`), so a
+    /// working-tree read spawned against the *old* root before the re-root
+    /// is discarded when it lands rather than clobbering the newly-rooted
+    /// state — and the single-flight gate is freed immediately rather than
+    /// waiting for that orphaned read to drain on its own.
+    #[test]
+    fn stale_async_snapshot_discarded_after_generation_bump() {
+        let (mut app, _fake) = app_with_send_fake(vec![raw_patch("a.rs", 3)], vec![]);
+        assert_eq!(app.view.files[0].hunks.len(), 3);
+
+        let stale = snapshot_of(&[raw_patch("a.rs", 2)], &[]);
+        let id = app.refresh_tasks.spawn(move || Some(stale));
+        app.refresh_in_flight = Some(InFlightRefresh {
+            id,
+            generation: app.refresh_generation,
+        });
+
+        // `App::reroot`'s race fix, applied directly here.
+        app.refresh_generation = app.refresh_generation.wrapping_add(1);
+        app.refresh_in_flight = None;
+
+        // Give the spawned (old-root) read time to finish, then drain: with
+        // `refresh_in_flight` already `None`, `poll_refresh`'s very first
+        // check discards the result outright — there's no tracked task for
+        // its id to match, so the generation mismatch never even needs to
+        // fire.
+        std::thread::sleep(Duration::from_millis(100));
+        app.poll_refresh();
+
+        assert!(app.refresh_in_flight.is_none());
+        assert_eq!(
+            app.view.files[0].hunks.len(),
+            3,
+            "the stale old-root snapshot must never apply over the newer state"
+        );
+
+        // Clearing `refresh_in_flight` also frees `spawn_auto_refresh`'s
+        // single-flight gate immediately, so the very next poll tick can
+        // spawn a fresh read rather than waiting on the orphaned old read.
+        app.maybe_auto_refresh();
+        assert!(
+            app.refresh_in_flight.is_some(),
+            "the single-flight gate must be free for a fresh read right away"
+        );
+    }
 }
 
 #[test]
@@ -2984,4 +3068,324 @@ fn focus_toggle_is_a_no_op_while_a_modal_owns_the_keyboard() {
     app.mode = Mode::Search;
     app.apply(Action::FocusGitPanel);
     assert_eq!(app.mode, Mode::Search); // unchanged: Search still owns keys
+}
+
+// -- Branch/worktree switcher modal (spec 03, task 3.0) --------------------
+
+/// A panel fixture with a git backend attached (via [`FakeGit`]), so
+/// `open_switcher` has something to read from.
+fn panel_app_with_git(fake: FakeGit) -> App {
+    let mut app = panel_app();
+    app.stage_ops = Some(Box::new(fake));
+    app
+}
+
+#[test]
+fn open_switcher_populates_lists_via_fake_ops() {
+    let branches = vec![
+        crate::git::LocalBranch {
+            name: "main".to_string(),
+            is_current: true,
+            worktree: None,
+        },
+        crate::git::LocalBranch {
+            name: "feature".to_string(),
+            is_current: false,
+            worktree: None,
+        },
+    ];
+    let worktrees = vec![crate::git::WorktreeEntry {
+        path: std::path::PathBuf::from("/repo"),
+        head: Some("deadbeef".to_string()),
+        branch: Some("main".to_string()),
+        bare: false,
+        detached: false,
+        locked: None,
+        prunable: None,
+    }];
+    let fake = FakeGit {
+        branches: Some(branches.clone()),
+        worktrees: Some(worktrees.clone()),
+        ..FakeGit::default()
+    };
+    let mut app = panel_app_with_git(fake);
+    app.apply(Action::FocusGitPanel);
+    app.apply(Action::PanelCursorDown); // capture a non-zero panel cursor
+    let panel_cursor = app.panel_cursor();
+
+    app.apply(Action::OpenSwitcher);
+
+    assert_eq!(app.mode, Mode::Switcher);
+    let state = app.switcher.as_ref().expect("switcher must be open");
+    assert_eq!(state.branches, branches);
+    assert_eq!(state.worktrees, worktrees);
+    assert_eq!(state.branch_cursor, 0); // "main" is current
+    assert_eq!(state.panel_cursor, panel_cursor);
+}
+
+#[test]
+fn open_switcher_read_error_sets_footer_message_and_stays_in_panel() {
+    // `FakeGit::default()` leaves `branches`/`worktrees` at `None`, so
+    // `branch_list`/`worktree_list` error — mirrors a real backend read
+    // failure (e.g. a corrupt ref).
+    let fake = FakeGit::default();
+    let mut app = panel_app_with_git(fake);
+    app.apply(Action::FocusGitPanel);
+
+    app.apply(Action::OpenSwitcher);
+
+    assert!(
+        app.switcher.is_none(),
+        "a read error must not half-open the modal"
+    );
+    assert!(matches!(app.mode, Mode::Panel { .. }));
+    assert!(app.status_message.is_some());
+}
+
+#[test]
+fn esc_closes_switcher_back_to_panel_mode() {
+    let fake = FakeGit {
+        branches: Some(vec![]),
+        worktrees: Some(vec![]),
+        ..FakeGit::default()
+    };
+    let mut app = panel_app_with_git(fake);
+    app.apply(Action::FocusGitPanel);
+    app.apply(Action::OpenSwitcher);
+    assert_eq!(app.mode, Mode::Switcher);
+
+    app.close_switcher();
+
+    assert!(matches!(app.mode, Mode::Panel { .. }));
+    assert!(app.switcher.is_none());
+}
+
+// -- Branch switch / worktree re-root (spec 03, task 4.0) -------------------
+
+fn two_branches() -> Vec<crate::git::LocalBranch> {
+    vec![
+        crate::git::LocalBranch {
+            name: "main".to_string(),
+            is_current: true,
+            worktree: None,
+        },
+        crate::git::LocalBranch {
+            name: "feature".to_string(),
+            is_current: false,
+            worktree: None,
+        },
+    ]
+}
+
+fn two_worktrees() -> Vec<crate::git::WorktreeEntry> {
+    vec![
+        crate::git::WorktreeEntry {
+            path: std::path::PathBuf::from("/repo"),
+            head: Some("aaa".to_string()),
+            branch: Some("main".to_string()),
+            bare: false,
+            detached: false,
+            locked: None,
+            prunable: None,
+        },
+        crate::git::WorktreeEntry {
+            path: std::path::PathBuf::from("/repo/wt"),
+            head: Some("bbb".to_string()),
+            branch: Some("feature".to_string()),
+            bare: false,
+            detached: false,
+            locked: None,
+            prunable: None,
+        },
+    ]
+}
+
+#[test]
+fn enter_on_current_branch_is_noop_with_message() {
+    let fake = FakeGit {
+        branches: Some(two_branches()),
+        worktrees: Some(vec![]),
+        ..FakeGit::default()
+    };
+    let mut app = panel_app_with_git(fake);
+    app.apply(Action::FocusGitPanel);
+    app.apply(Action::OpenSwitcher);
+    // `branch_cursor` starts on "main", the current branch.
+    assert_eq!(app.switcher.as_ref().unwrap().branch_cursor, 0);
+
+    app.switcher_confirm();
+
+    assert_eq!(app.mode, Mode::Switcher, "modal stays open on the no-op");
+    assert_eq!(app.status_message.as_deref(), Some("already on main"));
+}
+
+#[test]
+fn enter_switches_branch_closes_modal_and_logs_success() {
+    let fake = FakeGit {
+        branches: Some(two_branches()),
+        worktrees: Some(vec![]),
+        ..FakeGit::default()
+    };
+    let mut app = panel_app_with_git(fake);
+    app.apply(Action::FocusGitPanel);
+    app.apply(Action::OpenSwitcher);
+    app.switcher.as_mut().unwrap().move_down(); // -> feature
+
+    app.switcher_confirm();
+
+    assert!(
+        matches!(app.mode, Mode::Panel { .. }),
+        "modal closes on a successful switch"
+    );
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("switched to feature (annotations kept)")
+    );
+    let entries: Vec<_> = app.command_log.entries().collect();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].command_line, "git switch -- feature");
+    assert!(entries[0].success);
+}
+
+#[test]
+fn failed_switch_logs_stderr_and_leaves_state() {
+    let fake = FakeGit {
+        branches: Some(two_branches()),
+        worktrees: Some(vec![]),
+        switch_branch_error: Some("local changes would be overwritten".to_string()),
+        ..FakeGit::default()
+    };
+    let mut app = panel_app_with_git(fake);
+    app.apply(Action::FocusGitPanel);
+    app.apply(Action::OpenSwitcher);
+    app.switcher.as_mut().unwrap().move_down(); // -> feature
+
+    app.switcher_confirm();
+
+    assert_eq!(
+        app.mode,
+        Mode::Switcher,
+        "the modal stays open on a failed switch (spec 03 Unit 2)"
+    );
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("switch failed \u{2014} see command log (@)")
+    );
+    let entries: Vec<_> = app.command_log.entries().collect();
+    assert_eq!(entries.len(), 1);
+    assert!(!entries[0].success);
+    assert_eq!(entries[0].stderr, "local changes would be overwritten");
+}
+
+#[test]
+fn enter_rejected_while_remote_op_in_flight() {
+    let fake = FakeGit {
+        branches: Some(two_branches()),
+        worktrees: Some(vec![]),
+        ..FakeGit::default()
+    };
+    let mut app = panel_app_with_git(fake);
+    app.apply(Action::FocusGitPanel);
+    app.apply(Action::OpenSwitcher);
+    app.switcher.as_mut().unwrap().move_down(); // -> feature, a real attempt
+    app.remote_op = Some(InFlightRemote {
+        id: TaskId(1),
+        op: RemoteOp::Fetch,
+    });
+
+    app.switcher_confirm();
+
+    assert_eq!(app.mode, Mode::Switcher, "modal stays open");
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_some_and(|m| m.contains("is running")),
+        "got {:?}",
+        app.status_message
+    );
+    assert!(
+        app.command_log.entries().next().is_none(),
+        "no switch attempt reaches the backend while a remote op is in flight"
+    );
+}
+
+#[test]
+fn enter_on_bare_worktree_is_noop_with_message() {
+    let mut worktrees = two_worktrees();
+    worktrees.push(crate::git::WorktreeEntry {
+        path: std::path::PathBuf::from("/repo/bare"),
+        head: None,
+        branch: None,
+        bare: true,
+        detached: false,
+        locked: None,
+        prunable: None,
+    });
+    let fake = FakeGit {
+        branches: Some(vec![]),
+        worktrees: Some(worktrees),
+        ..FakeGit::default()
+    };
+    let mut app = panel_app_with_git(fake);
+    app.repo_root = Some(std::path::PathBuf::from("/repo"));
+    app.apply(Action::FocusGitPanel);
+    app.apply(Action::OpenSwitcher);
+    app.switcher.as_mut().unwrap().toggle_tab(); // -> Worktrees
+    app.switcher.as_mut().unwrap().worktree_cursor = 2; // the bare entry
+
+    app.switcher_confirm();
+
+    assert_eq!(app.mode, Mode::Switcher, "modal stays open on the no-op");
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("cannot re-root onto a bare worktree")
+    );
+}
+
+#[test]
+fn enter_on_current_worktree_is_noop() {
+    let fake = FakeGit {
+        branches: Some(vec![]),
+        worktrees: Some(two_worktrees()),
+        ..FakeGit::default()
+    };
+    let mut app = panel_app_with_git(fake);
+    app.repo_root = Some(std::path::PathBuf::from("/repo"));
+    app.apply(Action::FocusGitPanel);
+    app.apply(Action::OpenSwitcher);
+    app.switcher.as_mut().unwrap().toggle_tab(); // -> Worktrees
+    // `worktree_cursor` starts on "/repo", the current worktree.
+    assert_eq!(app.switcher.as_ref().unwrap().worktree_cursor, 0);
+
+    app.switcher_confirm();
+
+    assert_eq!(app.mode, Mode::Switcher, "modal stays open on the no-op");
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("already in this worktree")
+    );
+}
+
+#[test]
+fn apply_snapshot_clamps_panel_cursor() {
+    let a = raw_patch("a.rs", 1);
+    let b = raw_patch("b.rs", 1);
+    let c = raw_patch("c.rs", 1);
+    let (mut app, _calls, diff_h, _status_h) = app_with_mutable_fake(
+        vec![a.clone(), b.clone(), c.clone()],
+        vec![],
+        vec![a.clone(), b, c],
+        vec![],
+    );
+    app.mode = Mode::Panel { cursor: 2 }; // c.rs, the last navigable row
+
+    // An external change shrinks the review down to a single file.
+    *diff_h.borrow_mut() = vec![a];
+    app.refresh();
+
+    assert_eq!(
+        app.panel_cursor(),
+        0,
+        "the panel cursor must clamp into the shrunk navigable-row list"
+    );
 }

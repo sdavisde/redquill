@@ -229,6 +229,64 @@ pub(super) const PEEK_KEYS: &[ModalBinding<PeekAction>] = &[
     },
 ];
 
+// -- Switcher modal ----------------------------------------------------------
+
+/// What a key does in the branch/worktree switcher modal.
+#[derive(Clone, Copy)]
+pub(super) enum SwitcherAction {
+    ToggleTab,
+    MoveDown,
+    MoveUp,
+    Confirm,
+    Close,
+}
+
+pub(super) const SWITCHER_KEYS: &[ModalBinding<SwitcherAction>] = &[
+    ModalBinding {
+        label: "Tab / h / l",
+        description: "Switch tab (Branches / Worktrees)",
+        keys: &[
+            ModalKey::plain(KeyCode::Tab),
+            ModalKey::plain(KeyCode::BackTab),
+            ModalKey::plain(KeyCode::Char('h')),
+            ModalKey::plain(KeyCode::Char('l')),
+            ModalKey::plain(KeyCode::Left),
+            ModalKey::plain(KeyCode::Right),
+        ],
+        action: SwitcherAction::ToggleTab,
+    },
+    ModalBinding {
+        label: "j / Down",
+        description: "Move selection down",
+        keys: &[
+            ModalKey::plain(KeyCode::Char('j')),
+            ModalKey::plain(KeyCode::Down),
+        ],
+        action: SwitcherAction::MoveDown,
+    },
+    ModalBinding {
+        label: "k / Up",
+        description: "Move selection up",
+        keys: &[
+            ModalKey::plain(KeyCode::Char('k')),
+            ModalKey::plain(KeyCode::Up),
+        ],
+        action: SwitcherAction::MoveUp,
+    },
+    ModalBinding {
+        label: "Enter",
+        description: "Switch to the selected branch/worktree",
+        keys: &[ModalKey::plain(KeyCode::Enter)],
+        action: SwitcherAction::Confirm,
+    },
+    ModalBinding {
+        label: "Esc",
+        description: "Close",
+        keys: &[ModalKey::plain(KeyCode::Esc)],
+        action: SwitcherAction::Close,
+    },
+];
+
 // -- Help overlay ----------------------------------------------------------
 
 /// What a key does while the help overlay is open (it scrolls, since the
@@ -591,6 +649,106 @@ index 111..222 100644
         }
     }
 
+    /// An `App` in Switcher mode over two branches and two worktrees, so
+    /// every switcher action has a visible effect.
+    fn switcher_app() -> App {
+        let mut app = app();
+        let branches = vec![
+            crate::git::LocalBranch {
+                name: "main".to_string(),
+                is_current: true,
+                worktree: None,
+            },
+            crate::git::LocalBranch {
+                name: "feature".to_string(),
+                is_current: false,
+                worktree: None,
+            },
+        ];
+        let worktrees = vec![
+            crate::git::WorktreeEntry {
+                path: PathBuf::from("/repo"),
+                head: Some("aaa".to_string()),
+                branch: Some("main".to_string()),
+                bare: false,
+                detached: false,
+                locked: None,
+                prunable: None,
+            },
+            crate::git::WorktreeEntry {
+                path: PathBuf::from("/repo/wt"),
+                head: Some("bbb".to_string()),
+                branch: Some("feature".to_string()),
+                bare: false,
+                detached: false,
+                locked: None,
+                prunable: None,
+            },
+        ];
+        app.switcher = Some(crate::ui::switcher::SwitcherState::new(
+            branches, worktrees, None, 0,
+        ));
+        app.mode = Mode::Switcher;
+        app
+    }
+
+    #[test]
+    fn every_switcher_table_entry_drives_its_documented_action() {
+        use crate::ui::modes::handle_switcher_key;
+        use crate::ui::switcher::SwitcherTab;
+
+        for binding in SWITCHER_KEYS {
+            for key in binding.keys {
+                let mut app = switcher_app();
+                let label = binding.label;
+                match binding.action {
+                    SwitcherAction::ToggleTab => {
+                        handle_switcher_key(&mut app, key.event());
+                        assert_eq!(
+                            app.switcher.as_ref().unwrap().tab,
+                            SwitcherTab::Worktrees,
+                            "Switcher {label}: must switch tab"
+                        );
+                    }
+                    SwitcherAction::MoveDown => {
+                        handle_switcher_key(&mut app, key.event());
+                        assert_eq!(
+                            app.switcher.as_ref().unwrap().branch_cursor,
+                            1,
+                            "Switcher {label}: cursor moves down"
+                        );
+                    }
+                    SwitcherAction::MoveUp => {
+                        app.switcher.as_mut().unwrap().branch_cursor = 1;
+                        handle_switcher_key(&mut app, key.event());
+                        assert_eq!(
+                            app.switcher.as_ref().unwrap().branch_cursor,
+                            0,
+                            "Switcher {label}: cursor moves up"
+                        );
+                    }
+                    SwitcherAction::Confirm => {
+                        // Task 3 stub: Enter is a documented no-op (Task 4
+                        // wires it up) — the modal must at least stay open.
+                        handle_switcher_key(&mut app, key.event());
+                        assert_eq!(
+                            app.mode,
+                            Mode::Switcher,
+                            "Switcher {label}: modal stays open"
+                        );
+                    }
+                    SwitcherAction::Close => {
+                        handle_switcher_key(&mut app, key.event());
+                        assert!(
+                            matches!(app.mode, Mode::Panel { .. }),
+                            "Switcher {label}: must close back to the panel"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn every_help_table_entry_drives_its_documented_action() {
         for binding in HELP_KEYS {
@@ -791,5 +949,6 @@ index 111..222 100644
         assert!(resolve(HELP_KEYS, ev).is_none());
         assert!(resolve(COMPOSE_HINTS, ev).is_none());
         assert!(resolve(SEARCH_HINTS, ev).is_none());
+        assert!(resolve(SWITCHER_KEYS, ev).is_none());
     }
 }

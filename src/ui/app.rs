@@ -30,6 +30,7 @@ use super::refresh::InFlightRefresh;
 use super::rows::Row;
 use super::search::SearchState;
 use super::stage_ops::{ReviewSnapshot, StageOps, StagedFile, StagedState};
+use super::switcher::SwitcherState;
 use super::syntax::HighlightCache;
 use super::targeting;
 use super::theme::Theme;
@@ -62,6 +63,8 @@ pub enum Mode {
     Search,
     /// The LSP peek overlay (`gd`/`gr`/`K` results) is open.
     Peek,
+    /// The branch/worktree switcher modal (`b`, panel scope) is open.
+    Switcher,
 }
 
 /// The TUI's full state: the per-view diff state (files, selection, rows,
@@ -153,6 +156,10 @@ pub struct App {
     /// The active or most recent [`Mode::Peek`] overlay's state. `None`
     /// when the overlay has never been opened, or after it's closed.
     pub peek: Option<PeekState>,
+    /// The branch/worktree switcher modal's state, `Some` only while
+    /// [`Mode::Switcher`] is active (see [`App::open_switcher`] /
+    /// [`App::close_switcher`]).
+    pub switcher: Option<SwitcherState>,
     /// The LSP client backing `gd`/`gr`/`K`, created lazily on first use
     /// against `repo_root`. `None` until then. `pub(super)` for the
     /// code-intelligence module.
@@ -238,6 +245,7 @@ impl App {
             search_input: String::new(),
             repo_root: None,
             peek: None,
+            switcher: None,
             lsp: None,
             pending_lsp: None,
             background: BackgroundTasks::new(),
@@ -321,14 +329,15 @@ impl App {
     }
 
     /// Whether a keyboard-capturing overlay is currently up: the help overlay
-    /// (`help_open`), the Compose modal, or the LSP peek overlay. While one
-    /// is, it shadows the diff keymap and `q` is inert — an open overlay never
-    /// quits the app. A single predicate so this "is an overlay up?" check,
-    /// otherwise spread across `mode` and `help_open`, can't drift between
-    /// call sites. The command-log pane is deliberately excluded: it is a
-    /// bottom pane, not a full-screen overlay, and never captures `q`.
+    /// (`help_open`), the Compose modal, the LSP peek overlay, or the
+    /// branch/worktree switcher modal. While one is, it shadows the diff
+    /// keymap and `q` is inert — an open overlay never quits the app. A
+    /// single predicate so this "is an overlay up?" check, otherwise spread
+    /// across `mode` and `help_open`, can't drift between call sites. The
+    /// command-log pane is deliberately excluded: it is a bottom pane, not a
+    /// full-screen overlay, and never captures `q`.
     pub(super) fn overlay_active(&self) -> bool {
-        self.help_open || matches!(self.mode, Mode::Compose | Mode::Peek)
+        self.help_open || matches!(self.mode, Mode::Compose | Mode::Peek | Mode::Switcher)
     }
 
     /// Selects the file whose path is `path`: expands its section if
@@ -429,6 +438,7 @@ impl App {
             Action::RemoteFetch => self.request_remote_op(RemoteOp::Fetch),
             Action::RemotePull => self.request_remote_op(RemoteOp::Pull),
             Action::RemotePush => self.request_remote_op(RemoteOp::Push),
+            Action::OpenSwitcher => self.open_switcher(),
             Action::ToggleCommandLog => self.toggle_command_log(),
             Action::Refresh => self.manual_refresh(),
             Action::Quit | Action::QuitDiscard => {}

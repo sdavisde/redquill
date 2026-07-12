@@ -368,7 +368,12 @@ impl App {
     pub(super) fn toggle_git_panel(&mut self) {
         match self.mode {
             Mode::Panel { .. } => self.mode = Mode::Normal,
-            Mode::Compose | Mode::List | Mode::Staging | Mode::Search | Mode::Peek => {}
+            Mode::Compose
+            | Mode::List
+            | Mode::Staging
+            | Mode::Search
+            | Mode::Peek
+            | Mode::Switcher => {}
             Mode::Normal | Mode::Visual { .. } => {
                 self.mode = Mode::Panel { cursor: 0 };
                 self.panel_follow();
