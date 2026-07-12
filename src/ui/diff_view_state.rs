@@ -209,6 +209,24 @@ impl DiffViewState {
         self.ensure_visible();
     }
 
+    /// Jumps the cursor to the first addressable row (top of the buffer),
+    /// then scrolls to follow it. A no-op on an empty diff.
+    pub fn jump_to_top(&mut self) {
+        if !self.rows.is_empty() {
+            self.cursor = self.nearest_addressable(0, true);
+        }
+        self.ensure_visible();
+    }
+
+    /// Jumps the cursor to the last addressable row (bottom of the buffer),
+    /// then scrolls to follow it. A no-op on an empty diff.
+    pub fn jump_to_bottom(&mut self) {
+        if !self.rows.is_empty() {
+            self.cursor = self.max_cursor();
+        }
+        self.ensure_visible();
+    }
+
     /// The last addressable row index (skipping trailing
     /// [`Row::Annotation`] display rows).
     pub fn max_cursor(&self) -> usize {
@@ -494,6 +512,30 @@ index 1..2 100644
     fn cursor_up_clamps_at_zero() {
         let mut view = view_with_raw("f.rs", sample_raw());
         view.cursor_up();
+        assert_eq!(view.cursor, 0);
+    }
+
+    #[test]
+    fn jump_to_bottom_then_top_hits_the_buffer_extremes() {
+        let mut view = view_with_raw("f.rs", sample_raw());
+        let last = view.max_cursor();
+        assert_eq!(view.cursor, 0);
+        view.jump_to_bottom();
+        assert_eq!(view.cursor, last, "G lands on the last addressable row");
+        view.jump_to_top();
+        assert_eq!(
+            view.cursor,
+            view.nearest_addressable(0, true),
+            "gg lands on the first addressable row"
+        );
+    }
+
+    #[test]
+    fn jump_extremes_are_no_ops_on_empty_diff() {
+        let mut view = DiffViewState::new(vec![]);
+        view.jump_to_bottom();
+        assert_eq!(view.cursor, 0);
+        view.jump_to_top();
         assert_eq!(view.cursor, 0);
     }
 

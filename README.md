@@ -42,6 +42,7 @@ Vim-grammar keybindings, designed to be remappable (config layer planned — see
 | Key | Action |
 |---|---|
 | `j` / `k`, `Ctrl-d` / `Ctrl-u` | Move / scroll |
+| `gg` / `G` | Jump to top / bottom of the diff |
 | `h` / `l`, `w` / `b` | Move / word-jump the column cursor (needed for `gd`/`gr`/`K`) |
 | `]` / `[` | Next / previous hunk |
 | `Tab` / `Shift-Tab` | Next / previous file section |

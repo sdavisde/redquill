@@ -417,6 +417,8 @@ impl App {
             Action::CursorUp => self.view.cursor_up(),
             Action::HalfPageDown => self.view.half_page_down(),
             Action::HalfPageUp => self.view.half_page_up(),
+            Action::JumpToTop => self.view.jump_to_top(),
+            Action::JumpToBottom => self.view.jump_to_bottom(),
             Action::CursorLeft => self.view.move_column_left(),
             Action::CursorRight => self.view.move_column_right(),
             Action::WordForward => self.view.move_word_forward(),

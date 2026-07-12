@@ -37,6 +37,10 @@ pub enum Action {
     HalfPageDown,
     /// Move the cursor up half a viewport.
     HalfPageUp,
+    /// Jump the cursor to the top of the diff buffer.
+    JumpToTop,
+    /// Jump the cursor to the bottom of the diff buffer.
+    JumpToBottom,
     /// Jump to the next hunk, crossing file boundaries if needed.
     NextHunk,
     /// Jump to the previous hunk, crossing file boundaries if needed.
@@ -274,6 +278,16 @@ impl Keymap {
                     KeySeq::one(Char('u'), ctrl),
                     HalfPageUp,
                     "Scroll half page up",
+                ),
+                d(
+                    KeySeq::two(Char('g'), none, Char('g'), none),
+                    JumpToTop,
+                    "Jump to top of diff",
+                ),
+                d(
+                    KeySeq::one(Char('G'), none),
+                    JumpToBottom,
+                    "Jump to bottom of diff",
                 ),
                 d(KeySeq::one(Char(']'), none), NextHunk, "Next hunk"),
                 d(KeySeq::one(Char('['), none), PrevHunk, "Previous hunk"),
@@ -793,6 +807,50 @@ mod tests {
         let labels: Vec<String> = km.bindings().iter().map(Binding::key_label).collect();
         assert!(labels.contains(&"gd".to_string()));
         assert!(labels.contains(&"gr".to_string()));
+        assert!(labels.contains(&"gg".to_string()));
+    }
+
+    #[test]
+    fn gg_resolves_to_jump_to_top_across_two_events() {
+        let km = Keymap::default_map();
+        let mut pending = None;
+        let g = key(KeyCode::Char('g'), KeyModifiers::NONE);
+        // First `g` records the pending prefix and resolves nothing.
+        assert_eq!(km.resolve(&mut pending, g), None);
+        assert_eq!(pending, Some(g));
+        // Second `g` completes the sequence.
+        let action = km.resolve(&mut pending, g);
+        assert_eq!(action, Some(Action::JumpToTop));
+        assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn shift_g_resolves_to_jump_to_bottom_regardless_of_shift_bit() {
+        let km = Keymap::default_map();
+        // Uppercase `G` jumps to the bottom; matching strips SHIFT for Char,
+        // so both encodings resolve (mirrors K/Q/N/S/R).
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('G'), KeyModifiers::NONE)),
+            Some(Action::JumpToBottom)
+        );
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('G'), KeyModifiers::SHIFT)),
+            Some(Action::JumpToBottom)
+        );
+        // Lowercase `g` is a two-key prefix, not itself bound.
+        assert_eq!(km.lookup(key(KeyCode::Char('g'), KeyModifiers::NONE)), None);
+    }
+
+    /// A different key after `g` still cancels the pending prefix silently —
+    /// `gg` doesn't change that (an unknown second key resolves to nothing).
+    #[test]
+    fn g_then_unknown_key_cancels_silently_with_gg_bound() {
+        let km = Keymap::default_map();
+        let mut pending = None;
+        km.resolve(&mut pending, key(KeyCode::Char('g'), KeyModifiers::NONE));
+        let action = km.resolve(&mut pending, key(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(action, None);
+        assert_eq!(pending, None);
     }
 
     // -- resolve(): the pending-prefix state machine -------------------------

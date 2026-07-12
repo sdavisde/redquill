@@ -56,8 +56,8 @@ fn group_of(action: Action) -> &'static str {
     use Action::*;
     match action {
         CursorDown | CursorUp | CursorLeft | CursorRight | WordForward | WordBackward
-        | HalfPageDown | HalfPageUp | NextHunk | PrevHunk | NextFile | PrevFile
-        | ToggleCollapse => "Navigation",
+        | HalfPageDown | HalfPageUp | JumpToTop | JumpToBottom | NextHunk | PrevHunk | NextFile
+        | PrevFile | ToggleCollapse => "Navigation",
         EnterVisual | Compose => "Annotate",
         ToggleStage | StageFile | ToggleStagingPanel => "Stage",
         Search | SearchNext | SearchPrev => "Search",
