@@ -12,6 +12,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::App;
+use super::modal_keys::{self, ListAction, PeekAction, StagingAction};
 
 /// Handles one key event while [`super::Mode::Compose`] is active: printable
 /// chars insert, Backspace deletes, arrow keys move within the text, `Ctrl-j`
@@ -68,31 +69,38 @@ pub(super) fn handle_compose_key(app: &mut App, key: KeyEvent) {
 
 /// Handles one key event while [`super::Mode::List`] is active: `j`/`k` move
 /// focus, `Enter` jumps to the annotation and closes the panel, `e` edits
-/// it, `d` deletes it, `a`/`Esc` close the panel. Bypasses the
+/// it, `d` deletes it, `a`/`Esc` close the panel. Dispatch is driven by
+/// [`modal_keys::LIST_KEYS`] — the same table the help overlay renders — so
+/// the keys can't drift from their documentation. Bypasses the
 /// [`super::Keymap`] table entirely.
 pub(super) fn handle_list_key(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Char('j') => app.list_move_down(),
-        KeyCode::Char('k') => app.list_move_up(),
-        KeyCode::Enter => app.jump_to_focused_annotation(),
-        KeyCode::Char('e') => app.edit_focused_annotation(),
-        KeyCode::Char('d') => app.delete_focused_annotation(),
-        KeyCode::Char('a') | KeyCode::Esc => app.close_list(),
-        _ => {}
+    let Some(action) = modal_keys::resolve(modal_keys::LIST_KEYS, key) else {
+        return;
+    };
+    match action {
+        ListAction::MoveDown => app.list_move_down(),
+        ListAction::MoveUp => app.list_move_up(),
+        ListAction::Jump => app.jump_to_focused_annotation(),
+        ListAction::Edit => app.edit_focused_annotation(),
+        ListAction::Delete => app.delete_focused_annotation(),
+        ListAction::Close => app.close_list(),
     }
 }
 
 /// Handles one key event while [`super::Mode::Staging`] is active: `j`/`k`
 /// move focus, `Space`/`Enter` unstage the focused file (the panel stays
-/// open), `s`/`Esc` close the panel. Bypasses the [`super::Keymap`] table
-/// entirely.
+/// open), `s`/`Esc` close the panel. Dispatch is driven by
+/// [`modal_keys::STAGING_KEYS`] — the same table the help overlay renders.
+/// Bypasses the [`super::Keymap`] table entirely.
 pub(super) fn handle_staging_key(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Char('j') => app.staging_move_down(),
-        KeyCode::Char('k') => app.staging_move_up(),
-        KeyCode::Char(' ') | KeyCode::Enter => app.unstage_focused_file(),
-        KeyCode::Char('s') | KeyCode::Esc => app.close_staging(),
-        _ => {}
+    let Some(action) = modal_keys::resolve(modal_keys::STAGING_KEYS, key) else {
+        return;
+    };
+    match action {
+        StagingAction::MoveDown => app.staging_move_down(),
+        StagingAction::MoveUp => app.staging_move_up(),
+        StagingAction::Unstage => app.unstage_focused_file(),
+        StagingAction::Close => app.close_staging(),
     }
 }
 
@@ -147,15 +155,18 @@ pub(super) fn handle_panel_key(
 /// a Definition/References result that's one of the diff's files (closing
 /// the overlay) or sets `not in diff` otherwise (a no-op for Hover), `Esc`
 /// closes back to Normal (`q` is inert — an open overlay never quits the
-/// app). Bypasses the [`super::Keymap`] table entirely.
+/// app). Dispatch is driven by [`modal_keys::PEEK_KEYS`] — the same table the
+/// help overlay renders. Bypasses the [`super::Keymap`] table entirely.
 pub(super) fn handle_peek_key(app: &mut App, key: KeyEvent) {
     use super::code_intel;
-    match key.code {
-        KeyCode::Char('j') => code_intel::peek_move_down(app),
-        KeyCode::Char('k') => code_intel::peek_move_up(app),
-        KeyCode::Enter => code_intel::peek_enter(app),
-        KeyCode::Esc => code_intel::close_peek(app),
-        _ => {}
+    let Some(action) = modal_keys::resolve(modal_keys::PEEK_KEYS, key) else {
+        return;
+    };
+    match action {
+        PeekAction::MoveDown => code_intel::peek_move_down(app),
+        PeekAction::MoveUp => code_intel::peek_move_up(app),
+        PeekAction::Enter => code_intel::peek_enter(app),
+        PeekAction::Close => code_intel::close_peek(app),
     }
 }
 

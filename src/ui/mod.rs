@@ -28,6 +28,7 @@ mod help;
 mod keymap;
 mod list_panel;
 mod lsp_ops;
+mod modal_keys;
 mod modes;
 mod peek;
 mod peek_overlay;
@@ -210,20 +211,23 @@ fn dispatch_key(
 /// setting `u16::MAX` for "end" is safe. Paging uses the viewport height
 /// `render` recorded last frame.
 fn handle_help_key(app: &mut App, key: KeyEvent) {
+    use modal_keys::HelpAction;
+    let Some(action) = modal_keys::resolve(modal_keys::HELP_KEYS, key) else {
+        return;
+    };
     let page = app.help_viewport.get().max(1);
     let cur = app.help_scroll.get();
-    match key.code {
-        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') => {
+    match action {
+        HelpAction::Close => {
             app.help_open = false;
             app.help_scroll.set(0);
         }
-        KeyCode::Down | KeyCode::Char('j') => app.help_scroll.set(cur.saturating_add(1)),
-        KeyCode::Up | KeyCode::Char('k') => app.help_scroll.set(cur.saturating_sub(1)),
-        KeyCode::PageDown => app.help_scroll.set(cur.saturating_add(page)),
-        KeyCode::PageUp => app.help_scroll.set(cur.saturating_sub(page)),
-        KeyCode::Home | KeyCode::Char('g') => app.help_scroll.set(0),
-        KeyCode::End | KeyCode::Char('G') => app.help_scroll.set(u16::MAX),
-        _ => {}
+        HelpAction::ScrollDown => app.help_scroll.set(cur.saturating_add(1)),
+        HelpAction::ScrollUp => app.help_scroll.set(cur.saturating_sub(1)),
+        HelpAction::PageDown => app.help_scroll.set(cur.saturating_add(page)),
+        HelpAction::PageUp => app.help_scroll.set(cur.saturating_sub(page)),
+        HelpAction::Top => app.help_scroll.set(0),
+        HelpAction::Bottom => app.help_scroll.set(u16::MAX),
     }
 }
 

@@ -1,8 +1,9 @@
 //! The help overlay: a centered, scrollable box listing every binding,
-//! grouped, plus the Compose-mode, List-mode, and Staging-panel key hints
-//! that aren't in the [`Keymap`] table (those modes handle keys modally,
-//! bypassing the table — see [`super::handle_compose_key`]/
-//! [`super::handle_list_key`]/[`super::handle_staging_key`]).
+//! grouped, plus the modal-mode key hints (Compose, List, Staging panel,
+//! Search, Peek) that aren't in the [`Keymap`] table. Those modes handle keys
+//! modally, bypassing the table; their hint sections render from the shared
+//! per-mode tables in [`super::modal_keys`] — the same tables their handlers
+//! dispatch from — so the overlay and the handlers can't drift apart.
 //!
 //! The full binding list is taller than most terminals, so the box caps its
 //! height to a fraction of the screen and scrolls the overflow (a right-edge
@@ -22,43 +23,10 @@ use ratatui::widgets::{
 };
 
 use super::keymap::{Action, Binding, Keymap, Scope};
+use super::modal_keys::{
+    COMPOSE_HINTS, LIST_KEYS, ModalBinding, PEEK_KEYS, SEARCH_HINTS, STAGING_KEYS,
+};
 use super::theme::Theme;
-
-/// Static key hints for a mode that isn't driven by the [`Keymap`] table.
-const COMPOSE_HINTS: &[(&str, &str)] = &[
-    ("Enter", "Submit"),
-    ("Esc", "Cancel"),
-    ("Ctrl-j", "Insert newline"),
-    ("Ctrl-t", "Cycle classification"),
-    ("Backspace", "Delete character"),
-    ("Left/Right/Up/Down", "Move within text"),
-];
-
-const LIST_HINTS: &[(&str, &str)] = &[
-    ("j / k", "Move focus"),
-    ("Enter", "Jump to annotation"),
-    ("e", "Edit"),
-    ("d", "Delete"),
-    ("a / Esc", "Close panel"),
-];
-
-const STAGING_HINTS: &[(&str, &str)] = &[
-    ("j / k", "Move focus"),
-    ("Space / Enter", "Unstage file"),
-    ("s / Esc", "Close panel"),
-];
-
-const SEARCH_HINTS: &[(&str, &str)] = &[
-    ("Enter", "Confirm search"),
-    ("Esc", "Cancel (clears pattern if buffer empty)"),
-    ("Backspace", "Delete character"),
-];
-
-const PEEK_HINTS: &[(&str, &str)] = &[
-    ("j / k", "Move selection (or scroll hover text)"),
-    ("Enter", "Jump to location (definition/references)"),
-    ("Esc", "Close"),
-];
 
 /// The help overlay's group sections, in render order. Every [`Action`]'s
 /// [`group_of`] must be one of these, or its binding would never render — the
@@ -136,6 +104,28 @@ fn binding_hidden(action: Action, staging_allowed: bool) -> bool {
     !staging_allowed && matches!(action, Action::ToggleStage | Action::StageFile)
 }
 
+/// Flattens a per-mode key table (see [`super::modal_keys`]) into the
+/// `(key label, description)` rows the overlay prints — the erased view that
+/// lets tables with different per-mode action types share one render loop.
+fn modal_hints<A>(table: &'static [ModalBinding<A>]) -> Vec<(&'static str, &'static str)> {
+    table.iter().map(|b| (b.label, b.description)).collect()
+}
+
+/// The modal-mode hint sections, in render order: each mode's section title
+/// paired with the rows of its shared key table. The same tables drive the
+/// modal handlers' dispatch, so the overlay can't document keys the handlers
+/// don't accept (and vice versa — the `modal_keys` cross-check test pins the
+/// handler side).
+fn modal_sections() -> [(&'static str, Vec<(&'static str, &'static str)>); 5] {
+    [
+        ("Compose mode", modal_hints(COMPOSE_HINTS)),
+        ("List mode", modal_hints(LIST_KEYS)),
+        ("Staging panel", modal_hints(STAGING_KEYS)),
+        ("Search input", modal_hints(SEARCH_HINTS)),
+        ("Peek mode", modal_hints(PEEK_KEYS)),
+    ]
+}
+
 /// Renders the help overlay, centered over `area`. Bindings from the
 /// [`Keymap`] table are grouped Navigation / Annotate / Panels / Quit, with
 /// Compose-mode and List-mode hints appended below (those modes bypass the
@@ -156,15 +146,16 @@ pub fn render(
     scroll: &Cell<u16>,
     viewport: &Cell<u16>,
 ) {
+    let sections = modal_sections();
     let bindings = keymap.bindings();
     let key_width = bindings
         .iter()
         .map(|b| b.key_label().len())
-        .chain(COMPOSE_HINTS.iter().map(|(k, _)| k.len()))
-        .chain(LIST_HINTS.iter().map(|(k, _)| k.len()))
-        .chain(STAGING_HINTS.iter().map(|(k, _)| k.len()))
-        .chain(SEARCH_HINTS.iter().map(|(k, _)| k.len()))
-        .chain(PEEK_HINTS.iter().map(|(k, _)| k.len()))
+        .chain(
+            sections
+                .iter()
+                .flat_map(|(_, hints)| hints.iter().map(|(k, _)| k.len())),
+        )
         .max()
         .unwrap_or(0);
 
@@ -200,33 +191,14 @@ pub fn render(
         lines.push(Line::from(""));
     }
 
-    lines.push(section_header("Compose mode", theme));
-    for (key, desc) in COMPOSE_HINTS {
-        lines.push(key_line(key, desc, key_width, theme));
-    }
-    lines.push(Line::from(""));
-
-    lines.push(section_header("List mode", theme));
-    for (key, desc) in LIST_HINTS {
-        lines.push(key_line(key, desc, key_width, theme));
-    }
-    lines.push(Line::from(""));
-
-    lines.push(section_header("Staging panel", theme));
-    for (key, desc) in STAGING_HINTS {
-        lines.push(key_line(key, desc, key_width, theme));
-    }
-    lines.push(Line::from(""));
-
-    lines.push(section_header("Search input", theme));
-    for (key, desc) in SEARCH_HINTS {
-        lines.push(key_line(key, desc, key_width, theme));
-    }
-    lines.push(Line::from(""));
-
-    lines.push(section_header("Peek mode", theme));
-    for (key, desc) in PEEK_HINTS {
-        lines.push(key_line(key, desc, key_width, theme));
+    for (i, (title, hints)) in sections.iter().enumerate() {
+        lines.push(section_header(title, theme));
+        for (key, desc) in hints {
+            lines.push(key_line(key, desc, key_width, theme));
+        }
+        if i + 1 < sections.len() {
+            lines.push(Line::from(""));
+        }
     }
 
     // The chrome around the scrollable list, herdr-style: a dim subtitle
