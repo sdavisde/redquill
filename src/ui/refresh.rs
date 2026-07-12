@@ -192,7 +192,12 @@ impl App {
     /// files/patches/staged state, maintains the collapse map, invalidates
     /// only the highlight-cache entries whose file content changed, rebuilds
     /// rows, and restores the cursor/scroll/staging-panel position.
-    fn apply_snapshot(&mut self, snapshot: ReviewSnapshot) {
+    ///
+    /// `pub(super)` (rather than private) only so the performance tripwire
+    /// (`perf_tests.rs`) can time this hot path in isolation without routing
+    /// through a full `build_review`; nothing outside the refresh subsystem
+    /// calls it in production.
+    pub(super) fn apply_snapshot(&mut self, snapshot: ReviewSnapshot) {
         // Remember the cursor's file by path and its offset within that
         // file's section, so the same spot is restored even if files
         // reorder or the section shrinks.

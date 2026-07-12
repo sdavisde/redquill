@@ -875,3 +875,7 @@ fn line_target(path: &str, line: &LineRow) -> Option<Target> {
 #[cfg(test)]
 #[path = "app_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "perf_tests.rs"]
+mod perf_tests;
