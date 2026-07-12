@@ -11,7 +11,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use super::diff::RawFilePatch;
-use super::error::GitError;
+use super::error::{GitError, command_error, map_spawn_err};
 use super::runner::GitRunner;
 
 impl GitRunner {
@@ -100,15 +100,6 @@ impl GitRunner {
     }
 }
 
-/// Maps a spawn `io::Error` to a `GitNotFound` when git is absent, else `Spawn`.
-fn map_spawn_err(e: std::io::Error) -> GitError {
-    if e.kind() == std::io::ErrorKind::NotFound {
-        GitError::GitNotFound
-    } else {
-        GitError::Spawn(e)
-    }
-}
-
 /// Turns a non-zero exit status into a [`GitError::Command`].
 fn check_status(
     args: &[&str],
@@ -118,14 +109,7 @@ fn check_status(
     if status.success() {
         return Ok(());
     }
-    Err(GitError::Command {
-        command: args.join(" "),
-        code: status
-            .code()
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| "signal".to_string()),
-        stderr: String::from_utf8_lossy(stderr).trim().to_string(),
-    })
+    Err(command_error(args, status, stderr))
 }
 
 /// Splits a raw file patch into its header (everything before the first
@@ -327,7 +311,16 @@ pub fn build_line_patch(
                 }
                 // Unselected addition: dropped entirely.
             }
-            _ => unreachable!("markers are normalized to ' ', '-', or '+'"),
+            _ => {
+                // `parse_body_lines` normalizes every marker to ' ', '-', or
+                // '+', so this arm is not reachable in practice. Rather than
+                // panic on a hypothetical malformed marker, degrade to
+                // context (the same treatment as an unselected removal)
+                // instead of dropping the line.
+                out_lines.push((' ', &body.content, body.no_newline));
+                old_count += 1;
+                new_count += 1;
+            }
         }
     }
 

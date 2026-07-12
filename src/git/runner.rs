@@ -6,7 +6,7 @@ use std::process::Command;
 use super::branch::{BRANCH_LIST_FORMAT, LocalBranch, parse_branch_list};
 use super::commit::{COMMIT_SUMMARY_FORMAT, CommitSummary, parse_commit_summary};
 use super::diff::{DiffTarget, RawFilePatch, split_patches};
-use super::error::GitError;
+use super::error::{GitError, command_error, map_spawn_err};
 use super::stash::{STASH_LIST_FORMAT, StashEntry, parse_stash_list};
 use super::status::{FileStatus, StatusSnapshot, parse_porcelain_v2, parse_porcelain_v2_full};
 use super::worktree::{WorktreeEntry, parse_worktree_list};
@@ -65,15 +65,7 @@ impl GitRunner {
             .map_err(map_spawn_err)?;
 
         if !output.status.success() {
-            return Err(GitError::Command {
-                command: args.join(" "),
-                code: output
-                    .status
-                    .code()
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "signal".to_string()),
-                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            });
+            return Err(command_error(args, &output.status, &output.stderr));
         }
         Ok(output.stdout)
     }
@@ -174,14 +166,5 @@ impl GitRunner {
     pub fn show_file(&self, spec: &str) -> Option<String> {
         let bytes = self.run_raw(&["show", spec]).ok()?;
         String::from_utf8(bytes).ok()
-    }
-}
-
-/// Maps a spawn `io::Error` to a `GitNotFound` when git is absent, else `Spawn`.
-fn map_spawn_err(e: std::io::Error) -> GitError {
-    if e.kind() == std::io::ErrorKind::NotFound {
-        GitError::GitNotFound
-    } else {
-        GitError::Spawn(e)
     }
 }

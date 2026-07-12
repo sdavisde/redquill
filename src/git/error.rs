@@ -36,3 +36,30 @@ pub enum GitError {
     #[error("failed to parse git output: {0}")]
     Parse(String),
 }
+
+/// Maps a spawn `io::Error` to a `GitNotFound` when git is absent, else `Spawn`.
+pub(crate) fn map_spawn_err(e: std::io::Error) -> GitError {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        GitError::GitNotFound
+    } else {
+        GitError::Spawn(e)
+    }
+}
+
+/// Builds a [`GitError::Command`] from a non-zero exit status: joins `args`
+/// into the reported command string, maps a missing exit code (signal
+/// termination) to `"signal"`, and trims `stderr`.
+pub(crate) fn command_error(
+    args: &[&str],
+    status: &std::process::ExitStatus,
+    stderr: &[u8],
+) -> GitError {
+    GitError::Command {
+        command: args.join(" "),
+        code: status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "signal".to_string()),
+        stderr: String::from_utf8_lossy(stderr).trim().to_string(),
+    }
+}
