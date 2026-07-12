@@ -40,6 +40,8 @@ mod search;
 mod stage_ops;
 mod staging;
 mod staging_panel;
+mod switcher;
+mod switcher_modal;
 mod syntax;
 mod targeting;
 mod theme;
@@ -165,6 +167,7 @@ fn dispatch_key(
         Mode::Panel { .. } => return modes::handle_panel_key(app, key, keymap),
         Mode::Search => modes::handle_search_key(app, key),
         Mode::Peek => modes::handle_peek_key(app, key),
+        Mode::Switcher => modes::handle_switcher_key(app, key),
         Mode::Normal | Mode::Visual { .. } => {
             // While an overlay is open it captures keys — here that overlay
             // can only be the help overlay, since Compose and Peek have their
@@ -304,6 +307,9 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
     }
     if matches!(app.mode, Mode::Peek) {
         peek_overlay::render(frame, area, app);
+    }
+    if matches!(app.mode, Mode::Switcher) {
+        switcher_modal::render(frame, area, app);
     }
 }
 

@@ -1,6 +1,7 @@
 //! The help overlay: a centered, scrollable box listing every binding,
 //! grouped, plus the modal-mode key hints (Compose, List, Staging panel,
-//! Search, Peek) that aren't in the [`Keymap`] table. Those modes handle keys
+//! Search, Peek, the branch/worktree switcher) that aren't in the
+//! [`Keymap`] table. Those modes handle keys
 //! modally, bypassing the table; their hint sections render from the shared
 //! per-mode tables in [`super::modal_keys`] — the same tables their handlers
 //! dispatch from — so the overlay and the handlers can't drift apart.
@@ -24,7 +25,7 @@ use ratatui::widgets::{
 
 use super::keymap::{Action, Binding, Keymap, Scope};
 use super::modal_keys::{
-    COMPOSE_HINTS, LIST_KEYS, ModalBinding, PEEK_KEYS, SEARCH_HINTS, STAGING_KEYS,
+    COMPOSE_HINTS, LIST_KEYS, ModalBinding, PEEK_KEYS, SEARCH_HINTS, STAGING_KEYS, SWITCHER_KEYS,
 };
 use super::theme::Theme;
 
@@ -54,9 +55,8 @@ fn group_of(action: Action) -> &'static str {
         Search | SearchNext | SearchPrev => "Search",
         ToggleList | ToggleHelp | FocusGitPanel | ToggleCommandLog | Refresh => "Panels",
         GotoDefinition | GotoReferences | Hover => "Code intelligence",
-        PanelCursorDown | PanelCursorUp | PanelSelect | RemoteFetch | RemotePull | RemotePush => {
-            "Git panel"
-        }
+        PanelCursorDown | PanelCursorUp | PanelSelect | RemoteFetch | RemotePull | RemotePush
+        | OpenSwitcher => "Git panel",
         Quit | QuitDiscard => "Quit",
     }
 }
@@ -116,13 +116,14 @@ fn modal_hints<A>(table: &'static [ModalBinding<A>]) -> Vec<(&'static str, &'sta
 /// modal handlers' dispatch, so the overlay can't document keys the handlers
 /// don't accept (and vice versa — the `modal_keys` cross-check test pins the
 /// handler side).
-fn modal_sections() -> [(&'static str, Vec<(&'static str, &'static str)>); 5] {
+fn modal_sections() -> [(&'static str, Vec<(&'static str, &'static str)>); 6] {
     [
         ("Compose mode", modal_hints(COMPOSE_HINTS)),
         ("List mode", modal_hints(LIST_KEYS)),
         ("Staging panel", modal_hints(STAGING_KEYS)),
         ("Search input", modal_hints(SEARCH_HINTS)),
         ("Peek mode", modal_hints(PEEK_KEYS)),
+        ("Branch/worktree switcher", modal_hints(SWITCHER_KEYS)),
     ]
 }
 

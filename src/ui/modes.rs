@@ -12,7 +12,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::App;
-use super::modal_keys::{self, ListAction, PeekAction, StagingAction};
+use super::modal_keys::{self, ListAction, PeekAction, StagingAction, SwitcherAction};
 
 /// Handles one key event while [`super::Mode::Compose`] is active: printable
 /// chars insert, Backspace deletes, arrow keys move within the text, `Ctrl-j`
@@ -170,6 +170,30 @@ pub(super) fn handle_peek_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// Handles one key event while [`super::Mode::Switcher`] is active (the
+/// branch/worktree switcher modal is open): `Tab`/`BackTab`/`h`/`l`/arrow
+/// keys switch between the Branches and Worktrees tabs, `j`/`k` move the
+/// active tab's cursor, `Enter` acts on the selected row (a stub until
+/// Task 4 wires up `git switch`/re-root — see
+/// [`super::App::switcher_confirm`]), and `Esc` closes the modal back to
+/// the git panel at its pre-open cursor row. Dispatch is driven by
+/// [`modal_keys::SWITCHER_KEYS`] — the same table the help overlay renders
+/// — so, like [`handle_peek_key`], `q` isn't in the table and is therefore
+/// inert here: an open overlay never quits the app. Bypasses the
+/// [`super::Keymap`] table entirely.
+pub(super) fn handle_switcher_key(app: &mut App, key: KeyEvent) {
+    let Some(action) = modal_keys::resolve(modal_keys::SWITCHER_KEYS, key) else {
+        return;
+    };
+    match action {
+        SwitcherAction::ToggleTab => app.switcher_toggle_tab(),
+        SwitcherAction::MoveDown => app.switcher_move_down(),
+        SwitcherAction::MoveUp => app.switcher_move_up(),
+        SwitcherAction::Confirm => app.switcher_confirm(),
+        SwitcherAction::Close => app.close_switcher(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +270,34 @@ index 111..222 100644
         assert_eq!(app.mode, Mode::Peek, "q must not close the Peek overlay");
         handle_peek_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::Normal, "Esc still closes the Peek overlay");
+    }
+
+    /// An open overlay never quits the app, so `q` is inert while the
+    /// switcher modal is up (it isn't in `SWITCHER_KEYS`, so it resolves to
+    /// nothing here); Esc still closes it back to the git panel.
+    #[test]
+    fn switcher_q_is_inert_and_esc_closes() {
+        let mut app = App::new(vec![sample_file()]);
+        app.switcher = Some(crate::ui::switcher::SwitcherState::new(
+            vec![],
+            vec![],
+            None,
+            0,
+        ));
+        app.mode = Mode::Switcher;
+        handle_switcher_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        );
+        assert_eq!(
+            app.mode,
+            Mode::Switcher,
+            "q must not close the switcher modal"
+        );
+        handle_switcher_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(
+            matches!(app.mode, Mode::Panel { .. }),
+            "Esc still closes the switcher modal, back to the panel"
+        );
     }
 }

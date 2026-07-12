@@ -242,7 +242,7 @@ fn help_overlay_renders_bindings_when_open() {
 /// overlay clipping its lower sections.
 #[test]
 fn help_overlay_lists_remote_and_command_log_bindings() {
-    let backend = TestBackend::new(100, 80);
+    let backend = TestBackend::new(100, 300);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
     app.help_open = true;
@@ -264,6 +264,11 @@ fn help_overlay_lists_remote_and_command_log_bindings() {
     assert!(content.contains("Fetch from remote"));
     assert!(content.contains("Pull from remote"));
     assert!(content.contains("Push to remote"));
+    // Switcher-open binding (Git panel focused section, panel scope) and
+    // its modal hint section (spec 03, task 3.0).
+    assert!(content.contains("Open branch/worktree switcher"));
+    assert!(content.contains("Branch/worktree switcher"));
+    assert!(content.contains("Switch to the selected branch/worktree"));
 }
 
 /// On a terminal too short for the whole binding list, the help overlay
@@ -807,6 +812,114 @@ fn quit_family_quits_from_focused_panel() {
             Flow::Continue => panic!("{ev:?} should quit from the focused panel"),
         }
     }
+}
+
+// -- Branch/worktree switcher modal (spec 03, task 3.0) --------------------
+
+/// `b` resolves to `OpenSwitcher` only in panel scope, driven through the
+/// real `dispatch_key` path. `panel_smoke_app` attaches no git backend, so
+/// the switcher can't read branch/worktree lists and this degrades to a
+/// footer message rather than opening — still proving `b` reaches
+/// `App::open_switcher` from the focused panel rather than resolving to
+/// nothing.
+#[test]
+fn b_in_panel_mode_opens_switcher_through_dispatch_key() {
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut app = panel_smoke_app();
+    app.apply(Action::FocusGitPanel);
+    assert!(matches!(app.mode, Mode::Panel { .. }));
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE),
+    );
+    assert!(matches!(app.mode, Mode::Panel { .. }));
+    assert!(
+        app.status_message.is_some(),
+        "b must act (no-backend footer message) from the focused panel"
+    );
+}
+
+/// `b` in Normal mode (diff scope) is unaffected by the panel-scope
+/// binding: it stays `WordBackward`, never opening the switcher.
+#[test]
+fn b_in_normal_mode_still_word_jumps() {
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut app = panel_smoke_app();
+    assert_eq!(app.mode, Mode::Normal);
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE),
+    );
+    assert_eq!(
+        app.mode,
+        Mode::Normal,
+        "b must not open the switcher outside the focused panel"
+    );
+    assert!(app.switcher.is_none());
+}
+
+/// `Esc` inside the switcher modal closes it and restores the git panel's
+/// cursor to the row it had before the modal opened, not wherever the
+/// panel cursor happens to sit afterward.
+#[test]
+fn esc_restores_panel_cursor_row() {
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut app = panel_smoke_app();
+    app.apply(Action::FocusGitPanel);
+    app.apply(Action::PanelCursorDown);
+    app.apply(Action::PanelCursorDown);
+    assert_eq!(app.panel_cursor(), 2);
+    app.switcher = Some(super::switcher::SwitcherState::new(
+        vec![],
+        vec![],
+        None,
+        app.panel_cursor(),
+    ));
+    app.mode = Mode::Switcher;
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    );
+    assert!(matches!(app.mode, Mode::Panel { .. }));
+    assert_eq!(
+        app.panel_cursor(),
+        2,
+        "Esc must restore the pre-open panel cursor row"
+    );
+}
+
+/// `q` is inert inside the switcher modal, per the existing overlay rule —
+/// it must not quit the session.
+#[test]
+fn q_is_inert_inside_switcher() {
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut app = panel_smoke_app();
+    app.switcher = Some(super::switcher::SwitcherState::new(vec![], vec![], None, 0));
+    app.mode = Mode::Switcher;
+    match dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+    ) {
+        Flow::Quit(_) => panic!("q must not quit from inside the switcher modal"),
+        Flow::Continue => {}
+    }
+    assert_eq!(
+        app.mode,
+        Mode::Switcher,
+        "q must not close the switcher modal"
+    );
 }
 
 /// An open overlay never quits the app: `q` is inert while the help

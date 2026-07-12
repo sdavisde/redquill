@@ -102,15 +102,19 @@ impl App {
     /// unwelcome: a remote op is mid-flight (its completion refreshes anyway,
     /// and the intermediate tree is transient — mirrors lazygit pausing
     /// background refreshes during its own git ops); the target is a fixed
-    /// range (nothing to pick up); or the user has in-progress input or a
-    /// Visual selection anchored to positions a rebuild would move.
+    /// range (nothing to pick up); the user has in-progress input or a
+    /// Visual selection anchored to positions a rebuild would move; or the
+    /// branch/worktree switcher modal is open (rebuilding under an open
+    /// modal is wasted work and could shift `panel_cursor`/`selected_file`
+    /// mid-decision — the generation guard would keep it correct either
+    /// way, but pausing avoids the churn).
     pub(super) fn maybe_auto_refresh(&mut self) {
         if self.remote_op.is_some() || matches!(self.target, DiffTarget::Range(_)) {
             return;
         }
         if matches!(
             self.mode,
-            Mode::Compose | Mode::Search | Mode::Visual { .. }
+            Mode::Compose | Mode::Search | Mode::Visual { .. } | Mode::Switcher
         ) {
             return;
         }
@@ -171,7 +175,7 @@ impl App {
             // a safe mode returns (matches the `maybe_auto_refresh` guard).
             if matches!(
                 self.mode,
-                Mode::Compose | Mode::Search | Mode::Visual { .. }
+                Mode::Compose | Mode::Search | Mode::Visual { .. } | Mode::Switcher
             ) {
                 continue;
             }

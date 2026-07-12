@@ -96,6 +96,8 @@ pub enum Action {
     RemotePull,
     /// Push to the upstream remote on a background thread (panel scope).
     RemotePush,
+    /// Open the branch/worktree switcher modal (panel scope).
+    OpenSwitcher,
     /// Toggle the command-log pane (bound in both scopes).
     ToggleCommandLog,
     /// Re-read the working tree and rebuild the diff, picking up edits made
@@ -398,6 +400,11 @@ impl Keymap {
                 ),
                 p(KeySeq::one(Char('p'), none), RemotePull, "Pull from remote"),
                 p(KeySeq::one(Char('P'), none), RemotePush, "Push to remote"),
+                p(
+                    KeySeq::one(Char('b'), none),
+                    OpenSwitcher,
+                    "Open branch/worktree switcher",
+                ),
                 p(
                     KeySeq::one(Char('@'), none),
                     ToggleCommandLog,
@@ -970,6 +977,18 @@ mod tests {
             km.lookup_in(Scope::Panel, key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
             Some(Action::QuitDiscard)
         );
+    }
+
+    // -- Switcher modal (task 3.0) -------------------------------------------
+
+    /// `b` opens the switcher only in panel scope; in diff scope it stays
+    /// bound to `WordBackward` (column-cursor motion), unaffected.
+    #[test]
+    fn b_opens_switcher_only_in_panel_scope() {
+        let km = Keymap::default_map();
+        let b = key(KeyCode::Char('b'), KeyModifiers::NONE);
+        assert_eq!(km.lookup_in(Scope::Panel, b), Some(Action::OpenSwitcher));
+        assert_eq!(km.lookup_in(Scope::Diff, b), Some(Action::WordBackward));
     }
 
     /// `@` toggles the command log from *both* scopes (it is a view toggle,

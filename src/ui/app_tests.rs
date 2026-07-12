@@ -795,6 +795,11 @@ struct FakeGit {
     show_content: Option<String>,
     branch: Option<BranchStatus>,
     stashes: Vec<StashEntry>,
+    // `None` (the default) means "unavailable", mirroring the `StageOps`
+    // trait default (an error) so tests can exercise the switcher's
+    // read-error path without a separate flag.
+    branches: Option<Vec<crate::git::LocalBranch>>,
+    worktrees: Option<Vec<crate::git::WorktreeEntry>>,
 }
 
 impl FakeGit {
@@ -867,6 +872,18 @@ impl StageOps for FakeGit {
 
     fn stash_list(&self) -> Result<Vec<StashEntry>, GitError> {
         Ok(self.stashes.clone())
+    }
+
+    fn branch_list(&self) -> Result<Vec<crate::git::LocalBranch>, GitError> {
+        self.branches
+            .clone()
+            .ok_or_else(|| GitError::Parse("no branches".into()))
+    }
+
+    fn worktree_list(&self) -> Result<Vec<crate::git::WorktreeEntry>, GitError> {
+        self.worktrees
+            .clone()
+            .ok_or_else(|| GitError::Parse("no worktrees".into()))
     }
 }
 
@@ -2984,4 +3001,94 @@ fn focus_toggle_is_a_no_op_while_a_modal_owns_the_keyboard() {
     app.mode = Mode::Search;
     app.apply(Action::FocusGitPanel);
     assert_eq!(app.mode, Mode::Search); // unchanged: Search still owns keys
+}
+
+// -- Branch/worktree switcher modal (spec 03, task 3.0) --------------------
+
+/// A panel fixture with a git backend attached (via [`FakeGit`]), so
+/// `open_switcher` has something to read from.
+fn panel_app_with_git(fake: FakeGit) -> App {
+    let mut app = panel_app();
+    app.stage_ops = Some(Box::new(fake));
+    app
+}
+
+#[test]
+fn open_switcher_populates_lists_via_fake_ops() {
+    let branches = vec![
+        crate::git::LocalBranch {
+            name: "main".to_string(),
+            is_current: true,
+            worktree: None,
+        },
+        crate::git::LocalBranch {
+            name: "feature".to_string(),
+            is_current: false,
+            worktree: None,
+        },
+    ];
+    let worktrees = vec![crate::git::WorktreeEntry {
+        path: std::path::PathBuf::from("/repo"),
+        head: Some("deadbeef".to_string()),
+        branch: Some("main".to_string()),
+        bare: false,
+        detached: false,
+        locked: None,
+        prunable: None,
+    }];
+    let fake = FakeGit {
+        branches: Some(branches.clone()),
+        worktrees: Some(worktrees.clone()),
+        ..FakeGit::default()
+    };
+    let mut app = panel_app_with_git(fake);
+    app.apply(Action::FocusGitPanel);
+    app.apply(Action::PanelCursorDown); // capture a non-zero panel cursor
+    let panel_cursor = app.panel_cursor();
+
+    app.apply(Action::OpenSwitcher);
+
+    assert_eq!(app.mode, Mode::Switcher);
+    let state = app.switcher.as_ref().expect("switcher must be open");
+    assert_eq!(state.branches, branches);
+    assert_eq!(state.worktrees, worktrees);
+    assert_eq!(state.branch_cursor, 0); // "main" is current
+    assert_eq!(state.panel_cursor, panel_cursor);
+}
+
+#[test]
+fn open_switcher_read_error_sets_footer_message_and_stays_in_panel() {
+    // `FakeGit::default()` leaves `branches`/`worktrees` at `None`, so
+    // `branch_list`/`worktree_list` error — mirrors a real backend read
+    // failure (e.g. a corrupt ref).
+    let fake = FakeGit::default();
+    let mut app = panel_app_with_git(fake);
+    app.apply(Action::FocusGitPanel);
+
+    app.apply(Action::OpenSwitcher);
+
+    assert!(
+        app.switcher.is_none(),
+        "a read error must not half-open the modal"
+    );
+    assert!(matches!(app.mode, Mode::Panel { .. }));
+    assert!(app.status_message.is_some());
+}
+
+#[test]
+fn esc_closes_switcher_back_to_panel_mode() {
+    let fake = FakeGit {
+        branches: Some(vec![]),
+        worktrees: Some(vec![]),
+        ..FakeGit::default()
+    };
+    let mut app = panel_app_with_git(fake);
+    app.apply(Action::FocusGitPanel);
+    app.apply(Action::OpenSwitcher);
+    assert_eq!(app.mode, Mode::Switcher);
+
+    app.close_switcher();
+
+    assert!(matches!(app.mode, Mode::Panel { .. }));
+    assert!(app.switcher.is_none());
 }

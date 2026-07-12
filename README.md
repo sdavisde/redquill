@@ -69,7 +69,17 @@ Vim-grammar keybindings, designed to be remappable (config layer planned — see
 | `f` | Fetch from the upstream remote (background, non-blocking) |
 | `p` | Pull from the upstream remote (background, non-blocking) |
 | `P` | Push to the upstream remote (background, non-blocking) |
+| `b` | Open the branch/worktree switcher |
 | `@` | Toggle the command log pane (also works from the diff view) |
+
+**Branch/worktree switcher** (`b` from the git panel):
+
+| Key | Action |
+|---|---|
+| `Tab` / `h` / `l` (also `Shift-Tab` / arrow keys) | Switch between the Branches and Worktrees tabs |
+| `j` / `k` | Move the cursor |
+| `Enter` | Switch to the selected branch, or re-root onto the selected worktree |
+| `Esc` | Close the switcher, returning to the git panel at the row it had before the switcher opened |
 
 Layout sketch — every changed file is one collapsible section in a single scrollable **multibuffer** (`▾` expanded / `▸` collapsed; `●` fully staged / `±` partially staged); staging a file collapses it out of the way, unstaging on its header brings it back:
 
