@@ -236,9 +236,13 @@ fn init_repo_on_branch(name: &str) -> TempDir {
 
 #[test]
 fn branch_ahead_and_behind_with_upstream_and_a_stash() {
-    // Bare "remote" repo.
+    // Bare "remote" repo. Branch must be explicit: the host's
+    // init.defaultBranch config must not leak into the fixture, and a clone
+    // of a bare repo whose HEAD points at a branch nobody ever pushed (e.g.
+    // `master` when only `main` is pushed below) ends up with a dangling
+    // HEAD and no checked-out working tree.
     let bare = TempDir::new().unwrap();
-    git(bare.path(), &["init", "-q", "--bare"]);
+    git(bare.path(), &["init", "-q", "--bare", "-b", "main"]);
 
     // Local repo, pushed to the bare remote with an upstream set.
     let repo = init_repo_on_branch("main");

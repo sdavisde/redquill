@@ -1312,7 +1312,11 @@ fn capture_task_04_smoke_transcript() {
     out.push_str("Driven through App::request_remote_op -> poll_remote (real spawn).\n\n");
 
     let bare = tempfile::TempDir::new().unwrap();
-    git(bare.path(), &["init", "-q", "--bare"]);
+    // Branch must be explicit: the host's init.defaultBranch config must not
+    // leak into the fixture. A bare repo's HEAD (e.g. `master` on a host
+    // without init.defaultBranch set) that never has a matching branch
+    // pushed to it leaves clones with a dangling HEAD and no working tree.
+    git(bare.path(), &["init", "-q", "--bare", "-b", "main"]);
     let bare_url = format!("file://{}", bare.path().display());
 
     let repo = tempfile::TempDir::new().unwrap();
