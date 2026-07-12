@@ -21,6 +21,8 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use super::keymap::FooterHint;
+
 /// One physical key: a code plus the modifiers used to synthesize its
 /// [`KeyEvent`]. Matching is intentionally code-only ([`ModalKey::matches`]),
 /// preserving the historical behavior of the modal handlers, which all
@@ -80,6 +82,11 @@ pub(super) struct ModalBinding<A: 'static> {
     pub keys: &'static [ModalKey],
     /// The per-mode action this row dispatches to.
     pub action: A,
+    /// `Some` promotes this row into [`super::footer`]'s context-sensitive
+    /// footer strip; `None` keeps it help-overlay-only. See
+    /// [`super::keymap::FooterHint`] for the merge/rank/display rules — the
+    /// same mechanism [`super::keymap::Binding`] uses.
+    pub footer: Option<FooterHint>,
 }
 
 /// Resolves an incoming event against a table, returning the matched row's
@@ -111,30 +118,50 @@ pub(super) const LIST_KEYS: &[ModalBinding<ListAction>] = &[
         description: "Move focus down",
         keys: &[ModalKey::plain(KeyCode::Char('j'))],
         action: ListAction::MoveDown,
+        footer: Some(FooterHint {
+            rank: 1,
+            label: "move",
+        }),
     },
     ModalBinding {
         label: "k",
         description: "Move focus up",
         keys: &[ModalKey::plain(KeyCode::Char('k'))],
         action: ListAction::MoveUp,
+        footer: Some(FooterHint {
+            rank: 1,
+            label: "move",
+        }),
     },
     ModalBinding {
         label: "Enter",
         description: "Jump to annotation",
         keys: &[ModalKey::plain(KeyCode::Enter)],
         action: ListAction::Jump,
+        footer: Some(FooterHint {
+            rank: 2,
+            label: "open",
+        }),
     },
     ModalBinding {
         label: "e",
         description: "Edit",
         keys: &[ModalKey::plain(KeyCode::Char('e'))],
         action: ListAction::Edit,
+        footer: Some(FooterHint {
+            rank: 3,
+            label: "edit",
+        }),
     },
     ModalBinding {
         label: "d",
         description: "Delete",
         keys: &[ModalKey::plain(KeyCode::Char('d'))],
         action: ListAction::Delete,
+        footer: Some(FooterHint {
+            rank: 4,
+            label: "delete",
+        }),
     },
     ModalBinding {
         label: "a / Esc",
@@ -144,6 +171,10 @@ pub(super) const LIST_KEYS: &[ModalBinding<ListAction>] = &[
             ModalKey::plain(KeyCode::Esc),
         ],
         action: ListAction::Close,
+        footer: Some(FooterHint {
+            rank: 5,
+            label: "close",
+        }),
     },
 ];
 
@@ -164,12 +195,20 @@ pub(super) const STAGING_KEYS: &[ModalBinding<StagingAction>] = &[
         description: "Move focus down",
         keys: &[ModalKey::plain(KeyCode::Char('j'))],
         action: StagingAction::MoveDown,
+        footer: Some(FooterHint {
+            rank: 1,
+            label: "move",
+        }),
     },
     ModalBinding {
         label: "k",
         description: "Move focus up",
         keys: &[ModalKey::plain(KeyCode::Char('k'))],
         action: StagingAction::MoveUp,
+        footer: Some(FooterHint {
+            rank: 1,
+            label: "move",
+        }),
     },
     ModalBinding {
         label: "Space / Enter",
@@ -179,6 +218,10 @@ pub(super) const STAGING_KEYS: &[ModalBinding<StagingAction>] = &[
             ModalKey::plain(KeyCode::Enter),
         ],
         action: StagingAction::Unstage,
+        footer: Some(FooterHint {
+            rank: 2,
+            label: "unstage",
+        }),
     },
     ModalBinding {
         label: "s / Esc",
@@ -188,6 +231,10 @@ pub(super) const STAGING_KEYS: &[ModalBinding<StagingAction>] = &[
             ModalKey::plain(KeyCode::Esc),
         ],
         action: StagingAction::Close,
+        footer: Some(FooterHint {
+            rank: 3,
+            label: "close",
+        }),
     },
 ];
 
@@ -208,24 +255,40 @@ pub(super) const PEEK_KEYS: &[ModalBinding<PeekAction>] = &[
         description: "Move selection / scroll hover down",
         keys: &[ModalKey::plain(KeyCode::Char('j'))],
         action: PeekAction::MoveDown,
+        footer: Some(FooterHint {
+            rank: 1,
+            label: "move",
+        }),
     },
     ModalBinding {
         label: "k",
         description: "Move selection / scroll hover up",
         keys: &[ModalKey::plain(KeyCode::Char('k'))],
         action: PeekAction::MoveUp,
+        footer: Some(FooterHint {
+            rank: 1,
+            label: "move",
+        }),
     },
     ModalBinding {
         label: "Enter",
         description: "Jump to location (definition/references)",
         keys: &[ModalKey::plain(KeyCode::Enter)],
         action: PeekAction::Enter,
+        footer: Some(FooterHint {
+            rank: 2,
+            label: "jump",
+        }),
     },
     ModalBinding {
         label: "Esc",
         description: "Close",
         keys: &[ModalKey::plain(KeyCode::Esc)],
         action: PeekAction::Close,
+        footer: Some(FooterHint {
+            rank: 3,
+            label: "close",
+        }),
     },
 ];
 
@@ -254,6 +317,10 @@ pub(super) const SWITCHER_KEYS: &[ModalBinding<SwitcherAction>] = &[
             ModalKey::plain(KeyCode::Right),
         ],
         action: SwitcherAction::ToggleTab,
+        footer: Some(FooterHint {
+            rank: 1,
+            label: "switch tab",
+        }),
     },
     ModalBinding {
         label: "j / Down",
@@ -263,6 +330,10 @@ pub(super) const SWITCHER_KEYS: &[ModalBinding<SwitcherAction>] = &[
             ModalKey::plain(KeyCode::Down),
         ],
         action: SwitcherAction::MoveDown,
+        footer: Some(FooterHint {
+            rank: 2,
+            label: "move",
+        }),
     },
     ModalBinding {
         label: "k / Up",
@@ -272,18 +343,31 @@ pub(super) const SWITCHER_KEYS: &[ModalBinding<SwitcherAction>] = &[
             ModalKey::plain(KeyCode::Up),
         ],
         action: SwitcherAction::MoveUp,
+        // Not also tagged: its label ("k / Up") is already a compound key
+        // display, so merging it with MoveDown's would double up the " / "
+        // separators (see the identical note on HELP_KEYS's ScrollUp). The
+        // MoveDown row's own label reads fine alone.
+        footer: None,
     },
     ModalBinding {
         label: "Enter",
         description: "Switch to the selected branch/worktree",
         keys: &[ModalKey::plain(KeyCode::Enter)],
         action: SwitcherAction::Confirm,
+        footer: Some(FooterHint {
+            rank: 3,
+            label: "switch",
+        }),
     },
     ModalBinding {
         label: "Esc",
         description: "Close",
         keys: &[ModalKey::plain(KeyCode::Esc)],
         action: SwitcherAction::Close,
+        footer: Some(FooterHint {
+            rank: 4,
+            label: "close",
+        }),
     },
 ];
 
@@ -317,6 +401,10 @@ pub(super) const HELP_KEYS: &[ModalBinding<HelpAction>] = &[
             ModalKey::plain(KeyCode::Char('?')),
         ],
         action: HelpAction::Close,
+        footer: Some(FooterHint {
+            rank: 3,
+            label: "close",
+        }),
     },
     ModalBinding {
         label: "j / Down",
@@ -326,6 +414,14 @@ pub(super) const HELP_KEYS: &[ModalBinding<HelpAction>] = &[
             ModalKey::plain(KeyCode::Down),
         ],
         action: HelpAction::ScrollDown,
+        // `ScrollUp` isn't also tagged: its label ("k / Up") is already a
+        // compound key display, so merging it in would double up the " / "
+        // separators (`super::footer`'s merge is for atomic key text like
+        // "j" + "k"). This row's own label already reads fine alone.
+        footer: Some(FooterHint {
+            rank: 1,
+            label: "scroll",
+        }),
     },
     ModalBinding {
         label: "k / Up",
@@ -335,18 +431,21 @@ pub(super) const HELP_KEYS: &[ModalBinding<HelpAction>] = &[
             ModalKey::plain(KeyCode::Up),
         ],
         action: HelpAction::ScrollUp,
+        footer: None,
     },
     ModalBinding {
         label: "PageDown",
         description: "Page down",
         keys: &[ModalKey::plain(KeyCode::PageDown)],
         action: HelpAction::PageDown,
+        footer: None,
     },
     ModalBinding {
         label: "PageUp",
         description: "Page up",
         keys: &[ModalKey::plain(KeyCode::PageUp)],
         action: HelpAction::PageUp,
+        footer: None,
     },
     ModalBinding {
         label: "g / Home",
@@ -356,6 +455,7 @@ pub(super) const HELP_KEYS: &[ModalBinding<HelpAction>] = &[
             ModalKey::plain(KeyCode::Home),
         ],
         action: HelpAction::Top,
+        footer: None,
     },
     ModalBinding {
         label: "G / End",
@@ -365,12 +465,17 @@ pub(super) const HELP_KEYS: &[ModalBinding<HelpAction>] = &[
             ModalKey::plain(KeyCode::End),
         ],
         action: HelpAction::Bottom,
+        footer: None,
     },
     ModalBinding {
         label: "/",
         description: "Filter keybinds",
         keys: &[ModalKey::plain(KeyCode::Char('/'))],
         action: HelpAction::Search,
+        footer: Some(FooterHint {
+            rank: 2,
+            label: "filter",
+        }),
     },
 ];
 
@@ -389,18 +494,21 @@ pub(super) const HELP_SEARCH_HINTS: &[ModalBinding<()>] = &[
         description: "Lock in the filter (scroll keys resume)",
         keys: &[ModalKey::plain(KeyCode::Enter)],
         action: (),
+        footer: None,
     },
     ModalBinding {
         label: "Esc",
         description: "Clear the filter",
         keys: &[ModalKey::plain(KeyCode::Esc)],
         action: (),
+        footer: None,
     },
     ModalBinding {
         label: "Backspace",
         description: "Delete character",
         keys: &[ModalKey::plain(KeyCode::Backspace)],
         action: (),
+        footer: None,
     },
 ];
 
@@ -416,30 +524,41 @@ pub(super) const COMPOSE_HINTS: &[ModalBinding<()>] = &[
         description: "Submit",
         keys: &[ModalKey::plain(KeyCode::Enter)],
         action: (),
+        footer: Some(FooterHint {
+            rank: 1,
+            label: "save",
+        }),
     },
     ModalBinding {
         label: "Esc",
         description: "Cancel",
         keys: &[ModalKey::plain(KeyCode::Esc)],
         action: (),
+        footer: Some(FooterHint {
+            rank: 2,
+            label: "discard",
+        }),
     },
     ModalBinding {
         label: "Ctrl-j",
         description: "Insert newline",
         keys: &[ModalKey::ctrl(KeyCode::Char('j'))],
         action: (),
+        footer: None,
     },
     ModalBinding {
         label: "Ctrl-t",
         description: "Cycle classification",
         keys: &[ModalKey::ctrl(KeyCode::Char('t'))],
         action: (),
+        footer: None,
     },
     ModalBinding {
         label: "Backspace",
         description: "Delete character",
         keys: &[ModalKey::plain(KeyCode::Backspace)],
         action: (),
+        footer: None,
     },
     ModalBinding {
         label: "Left/Right/Up/Down",
@@ -451,6 +570,7 @@ pub(super) const COMPOSE_HINTS: &[ModalBinding<()>] = &[
             ModalKey::plain(KeyCode::Down),
         ],
         action: (),
+        footer: None,
     },
 ];
 
@@ -465,18 +585,21 @@ pub(super) const SEARCH_HINTS: &[ModalBinding<()>] = &[
         description: "Confirm search",
         keys: &[ModalKey::plain(KeyCode::Enter)],
         action: (),
+        footer: None,
     },
     ModalBinding {
         label: "Esc",
         description: "Cancel (clears pattern if buffer empty)",
         keys: &[ModalKey::plain(KeyCode::Esc)],
         action: (),
+        footer: None,
     },
     ModalBinding {
         label: "Backspace",
         description: "Delete character",
         keys: &[ModalKey::plain(KeyCode::Backspace)],
         action: (),
+        footer: None,
     },
 ];
 

@@ -24,6 +24,7 @@ mod compose;
 mod compose_modal;
 mod diff_view;
 mod diff_view_state;
+mod footer;
 mod git_panel;
 mod help;
 mod keymap;
@@ -90,12 +91,16 @@ pub enum QuitOutcome {
     Discard,
 }
 
-/// Splits the full terminal area into the main content area and the
-/// single-line status footer at the bottom (transient messages).
-fn split_footer(area: Rect) -> (Rect, Rect) {
+/// Splits the full terminal area into the main content area and the status
+/// footer at the bottom. `footer_height` is 1 row whenever the search input,
+/// a remote-op spinner, or a transient status message occupies it, or 1-2
+/// rows for the context-sensitive hint strip (see [`footer::footer_height`]
+/// — the single place that height is computed, so this and the event loop's
+/// viewport-measurement mirror never disagree).
+fn split_footer(area: Rect, footer_height: u16) -> (Rect, Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .constraints([Constraint::Min(0), Constraint::Length(footer_height)])
         .split(area);
     (chunks[0], chunks[1])
 }
@@ -171,7 +176,18 @@ fn dispatch_key(
         Mode::Compose => modes::handle_compose_key(app, key),
         Mode::List => modes::handle_list_key(app, key),
         Mode::Staging => modes::handle_staging_key(app, key),
-        Mode::Panel { .. } => return modes::handle_panel_key(app, key, keymap),
+        Mode::Panel { .. } => {
+            // `?` opens help from the focused git panel too (see the
+            // panel-scope `ToggleHelp` row in keymap.rs); once open it
+            // shadows panel dispatch exactly like the Normal/Visual overlay
+            // case above, so `j`/`k`/Esc scroll/close the overlay rather than
+            // moving the panel cursor underneath it.
+            if app.help_open {
+                handle_help_key(app, key);
+                return Flow::Continue;
+            }
+            return modes::handle_panel_key(app, key, keymap);
+        }
         Mode::Search => modes::handle_search_key(app, key),
         Mode::Peek => modes::handle_peek_key(app, key),
         Mode::Switcher => modes::handle_switcher_key(app, key),
@@ -300,29 +316,16 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-/// The idle footer hint: `` ` git panel · ? help ``, shown whenever no
-/// search input, remote-op indicator, or transient status message occupies
-/// the footer strip. Since the git panel (see `split_layout`) is hidden
-/// unless focused, this is its persistent discoverability surface — mirrors
-/// the key/label emphasis established by `git_panel::remote_keys_line`.
-fn idle_footer_hint(theme: &Theme) -> Line<'static> {
-    let key = |k: &'static str| Span::styled(k, Style::default().fg(theme.help_key));
-    let label = |l: &'static str| Span::styled(l, Style::default().fg(theme.footer_text));
-    Line::from(vec![
-        Span::raw(" "),
-        key("`"),
-        label(" git panel \u{b7} "),
-        key("?"),
-        label(" help"),
-    ])
-}
-
 /// Draws one frame: git panel, diff pane, bottom panel (annotation list or
 /// staging panel, if open), status footer, help overlay (if open), and the
-/// Compose modal (if open).
-fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
+/// Compose modal (if open). `pending` mirrors the event loop's pending
+/// two-key prefix (see [`event_loop`]), so the footer's pending-completion
+/// strip (`za`, `gd`/`gr`/...) matches what the next keystroke will actually
+/// resolve.
+fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<KeyEvent>) {
     let area = frame.area();
-    let (main_area, footer_area) = split_footer(area);
+    let footer_h = footer::footer_height(area.width, app, keymap, pending);
+    let (main_area, footer_area) = split_footer(area, footer_h);
     let (sidebar_area, right_area) = split_layout(main_area, app.git_panel_focused());
     let (diff_area, panel_area) = split_right(right_area, bottom_open(app));
 
@@ -371,10 +374,12 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap) {
         frame.render_widget(footer, footer_area);
     } else {
         // Lowest priority: no search/remote-op/status message is active, so
-        // show a persistent idle hint. The git panel is hidden by default
-        // (see `split_layout`), so this is its only discoverability surface
-        // outside the `?` help overlay.
-        frame.render_widget(idle_footer_hint(&app.theme), footer_area);
+        // show the context-sensitive hint strip (see `footer`).
+        let staging_allowed = !matches!(app.target, crate::git::DiffTarget::Range(_));
+        let entries =
+            footer::build_hints(app.mode, staging_allowed, app.help_open, pending, keymap);
+        let lines = footer::render_hint_strip(&entries, footer_area.width, &app.theme);
+        frame.render_widget(ratatui::widgets::Paragraph::new(lines), footer_area);
     }
     if app.help_open {
         let staging_allowed = !matches!(app.target, crate::git::DiffTarget::Range(_));
@@ -459,13 +464,18 @@ fn event_loop(
     loop {
         let size = terminal.size()?;
         let full_area = Rect::new(0, 0, size.width, size.height);
-        let (main_area, _) = split_footer(full_area);
+        // Mirrors `draw`'s own `footer::footer_height` call so the viewport
+        // height measured here for the diff pane matches what actually
+        // renders this frame (same `app`/`pending` state, same computation —
+        // see `footer::footer_height`'s doc comment).
+        let footer_h = footer::footer_height(full_area.width, app, keymap, pending_prefix);
+        let (main_area, _) = split_footer(full_area, footer_h);
         let (_, right_area) = split_layout(main_area, app.git_panel_focused());
         let (diff_area, _) = split_right(right_area, bottom_open(app));
         app.view
             .set_viewport_height(diff_view::viewport_height(diff_area));
 
-        terminal.draw(|frame| draw(frame, app, keymap))?;
+        terminal.draw(|frame| draw(frame, app, keymap, pending_prefix))?;
 
         // Bounded wait rather than a blocking read: LSP responses must keep
         // flowing (via `poll_lsp` below) even while the user isn't typing,

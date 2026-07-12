@@ -40,7 +40,9 @@ fn renders_diff_pane_content() {
     let app = App::new(vec![sample_file()]);
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
 
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -61,7 +63,9 @@ fn sidebar_hidden_in_normal_mode_shown_when_panel_focused() {
     let mut app = App::new(vec![sample_file()]);
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
     assert!(!content.contains("[1 files]"));
@@ -69,7 +73,9 @@ fn sidebar_hidden_in_normal_mode_shown_when_panel_focused() {
     app.apply(Action::FocusGitPanel);
     assert!(matches!(app.mode, Mode::Panel { .. }));
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
     assert!(content.contains("[1 files]"));
@@ -97,7 +103,9 @@ fn multibuffer_renders_all_section_headers() {
     let app = App::new(vec![multi_file("a.rs"), multi_file("b.rs")]);
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
 
@@ -121,9 +129,22 @@ fn collapsed_section_renders_header_only_with_collapsed_indicator() {
     app.rebuild_rows();
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
     let buffer = terminal.backend().buffer().clone();
-    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+    // Scoped to the area above the footer strip: the context-sensitive
+    // footer (see `footer.rs`) legitimately shows a "fold" hint (`za`), whose
+    // text incidentally contains the substring "old" — unrelated to this
+    // test's `old`/`new` diff-body fixture, so the whole-screen buffer isn't
+    // the right thing to scan here.
+    let footer_h = footer::footer_height(buffer.area.width, &app, &keymap, None);
+    let content_h = buffer.area.height.saturating_sub(footer_h);
+    let content: String = (0..content_h)
+        .flat_map(|y| (0..buffer.area.width).map(move |x| (x, y)))
+        .filter_map(|(x, y)| buffer.cell((x, y)))
+        .map(|cell| cell.symbol())
+        .collect();
 
     assert!(content.contains("\u{25b8}")); // ▸ collapsed indicator
     assert!(content.contains("M a.rs"));
@@ -144,7 +165,9 @@ fn staged_file_section_header_shows_marker() {
     app.rebuild_rows();
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
 
@@ -163,7 +186,9 @@ fn partial_file_section_header_shows_partial_marker() {
     app.rebuild_rows();
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
 
@@ -178,7 +203,9 @@ fn empty_diff_shows_no_changes_message() {
     let app = App::new(vec![]);
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
 
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -195,7 +222,9 @@ fn multibuffer_renders_for_a_range_target() {
     app.target = crate::git::DiffTarget::Range("main..HEAD".to_string());
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
 
@@ -217,7 +246,9 @@ fn help_overlay_hides_staging_rows_on_a_range_target() {
     app.target = crate::git::DiffTarget::Range("main..HEAD".to_string());
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
 
@@ -237,7 +268,9 @@ fn help_overlay_shows_staging_rows_on_the_working_tree_target() {
     app.help_open = true; // target defaults to WorkingTree
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
 
@@ -254,7 +287,9 @@ fn help_overlay_renders_bindings_when_open() {
     app.help_open = true;
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
 
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -273,7 +308,9 @@ fn help_overlay_lists_remote_and_command_log_bindings() {
     app.help_open = true;
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
     let content: String = terminal
         .backend()
         .buffer()
@@ -310,7 +347,9 @@ fn help_overlay_scrolls_to_reveal_lower_sections() {
 
     // First frame renders the top of the list (and records the viewport
     // height the pager needs). The last section (Help filter) is far below.
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
     let top: String = terminal
         .backend()
         .buffer()
@@ -326,7 +365,9 @@ fn help_overlay_scrolls_to_reveal_lower_sections() {
     let mut pending = None;
     let end = KeyEvent::new(KeyCode::End, KeyModifiers::NONE);
     let _ = dispatch_key(&mut app, &keymap, &mut pending, end);
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
     let bottom: String = terminal
         .backend()
         .buffer()
@@ -417,7 +458,9 @@ fn help_filter_narrows_rendered_bindings_to_matching_rows() {
     app.help_search = Some(("quit".to_string(), false));
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
     let content: String = terminal
         .backend()
         .buffer()
@@ -445,7 +488,9 @@ fn help_filter_shows_no_matches_message_when_nothing_matches() {
     app.help_search = Some(("zzznomatchzzz".to_string(), false));
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
     let content: String = terminal
         .backend()
         .buffer()
@@ -484,7 +529,9 @@ fn annotation_renders_inline_and_in_list_panel() {
     app.mode = Mode::List;
 
     let keymap = Keymap::default_map();
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
 
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -520,7 +567,9 @@ fn staging_panel_indicator_and_footer_render() {
     app.set_status_message("staged hunk");
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
 
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -548,7 +597,9 @@ fn sidebar_staged_indicator_renders_when_panel_focused() {
     assert!(matches!(app.mode, Mode::Panel { .. }));
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
 
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -565,7 +616,9 @@ fn empty_staging_panel_shows_hint() {
     app.mode = Mode::Staging;
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
 
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -592,7 +645,9 @@ fn syntax_highlighted_span_renders_with_token_color() {
     line.syntax_spans = Some(vec![(0..2, TokenKind::Keyword)]);
 
     let keymap = Keymap::default_map();
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
 
     let buffer = terminal.backend().buffer().clone();
     let has_keyword_cell = buffer
@@ -620,7 +675,9 @@ fn search_mode_renders_prompt_and_confirmed_match_is_highlighted() {
     app.mode = Mode::Search;
     app.search_input = "n".to_string();
     let keymap = Keymap::default_map();
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
     assert!(content.contains("/n"));
@@ -635,7 +692,9 @@ fn search_mode_renders_prompt_and_confirmed_match_is_highlighted() {
     assert_eq!(app.search.matches.len(), 2);
     assert_ne!(app.view.cursor, app.search.matches[1]);
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let has_match_bg = buffer
         .content()
@@ -663,7 +722,9 @@ fn column_cursor_renders_distinct_background_on_the_cursor_cell() {
     app.apply(Action::CursorRight); // column 2, the second 'n' of "fn"
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let has_cursor_bg = buffer
         .content()
@@ -706,7 +767,9 @@ fn peek_overlay_renders_canned_references_and_preview() {
     app.mode = Mode::Peek;
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
 
@@ -727,7 +790,9 @@ fn peek_overlay_renders_hover_text() {
     app.mode = Mode::Peek;
     let keymap = Keymap::default_map();
 
-    terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
 
@@ -854,7 +919,7 @@ fn focused_pane_border_emphasis_follows_the_toggle() {
 
     // Diff focused (Normal): the sidebar is hidden entirely, so the diff
     // pane spans the full width with its border emphasized.
-    terminal.draw(|f| draw(f, &app, &keymap)).unwrap();
+    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
     assert!(
@@ -871,7 +936,7 @@ fn focused_pane_border_emphasis_follows_the_toggle() {
     // moves to the panel border.
     app.apply(Action::FocusGitPanel);
     assert!(matches!(app.mode, Mode::Panel { .. }));
-    terminal.draw(|f| draw(f, &app, &keymap)).unwrap();
+    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
     assert!(
@@ -888,7 +953,7 @@ fn focused_pane_border_emphasis_follows_the_toggle() {
     // Toggling back to the diff hides the sidebar again.
     app.apply(Action::FocusGitPanel);
     assert!(matches!(app.mode, Mode::Normal));
-    terminal.draw(|f| draw(f, &app, &keymap)).unwrap();
+    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
     assert!(
@@ -1177,7 +1242,7 @@ fn at_toggles_command_log_from_both_scopes_and_renders_in_bottom_slot() {
     // It renders in the bottom slot with the failed entry and its stderr.
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| draw(f, &app, &keymap)).unwrap();
+    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
     let content: String = terminal
         .backend()
         .buffer()
@@ -1229,7 +1294,7 @@ fn running_indicator_renders_while_a_remote_op_is_in_flight() {
 
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| draw(f, &app, &keymap)).unwrap();
+    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
     let content: String = terminal
         .backend()
         .buffer()
@@ -1245,17 +1310,18 @@ fn running_indicator_renders_while_a_remote_op_is_in_flight() {
 }
 
 /// With no search input, remote-op indicator, or transient status message
-/// active, the footer falls back to the persistent idle hint advertising the
-/// backtick binding — the git panel's only discoverability surface now that
-/// it's hidden by default (besides the `?` help overlay).
+/// active, the footer falls back to the context-sensitive hint strip (see
+/// `footer.rs`) — the git panel's only discoverability surface now that it's
+/// hidden by default (besides the `?` help overlay), plus the rest of the
+/// curated Normal-mode strip.
 #[test]
-fn idle_footer_hint_renders_when_nothing_else_occupies_the_footer() {
+fn context_footer_strip_renders_when_nothing_else_occupies_the_footer() {
     let keymap = Keymap::default_map();
     let app = App::new(vec![sample_file()]);
 
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| draw(f, &app, &keymap)).unwrap();
+    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
     let content: String = terminal
         .backend()
         .buffer()
@@ -1266,25 +1332,33 @@ fn idle_footer_hint_renders_when_nothing_else_occupies_the_footer() {
         .collect();
     assert!(
         content.contains("git panel"),
-        "idle footer should hint at the backtick binding"
+        "footer strip should hint at the backtick binding"
     );
     assert!(
         content.contains("help"),
-        "idle footer should hint at the help overlay"
+        "footer strip should hint at the help overlay"
+    );
+    assert!(
+        content.contains("move"),
+        "footer strip should hint at j/k movement"
+    );
+    assert!(
+        content.contains("stage hunk"),
+        "footer strip should hint at Space staging a hunk"
     );
 }
 
-/// A transient status message takes priority over the idle footer hint —
-/// the hint only shows once the message clears.
+/// A transient status message takes priority over the context footer strip —
+/// the strip only shows once the message clears.
 #[test]
-fn status_message_replaces_the_idle_footer_hint() {
+fn status_message_replaces_the_context_footer_strip() {
     let keymap = Keymap::default_map();
     let mut app = App::new(vec![sample_file()]);
-    app.set_status_message("staged hunk");
+    app.set_status_message("staged hunk!!");
 
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| draw(f, &app, &keymap)).unwrap();
+    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
     let content: String = terminal
         .backend()
         .buffer()
@@ -1293,10 +1367,10 @@ fn status_message_replaces_the_idle_footer_hint() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(content.contains("staged hunk"));
+    assert!(content.contains("staged hunk!!"));
     assert!(
         !content.contains("git panel"),
-        "status message should displace the idle hint"
+        "status message should displace the footer strip"
     );
 }
 
@@ -1339,7 +1413,7 @@ fn capture_task_03_smoke_transcript() {
                 KeyEvent::new(code, KeyModifiers::NONE),
             );
         }
-        terminal.draw(|f| draw(f, app, &keymap)).unwrap();
+        terminal.draw(|f| draw(f, app, &keymap, None)).unwrap();
         let buf = terminal.backend().buffer().clone();
         let text: String = buf.content().iter().map(|c| c.symbol()).collect();
         let pane = if app.git_panel_focused() {
@@ -1641,7 +1715,7 @@ fn capture_task_04_smoke_transcript() {
     app2.command_log_open = true;
     let backend = TestBackend::new(100, 40);
     let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| draw(f, &app2, &keymap)).unwrap();
+    terminal.draw(|f| draw(f, &app2, &keymap, None)).unwrap();
     let frame: String = terminal
         .backend()
         .buffer()
@@ -1701,7 +1775,9 @@ fn scrolling_a_5k_line_multibuffer_renders_fast() {
     let mut frames = 0u32;
     let start = std::time::Instant::now();
     loop {
-        terminal.draw(|frame| draw(frame, &app, &keymap)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &app, &keymap, None))
+            .unwrap();
         frames += 1;
         if app.view.cursor >= app.view.max_cursor() || frames > 2000 {
             break;

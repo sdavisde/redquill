@@ -108,7 +108,7 @@ fn key_line(key: &str, description: &str, key_width: usize, theme: &Theme) -> Li
 /// [`super::app::App::stage_file`] / [`super::staging::toggle_stage`]), so
 /// listing them would be untruthful; the staging-panel toggle stays visible
 /// because it still works (it shows the index regardless of target).
-fn binding_hidden(action: Action, staging_allowed: bool) -> bool {
+pub(super) fn binding_hidden(action: Action, staging_allowed: bool) -> bool {
     !staging_allowed && matches!(action, Action::ToggleStage | Action::StageFile)
 }
 

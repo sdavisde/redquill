@@ -191,6 +191,30 @@ impl KeySeq {
     }
 }
 
+/// Presence promotes a [`Binding`] (or a [`super::modal_keys::ModalBinding`])
+/// into the context-sensitive footer strip built by [`super::footer`]. Two
+/// rows sharing an identical `FooterHint` (same `rank` *and* `label`) are
+/// merged into one hint whose key text joins both rows' key labels with `/`
+/// (e.g. `j` + `k`, both tagged `(1, "move")`, become `j/k move`) — the
+/// mechanism [`super::footer`] uses for every "j/k" pairing rather than
+/// hardcoding the merge per mode.
+///
+/// `rank` only controls *drop order* under narrow-width pressure, not screen
+/// position: a strip always renders in the order its hints were built, and
+/// `rank == 0` is the sole exception — reserved for the `? help` escape
+/// hatch, it is displayed last (after every other hint) but is the last
+/// dropped when hints don't fit (see `super::footer::sort_for_display`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FooterHint {
+    /// Drop priority under width pressure: higher drops first. `0` is
+    /// reserved for the always-last-dropped `? help` hint.
+    pub rank: u8,
+    /// The short label shown in the footer strip (distinct from
+    /// `description`, which is verbose enough for the help overlay but too
+    /// long for a one-line strip).
+    pub label: &'static str,
+}
+
 /// One entry in the keymap: a key sequence, the action it triggers, and its
 /// description for the help overlay.
 #[derive(Debug, Clone, Copy)]
@@ -204,6 +228,10 @@ pub struct Binding {
     /// The input context this binding resolves in (diff view vs. focused
     /// git panel).
     pub scope: Scope,
+    /// `Some` promotes this row into [`super::footer`]'s context-sensitive
+    /// footer strip; `None` (the default) keeps it help-overlay-only. Set via
+    /// [`Binding::footer`].
+    pub footer: Option<FooterHint>,
 }
 
 impl Binding {
@@ -213,6 +241,14 @@ impl Binding {
             KeySeq::One(chord) => chord.label(),
             KeySeq::Two(first, second) => format!("{}{}", first.label(), second.label()),
         }
+    }
+
+    /// Promotes this row into the footer strip (see [`FooterHint`]).
+    /// Chainable onto the `d(...)`/`p(...)` table constructors so promoted
+    /// rows read as `d(keys, action, description).footer(rank, "label")`.
+    pub fn footer(mut self, rank: u8, label: &'static str) -> Binding {
+        self.footer = Some(FooterHint { rank, label });
+        self
     }
 }
 
@@ -238,17 +274,19 @@ impl Keymap {
             action,
             description,
             scope: Scope::Diff,
+            footer: None,
         };
         let p = |keys: KeySeq, action: Action, description: &'static str| Binding {
             keys,
             action,
             description,
             scope: Scope::Panel,
+            footer: None,
         };
         Keymap {
             bindings: vec![
-                d(KeySeq::one(Char('j'), none), CursorDown, "Move cursor down"),
-                d(KeySeq::one(Char('k'), none), CursorUp, "Move cursor up"),
+                d(KeySeq::one(Char('j'), none), CursorDown, "Move cursor down").footer(1, "move"),
+                d(KeySeq::one(Char('k'), none), CursorUp, "Move cursor up").footer(1, "move"),
                 d(
                     KeySeq::one(Char('h'), none),
                     CursorLeft,
@@ -289,7 +327,7 @@ impl Keymap {
                     JumpToBottom,
                     "Jump to bottom of diff",
                 ),
-                d(KeySeq::one(Char(']'), none), NextHunk, "Next hunk"),
+                d(KeySeq::one(Char(']'), none), NextHunk, "Next hunk").footer(2, "hunk"),
                 d(KeySeq::one(Char('['), none), PrevHunk, "Previous hunk"),
                 d(KeySeq::one(Tab, none), NextFile, "Next file section"),
                 d(
@@ -301,8 +339,9 @@ impl Keymap {
                     KeySeq::two(Char('z'), none, Char('a'), none),
                     ToggleCollapse,
                     "Collapse/expand file section",
-                ),
-                d(KeySeq::one(Char('?'), none), ToggleHelp, "Toggle help"),
+                )
+                .footer(3, "fold"),
+                d(KeySeq::one(Char('?'), none), ToggleHelp, "Toggle help").footer(0, "help"),
                 d(KeySeq::one(Esc, none), ToggleHelp, "Close help"),
                 d(
                     KeySeq::one(Char('v'), none),
@@ -313,7 +352,8 @@ impl Keymap {
                     KeySeq::one(Char('c'), none),
                     Compose,
                     "Comment on line/hunk/file (or visual selection)",
-                ),
+                )
+                .footer(6, "comment"),
                 d(
                     KeySeq::one(Char('a'), none),
                     ToggleList,
@@ -323,12 +363,14 @@ impl Keymap {
                     KeySeq::one(Char(' '), none),
                     ToggleStage,
                     "Stage/unstage hunk (lines in visual mode)",
-                ),
+                )
+                .footer(4, "stage hunk"),
                 d(
                     KeySeq::one(Char('S'), none),
                     StageFile,
                     "Stage/unstage file under cursor",
-                ),
+                )
+                .footer(5, "stage file"),
                 d(
                     KeySeq::one(Char('s'), none),
                     ToggleStagingPanel,
@@ -338,7 +380,8 @@ impl Keymap {
                     KeySeq::one(Char('`'), none),
                     FocusGitPanel,
                     "Open git panel",
-                ),
+                )
+                .footer(8, "git panel"),
                 d(
                     KeySeq::one(Char('@'), none),
                     ToggleCommandLog,
@@ -349,7 +392,7 @@ impl Keymap {
                     Refresh,
                     "Refresh diff from working tree",
                 ),
-                d(KeySeq::one(Char('/'), none), Search, "Search"),
+                d(KeySeq::one(Char('/'), none), Search, "Search").footer(7, "search"),
                 d(
                     KeySeq::one(Char('n'), none),
                     SearchNext,
@@ -391,29 +434,40 @@ impl Keymap {
                     KeySeq::one(Char('`'), none),
                     FocusGitPanel,
                     "Close git panel",
-                ),
+                )
+                .footer(6, "close"),
                 p(
                     KeySeq::one(Char('j'), none),
                     PanelCursorDown,
                     "Move panel cursor down",
-                ),
+                )
+                .footer(1, "move"),
                 p(
                     KeySeq::one(Char('k'), none),
                     PanelCursorUp,
                     "Move panel cursor up",
-                ),
+                )
+                .footer(1, "move"),
                 p(
                     KeySeq::one(Enter, none),
                     PanelSelect,
                     "Focus diff on this file",
-                ),
+                )
+                .footer(2, "open file"),
                 p(
                     KeySeq::one(Char('f'), none),
                     RemoteFetch,
                     "Fetch from remote",
-                ),
-                p(KeySeq::one(Char('p'), none), RemotePull, "Pull from remote"),
-                p(KeySeq::one(Char('P'), none), RemotePush, "Push to remote"),
+                )
+                .footer(3, "fetch"),
+                p(KeySeq::one(Char('p'), none), RemotePull, "Pull from remote").footer(4, "pull"),
+                p(KeySeq::one(Char('P'), none), RemotePush, "Push to remote").footer(5, "push"),
+                // Wired here specifically so the git panel's footer strip can
+                // promise a working `? help` escape hatch (see `super::footer`):
+                // before this row, `?` was diff-scope only and did nothing while
+                // the panel held focus. README's git panel table documents it
+                // alongside this addition.
+                p(KeySeq::one(Char('?'), none), ToggleHelp, "Toggle help").footer(0, "help"),
                 p(
                     KeySeq::one(Char('b'), none),
                     OpenSwitcher,
@@ -480,6 +534,20 @@ impl Keymap {
         self.bindings.iter().any(|b| {
             b.scope == scope && matches!(b.keys, KeySeq::Two(first, _) if first.matches(key))
         })
+    }
+
+    /// All two-key bindings in `scope` whose first chord matches `prefix` —
+    /// the pending-prefix completions [`super::footer`] shows while a
+    /// sequence is in progress (e.g. after `z`: just `za`; after `g`: `gd`
+    /// and `gr`). Table-driven so a newly bound two-key sequence shows up
+    /// here automatically, never hardcoded per-prefix.
+    pub fn completions_for(&self, scope: Scope, prefix: KeyEvent) -> Vec<&Binding> {
+        self.bindings
+            .iter()
+            .filter(|b| {
+                b.scope == scope && matches!(b.keys, KeySeq::Two(first, _) if first.matches(prefix))
+            })
+            .collect()
     }
 
     /// Resolves a two-key sequence in [`Scope::Diff`]: `first` is the
@@ -1051,6 +1119,134 @@ mod tests {
 
     /// `@` toggles the command log from *both* scopes (it is a view toggle,
     /// not tied to which pane holds focus).
+    // -- Footer promotion (`FooterHint`) -------------------------------------
+
+    #[test]
+    fn footer_builder_sets_rank_and_label() {
+        let b = Binding {
+            keys: KeySeq::one(KeyCode::Char('j'), KeyModifiers::NONE),
+            action: Action::CursorDown,
+            description: "Move cursor down",
+            scope: Scope::Diff,
+            footer: None,
+        }
+        .footer(1, "move");
+        assert_eq!(
+            b.footer,
+            Some(FooterHint {
+                rank: 1,
+                label: "move"
+            })
+        );
+    }
+
+    #[test]
+    fn cursor_down_and_up_are_promoted_with_the_same_footer_hint() {
+        let km = Keymap::default_map();
+        let down = km
+            .bindings()
+            .iter()
+            .find(|b| b.scope == Scope::Diff && b.action == Action::CursorDown)
+            .unwrap();
+        let up = km
+            .bindings()
+            .iter()
+            .find(|b| b.scope == Scope::Diff && b.action == Action::CursorUp)
+            .unwrap();
+        assert_eq!(
+            down.footer,
+            Some(FooterHint {
+                rank: 1,
+                label: "move"
+            })
+        );
+        assert_eq!(down.footer, up.footer);
+    }
+
+    #[test]
+    fn help_toggle_is_promoted_with_rank_zero_in_both_scopes() {
+        let km = Keymap::default_map();
+        for scope in [Scope::Diff, Scope::Panel] {
+            let question_mark = km
+                .bindings()
+                .iter()
+                .find(|b| {
+                    b.scope == scope && b.action == Action::ToggleHelp && b.key_label() == "?"
+                })
+                .unwrap_or_else(|| panic!("no `?` ToggleHelp binding in {scope:?}"));
+            assert_eq!(
+                question_mark.footer,
+                Some(FooterHint {
+                    rank: 0,
+                    label: "help"
+                })
+            );
+        }
+        // The diff-scope `Esc` row (Close help) is deliberately *not*
+        // promoted — only `?` is, so the footer strip shows one help hint.
+        let esc_close = km
+            .bindings()
+            .iter()
+            .find(|b| {
+                b.scope == Scope::Diff && b.action == Action::ToggleHelp && b.key_label() == "Esc"
+            })
+            .unwrap();
+        assert_eq!(esc_close.footer, None);
+    }
+
+    // -- Panel-scope `?` (help from the git panel) ---------------------------
+
+    /// The git panel's footer strip promises `? help`, so `?` must actually
+    /// toggle help while the panel is focused — this closes the gap where
+    /// `?` was diff-scope only.
+    #[test]
+    fn question_mark_toggles_help_in_panel_scope() {
+        let km = Keymap::default_map();
+        assert_eq!(
+            km.lookup_in(Scope::Panel, key(KeyCode::Char('?'), KeyModifiers::NONE)),
+            Some(Action::ToggleHelp)
+        );
+    }
+
+    // -- `completions_for`: pending-prefix completions -----------------------
+
+    #[test]
+    fn completions_for_z_is_just_za() {
+        let km = Keymap::default_map();
+        let z = key(KeyCode::Char('z'), KeyModifiers::NONE);
+        let completions = km.completions_for(Scope::Diff, z);
+        assert_eq!(completions.len(), 1);
+        assert_eq!(completions[0].action, Action::ToggleCollapse);
+        assert_eq!(completions[0].key_label(), "za");
+    }
+
+    #[test]
+    fn completions_for_g_is_gg_gd_and_gr() {
+        let km = Keymap::default_map();
+        let g = key(KeyCode::Char('g'), KeyModifiers::NONE);
+        let mut actions: Vec<Action> = km
+            .completions_for(Scope::Diff, g)
+            .into_iter()
+            .map(|b| b.action)
+            .collect();
+        actions.sort_by_key(|a| format!("{a:?}"));
+        assert_eq!(
+            actions,
+            vec![
+                Action::GotoDefinition,
+                Action::GotoReferences,
+                Action::JumpToTop
+            ]
+        );
+    }
+
+    #[test]
+    fn completions_for_an_unbound_prefix_is_empty() {
+        let km = Keymap::default_map();
+        let x = key(KeyCode::Char('x'), KeyModifiers::NONE);
+        assert!(km.completions_for(Scope::Diff, x).is_empty());
+    }
+
     #[test]
     fn at_toggles_command_log_in_both_scopes() {
         let km = Keymap::default_map();

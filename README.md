@@ -72,6 +72,7 @@ Vim-grammar keybindings, designed to be remappable (config layer planned — see
 | `P` | Push to the upstream remote (background, non-blocking) |
 | `b` | Open the branch/worktree switcher |
 | `@` | Toggle the command log pane (also works from the diff view) |
+| `?` | Help (also works from the diff view) |
 
 **Help modal** (`?`):
 
