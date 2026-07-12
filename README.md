@@ -37,7 +37,7 @@ Zed's git panel and diff viewer are the quality bar for the review experience. l
 
 ## Interaction model
 
-Vim-grammar keybindings, fully remappable. Draft default map:
+Vim-grammar keybindings, designed to be remappable (config layer planned — see `docs/config-layer.md`). Draft default map:
 
 | Key | Action |
 |---|---|

@@ -63,7 +63,9 @@ Keep these boundaries clean; they're the seams for testing and for future work:
 
 ## Guardrails
 
-- Never run destructive git commands (reset --hard, checkout --, clean, push) as part of a task; staging/unstaging is the write ceiling.
+- **The tool's write ceiling** (what the shipped product may do to the user's repo at runtime) is index writes (stage/unstage) plus the three sanctioned plain remote ops — fetch, pull, push — shipped in the git panel per spec 02. `push` is never `--force`. Forbidden, always: force-push, `reset --hard`, `checkout --`, `clean`, and any other destructive or history-rewriting operation.
+- **What an agent working in this repo may run during a task** is narrower than the above: staging/unstaging only. Agents must not fetch, pull, or push on the user's behalf, even though the product offers those operations to its human user through the git panel — an agent-run task is not the same context as a user pressing a panel keybind.
+- Branch/worktree read models and a `git switch` runner exist in `src/git/` (commit `9c98d97`) as capability staged ahead of a ratified UI feature — spec 02 lists branch switching as a non-goal, so this is not yet an exposed product feature; treat it as scaffolding for a future spec, not a green light to wire it into the UI.
 - Don't add dependencies casually — this ships as one lean static binary. Justify anything beyond the stack above in the PR/commit description.
 - Don't invent new keybindings that conflict with the README's map; propose changes to the map in README.md itself.
 - If a task seems to require a web view, daemon, or network call, stop and ask — it's out of scope by design.
