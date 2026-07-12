@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/sdavisde/redquill/compare/v0.4.1...v0.5.0) (2026-07-12)
+
+
+### Features
+
+* **ui:** filter the keybind help overlay with / search ([e093d19](https://github.com/sdavisde/redquill/commit/e093d1970ebc8d674eb141350a3c74ffaefae39d))
+* **ui:** hide the git panel until opened with backtick ([19252c7](https://github.com/sdavisde/redquill/commit/19252c7264149d66b1991cea9e4bddbbf3651947))
+* **ui:** jump to the top/bottom of the diff with vim-style gg and G ([0093b18](https://github.com/sdavisde/redquill/commit/0093b1880367cb40b07478d116b62921a2a19485))
+* **ui:** show context-sensitive key hints in the footer ([52aa593](https://github.com/sdavisde/redquill/commit/52aa59391c8de0a43c670d7937bb09f5dabde1f4))
+* **ui:** size the diff gutter to fit the largest line number ([1fa97ae](https://github.com/sdavisde/redquill/commit/1fa97aee0c2df73f266fd607eb69f6eebd27cb10))
+* **ui:** visually separate annotations and file headers from diff content ([162afbd](https://github.com/sdavisde/redquill/commit/162afbd169b525c8b73051225fd6d0e30f08fe42))
+
 ## [0.4.1](https://github.com/sdavisde/redquill/compare/v0.4.0...v0.4.1) (2026-07-12)
 
 
