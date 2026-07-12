@@ -15,6 +15,7 @@
 //! lifecycle — raw mode, alternate screen, panic-safe restoration, and the
 //! blocking event loop — and returns which way the session ended.
 
+mod annotation_list;
 mod app;
 mod background;
 mod code_intel;

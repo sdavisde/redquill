@@ -13,6 +13,7 @@ use super::App;
 use super::Mode;
 use super::diff_view_state::DiffViewState;
 use super::rows::Row;
+use super::stage_ops::{staged_from_status, staged_states_from_status};
 
 /// The staging granularity a `space` gesture resolved to.
 enum StageGesture {
@@ -215,6 +216,87 @@ fn visual_stage_selection(
         return Err("no changed lines in selection");
     };
     Ok((hunk_index, selected_lines))
+}
+
+/// The staging panel's handlers: opening/closing the panel, moving its focus,
+/// and unstaging the focused file. Split out of `app.rs` alongside the `space`
+/// gesture above so all staging-panel logic lives in one module.
+impl App {
+    /// Toggles the staging panel: opens it (refreshing the staged list from
+    /// `git status` first, so it's current even if nothing was staged this
+    /// session) from Normal/Visual, closes it from Staging. A no-op while
+    /// Compose or the annotation list is open.
+    pub(super) fn toggle_staging_panel(&mut self) {
+        match self.mode {
+            Mode::Staging => self.mode = Mode::Normal,
+            Mode::Compose | Mode::List | Mode::Panel | Mode::Search | Mode::Peek => {}
+            Mode::Normal | Mode::Visual { .. } => {
+                self.refresh_staged_list();
+                self.staging_cursor = self.staging_cursor.min(self.staged.len().saturating_sub(1));
+                self.mode = Mode::Staging;
+            }
+        }
+    }
+
+    /// Closes the staging panel, returning to [`Mode::Normal`].
+    pub fn close_staging(&mut self) {
+        self.mode = Mode::Normal;
+    }
+
+    /// Moves the staging panel's focus down one file, clamped at the last.
+    pub fn staging_move_down(&mut self) {
+        if !self.staged.is_empty() {
+            self.staging_cursor = (self.staging_cursor + 1).min(self.staged.len() - 1);
+        }
+    }
+
+    /// Moves the staging panel's focus up one file, clamped at the first.
+    pub fn staging_move_up(&mut self) {
+        self.staging_cursor = self.staging_cursor.saturating_sub(1);
+    }
+
+    /// Unstages the staging panel's focused file, then refreshes. The panel
+    /// stays open and its cursor is clamped to the shrunken list. A no-op
+    /// on an empty list; failures set a footer message and change nothing.
+    pub fn unstage_focused_file(&mut self) {
+        let Some(entry) = self.staged.get(self.staging_cursor) else {
+            return;
+        };
+        let path = entry.path.clone();
+        let result = {
+            let Some(ops) = self.stage_ops() else {
+                self.set_status_message("staging unavailable (no git backend)");
+                return;
+            };
+            ops.unstage_file(&path)
+        };
+        match result {
+            Ok(()) => {
+                self.set_status_message(format!("unstaged {path}"));
+                self.refresh();
+            }
+            Err(e) => self.set_status_message(e.to_string()),
+        }
+    }
+
+    /// Best-effort re-read of the staged-file list (and per-path staged
+    /// states) from `git status`, keeping the previous values on any failure.
+    fn refresh_staged_list(&mut self) {
+        let (staged, states) = {
+            let Some(ops) = self.stage_ops() else {
+                return;
+            };
+            match ops.status() {
+                Ok(status) => (
+                    staged_from_status(&status),
+                    staged_states_from_status(&status),
+                ),
+                Err(_) => return,
+            }
+        };
+        self.staged = staged;
+        self.staged_states = states;
+    }
 }
 
 #[cfg(test)]

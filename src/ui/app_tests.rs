@@ -3,7 +3,7 @@ use crate::annotate::Classification;
 use crate::git::RawFilePatch;
 use crate::ui::compose::TextBuffer;
 use crate::ui::rows::StagedMarker;
-use crate::ui::stage_ops::build_review;
+use crate::ui::stage_ops::{build_review, staged_from_status, staged_states_from_status};
 
 fn file(path: &str, hunk_count: usize) -> FileDiff {
     let mut raw =

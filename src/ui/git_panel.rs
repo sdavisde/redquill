@@ -20,6 +20,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use crate::git::{BranchStatus, CommitSummary};
 
 use super::app::App;
+use super::app::Mode;
 use super::stage_ops::StagedState;
 use super::theme::Theme;
 
@@ -339,6 +340,57 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(counts, footer[0]);
     frame.render_widget(commit_line(app.last_commit.as_ref(), theme), footer[1]);
     frame.render_widget(remote_keys_line(theme), footer[2]);
+}
+
+/// The git panel's focus and navigation handlers, split out of `app.rs`
+/// alongside the panel's row model and renderer so all panel logic lives in
+/// one module.
+impl App {
+    /// Whether the git panel currently holds focus (drives border emphasis
+    /// and which pane's cursor renders).
+    pub fn git_panel_focused(&self) -> bool {
+        matches!(self.mode, Mode::Panel)
+    }
+
+    /// Toggles git-panel focus: from Normal/Visual it focuses the panel
+    /// (resetting its cursor to the top); from the focused panel it returns
+    /// to Normal. A no-op while another modal (Compose/List/Staging/Search/
+    /// Peek) owns the keyboard, mirroring the other panel toggles.
+    pub(super) fn toggle_git_panel(&mut self) {
+        match self.mode {
+            Mode::Panel => self.mode = Mode::Normal,
+            Mode::Compose | Mode::List | Mode::Staging | Mode::Search | Mode::Peek => {}
+            Mode::Normal | Mode::Visual { .. } => {
+                self.panel_cursor = 0;
+                self.mode = Mode::Panel;
+            }
+        }
+    }
+
+    /// Moves the panel cursor down one navigable row, clamped at the last.
+    pub fn panel_move_down(&mut self) {
+        let len = navigable_rows(self).len();
+        self.panel_cursor = moved_cursor(self.panel_cursor, len, true);
+    }
+
+    /// Moves the panel cursor up one navigable row, clamped at the first.
+    pub fn panel_move_up(&mut self) {
+        let len = navigable_rows(self).len();
+        self.panel_cursor = moved_cursor(self.panel_cursor, len, false);
+    }
+
+    /// Acts on the panel cursor's current row: a file row scrolls the
+    /// multibuffer to that file's section (via [`App::select_file_by_path`])
+    /// and returns focus to the diff; a stash row (or an out-of-range cursor)
+    /// is a no-op, leaving the panel focused.
+    pub fn panel_select(&mut self) {
+        let rows = navigable_rows(self);
+        if let Some(PanelRow::File(i)) = rows.get(self.panel_cursor) {
+            let path = self.view.files[*i].path.clone();
+            self.select_file_by_path(&path);
+            self.mode = Mode::Normal;
+        }
+    }
 }
 
 #[cfg(test)]

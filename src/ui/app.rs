@@ -24,10 +24,7 @@ use super::peek::{PeekKind, PeekState};
 use super::refresh::InFlightRefresh;
 use super::rows::{LineRow, Row, hunk_span};
 use super::search::SearchState;
-use super::stage_ops::{
-    ReviewSnapshot, StageOps, StagedFile, StagedState, staged_from_status,
-    staged_states_from_status,
-};
+use super::stage_ops::{ReviewSnapshot, StageOps, StagedFile, StagedState};
 use super::syntax::HighlightCache;
 use super::theme::Theme;
 
@@ -591,7 +588,7 @@ impl App {
     /// Opens the Compose modal pre-filled with the given existing
     /// annotation, so submitting edits it in place instead of adding a new
     /// one.
-    fn open_compose_for(&mut self, id: usize) {
+    pub(super) fn open_compose_for(&mut self, id: usize) {
         let Some(annotation) = self.annotations.iter().find(|a| a.id == id) else {
             return;
         };
@@ -643,99 +640,6 @@ impl App {
         self.refresh_rows();
     }
 
-    // -- Annotation list panel -------------------------------------------
-
-    fn toggle_list(&mut self) {
-        match self.mode {
-            Mode::List => self.mode = Mode::Normal,
-            Mode::Compose | Mode::Staging | Mode::Panel | Mode::Search | Mode::Peek => {}
-            Mode::Normal | Mode::Visual { .. } => {
-                if !self.annotations.is_empty() {
-                    self.list_cursor = self.list_cursor.min(self.annotations.len() - 1);
-                }
-                self.mode = Mode::List;
-            }
-        }
-    }
-
-    /// Closes the annotation list panel, returning to [`Mode::Normal`].
-    pub fn close_list(&mut self) {
-        self.mode = Mode::Normal;
-    }
-
-    /// Moves the list panel's focus down one annotation, clamped at the
-    /// last.
-    pub fn list_move_down(&mut self) {
-        if !self.annotations.is_empty() {
-            self.list_cursor = (self.list_cursor + 1).min(self.annotations.len() - 1);
-        }
-    }
-
-    /// Moves the list panel's focus up one annotation, clamped at the
-    /// first.
-    pub fn list_move_up(&mut self) {
-        self.list_cursor = self.list_cursor.saturating_sub(1);
-    }
-
-    /// Switches to the focused annotation's file, places the cursor on its
-    /// anchor row, and closes the list panel. A no-op if the store is
-    /// empty or the annotation's file/anchor can no longer be found.
-    pub fn jump_to_focused_annotation(&mut self) {
-        let Some(id) = self.annotations.iter().nth(self.list_cursor).map(|a| a.id) else {
-            self.mode = Mode::Normal;
-            return;
-        };
-        self.jump_to_annotation(id);
-    }
-
-    fn jump_to_annotation(&mut self, id: usize) {
-        let Some(annotation) = self.annotations.iter().find(|a| a.id == id) else {
-            self.mode = Mode::Normal;
-            return;
-        };
-        let target = annotation.target.clone();
-        let path = target.path().to_string();
-        if let Some(index) = self.view.files.iter().position(|f| f.path == path) {
-            // Expand the target section so line/hunk anchors are reachable,
-            // then resolve the anchor against the whole buffer (a File target
-            // lands on the section header; line/hunk/range targets resolve
-            // within this file's row span). Fall back to the section header
-            // if the specific anchor row can no longer be found.
-            self.view.set_collapsed(&path, false);
-            self.rebuild_rows();
-            self.view.cursor = self
-                .view
-                .anchor_row_in_buffer(&target)
-                .unwrap_or_else(|| self.view.header_row_of_file[index]);
-            self.view.scroll = 0;
-            self.view.ensure_visible();
-        }
-        self.mode = Mode::Normal;
-    }
-
-    /// Opens Compose pre-filled with the focused annotation for editing.
-    pub fn edit_focused_annotation(&mut self) {
-        let Some(id) = self.annotations.iter().nth(self.list_cursor).map(|a| a.id) else {
-            return;
-        };
-        self.open_compose_for(id);
-    }
-
-    /// Deletes the focused annotation. No confirmation — deletion is cheap
-    /// to redo.
-    pub fn delete_focused_annotation(&mut self) {
-        let Some(id) = self.annotations.iter().nth(self.list_cursor).map(|a| a.id) else {
-            return;
-        };
-        let _ = self.annotations.remove(id);
-        if self.annotations.is_empty() {
-            self.list_cursor = 0;
-        } else {
-            self.list_cursor = self.list_cursor.min(self.annotations.len() - 1);
-        }
-        self.refresh_rows();
-    }
-
     // -- Staging -----------------------------------------------------------
 
     /// Sets the transient status-footer message (cleared by the event loop
@@ -753,113 +657,6 @@ impl App {
     /// for the UI-side staging module. `None` in git-less contexts.
     pub(super) fn stage_ops(&self) -> Option<&dyn StageOps> {
         self.stage_ops.as_deref()
-    }
-
-    // -- Staging panel -----------------------------------------------------
-
-    /// Toggles the staging panel: opens it (refreshing the staged list from
-    /// `git status` first, so it's current even if nothing was staged this
-    /// session) from Normal/Visual, closes it from Staging. A no-op while
-    /// Compose or the annotation list is open.
-    fn toggle_staging_panel(&mut self) {
-        match self.mode {
-            Mode::Staging => self.mode = Mode::Normal,
-            Mode::Compose | Mode::List | Mode::Panel | Mode::Search | Mode::Peek => {}
-            Mode::Normal | Mode::Visual { .. } => {
-                self.refresh_staged_list();
-                self.staging_cursor = self.staging_cursor.min(self.staged.len().saturating_sub(1));
-                self.mode = Mode::Staging;
-            }
-        }
-    }
-
-    /// Closes the staging panel, returning to [`Mode::Normal`].
-    pub fn close_staging(&mut self) {
-        self.mode = Mode::Normal;
-    }
-
-    /// Moves the staging panel's focus down one file, clamped at the last.
-    pub fn staging_move_down(&mut self) {
-        if !self.staged.is_empty() {
-            self.staging_cursor = (self.staging_cursor + 1).min(self.staged.len() - 1);
-        }
-    }
-
-    /// Moves the staging panel's focus up one file, clamped at the first.
-    pub fn staging_move_up(&mut self) {
-        self.staging_cursor = self.staging_cursor.saturating_sub(1);
-    }
-
-    /// Unstages the staging panel's focused file, then refreshes. The panel
-    /// stays open and its cursor is clamped to the shrunken list. A no-op
-    /// on an empty list; failures set a footer message and change nothing.
-    pub fn unstage_focused_file(&mut self) {
-        let Some(entry) = self.staged.get(self.staging_cursor) else {
-            return;
-        };
-        let path = entry.path.clone();
-        let result = {
-            let Some(ops) = self.stage_ops.as_deref() else {
-                self.set_status_message("staging unavailable (no git backend)");
-                return;
-            };
-            ops.unstage_file(&path)
-        };
-        match result {
-            Ok(()) => {
-                self.set_status_message(format!("unstaged {path}"));
-                self.refresh();
-            }
-            Err(e) => self.set_status_message(e.to_string()),
-        }
-    }
-
-    // -- Git panel focus & navigation -------------------------------------
-
-    /// Whether the git panel currently holds focus (drives border emphasis
-    /// and which pane's cursor renders).
-    pub fn git_panel_focused(&self) -> bool {
-        matches!(self.mode, Mode::Panel)
-    }
-
-    /// Toggles git-panel focus: from Normal/Visual it focuses the panel
-    /// (resetting its cursor to the top); from the focused panel it returns
-    /// to Normal. A no-op while another modal (Compose/List/Staging/Search/
-    /// Peek) owns the keyboard, mirroring the other panel toggles.
-    fn toggle_git_panel(&mut self) {
-        match self.mode {
-            Mode::Panel => self.mode = Mode::Normal,
-            Mode::Compose | Mode::List | Mode::Staging | Mode::Search | Mode::Peek => {}
-            Mode::Normal | Mode::Visual { .. } => {
-                self.panel_cursor = 0;
-                self.mode = Mode::Panel;
-            }
-        }
-    }
-
-    /// Moves the panel cursor down one navigable row, clamped at the last.
-    pub fn panel_move_down(&mut self) {
-        let len = super::git_panel::navigable_rows(self).len();
-        self.panel_cursor = super::git_panel::moved_cursor(self.panel_cursor, len, true);
-    }
-
-    /// Moves the panel cursor up one navigable row, clamped at the first.
-    pub fn panel_move_up(&mut self) {
-        let len = super::git_panel::navigable_rows(self).len();
-        self.panel_cursor = super::git_panel::moved_cursor(self.panel_cursor, len, false);
-    }
-
-    /// Acts on the panel cursor's current row: a file row scrolls the
-    /// multibuffer to that file's section (via [`App::select_file_by_path`])
-    /// and returns focus to the diff; a stash row (or an out-of-range cursor)
-    /// is a no-op, leaving the panel focused.
-    pub fn panel_select(&mut self) {
-        let rows = super::git_panel::navigable_rows(self);
-        if let Some(super::git_panel::PanelRow::File(i)) = rows.get(self.panel_cursor) {
-            let path = self.view.files[*i].path.clone();
-            self.select_file_by_path(&path);
-            self.mode = Mode::Normal;
-        }
     }
 
     // -- Remote operations & command log ----------------------------------
@@ -953,25 +750,6 @@ impl App {
                 ));
             }
         }
-    }
-
-    /// Best-effort re-read of the staged-file list (and per-path staged
-    /// states) from `git status`, keeping the previous values on any failure.
-    fn refresh_staged_list(&mut self) {
-        let (staged, states) = {
-            let Some(ops) = self.stage_ops.as_deref() else {
-                return;
-            };
-            match ops.status() {
-                Ok(status) => (
-                    staged_from_status(&status),
-                    staged_states_from_status(&status),
-                ),
-                Err(_) => return,
-            }
-        };
-        self.staged = staged;
-        self.staged_states = states;
     }
 
     // -- Search --------------------------------------------------------------
