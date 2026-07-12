@@ -32,6 +32,7 @@ mod modal_keys;
 mod modes;
 mod peek;
 mod peek_overlay;
+mod refresh;
 mod rows;
 mod search;
 mod stage_ops;
