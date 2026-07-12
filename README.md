@@ -64,8 +64,8 @@ Vim-grammar keybindings, designed to be remappable (config layer planned — see
 | Key | Action |
 |---|---|
 | `` ` `` | Return focus to the diff view |
-| `j` / `k` | Move the panel cursor through CHANGES / UNTRACKED / STASHES |
-| `Enter` | Open the cursor's file in the diff (stash / header rows: no-op) |
+| `j` / `k` | Move the panel cursor through CHANGES / UNTRACKED / STASHES; the diff follows file rows as you move |
+| `Enter` | Return focus to the diff at the cursor's file (stash / header rows: no-op) |
 | `f` | Fetch from the upstream remote (background, non-blocking) |
 | `p` | Pull from the upstream remote (background, non-blocking) |
 | `P` | Push to the upstream remote (background, non-blocking) |

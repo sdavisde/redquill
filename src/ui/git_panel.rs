@@ -369,7 +369,10 @@ impl App {
         match self.mode {
             Mode::Panel { .. } => self.mode = Mode::Normal,
             Mode::Compose | Mode::List | Mode::Staging | Mode::Search | Mode::Peek => {}
-            Mode::Normal | Mode::Visual { .. } => self.mode = Mode::Panel { cursor: 0 },
+            Mode::Normal | Mode::Visual { .. } => {
+                self.mode = Mode::Panel { cursor: 0 };
+                self.panel_follow();
+            }
         }
     }
 
@@ -380,6 +383,7 @@ impl App {
         if let Mode::Panel { cursor } = &mut self.mode {
             *cursor = moved_cursor(*cursor, len, true);
         }
+        self.panel_follow();
     }
 
     /// Moves the panel cursor up one navigable row, clamped at the first.
@@ -389,17 +393,34 @@ impl App {
         if let Mode::Panel { cursor } = &mut self.mode {
             *cursor = moved_cursor(*cursor, len, false);
         }
+        self.panel_follow();
     }
 
-    /// Acts on the panel cursor's current row: a file row scrolls the
-    /// multibuffer to that file's section (via [`App::select_file_by_path`])
-    /// and returns focus to the diff; a stash row (or an out-of-range cursor)
-    /// is a no-op, leaving the panel focused.
-    pub fn panel_select(&mut self) {
+    /// Follows the panel cursor into the diff: if it rests on a file row
+    /// whose file isn't already selected, scrolls the multibuffer to that
+    /// file's section (expanding it if collapsed) via
+    /// [`App::select_file_by_path`]. Stash rows, an empty panel, and an
+    /// out-of-range cursor leave the diff untouched. Pure in-memory — never
+    /// re-runs git. Always stays in `Mode::Panel`; the caller decides
+    /// whether to also move focus (see [`App::panel_select`]).
+    pub(super) fn panel_follow(&mut self) {
         let rows = navigable_rows(self);
-        if let Some(PanelRow::File(i)) = rows.get(self.panel_cursor()) {
+        if let Some(PanelRow::File(i)) = rows.get(self.panel_cursor())
+            && *i != self.view.selected_file
+        {
             let path = self.view.files[*i].path.clone();
             self.select_file_by_path(&path);
+        }
+    }
+
+    /// Acts on the panel cursor's current row: a file row follows the diff
+    /// to that file (via [`App::panel_follow`]) and returns focus to the
+    /// diff; a stash row (or an out-of-range cursor) is a no-op, leaving the
+    /// panel focused.
+    pub fn panel_select(&mut self) {
+        let rows = navigable_rows(self);
+        if let Some(PanelRow::File(_)) = rows.get(self.panel_cursor()) {
+            self.panel_follow();
             self.mode = Mode::Normal;
         }
     }
@@ -704,5 +725,92 @@ mod tests {
             vec![PanelRow::File(0), PanelRow::File(1), PanelRow::File(2)]
         );
         assert!(rows.iter().all(|r| matches!(r, PanelRow::File(_))));
+    }
+
+    // -- Auto-follow (Task 2) -----------------------------------------------
+
+    /// Moving the panel cursor onto a file row scrolls the diff to that
+    /// file without leaving `Mode::Panel` — follow, don't focus-jump.
+    #[test]
+    fn panel_cursor_motion_follows_file_rows() {
+        let mut app = mixed_app();
+        app.mode = Mode::Panel { cursor: 0 }; // a.rs, already selected (selected_file starts at 0)
+        app.panel_move_down(); // -> b.rs
+        assert_eq!(app.panel_cursor(), 1);
+        assert_eq!(app.view.selected_file, 1);
+        assert!(matches!(app.mode, Mode::Panel { .. }));
+    }
+
+    /// Moving onto a stash row leaves the diff's file selection exactly
+    /// where it last followed to — stash rows have nothing to follow to.
+    #[test]
+    fn panel_cursor_on_stash_row_leaves_diff_selection() {
+        let mut app = mixed_app();
+        app.mode = Mode::Panel { cursor: 1 };
+        app.panel_follow(); // -> b.rs selected
+        assert_eq!(app.view.selected_file, 1);
+        app.panel_move_down(); // -> notes.md
+        assert_eq!(app.view.selected_file, 2);
+        app.panel_move_down(); // -> stash 0, nothing to follow to
+        assert_eq!(app.panel_cursor(), 3);
+        assert_eq!(app.view.selected_file, 2); // unchanged from the last file row
+    }
+
+    /// An empty panel (no files, no stashes) is a no-op, not a panic.
+    #[test]
+    fn panel_follow_on_empty_panel_is_noop() {
+        let mut app = App::new(vec![]);
+        app.mode = Mode::Panel { cursor: 0 };
+        app.panel_follow();
+        assert_eq!(app.panel_cursor(), 0);
+        assert_eq!(app.view.selected_file, 0);
+    }
+
+    /// Focusing the panel (`` ` ``) resets the cursor to the top row and
+    /// follows it, so the diff snaps back to the first file even if it had
+    /// scrolled elsewhere while the panel was unfocused.
+    #[test]
+    fn focusing_panel_follows_to_first_file() {
+        let mut app = mixed_app();
+        assert!(app.select_file_by_path("b.rs"));
+        assert_eq!(app.view.selected_file, 1);
+        app.toggle_git_panel();
+        assert!(matches!(app.mode, Mode::Panel { .. }));
+        assert_eq!(app.panel_cursor(), 0);
+        assert_eq!(app.view.selected_file, 0); // followed back to a.rs
+    }
+
+    /// Following onto a collapsed file's row expands it — a collapsed
+    /// section has nothing to follow to otherwise.
+    #[test]
+    fn panel_follow_expands_collapsed_target() {
+        let mut app = mixed_app();
+        app.view.set_collapsed("b.rs", true);
+        app.rebuild_rows();
+        assert!(app.view.is_collapsed("b.rs"));
+        app.mode = Mode::Panel { cursor: 0 };
+        app.panel_move_down(); // onto b.rs's row
+        assert_eq!(app.panel_cursor(), 1);
+        assert_eq!(app.view.selected_file, 1);
+        assert!(!app.view.is_collapsed("b.rs"));
+    }
+
+    /// Enter on a file row follows to it and returns focus to the diff.
+    #[test]
+    fn enter_on_file_row_returns_focus_with_file_selected() {
+        let mut app = mixed_app();
+        app.mode = Mode::Panel { cursor: 1 }; // b.rs
+        app.panel_select();
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.view.selected_file, 1);
+    }
+
+    /// Enter on a stash row stays put — no file to focus on.
+    #[test]
+    fn enter_on_stash_row_is_noop_keeping_panel_focus() {
+        let mut app = mixed_app();
+        app.mode = Mode::Panel { cursor: 3 }; // stash 0
+        app.panel_select();
+        assert!(matches!(app.mode, Mode::Panel { .. }));
     }
 }
