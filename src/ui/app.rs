@@ -6,8 +6,13 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::annotate::{AnnotationStore, Side, Target};
-use crate::diff::{FileDiff, LineOrigin};
+use crate::annotate::{AnnotationStore, Target};
+// `Side` is only referenced by test-only helpers here (and by the `super::*`
+// re-export the `tests` module relies on), so gate it to avoid an unused
+// import in the production build.
+#[cfg(test)]
+use crate::annotate::Side;
+use crate::diff::FileDiff;
 use crate::git::{
     BranchStatus, CommitSummary, DiffTarget, RawFilePatch, RemoteOp, StashEntry, remote_command,
 };
@@ -22,10 +27,11 @@ use super::keymap::Action;
 use super::lsp_ops::LspClient;
 use super::peek::{PeekKind, PeekState};
 use super::refresh::InFlightRefresh;
-use super::rows::{LineRow, Row, hunk_span};
+use super::rows::Row;
 use super::search::SearchState;
 use super::stage_ops::{ReviewSnapshot, StageOps, StagedFile, StagedState};
 use super::syntax::HighlightCache;
+use super::targeting;
 use super::theme::Theme;
 
 /// The interaction mode. Normal/Visual bindings dispatch through the
@@ -518,62 +524,15 @@ impl App {
     /// cursor never addresses).
     pub fn target_for_cursor(&self) -> Option<Target> {
         let file = self.view.files.get(self.view.file_of_cursor())?;
-        match self.view.rows.get(self.view.cursor)? {
-            Row::Line(line) => line_target(&file.path, line),
-            Row::HunkHeader { hunk_index, .. } => self.hunk_target(*hunk_index),
-            Row::FileHeader { .. } | Row::Binary => Some(Target::file(&file.path)),
-            Row::Annotation { .. } => None,
-        }
-    }
-
-    fn hunk_target(&self, hunk_index: usize) -> Option<Target> {
-        let file = self.view.files.get(self.view.file_of_cursor())?;
-        let hunk = file.hunks.get(hunk_index)?;
-        let (start, end) = hunk_span(hunk);
-        Target::hunk(&file.path, start, end).ok()
+        targeting::target_for_cursor(file, &self.view.rows, self.view.cursor)
     }
 
     /// The annotation target for a [`Mode::Visual`] selection between
-    /// `anchor` and the cursor (inclusive, order-independent). Only
-    /// `Row::Line` rows in the span count; selections spanning hunk/file
-    /// headers clamp to the line rows within them. If every selected line
-    /// is `Removed`, the target uses the old side and old-side line
-    /// numbers; otherwise it uses the new side and the new-side line
-    /// numbers of the non-removed rows the selection spans. `None` if the
-    /// selection covers no line rows at all.
+    /// `anchor` and the cursor. Gathers the selected file and cursor and
+    /// delegates to [`targeting::target_for_visual`].
     pub fn target_for_visual(&self, anchor: usize) -> Option<Target> {
         let file = self.view.files.get(self.view.file_of_cursor())?;
-        let (lo, hi) = if anchor <= self.view.cursor {
-            (anchor, self.view.cursor)
-        } else {
-            (self.view.cursor, anchor)
-        };
-        let lines: Vec<&LineRow> = self.view.rows[lo..=hi]
-            .iter()
-            .filter_map(|r| match r {
-                Row::Line(l) => Some(l),
-                _ => None,
-            })
-            .collect();
-        if lines.is_empty() {
-            return None;
-        }
-
-        if lines.iter().all(|l| l.origin == LineOrigin::Removed) {
-            let nums: Vec<u32> = lines.iter().filter_map(|l| l.old_line).collect();
-            let start = *nums.iter().min()?;
-            let end = *nums.iter().max()?;
-            Target::range(&file.path, start, end, Side::Old).ok()
-        } else {
-            let nums: Vec<u32> = lines
-                .iter()
-                .filter(|l| l.origin != LineOrigin::Removed)
-                .filter_map(|l| l.new_line)
-                .collect();
-            let start = *nums.iter().min()?;
-            let end = *nums.iter().max()?;
-            Target::range(&file.path, start, end, Side::New).ok()
-        }
+        targeting::target_for_visual(file, &self.view.rows, self.view.cursor, anchor)
     }
 
     // -- Compose ---------------------------------------------------------
@@ -857,19 +816,6 @@ fn visual_mode_allows(action: Action) -> bool {
             | Action::ToggleHelp
             | Action::ToggleCommandLog
     )
-}
-
-/// The `Line` target for a diff line row: `Removed` lines anchor to the old
-/// side/number, `Added`/`Context` lines to the new side/number. `None` only
-/// if the row's own invariant (removed lines always carry `old_line`,
-/// non-removed lines always carry `new_line`) is somehow violated.
-fn line_target(path: &str, line: &LineRow) -> Option<Target> {
-    match line.origin {
-        LineOrigin::Removed => line.old_line.map(|n| Target::line(path, n, Side::Old)),
-        LineOrigin::Added | LineOrigin::Context => {
-            line.new_line.map(|n| Target::line(path, n, Side::New))
-        }
-    }
 }
 
 #[cfg(test)]

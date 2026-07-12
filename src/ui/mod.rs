@@ -41,6 +41,7 @@ mod stage_ops;
 mod staging;
 mod staging_panel;
 mod syntax;
+mod targeting;
 mod theme;
 
 pub use app::{App, Mode};
