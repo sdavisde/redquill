@@ -2,6 +2,7 @@ use super::*;
 use crate::annotate::Classification;
 use crate::git::RawFilePatch;
 use crate::ui::compose::TextBuffer;
+use crate::ui::rows::StagedMarker;
 use crate::ui::stage_ops::build_review;
 
 fn file(path: &str, hunk_count: usize) -> FileDiff {

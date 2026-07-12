@@ -33,6 +33,7 @@ mod modes;
 mod peek;
 mod peek_overlay;
 mod refresh;
+mod render_glue;
 mod rows;
 mod search;
 mod stage_ops;
