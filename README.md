@@ -1,8 +1,8 @@
 # redquill
 
-**A terminal UI for reviewing agentic code — read it, question it, stage it, or send it back.**
+**A Portable, Efficeint tool for reviewing agentic code**
 
-Coding agents produce large working-tree diffs faster than humans can review them. The review loop today is fragmented: one tool to read the diff, another to stage what's good, a third window to answer "wait, who else calls this function?", and copy-paste to get feedback back to the agent. redquill collapses that into a single keyboard-driven surface.
+AI Agents still produce code that is hard to maintain, or I may not agree with. This tool was built as a way to streamline the local code review process while never having to leave the terminal.
 
 ## Vision
 
@@ -11,9 +11,19 @@ redquill is the human checkpoint between agent output and commit. Every hunk in 
 - **Keep it** → stage it (file, hunk, or line granularity)
 - **Fix it** → annotate it, and batch the annotations back to the agent as its next prompt
 
-Everything else in the tool exists to make those two verdicts fast and well-informed. The differentiating bet is **code intelligence during review**: a limited language-server client so that go-to-definition, find-references, and hover docs are one keystroke away from any symbol in the diff — because the most common reason a reviewer leaves their review tool is to answer "what does this touch?"
+What makes this tool unique is **code intelligence during review**: a limited language-server client so that go-to-definition, find-references, and hover docs are one keystroke away from any symbol in the diff — because the most common problem when reviewing code: not understanding how the changes impact other areas in the codebase.
 
-Zed's git panel and diff viewer are the quality bar for the review experience. lazygit is the quality bar for staging ergonomics. The annotate-and-send loop should feel native to Claude Code, Codex CLI, and OpenCode sessions.
+## Getting Started
+
+1. Install the redquill application
+
+```bash
+brew install sdavisde/tap/redquill
+```
+
+2. Run `redquill` in the git repo you want to review
+3. Press \` to open the git panel, and `?` to see the list of keybinds.
+4. When viewing the diff, press `c` to leave a comment which can be piped out to an agent when the session ends.
 
 ## Core features
 
@@ -37,88 +47,7 @@ Zed's git panel and diff viewer are the quality bar for the review experience. l
 
 ## Interaction model
 
-Vim-grammar keybindings, designed to be remappable (config layer planned — see `docs/config-layer.md`). Draft default map:
-
-| Key | Action |
-|---|---|
-| `j` / `k`, `Ctrl-d` / `Ctrl-u` | Move / scroll |
-| `gg` / `G` | Jump to top / bottom of the diff |
-| `h` / `l`, `w` / `b` | Move / word-jump the column cursor (needed for `gd`/`gr`/`K`) |
-| `]` / `[` | Next / previous hunk |
-| `Tab` / `Shift-Tab` | Next / previous file section |
-| `za` | Collapse / expand the file section under the cursor |
-| `/` then `n` / `N` | Search |
-| `c` | Comment on line (visual select `v` for ranges) |
-| `space` | Stage/unstage hunk (line in visual mode) |
-| `S` | Stage/unstage the file under the cursor (collapses on stage, expands on unstage) |
-| `s` | Toggle staging panel |
-| `` ` `` | Open the git panel (hidden by default) and focus it |
-| `@` | Toggle the git command log pane |
-| `R` | Refresh the diff from the working tree (edits made outside redquill are also picked up automatically every couple of seconds) |
-| `gd` / `gr` / `K` | Go to definition / references / hover docs |
-| `a` | Annotation list |
-| `?` | Help |
-| `q` / `Q` | Quit and emit annotations / quit and discard |
-
-**Git panel** (while focused, after `` ` ``):
-
-| Key | Action |
-|---|---|
-| `` ` `` | Return focus to the diff view (also hides the panel again) |
-| `j` / `k` | Move the panel cursor through CHANGES / UNTRACKED / STASHES; the diff follows file rows as you move |
-| `Enter` | Return focus to the diff at the cursor's file (also hides the panel; stash / header rows: no-op) |
-| `f` | Fetch from the upstream remote (background, non-blocking) |
-| `p` | Pull from the upstream remote (background, non-blocking) |
-| `P` | Push to the upstream remote (background, non-blocking) |
-| `b` | Open the branch/worktree switcher |
-| `@` | Toggle the command log pane (also works from the diff view) |
-| `?` | Help (also works from the diff view) |
-
-**Help modal** (`?`):
-
-| Key | Action |
-|---|---|
-| `j` / `k` (also arrow keys) | Scroll |
-| `PgUp` / `PgDn` | Page up / down |
-| `g` / `G` (also `Home` / `End`) | Jump to the top / bottom |
-| `/` | Filter the keybind list (lazygit-style): type to filter live, `Enter` locks the filter in (scroll keys resume), `Esc` clears it |
-| `Esc` / `Enter` / `?` | Close the help modal (with a locked filter active, `Esc` first clears the filter, then a second `Esc` closes) |
-
-**Branch/worktree switcher** (`b` from the git panel):
-
-| Key | Action |
-|---|---|
-| `Tab` / `h` / `l` (also `Shift-Tab` / arrow keys) | Switch between the Branches and Worktrees tabs |
-| `j` / `k` | Move the cursor |
-| `Enter` | Switch to the selected branch, or re-root onto the selected worktree |
-| `Esc` | Close the switcher, returning to the git panel at the row it had before the switcher opened |
-
-Layout sketch (git panel shown focused via `` ` `` — it's hidden by default, so a diff-focused session gets the full width) — every changed file is one collapsible section in a single scrollable **multibuffer** (`▾` expanded / `▸` collapsed; `●` fully staged / `±` partially staged); staging a file collapses it out of the way, unstaging on its header brings it back:
-
-```
-┌─ files ──────┬─ uncommitted changes ─────────────────────────────────┐
-│ ± session.rs │ ▾ M src/auth/session.rs                            ±  │
-│   mod.rs     │   42 │  fn validate(token: &Token) -> Result<Claims>{ │
-│ ● keys.rs    │   43 │-     let key = env::var("SECRET")?;            │
-│   tests/…    │   44 │+     let key = self.keystore.current()?;       │
-│              │      │  ● [question] where does keystore get rotated? │
-│ [2 staged]   │ ▸ A src/keys.rs                                    ●  │
-│ [4 notes]    │ ▾ M src/auth/mod.rs                                   │
-│              │   12 │+ pub mod keystore;                             │
-│              │ ┌─ references: keystore.current() ── 3 results ──┐    │
-│              │ │ src/keys.rs:81   src/auth/mod.rs:12   tests/…  │    │
-│              │ └────────────────────────────────────────────────┘   │
-└──────────────┴────────────────────────────────────────────────────────┘
-```
-
-## Architecture
-
-- **Language:** Rust
-- **TUI:** [ratatui](https://ratatui.rs) + crossterm — the de facto standard for modern review/diff TUIs; large ecosystem, immediate-mode rendering suits a diff viewer well
-- **Git:** shell out to `git` for diffs/staging (matches what the ecosystem does; avoids libgit2 divergence from user config), `git2` crate only where it clearly wins
-- **Syntax highlighting:** tree-sitter (accurate, incremental, and the same infrastructure the LSP layer benefits from); syntect acceptable as a stopgap
-- **LSP:** thin JSON-RPC client (`lsp-types` crate) managing external servers per language, configured like Helix's `languages.toml`; only `definition`, `references`, `hover` in scope for v1.x
-- **Annotation output:** structured markdown on stdout — `## path/to/file.rs:LINE (+)` header followed by the comment body — a format agents parse trivially and humans can read raw
+Vim-grammar keybindings, designed to be remappable (config layer planned — see `docs/config-layer.md`).
 
 ### Design principles
 
@@ -127,27 +56,6 @@ Layout sketch (git panel shown focused via `` ` `` — it's hidden by default, s
 3. **Never block review on intelligence.** LSP is progressive enhancement. Slow or missing servers must never make the diff feel slow.
 4. **The terminal is the product.** No web views, no daemon, no account. One static binary.
 5. **Respect user git config.** redquill reads and writes repo state the same way `git` on their PATH would.
-
-## Installation (planned)
-
-Follow ecosystem conventions from day one:
-
-```sh
-curl -fsSL redquill.dev/install.sh | sh   # or:
-brew install sdavisde/tap/redquill
-cargo install redquill
-```
-
-Prebuilt binaries (linux/darwin, amd64/arm64) attached to GitHub Releases.
-
-## Usage
-
-```sh
-redquill                 # review the working tree
-redquill --staged        # review the index
-redquill main..HEAD      # review a range
-redquill -o review.md    # also write annotations to a file
-```
 
 Quit with `q` and annotations print to stdout — pipe them anywhere:
 
@@ -158,7 +66,3 @@ redquill | claude -p "address this review feedback"
 ## Prior art
 
 Standing on the shoulders of: **lazygit** (staging ergonomics), **revdiff** and **tuicr** (the annotate-to-agent loop and its output conventions), **Zed** (diff-viewer quality bar), **Helix** (LSP configuration model). redquill exists because no one tool combines staging, annotation, and code navigation in a single review surface.
-
-## Status
-
-Pre-alpha, but the v1 review loop is implemented and usable via `cargo run --`: diff viewer (unified view), annotations with markdown-on-quit, and file/hunk/line staging. LSP peek (`gd`/`gr`/`K`) from the v1.x milestone is implemented too. Installation (prebuilt binaries, package manager taps) is still planned — for now, build from source. Roadmap order: diff viewer → annotations + stdout → staging → LSP peek → agent plugins.
