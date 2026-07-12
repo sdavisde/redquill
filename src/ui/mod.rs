@@ -419,3 +419,7 @@ fn event_loop(
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "git_switch_integration_tests.rs"]
+mod git_switch_integration_tests;

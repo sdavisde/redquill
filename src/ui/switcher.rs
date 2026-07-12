@@ -8,9 +8,11 @@
 
 use std::path::Path;
 
-use crate::git::{LocalBranch, WorktreeEntry};
+use crate::git::{GitError, GitRunner, LocalBranch, WorktreeEntry};
 
 use super::app::{App, Mode};
+use super::command_log::CommandLogEntry;
+use super::stage_ops::build_review;
 
 /// Which tab of the switcher modal is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,16 +196,205 @@ impl App {
         }
     }
 
-    /// The `Enter` gesture inside the switcher modal.
-    ///
-    /// **Stub for now.** This is Task 3 (spec 03 Unit 1, the modal shell) —
-    /// Task 4 (spec 03 Units 2/3, `docs/specs/03-spec-branch-worktree-switcher.md`)
-    /// wires this up to dispatch on `self.switcher`'s active tab: `git
-    /// switch` for a selected branch, or a build-before-swap re-root onto a
-    /// selected worktree. Until then `Enter` is a no-op so the modal shell
-    /// is demoable without acting on it.
+    /// The `Enter` gesture inside the switcher modal (spec 03 Units 2/3):
+    /// dispatches on the active tab to [`App::confirm_branch_switch`] or
+    /// [`App::confirm_worktree_switch`]. Guarded up front by the same
+    /// single-in-flight rule [`App::request_remote_op`] enforces: a running
+    /// fetch/pull/push blocks a switch attempt (both mutate the working tree
+    /// state the remote op is mid-flight against) — rejected with a footer
+    /// message, modal left open, exactly like a second remote-op request.
     pub(super) fn switcher_confirm(&mut self) {
-        // TODO(spec 03 Task 4): confirm_branch_switch / confirm_worktree_switch.
+        if let Some(label) = self.remote_running_label() {
+            self.set_status_message(format!("{label} is running \u{2014} wait before switching"));
+            return;
+        }
+        let Some(s) = self.switcher.as_ref() else {
+            return;
+        };
+        match s.tab {
+            SwitcherTab::Branches => self.confirm_branch_switch(),
+            SwitcherTab::Worktrees => self.confirm_worktree_switch(),
+        }
+    }
+
+    /// Branches-tab `Enter` (spec 03 Unit 2): switches to the selected
+    /// branch via `git switch -- <name>`, records the attempt in the
+    /// command log either way, and reports the outcome in the footer.
+    ///
+    /// The current branch is a no-op with a footer message, modal left open
+    /// (nothing to switch to). On success the modal closes, a full refresh
+    /// rebuilds the review (diff/panel/branch/annotation targets — annotations
+    /// themselves are untouched, so they keep pointing at the same
+    /// paths/lines) and the git-panel cursor re-follows the diff. On failure
+    /// (dirty tree, branch checked out in another worktree, ...) the modal
+    /// stays open per spec so the reviewer can see the failure and retry or
+    /// pick something else; the footer points at the command log (`@`) for
+    /// git's stderr.
+    ///
+    /// Race-safe for free: [`App::refresh`] bumps `refresh_generation`, so
+    /// any working-tree poll spawned before this switch is discarded on
+    /// drain rather than clobbering the post-switch state (see
+    /// [`super::refresh`]).
+    fn confirm_branch_switch(&mut self) {
+        let Some(s) = self.switcher.as_ref() else {
+            return;
+        };
+        let Some(branch) = s.branches.get(s.branch_cursor) else {
+            return;
+        };
+        let name = branch.name.clone();
+        if branch.is_current {
+            self.set_status_message(format!("already on {name}"));
+            return;
+        }
+        let Some(ops) = self.stage_ops.as_deref() else {
+            self.set_status_message("switcher unavailable (no git backend)");
+            return;
+        };
+        let result = ops.switch_branch(&name);
+        self.command_log
+            .push(branch_switch_log_entry(&name, &result));
+        match result {
+            Ok(()) => {
+                self.close_switcher();
+                self.refresh();
+                self.after_panel_coherence();
+                self.set_status_message(format!("switched to {name} (annotations kept)"));
+            }
+            Err(_) => {
+                self.set_status_message("switch failed \u{2014} see command log (@)");
+            }
+        }
+    }
+
+    /// Worktrees-tab `Enter` (spec 03 Unit 3): re-roots the whole review
+    /// session onto the selected worktree.
+    ///
+    /// Guards a bare worktree (nothing to review there) and the already-current
+    /// worktree with a footer message, modal left open — mirrors the
+    /// current-branch guard on the Branches tab. Otherwise discovers a fresh
+    /// [`GitRunner`] at the worktree's path and hands off to
+    /// [`App::reroot`], which does the actual build-before-swap.
+    fn confirm_worktree_switch(&mut self) {
+        let Some(s) = self.switcher.as_ref() else {
+            return;
+        };
+        let Some(wt) = s.worktrees.get(s.worktree_cursor) else {
+            return;
+        };
+        if wt.bare {
+            self.set_status_message("cannot re-root onto a bare worktree");
+            return;
+        }
+        if is_current_worktree(self.repo_root.as_deref(), wt) {
+            self.set_status_message("already in this worktree");
+            return;
+        }
+        let path = wt.path.clone();
+        match GitRunner::discover_in(&path) {
+            Ok(runner) => self.reroot(runner),
+            Err(e) => {
+                self.close_switcher();
+                self.set_status_message(format!("re-root failed: {e}"));
+            }
+        }
+    }
+
+    /// Re-roots the app onto `runner`'s repository: builds the new review
+    /// snapshot *before* touching any state (spec 03 Unit 3's build-first
+    /// requirement), so a failed rebuild leaves the current worktree's
+    /// session fully intact — only on success does the backend, repo root,
+    /// and LSP state actually swap.
+    ///
+    /// Once the swap commits, bumps `refresh_generation` and clears
+    /// `refresh_in_flight`: any working-tree poll still in flight against the
+    /// *old* root was captured (by [`super::stage_ops::StageOps::async_review_builder`])
+    /// as a clone of the old [`GitRunner`], so it keeps running to completion
+    /// against the old repo — but its result is now orphaned twice over:
+    /// [`super::App::poll_refresh`] drops anything whose spawn-time
+    /// generation no longer matches (the bump), and even if that raced back
+    /// to matching, `refresh_in_flight` being `None` means there's no
+    /// tracked task for its id to match at all. Clearing it also frees
+    /// `spawn_auto_refresh`'s single-flight gate immediately, rather than
+    /// waiting for the orphaned old-root read to naturally drain, so the very
+    /// next poll tick can spawn a fresh read against the *new* backend.
+    ///
+    /// Annotations are untouched by this swap (spec 03 Unit 4): they're
+    /// keyed by path/line, not by backend identity, so they keep applying to
+    /// the newly-rooted review as-is.
+    fn reroot(&mut self, runner: GitRunner) {
+        let new_root = runner.root().to_path_buf();
+        let snapshot = match build_review(&runner, &self.target) {
+            Ok(snapshot) => snapshot,
+            Err(e) => {
+                self.close_switcher();
+                self.set_status_message(format!("re-root failed: {e}"));
+                return;
+            }
+        };
+
+        self.refresh_generation = self.refresh_generation.wrapping_add(1);
+        self.refresh_in_flight = None;
+
+        if let Some(client) = self.take_lsp_client() {
+            std::thread::spawn(move || client.shutdown());
+        }
+        // A peek request in flight against the old root must not resolve
+        // into the newly-rooted session once it lands.
+        self.pending_lsp = None;
+
+        self.repo_root = Some(new_root);
+        self.stage_ops = Some(Box::new(runner));
+        self.apply_snapshot(snapshot);
+        self.close_switcher();
+        self.after_panel_coherence();
+        self.set_status_message("re-rooted (annotations kept)");
+    }
+
+    /// After a branch switch or worktree re-root closes the modal back to
+    /// [`Mode::Panel`], re-follows the diff to the panel cursor's row — the
+    /// rebuilt review may have reordered or replaced files out from under
+    /// it, so this keeps the diff pointed at whatever the panel cursor now
+    /// rests on rather than a stale selection. A no-op when the panel isn't
+    /// focused (e.g. the switcher was opened some other way in the future).
+    fn after_panel_coherence(&mut self) {
+        if matches!(self.mode, Mode::Panel { .. }) {
+            self.panel_follow();
+        }
+    }
+}
+
+/// Builds the [`CommandLogEntry`] for a `git switch -- <name>` attempt from
+/// its result: success records a clean `exit 0`; a [`GitError::Command`]
+/// copies git's own exit code and stderr; any other [`GitError`] variant
+/// (git missing, spawn failure, ...) never reached a process, so it has no
+/// code/stderr to copy — those fields are recorded empty and the error's
+/// `Display` becomes the stderr line instead, so the command log still shows
+/// *something* actionable.
+fn branch_switch_log_entry(name: &str, result: &Result<(), GitError>) -> CommandLogEntry {
+    let command_line = format!("git switch -- {name}");
+    match result {
+        Ok(()) => CommandLogEntry {
+            command_line,
+            success: true,
+            code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+        },
+        Err(GitError::Command { code, stderr, .. }) => CommandLogEntry {
+            command_line,
+            success: false,
+            code: code.parse().ok(),
+            stdout: String::new(),
+            stderr: stderr.clone(),
+        },
+        Err(e) => CommandLogEntry {
+            command_line,
+            success: false,
+            code: None,
+            stdout: String::new(),
+            stderr: e.to_string(),
+        },
     }
 }
 

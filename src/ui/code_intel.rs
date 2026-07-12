@@ -283,9 +283,9 @@ fn closest_row_for_new_line(rows: &[Row], target_line: u32) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::path::PathBuf;
-    use std::rc::Rc;
+    use std::sync::Arc;
+    use std::sync::Mutex;
 
     use super::*;
     use crate::diff::FileDiff;
@@ -354,11 +354,11 @@ mod tests {
     }
 
     struct FakeLsp {
-        calls: Rc<RefCell<Vec<LspCall>>>,
+        calls: Arc<Mutex<Vec<LspCall>>>,
         next_id: u64,
         deny: bool,
-        poll_queue: Rc<RefCell<std::collections::VecDeque<Vec<LspEvent>>>>,
-        shutdown_called: Rc<RefCell<bool>>,
+        poll_queue: Arc<Mutex<std::collections::VecDeque<Vec<LspEvent>>>>,
+        shutdown_called: Arc<Mutex<bool>>,
     }
 
     impl FakeLsp {
@@ -367,7 +367,7 @@ mod tests {
                 return None;
             }
             self.next_id += 1;
-            self.calls.borrow_mut().push(call);
+            self.calls.lock().unwrap().push(call);
             Some(RequestId(self.next_id))
         }
     }
@@ -401,11 +401,15 @@ mod tests {
         }
 
         fn poll(&mut self) -> Vec<LspEvent> {
-            self.poll_queue.borrow_mut().pop_front().unwrap_or_default()
+            self.poll_queue
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_default()
         }
 
         fn shutdown(self: Box<Self>) {
-            *self.shutdown_called.borrow_mut() = true;
+            *self.shutdown_called.lock().unwrap() = true;
         }
     }
 
@@ -434,8 +438,8 @@ index 1..2 100644
     fn lsp_test_app() -> (
         App,
         tempfile::TempDir,
-        Rc<RefCell<Vec<LspCall>>>,
-        Rc<RefCell<std::collections::VecDeque<Vec<LspEvent>>>>,
+        Arc<Mutex<Vec<LspCall>>>,
+        Arc<Mutex<std::collections::VecDeque<Vec<LspEvent>>>>,
     ) {
         let tmp = tempfile::TempDir::new().expect("tempdir");
         std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir");
@@ -446,14 +450,14 @@ index 1..2 100644
         .expect("write fixture");
 
         let mut app = App::new(vec![file_with_raw("src/main.rs", lsp_fixture_raw())]);
-        let calls = Rc::new(RefCell::new(Vec::new()));
-        let poll_queue = Rc::new(RefCell::new(std::collections::VecDeque::new()));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let poll_queue = Arc::new(Mutex::new(std::collections::VecDeque::new()));
         let fake = FakeLsp {
-            calls: Rc::clone(&calls),
+            calls: Arc::clone(&calls),
             next_id: 0,
             deny: false,
-            poll_queue: Rc::clone(&poll_queue),
-            shutdown_called: Rc::new(RefCell::new(false)),
+            poll_queue: Arc::clone(&poll_queue),
+            shutdown_called: Arc::new(Mutex::new(false)),
         };
         app.inject_lsp_client(Box::new(fake), tmp.path().to_path_buf());
         (app, tmp, calls, poll_queue)
@@ -481,7 +485,7 @@ index 1..2 100644
             })
         ));
         app.apply(Action::GotoDefinition);
-        assert!(calls.borrow().is_empty());
+        assert!(calls.lock().unwrap().is_empty());
         assert_eq!(
             app.status_message.as_deref(),
             Some("no code intelligence here")
@@ -496,7 +500,7 @@ index 1..2 100644
             Row::FileHeader { .. }
         ));
         app.apply(Action::GotoDefinition);
-        assert!(calls.borrow().is_empty());
+        assert!(calls.lock().unwrap().is_empty());
         assert_eq!(
             app.status_message.as_deref(),
             Some("no code intelligence here")
@@ -508,18 +512,18 @@ index 1..2 100644
         let tmp = tempfile::TempDir::new().expect("tempdir");
         // Deliberately no file written under `tmp` at "src/main.rs".
         let mut app = App::new(vec![file_with_raw("src/main.rs", lsp_fixture_raw())]);
-        let calls = Rc::new(RefCell::new(Vec::new()));
+        let calls = Arc::new(Mutex::new(Vec::new()));
         let fake = FakeLsp {
-            calls: Rc::clone(&calls),
+            calls: Arc::clone(&calls),
             next_id: 0,
             deny: false,
-            poll_queue: Rc::new(RefCell::new(std::collections::VecDeque::new())),
-            shutdown_called: Rc::new(RefCell::new(false)),
+            poll_queue: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            shutdown_called: Arc::new(Mutex::new(false)),
         };
         app.inject_lsp_client(Box::new(fake), tmp.path().to_path_buf());
         move_to_added_line(&mut app);
         app.apply(Action::GotoDefinition);
-        assert!(calls.borrow().is_empty());
+        assert!(calls.lock().unwrap().is_empty());
         assert_eq!(
             app.status_message.as_deref(),
             Some("no code intelligence here")
@@ -543,7 +547,7 @@ index 1..2 100644
         move_to_added_line(&mut app);
         app.apply(Action::GotoDefinition);
         assert_eq!(
-            calls.borrow()[0],
+            calls.lock().unwrap()[0],
             LspCall::Definition(tmp.path().join("src/main.rs"), 1, 0)
         );
         assert_eq!(
@@ -558,12 +562,12 @@ index 1..2 100644
         move_to_added_line(&mut app);
         app.apply(Action::GotoReferences);
         assert_eq!(
-            calls.borrow()[0],
+            calls.lock().unwrap()[0],
             LspCall::References(tmp.path().join("src/main.rs"), 1, 0)
         );
         app.apply(Action::Hover);
         assert_eq!(
-            calls.borrow()[1],
+            calls.lock().unwrap()[1],
             LspCall::Hover(tmp.path().join("src/main.rs"), 1, 0)
         );
     }
@@ -577,7 +581,7 @@ index 1..2 100644
         }
         app.apply(Action::GotoDefinition);
         assert_eq!(
-            calls.borrow()[0],
+            calls.lock().unwrap()[0],
             LspCall::Definition(tmp.path().join("src/main.rs"), 1, 4)
         );
     }
@@ -595,7 +599,8 @@ index 1..2 100644
 
         // A response for the superseded first id must be ignored.
         poll_queue
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .push_back(vec![LspEvent::Definition {
                 id: first_id,
                 locations: vec![SourceLocation {
@@ -611,7 +616,8 @@ index 1..2 100644
         // The second (References) request's own response still opens the
         // overlay.
         poll_queue
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .push_back(vec![LspEvent::References {
                 id: second_id,
                 locations: vec![SourceLocation {
@@ -632,7 +638,8 @@ index 1..2 100644
         let real_id = app.pending_lsp.expect("pending after gd").0;
 
         poll_queue
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .push_back(vec![LspEvent::Definition {
                 id: RequestId(real_id.0 + 999),
                 locations: vec![SourceLocation {
@@ -654,7 +661,8 @@ index 1..2 100644
         let id = app.pending_lsp.expect("pending after gd").0;
 
         poll_queue
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .push_back(vec![LspEvent::Definition {
                 id,
                 locations: vec![],
@@ -672,7 +680,8 @@ index 1..2 100644
         let id = app.pending_lsp.expect("pending after K").0;
 
         poll_queue
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .push_back(vec![LspEvent::Failed { id }]);
         poll(&mut app);
         assert_eq!(app.mode, Mode::Normal);
@@ -686,7 +695,7 @@ index 1..2 100644
         app.apply(Action::Hover);
         let id = app.pending_lsp.expect("pending after K").0;
 
-        poll_queue.borrow_mut().push_back(vec![LspEvent::Hover {
+        poll_queue.lock().unwrap().push_back(vec![LspEvent::Hover {
             id,
             contents: "some docs".to_string(),
         }]);
@@ -837,13 +846,13 @@ index 1..2 100644
             file_with_raw("src/a.rs", &added_line_raw("src/a.rs")),
             file_with_raw("src/b.rs", &added_line_raw("src/b.rs")),
         ]);
-        let calls = Rc::new(RefCell::new(Vec::new()));
+        let calls = Arc::new(Mutex::new(Vec::new()));
         let fake = FakeLsp {
-            calls: Rc::clone(&calls),
+            calls: Arc::clone(&calls),
             next_id: 0,
             deny: false,
-            poll_queue: Rc::new(RefCell::new(std::collections::VecDeque::new())),
-            shutdown_called: Rc::new(RefCell::new(false)),
+            poll_queue: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            shutdown_called: Arc::new(Mutex::new(false)),
         };
         app.inject_lsp_client(Box::new(fake), tmp.path().to_path_buf());
 
@@ -858,7 +867,7 @@ index 1..2 100644
 
         app.apply(Action::GotoDefinition);
         assert_eq!(
-            calls.borrow()[0],
+            calls.lock().unwrap()[0],
             LspCall::Definition(tmp.path().join("src/b.rs"), 1, 0)
         );
     }

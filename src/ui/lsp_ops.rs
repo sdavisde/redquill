@@ -11,7 +11,12 @@ use crate::lsp::{LspEvent, LspManager, RequestId};
 /// The LSP operations the TUI needs, kept behind a trait so `App`'s request
 /// routing and event handling are unit-testable without spawning real
 /// language servers. [`LspManager`] is the production implementation.
-pub trait LspClient {
+///
+/// `Send` (spec 03 Unit 3): a worktree re-root shuts down the old client
+/// off-thread (`take_lsp_client` + a spawned `shutdown` call) so the render
+/// loop never blocks on server teardown, which requires `Box<dyn LspClient>`
+/// to cross a thread boundary.
+pub trait LspClient: Send {
     /// Requests `textDocument/definition`. See
     /// [`LspManager::request_definition`] for position conventions.
     fn request_definition(&mut self, path: &Path, line: u32, character: u32) -> Option<RequestId>;
