@@ -94,6 +94,46 @@ pub struct MultibufferRows {
     /// `header_row_of_file[f]` is the index (into `rows`) of file `f`'s
     /// [`Row::FileHeader`] row.
     pub header_row_of_file: Vec<usize>,
+    /// The gutter's digit width for the whole buffer (see [`gutter_width`]) —
+    /// one value shared by every file's section so columns stay aligned
+    /// across files, computed once here rather than per frame.
+    pub gutter_width: usize,
+}
+
+/// The minimum gutter digit width, even when every line number currently
+/// loaded is small — keeps a small diff's line-number columns from looking
+/// cramped and leaves a little room to grow without a visible mid-review
+/// re-layout.
+pub(crate) const MIN_GUTTER_WIDTH: usize = 3;
+
+/// The gutter's digit width for the largest line number in a diff: the
+/// decimal digit count of `max_line`, clamped to [`MIN_GUTTER_WIDTH`]. `None`
+/// (no line rows loaded at all) is treated as digit-width `0`, which also
+/// clamps to the minimum.
+fn gutter_width_for_max_line(max_line: Option<u32>) -> usize {
+    let digits = match max_line {
+        None | Some(0) => 0,
+        Some(n) => n.checked_ilog10().map_or(1, |d| d as usize + 1),
+    };
+    digits.max(MIN_GUTTER_WIDTH)
+}
+
+/// The gutter's digit width for a built row buffer: [`gutter_width_for_max_line`]
+/// applied to the largest old- or new-side line number across every
+/// [`Row::Line`] in `rows`. A single `O(rows.len())` fold with no
+/// allocation, called once per rebuild by [`build_multibuffer`] — never
+/// rescanned per frame.
+fn gutter_width(rows: &[Row]) -> usize {
+    let max_line = rows.iter().fold(None, |acc: Option<u32>, row| {
+        let Row::Line(line) = row else {
+            return acc;
+        };
+        [line.old_line, line.new_line]
+            .into_iter()
+            .flatten()
+            .fold(acc, |acc, n| Some(acc.map_or(n, |a| a.max(n))))
+    });
+    gutter_width_for_max_line(max_line)
 }
 
 /// One row of the flattened diff-pane row model. The cursor addresses rows
@@ -295,7 +335,8 @@ pub fn build_rows(file: &FileDiff, annotations: &AnnotationStore, syntax: Syntax
 
 /// Builds the concatenated multi-file row buffer: for each file, its section
 /// header followed by (unless collapsed) its full row model, with per-row
-/// file identity and per-file header-row indices recorded. The
+/// file identity and per-file header-row indices recorded, plus one gutter
+/// digit width (see [`gutter_width`]) shared by the whole buffer. The
 /// `collapsed`/`staged_markers`/`syntax` slices are index-aligned with
 /// `files`; collapsed files contribute exactly their header row, and
 /// synthetic untracked files (built via [`FileDiff::synthetic_added`]) enter
@@ -326,10 +367,12 @@ pub fn build_multibuffer(
             file_of_row.push(i);
         }
     }
+    let gutter_width = gutter_width(&rows);
     MultibufferRows {
         rows,
         file_of_row,
         header_row_of_file,
+        gutter_width,
     }
 }
 
@@ -1238,5 +1281,60 @@ index 1..2 100644
             panic!("expected file header");
         };
         assert!(!collapsed);
+    }
+
+    // -- Gutter width computation --------------------------------------------
+
+    #[test]
+    fn gutter_width_for_max_line_clamps_to_minimum_and_grows_with_digits() {
+        assert_eq!(gutter_width_for_max_line(None), 3);
+        assert_eq!(gutter_width_for_max_line(Some(0)), 3);
+        assert_eq!(gutter_width_for_max_line(Some(1)), 3);
+        assert_eq!(gutter_width_for_max_line(Some(999)), 3);
+        assert_eq!(gutter_width_for_max_line(Some(1000)), 4);
+        assert_eq!(gutter_width_for_max_line(Some(99999)), 5);
+        assert_eq!(gutter_width_for_max_line(Some(100000)), 6);
+    }
+
+    /// A single-hunk file whose one changed line sits at `line` on both
+    /// sides, so its old/new line number is exactly `line` — used to pin the
+    /// max line number a synthetic file contributes to the gutter width.
+    fn file_diff_at_line(path: &str, line: u32) -> FileDiff {
+        let raw = format!(
+            "diff --git a/{path} b/{path}\nindex 1..2 100644\n--- a/{path}\n+++ b/{path}\n@@ -{line},1 +{line},1 @@\n-old\n+new\n"
+        );
+        file_diff(&raw, path, false)
+    }
+
+    #[test]
+    fn multibuffer_gutter_width_is_empty_default_with_no_files() {
+        let mb = two_file_buffer(&[]);
+        assert_eq!(mb.gutter_width, 3);
+    }
+
+    #[test]
+    fn multibuffer_gutter_width_stays_at_minimum_below_1000() {
+        let files = vec![file_diff_at_line("f.rs", 950)];
+        let mb = two_file_buffer(&files);
+        assert_eq!(mb.gutter_width, 3);
+    }
+
+    #[test]
+    fn multibuffer_gutter_width_grows_for_large_line_numbers() {
+        let files = vec![file_diff_at_line("f.rs", 25_000)];
+        let mb = two_file_buffer(&files);
+        assert_eq!(mb.gutter_width, 5);
+    }
+
+    #[test]
+    fn multibuffer_gutter_width_is_one_global_max_across_files() {
+        // A small file paired with a large one must widen the *whole*
+        // buffer's gutter, not just the large file's own section.
+        let files = vec![
+            file_diff_at_line("small.rs", 12),
+            file_diff_at_line("large.rs", 1_234),
+        ];
+        let mb = two_file_buffer(&files);
+        assert_eq!(mb.gutter_width, 4);
     }
 }

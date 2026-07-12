@@ -21,13 +21,17 @@ use super::app::App;
 use super::rows::{LineRow, Row, StagedMarker};
 use super::theme::Theme;
 
-pub(super) const GUTTER_WIDTH: usize = 5;
 /// Width of the annotated-line dot column, rendered before the gutter.
 pub(super) const DOT_WIDTH: usize = 2;
-/// Left padding for [`Row::Annotation`] display rows, aligned under the
-/// gutter/marker columns so the bullet and continuation text sit clear of
-/// the line-number columns.
-const ANNOTATION_INDENT: usize = DOT_WIDTH + GUTTER_WIDTH * 2 + 3;
+
+/// Left padding for [`Row::Annotation`] display rows for a buffer whose
+/// gutter is `gutter_width` columns wide, aligned under the gutter/marker
+/// columns so the bullet and continuation text sit clear of the line-number
+/// columns. Mirrors [`line_row_line`]'s fixed layout: dot + old gutter + " "
+/// + new gutter + " " + origin marker.
+fn annotation_indent(gutter_width: usize) -> usize {
+    DOT_WIDTH + gutter_width * 2 + 3
+}
 
 pub(super) fn dot_span(annotated: bool, theme: &Theme) -> Span<'static> {
     let text = if annotated { "\u{25cf} " } else { "  " };
@@ -42,10 +46,10 @@ pub(super) fn origin_marker(origin: LineOrigin) -> &'static str {
     }
 }
 
-pub(super) fn gutter_number(n: Option<u32>) -> String {
+pub(super) fn gutter_number(n: Option<u32>, gutter_width: usize) -> String {
     match n {
-        Some(n) => format!("{n:>width$}", width = GUTTER_WIDTH),
-        None => " ".repeat(GUTTER_WIDTH),
+        Some(n) => format!("{n:>gutter_width$}"),
+        None => " ".repeat(gutter_width),
     }
 }
 
@@ -180,14 +184,15 @@ fn line_row_line(
     selected: bool,
     is_match: bool,
     cursor_col: Option<usize>,
+    gutter_width: usize,
     theme: &Theme,
 ) -> Line<'static> {
     let gutter_style = Style::default().fg(theme.gutter);
     let mut spans = vec![
         dot_span(row.annotated, theme),
-        Span::styled(gutter_number(row.old_line), gutter_style),
+        Span::styled(gutter_number(row.old_line, gutter_width), gutter_style),
         Span::raw(" "),
-        Span::styled(gutter_number(row.new_line), gutter_style),
+        Span::styled(gutter_number(row.new_line, gutter_width), gutter_style),
         Span::raw(" "),
         Span::styled(
             origin_marker(row.origin),
@@ -311,31 +316,33 @@ fn binary_line(selected: bool, theme: &Theme) -> Line<'static> {
 fn annotation_row_line(
     text: &str,
     classification: Option<Classification>,
+    gutter_width: usize,
     theme: &Theme,
 ) -> Line<'static> {
     let style = Style::default()
         .fg(theme.annotation_text)
         .add_modifier(Modifier::ITALIC);
+    let indent = annotation_indent(gutter_width);
     let content = match classification {
-        Some(c) => format!(
-            "{}\u{25cf} [{}] {}",
-            " ".repeat(ANNOTATION_INDENT),
-            c.label(),
-            text
-        ),
-        None => format!("{}{}", " ".repeat(ANNOTATION_INDENT + 2), text),
+        Some(c) => format!("{}\u{25cf} [{}] {}", " ".repeat(indent), c.label(), text),
+        None => format!("{}{}", " ".repeat(indent + 2), text),
     };
     Line::from(Span::styled(content, style))
 }
 
 /// Renders one row (any [`Row`] variant) as a full-width [`Line`]: the
-/// diff pane's own per-frame renderer.
+/// diff pane's own per-frame renderer. `gutter_width` is the whole
+/// multibuffer's dynamic gutter digit width (see
+/// [`super::rows::build_multibuffer`]), shared by every row so line-number
+/// and annotation-indent columns stay aligned across files.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn row_line(
     row: &Row,
     index: usize,
     cursor: usize,
     matches: &HashSet<usize>,
     cursor_col: Option<usize>,
+    gutter_width: usize,
     theme: &Theme,
 ) -> Line<'static> {
     let selected = index == cursor;
@@ -367,6 +374,7 @@ pub(super) fn row_line(
             selected,
             is_match,
             if selected { cursor_col } else { None },
+            gutter_width,
             theme,
         ),
         Row::Binary => binary_line(selected, theme),
@@ -374,7 +382,7 @@ pub(super) fn row_line(
             text,
             classification,
             ..
-        } => annotation_row_line(text, *classification, theme),
+        } => annotation_row_line(text, *classification, gutter_width, theme),
     }
 }
 
@@ -422,6 +430,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 app.view.cursor,
                 &matches,
                 cursor_col,
+                app.view.gutter_width,
                 &app.theme,
             )
         })
@@ -436,4 +445,92 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 /// sync with what's actually visible.
 pub fn viewport_height(area: Rect) -> usize {
     area.height.saturating_sub(2).max(1) as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_line_row(old_line: Option<u32>, new_line: Option<u32>) -> LineRow {
+        LineRow {
+            hunk_index: 0,
+            old_line,
+            new_line,
+            origin: LineOrigin::Context,
+            content: "x".to_string(),
+            word_spans: None,
+            no_newline: false,
+            annotated: false,
+            syntax_spans: None,
+        }
+    }
+
+    /// Renders `spans` to a plain string, the way the terminal would show
+    /// them concatenated.
+    fn spans_to_string(spans: &[Span<'static>]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn gutter_number_pads_to_the_requested_width() {
+        assert_eq!(gutter_number(Some(5), 3), "  5");
+        assert_eq!(gutter_number(None, 4), "    ");
+        assert_eq!(gutter_number(Some(1000), 4), "1000");
+    }
+
+    #[test]
+    fn gutter_number_does_not_truncate_a_number_wider_than_the_column() {
+        // A stale/undersized width must never cut digits off — only ever
+        // pad, never truncate.
+        assert_eq!(gutter_number(Some(12345), 3), "12345");
+    }
+
+    #[test]
+    fn annotation_indent_grows_with_gutter_width() {
+        assert_eq!(annotation_indent(3), DOT_WIDTH + 3 * 2 + 3);
+        assert_eq!(annotation_indent(5), DOT_WIDTH + 5 * 2 + 3);
+        assert!(annotation_indent(5) > annotation_indent(3));
+    }
+
+    #[test]
+    fn line_row_line_honors_the_passed_gutter_width() {
+        let row = sample_line_row(Some(7), Some(9));
+        let theme = Theme::default();
+        let line = line_row_line(&row, false, false, None, 4, &theme);
+        let text = spans_to_string(&line.spans);
+        // "   7" (old, width 4) + " " + "   9" (new, width 4) + " " + " "
+        // (context marker) precede the dot's own two leading chars.
+        assert!(text.contains("   7    9"));
+    }
+
+    #[test]
+    fn line_row_line_at_a_wider_width_stays_aligned() {
+        let row = sample_line_row(Some(7), Some(9));
+        let theme = Theme::default();
+        let narrow = spans_to_string(&line_row_line(&row, false, false, None, 3, &theme).spans);
+        let wide = spans_to_string(&line_row_line(&row, false, false, None, 5, &theme).spans);
+        // Same numbers, wider gutter: the rendered line grows by exactly
+        // 2 columns per side (one per gutter column).
+        assert_eq!(wide.chars().count(), narrow.chars().count() + 4);
+    }
+
+    #[test]
+    fn annotation_row_line_indent_matches_gutter_width() {
+        let line = annotation_row_line("note", Some(Classification::Nit), 3, &Theme::default());
+        let text = spans_to_string(&line.spans);
+        let indent = annotation_indent(3);
+        assert_eq!(&text[..indent], " ".repeat(indent).as_str());
+        assert!(text[indent..].starts_with('\u{25cf}'));
+    }
+
+    #[test]
+    fn row_line_threads_gutter_width_into_line_rows() {
+        let row = Row::Line(sample_line_row(Some(1), Some(2)));
+        let matches = HashSet::new();
+        let theme = Theme::default();
+        let narrow = spans_to_string(&row_line(&row, 0, 0, &matches, None, 3, &theme).spans);
+        let wide = spans_to_string(&row_line(&row, 0, 0, &matches, None, 5, &theme).spans);
+        assert_ne!(narrow, wide);
+        assert_eq!(wide.chars().count(), narrow.chars().count() + 4);
+    }
 }

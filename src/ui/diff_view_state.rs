@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use crate::annotate::Target;
 use crate::diff::FileDiff;
 
-use super::rows::{Row, anchor_row_index};
+use super::rows::{MIN_GUTTER_WIDTH, Row, anchor_row_index};
 
 /// A reasonable default viewport height, used until the first frame reports
 /// the real one. Arbitrary but generous enough that half-page motion isn't
@@ -43,6 +43,11 @@ pub struct DiffViewState {
     /// `header_row_of_file[f]` is the row index of file `f`'s section
     /// header.
     pub header_row_of_file: Vec<usize>,
+    /// The gutter's digit width for `rows` — one value shared across every
+    /// file's section so columns stay aligned, recomputed alongside `rows`
+    /// on every rebuild (see [`super::rows::build_multibuffer`]). Starts at
+    /// the minimum width until the first rebuild populates it.
+    pub gutter_width: usize,
     /// Per-file collapse state, keyed by path so it survives refreshes that
     /// reorder or re-index files. An absent entry means expanded.
     collapsed: HashMap<String, bool>,
@@ -74,6 +79,7 @@ impl DiffViewState {
             rows: Vec::new(),
             file_of_row: Vec::new(),
             header_row_of_file: Vec::new(),
+            gutter_width: MIN_GUTTER_WIDTH,
             collapsed: HashMap::new(),
             cursor: 0,
             scroll: 0,
@@ -444,6 +450,7 @@ mod tests {
         view.rows = mb.rows;
         view.file_of_row = mb.file_of_row;
         view.header_row_of_file = mb.header_row_of_file;
+        view.gutter_width = mb.gutter_width;
         view.selected_file = view.file_of_cursor();
         view
     }
@@ -698,6 +705,7 @@ index 1..2 100644
         view.rows = small.rows;
         view.file_of_row = small.file_of_row;
         view.header_row_of_file = small.header_row_of_file;
+        view.gutter_width = small.gutter_width;
         view.cursor = view.nearest_addressable(view.cursor.min(view.max_cursor()), false);
         view.ensure_visible();
         assert!(view.cursor < view.rows.len());

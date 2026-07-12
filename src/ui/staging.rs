@@ -337,6 +337,7 @@ mod tests {
         view.rows = mb.rows;
         view.file_of_row = mb.file_of_row;
         view.header_row_of_file = mb.header_row_of_file;
+        view.gutter_width = mb.gutter_width;
         view
     }
 
