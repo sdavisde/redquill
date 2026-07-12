@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/sdavisde/redquill/compare/v0.4.0...v0.4.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* pin bare-remote test fixtures to main regardless of host git config ([4ddfb04](https://github.com/sdavisde/redquill/commit/4ddfb043f73afa4b9ec17b0f7ab30b13a8bd733e))
+
 ## [0.4.0](https://github.com/sdavisde/redquill/compare/v0.3.0...v0.4.0) (2026-07-12)
 
 
