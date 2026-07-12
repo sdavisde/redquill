@@ -19,14 +19,14 @@ use super::rows::{LineRow, Row, hunk_span};
 /// a `Line` target for a diff line (side/number from the line's origin), a
 /// `Hunk` target for a hunk header, or a `File` target for the file
 /// header/binary placeholder. `None` on rows that carry no derivable target
-/// (currently only [`Row::Annotation`], which the cursor never addresses) or
-/// when `cursor` is out of bounds.
+/// (currently [`Row::Annotation`] and [`Row::AnnotationBorder`], which the
+/// cursor never addresses) or when `cursor` is out of bounds.
 pub(super) fn target_for_cursor(file: &FileDiff, rows: &[Row], cursor: usize) -> Option<Target> {
     match rows.get(cursor)? {
         Row::Line(line) => line_target(&file.path, line),
         Row::HunkHeader { hunk_index, .. } => hunk_target(file, *hunk_index),
         Row::FileHeader { .. } | Row::Binary => Some(Target::file(&file.path)),
-        Row::Annotation { .. } => None,
+        Row::Annotation { .. } | Row::AnnotationBorder { .. } => None,
     }
 }
 

@@ -185,13 +185,23 @@ pub enum Row {
         /// `Some` only for the first rendered line of the body.
         classification: Option<Classification>,
     },
+    /// A horizontal border line bracketing an annotation block: `top: true`
+    /// immediately precedes the block's first [`Row::Annotation`] row,
+    /// `top: false` immediately follows its last. Connects to the block's
+    /// left accent bar so the block reads as one outlined unit. Display-only,
+    /// like [`Row::Annotation`] — never addressable, never search-matched.
+    AnnotationBorder {
+        /// `true` for the border above the block, `false` for the border
+        /// below it.
+        top: bool,
+    },
 }
 
 impl Row {
-    /// Whether the cursor can land on this row. [`Row::Annotation`] rows
-    /// are display-only.
+    /// Whether the cursor can land on this row. [`Row::Annotation`] and
+    /// [`Row::AnnotationBorder`] rows are display-only.
     pub fn is_addressable(&self) -> bool {
-        !matches!(self, Row::Annotation { .. })
+        !matches!(self, Row::Annotation { .. } | Row::AnnotationBorder { .. })
     }
 }
 
@@ -254,12 +264,15 @@ fn line_row_number(line: &LineRow, side: Side) -> Option<u32> {
     }
 }
 
-/// Converts one annotation's body into its display rows: the first line
-/// tagged with the marker and classification, continuation lines indented
-/// and untagged.
+/// Converts one annotation's body into its display rows: a top
+/// [`Row::AnnotationBorder`], the first body line tagged with the marker
+/// and classification, continuation lines indented and untagged, and a
+/// bottom [`Row::AnnotationBorder`]. The body is guaranteed non-empty by
+/// [`crate::annotate::model::validate_body`], so the block always has at
+/// least one body row between its borders.
 fn annotation_rows(annotation: &Annotation) -> Vec<Row> {
     let mut lines = annotation.body.lines();
-    let mut rows = Vec::new();
+    let mut rows = vec![Row::AnnotationBorder { top: true }];
     if let Some(first) = lines.next() {
         rows.push(Row::Annotation {
             id: annotation.id,
@@ -274,6 +287,7 @@ fn annotation_rows(annotation: &Annotation) -> Vec<Row> {
             classification: None,
         });
     }
+    rows.push(Row::AnnotationBorder { top: false });
     rows
 }
 
@@ -771,7 +785,8 @@ index 111..222 100644
         let rows = build_rows(&diff, &store, SyntaxSpans::default());
 
         // rows: FileHeader(0), HunkHeader(1), Line old1(2), Line new1(3),
-        // Annotation(4), Line ctx(5)
+        // AnnotationBorder top(4), Annotation(5), AnnotationBorder
+        // bottom(6), Line ctx(7)
         let Row::Line(new1) = &rows[3] else {
             panic!("expected added line row");
         };
@@ -781,7 +796,8 @@ index 111..222 100644
         };
         assert!(!old1.annotated);
 
-        match &rows[4] {
+        assert_eq!(rows[4], Row::AnnotationBorder { top: true });
+        match &rows[5] {
             Row::Annotation {
                 text,
                 classification,
@@ -792,7 +808,8 @@ index 111..222 100644
             }
             other => panic!("expected annotation row, got {other:?}"),
         }
-        assert!(matches!(rows[5], Row::Line(_)));
+        assert_eq!(rows[6], Row::AnnotationBorder { top: false });
+        assert!(matches!(rows[7], Row::Line(_)));
     }
 
     #[test]
@@ -817,7 +834,8 @@ index 111..222 100644
             )
             .unwrap();
         let rows = build_rows(&diff, &store, SyntaxSpans::default());
-        // rows: FileHeader(0) HunkHeader(1) Line a(2) Line b(3) Line c(4) Annotation(5)
+        // rows: FileHeader(0) HunkHeader(1) Line a(2) Line b(3) Line c(4)
+        // AnnotationBorder top(5) Annotation(6) AnnotationBorder bottom(7)
         let Row::Line(b) = &rows[3] else {
             panic!("expected line b");
         };
@@ -826,7 +844,9 @@ index 111..222 100644
             panic!("expected line c");
         };
         assert!(c.annotated);
-        assert!(matches!(rows[5], Row::Annotation { .. }));
+        assert_eq!(rows[5], Row::AnnotationBorder { top: true });
+        assert!(matches!(rows[6], Row::Annotation { .. }));
+        assert_eq!(rows[7], Row::AnnotationBorder { top: false });
     }
 
     #[test]
@@ -841,12 +861,15 @@ index 111..222 100644
             )
             .unwrap();
         let rows = build_rows(&diff, &store, SyntaxSpans::default());
-        // FileHeader(0) HunkHeader(1) Annotation(2) Line(3)...
+        // FileHeader(0) HunkHeader(1) AnnotationBorder top(2) Annotation(3)
+        // AnnotationBorder bottom(4) Line(5)...
         let Row::HunkHeader { annotated, .. } = &rows[1] else {
             panic!("expected hunk header");
         };
         assert!(annotated);
-        assert!(matches!(rows[2], Row::Annotation { .. }));
+        assert_eq!(rows[2], Row::AnnotationBorder { top: true });
+        assert!(matches!(rows[3], Row::Annotation { .. }));
+        assert_eq!(rows[4], Row::AnnotationBorder { top: false });
     }
 
     #[test]
@@ -861,7 +884,9 @@ index 111..222 100644
             panic!("expected file header");
         };
         assert!(annotated);
-        assert!(matches!(rows[1], Row::Annotation { .. }));
+        assert_eq!(rows[1], Row::AnnotationBorder { top: true });
+        assert!(matches!(rows[2], Row::Annotation { .. }));
+        assert_eq!(rows[3], Row::AnnotationBorder { top: false });
     }
 
     #[test]
@@ -872,7 +897,8 @@ index 111..222 100644
             .add(Target::file("f.rs"), Classification::Issue, "first\nsecond")
             .unwrap();
         let rows = build_rows(&diff, &store, SyntaxSpans::default());
-        match &rows[1] {
+        assert_eq!(rows[1], Row::AnnotationBorder { top: true });
+        match &rows[2] {
             Row::Annotation {
                 text,
                 classification,
@@ -883,7 +909,7 @@ index 111..222 100644
             }
             other => panic!("unexpected row {other:?}"),
         }
-        match &rows[2] {
+        match &rows[3] {
             Row::Annotation {
                 text,
                 classification,
@@ -894,6 +920,111 @@ index 111..222 100644
             }
             other => panic!("unexpected row {other:?}"),
         }
+        assert_eq!(rows[4], Row::AnnotationBorder { top: false });
+    }
+
+    // -- Annotation border placement -----------------------------------
+
+    #[test]
+    fn border_rows_bracket_a_file_annotation_block() {
+        let diff = file_diff(raw_two_line_hunk(), "f.rs", false);
+        let mut store = AnnotationStore::new();
+        store
+            .add(Target::file("f.rs"), Classification::Praise, "nice module")
+            .unwrap();
+        let rows = build_rows(&diff, &store, SyntaxSpans::default());
+        // FileHeader(0) AnnotationBorder top(1) Annotation(2)
+        // AnnotationBorder bottom(3) HunkHeader(4)
+        assert_eq!(rows[1], Row::AnnotationBorder { top: true });
+        assert!(matches!(rows[2], Row::Annotation { .. }));
+        assert_eq!(rows[3], Row::AnnotationBorder { top: false });
+        assert!(matches!(rows[4], Row::HunkHeader { .. }));
+    }
+
+    #[test]
+    fn border_rows_bracket_a_hunk_annotation_block() {
+        let diff = file_diff(raw_two_line_hunk(), "f.rs", false);
+        let mut store = AnnotationStore::new();
+        store
+            .add(
+                Target::hunk("f.rs", 1, 2).unwrap(),
+                Classification::Praise,
+                "clean",
+            )
+            .unwrap();
+        let rows = build_rows(&diff, &store, SyntaxSpans::default());
+        // FileHeader(0) HunkHeader(1) AnnotationBorder top(2) Annotation(3)
+        // AnnotationBorder bottom(4) Line(5)
+        assert_eq!(rows[2], Row::AnnotationBorder { top: true });
+        assert!(matches!(rows[3], Row::Annotation { .. }));
+        assert_eq!(rows[4], Row::AnnotationBorder { top: false });
+        assert!(matches!(rows[5], Row::Line(_)));
+    }
+
+    #[test]
+    fn border_rows_bracket_a_line_annotation_block() {
+        let diff = file_diff(raw_two_line_hunk(), "f.rs", false);
+        let mut store = AnnotationStore::new();
+        store
+            .add(
+                Target::line("f.rs", 1, Side::New),
+                Classification::Question,
+                "why change this?",
+            )
+            .unwrap();
+        let rows = build_rows(&diff, &store, SyntaxSpans::default());
+        // FileHeader(0) HunkHeader(1) Line old1(2) Line new1(3)
+        // AnnotationBorder top(4) Annotation(5) AnnotationBorder bottom(6)
+        // Line ctx(7)
+        assert_eq!(rows[4], Row::AnnotationBorder { top: true });
+        assert!(matches!(rows[5], Row::Annotation { .. }));
+        assert_eq!(rows[6], Row::AnnotationBorder { top: false });
+        assert!(matches!(rows[7], Row::Line(_)));
+    }
+
+    #[test]
+    fn border_rows_bracket_a_range_annotation_block() {
+        let raw = "\
+diff --git a/f.rs b/f.rs
+index 111..222 100644
+--- a/f.rs
++++ b/f.rs
+@@ -1,3 +1,3 @@
+ a
++b
++c
+";
+        let diff = file_diff(raw, "f.rs", false);
+        let mut store = AnnotationStore::new();
+        store
+            .add(
+                Target::range("f.rs", 2, 3, Side::New).unwrap(),
+                Classification::Nit,
+                "extract helper",
+            )
+            .unwrap();
+        let rows = build_rows(&diff, &store, SyntaxSpans::default());
+        // FileHeader(0) HunkHeader(1) Line a(2) Line b(3) Line c(4)
+        // AnnotationBorder top(5) Annotation(6) AnnotationBorder bottom(7)
+        assert_eq!(rows[5], Row::AnnotationBorder { top: true });
+        assert!(matches!(rows[6], Row::Annotation { .. }));
+        assert_eq!(rows[7], Row::AnnotationBorder { top: false });
+    }
+
+    #[test]
+    fn border_rows_bracket_a_multiline_annotation_body() {
+        let diff = file_diff(raw_two_line_hunk(), "f.rs", false);
+        let mut store = AnnotationStore::new();
+        store
+            .add(Target::file("f.rs"), Classification::Issue, "first\nsecond")
+            .unwrap();
+        let rows = build_rows(&diff, &store, SyntaxSpans::default());
+        // The bottom border sits immediately after the *last* body row,
+        // not after the first.
+        assert_eq!(rows[1], Row::AnnotationBorder { top: true });
+        assert!(matches!(rows[2], Row::Annotation { .. }));
+        assert!(matches!(rows[3], Row::Annotation { .. }));
+        assert_eq!(rows[4], Row::AnnotationBorder { top: false });
     }
 
     #[test]
@@ -904,9 +1035,13 @@ index 111..222 100644
             .add(Target::file("f.rs"), Classification::Issue, "note")
             .unwrap();
         let rows = build_rows(&diff, &store, SyntaxSpans::default());
+        // FileHeader(0) AnnotationBorder top(1) Annotation(2)
+        // AnnotationBorder bottom(3) HunkHeader(4)
         assert!(rows[0].is_addressable());
         assert!(!rows[1].is_addressable());
-        assert!(rows[2].is_addressable());
+        assert!(!rows[2].is_addressable());
+        assert!(!rows[3].is_addressable());
+        assert!(rows[4].is_addressable());
     }
 
     #[test]
@@ -1172,10 +1307,13 @@ index 1..2 100644
         let markers = vec![StagedMarker::None];
         let syntax = vec![SyntaxSpans::default()];
         let mb = build_multibuffer(&files, &collapsed, &markers, &store, &syntax);
-        // FileHeader(0) Annotation(1) HunkHeader(2) ...
+        // FileHeader(0) AnnotationBorder top(1) Annotation(2)
+        // AnnotationBorder bottom(3) HunkHeader(4) ...
         assert!(mb.rows[0].is_addressable()); // header
-        assert!(!mb.rows[1].is_addressable()); // annotation display row
-        assert!(mb.rows[2].is_addressable()); // hunk header
+        assert!(!mb.rows[1].is_addressable()); // annotation border row
+        assert!(!mb.rows[2].is_addressable()); // annotation display row
+        assert!(!mb.rows[3].is_addressable()); // annotation border row
+        assert!(mb.rows[4].is_addressable()); // hunk header
     }
 
     #[test]

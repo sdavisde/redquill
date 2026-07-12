@@ -52,6 +52,17 @@ pub struct Theme {
     /// The column cursor's cell highlight (diff pane) and the target
     /// line's highlight in the LSP peek overlay's preview pane.
     pub column_cursor_bg: Color,
+    /// Standing background band behind every [`super::rows::Row::Annotation`]
+    /// display row, so an annotation block reads as visually distinct from
+    /// the surrounding diff buffer.
+    pub annotation_bg: Color,
+    /// The left accent bar drawn on annotation rows (first and continuation
+    /// lines alike), so a multi-line annotation reads as one attached unit.
+    pub annotation_accent: Color,
+    /// Standing background band behind every file header row (expanded or
+    /// collapsed), so file boundaries — and collapsed files, which are just
+    /// their header row — stay visible against the diff buffer.
+    pub file_header_bg: Color,
 
     // -- Change-kind letters (sidebar file list + staging panel) --
     pub kind_added: Color,
@@ -111,6 +122,9 @@ impl Default for Theme {
             binary_placeholder: Color::DarkGray,
             status_message: Color::Yellow,
             column_cursor_bg: Color::Rgb(70, 70, 100),
+            annotation_bg: Color::Rgb(24, 22, 32),
+            annotation_accent: Color::Rgb(140, 120, 200),
+            file_header_bg: Color::Rgb(20, 24, 28),
 
             kind_added: Color::Green,
             kind_deleted: Color::Red,

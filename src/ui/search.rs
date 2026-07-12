@@ -21,8 +21,8 @@ pub fn smartcase_contains(haystack: &str, pattern: &str) -> bool {
 
 /// Row indices in `rows` whose searchable text smartcase-matches `pattern`:
 /// a [`Row::Line`]'s content, or a [`Row::HunkHeader`]'s section text.
-/// Other row kinds (file header, binary placeholder, annotation display
-/// rows) are never matched.
+/// Other row kinds (file header, binary placeholder, annotation display and
+/// border rows) are never matched.
 pub fn find_matches(rows: &[Row], pattern: &str) -> Vec<usize> {
     rows.iter()
         .enumerate()
@@ -99,7 +99,36 @@ impl SearchState {
 
 #[cfg(test)]
 mod tests {
+    use super::super::rows::LineRow;
     use super::*;
+    use crate::diff::LineOrigin;
+
+    #[test]
+    fn find_matches_skips_annotation_and_border_rows() {
+        let rows = vec![
+            Row::Line(LineRow {
+                hunk_index: 0,
+                old_line: None,
+                new_line: Some(1),
+                origin: LineOrigin::Context,
+                content: "hello".to_string(),
+                word_spans: None,
+                no_newline: false,
+                annotated: false,
+                syntax_spans: None,
+            }),
+            Row::AnnotationBorder { top: true },
+            Row::Annotation {
+                id: 0,
+                text: "hello".to_string(),
+                classification: None,
+            },
+            Row::AnnotationBorder { top: false },
+        ];
+        // Both the annotation body (which literally contains "hello") and
+        // its border rows must be excluded — only the Line row matches.
+        assert_eq!(find_matches(&rows, "hello"), vec![0]);
+    }
 
     #[test]
     fn smartcase_lowercase_pattern_is_case_insensitive() {

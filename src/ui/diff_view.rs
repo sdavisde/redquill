@@ -227,15 +227,21 @@ fn staged_marker_span(marker: StagedMarker, theme: &Theme) -> Span<'static> {
     }
 }
 
+/// Same trailing-space padding as [`annotation_row_line`] (see its doc for
+/// why): without it, `Paragraph` only paints `file_header_bg` (or the
+/// selected/search-match bg) onto the header's own text, leaving the rest
+/// of the row showing the terminal background.
 #[allow(clippy::too_many_arguments)]
 fn file_header_line(
     path: &str,
     old_path: &Option<String>,
     kind: FileChangeKind,
     selected: bool,
+    is_match: bool,
     annotated: bool,
     collapsed: bool,
     staged_marker: StagedMarker,
+    width: usize,
     theme: &Theme,
 ) -> Line<'static> {
     // Collapse indicator: ▾ expanded, ▸ collapsed.
@@ -265,9 +271,17 @@ fn file_header_line(
     }
     spans.push(staged_marker_span(staged_marker, theme));
     let mut line = Line::from(spans);
-    if selected {
-        line.style = Style::default().bg(theme.selected_row_bg);
+    let pad = width.saturating_sub(line.width());
+    if pad > 0 {
+        line.spans.push(Span::raw(" ".repeat(pad)));
     }
+    line.style = Style::default().bg(if selected {
+        theme.selected_row_bg
+    } else if is_match {
+        theme.search_match_bg
+    } else {
+        theme.file_header_bg
+    });
     line
 }
 
@@ -312,29 +326,82 @@ fn binary_line(selected: bool, theme: &Theme) -> Line<'static> {
 /// Renders one [`Row::Annotation`] display row: the first line of an
 /// annotation's body gets the `●` marker and `[classification]` tag,
 /// continuation lines are indented plain text. Always dim/italic — this row
-/// is never addressable, so it's never drawn "selected".
+/// is never addressable, so it's never drawn "selected". A left accent bar
+/// is carved out of the leading indent's first column (rather than shifting
+/// content right) and runs down every line of the block, first and
+/// continuation alike, so a multi-line annotation reads as one attached
+/// unit; a standing background tint fills the rest of the row. The bar
+/// glyph (`│`, centered in its cell) matches the corner/edge glyphs of
+/// [`annotation_border_line`] so the block's top/bottom borders visually
+/// join it into one open-right outline.
+///
+/// Ratatui's `Paragraph` only paints a `Line`'s style onto the cells its
+/// spans actually occupy — it does not extend a line's background across
+/// the rest of an under-filled row. So `annotation_bg` reaches the pane's
+/// right edge only because a trailing space span is appended out to `width`
+/// (the pane's inner content width, see [`render`]); a row already at or
+/// past `width` gets no padding (`Paragraph` truncates it regardless).
 fn annotation_row_line(
     text: &str,
     classification: Option<Classification>,
     gutter_width: usize,
+    width: usize,
     theme: &Theme,
 ) -> Line<'static> {
     let style = Style::default()
         .fg(theme.annotation_text)
         .add_modifier(Modifier::ITALIC);
     let indent = annotation_indent(gutter_width);
-    let content = match classification {
-        Some(c) => format!("{}\u{25cf} [{}] {}", " ".repeat(indent), c.label(), text),
-        None => format!("{}{}", " ".repeat(indent + 2), text),
+    let bar = Span::styled("\u{2502}", Style::default().fg(theme.annotation_accent));
+    let rest = match classification {
+        Some(c) => format!(
+            "{}\u{25cf} [{}] {}",
+            " ".repeat(indent - 1),
+            c.label(),
+            text
+        ),
+        None => format!("{}{}", " ".repeat(indent + 1), text),
     };
-    Line::from(Span::styled(content, style))
+    let mut line = Line::from(vec![bar, Span::styled(rest, style)]);
+    let pad = width.saturating_sub(line.width());
+    if pad > 0 {
+        line.spans.push(Span::raw(" ".repeat(pad)));
+    }
+    line.style = Style::default().bg(theme.annotation_bg);
+    line
+}
+
+/// Renders one [`Row::AnnotationBorder`] row: a corner glyph (`╭` top,
+/// `╰` bottom) at column 0 — the same column [`annotation_row_line`]'s
+/// accent bar occupies, so the two visually connect — followed by `─`
+/// filling the rest of the pane's content `width`. `width` is the inner
+/// content width the renderer measured for the current frame (see
+/// [`render`]); a `width` of `0` still renders the bare corner glyph rather
+/// than panicking or producing an empty line.
+fn annotation_border_line(top: bool, width: usize, theme: &Theme) -> Line<'static> {
+    let corner = if top { '\u{256d}' } else { '\u{2570}' };
+    let text: String = std::iter::once(corner)
+        .chain(std::iter::repeat_n('\u{2500}', width.saturating_sub(1)))
+        .collect();
+    let mut line = Line::from(Span::styled(
+        text,
+        Style::default().fg(theme.annotation_accent),
+    ));
+    line.style = Style::default().bg(theme.annotation_bg);
+    line
 }
 
 /// Renders one row (any [`Row`] variant) as a full-width [`Line`]: the
 /// diff pane's own per-frame renderer. `gutter_width` is the whole
 /// multibuffer's dynamic gutter digit width (see
 /// [`super::rows::build_multibuffer`]), shared by every row so line-number
-/// and annotation-indent columns stay aligned across files.
+/// and annotation-indent columns stay aligned across files. `width` is the
+/// pane's inner content width (see [`render`]), used to draw
+/// [`Row::AnnotationBorder`]'s dashes across the full pane width and to pad
+/// [`Row::FileHeader`] and [`Row::Annotation`] rows' trailing cells so their
+/// standing background reaches the right edge (see [`file_header_line`] and
+/// [`annotation_row_line`] for why the padding is needed); [`Row::Line`] and
+/// [`Row::HunkHeader`] ignore it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn row_line(
     row: &Row,
@@ -343,6 +410,7 @@ pub(super) fn row_line(
     matches: &HashSet<usize>,
     cursor_col: Option<usize>,
     gutter_width: usize,
+    width: usize,
     theme: &Theme,
 ) -> Line<'static> {
     let selected = index == cursor;
@@ -361,9 +429,11 @@ pub(super) fn row_line(
             old_path,
             *kind,
             selected,
+            is_match,
             *annotated,
             *collapsed,
             *staged_marker,
+            width,
             theme,
         ),
         Row::HunkHeader {
@@ -382,7 +452,8 @@ pub(super) fn row_line(
             text,
             classification,
             ..
-        } => annotation_row_line(text, *classification, gutter_width, theme),
+        } => annotation_row_line(text, *classification, gutter_width, width, theme),
+        Row::AnnotationBorder { top } => annotation_border_line(*top, width, theme),
     }
 }
 
@@ -416,6 +487,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     let inner_height = area.height.saturating_sub(2) as usize;
+    let inner_width = area.width.saturating_sub(2) as usize;
     let start = app.view.scroll;
     let end = (start + inner_height.max(1)).min(app.view.rows.len());
     let matches: HashSet<usize> = app.search.matches.iter().copied().collect();
@@ -431,6 +503,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 &matches,
                 cursor_col,
                 app.view.gutter_width,
+                inner_width,
                 &app.theme,
             )
         })
@@ -515,12 +588,198 @@ mod tests {
     }
 
     #[test]
-    fn annotation_row_line_indent_matches_gutter_width() {
-        let line = annotation_row_line("note", Some(Classification::Nit), 3, &Theme::default());
-        let text = spans_to_string(&line.spans);
+    fn annotation_row_line_places_accent_bar_and_bg_on_first_line() {
+        let theme = Theme::default();
+        let line = annotation_row_line("note", Some(Classification::Nit), 3, 40, &theme);
+        assert_eq!(line.style.bg, Some(theme.annotation_bg));
+        assert_eq!(line.spans[0].content.as_ref(), "\u{2502}");
+        assert_eq!(line.spans[0].style.fg, Some(theme.annotation_accent));
+        // The bar is carved out of the leading indent's first column, so
+        // the bullet still lands at the same visual column as before.
         let indent = annotation_indent(3);
-        assert_eq!(&text[..indent], " ".repeat(indent).as_str());
-        assert!(text[indent..].starts_with('\u{25cf}'));
+        let chars: Vec<char> = spans_to_string(&line.spans).chars().collect();
+        assert_eq!(chars[0], '\u{2502}');
+        assert!(chars[1..indent].iter().all(|&c| c == ' '));
+        assert_eq!(chars[indent], '\u{25cf}');
+    }
+
+    #[test]
+    fn annotation_row_line_places_accent_bar_on_continuation_lines() {
+        let theme = Theme::default();
+        let line = annotation_row_line("more text", None, 3, 40, &theme);
+        assert_eq!(line.style.bg, Some(theme.annotation_bg));
+        assert_eq!(line.spans[0].content.as_ref(), "\u{2502}");
+        let indent = annotation_indent(3);
+        let chars: Vec<char> = spans_to_string(&line.spans).chars().collect();
+        assert_eq!(chars[0], '\u{2502}');
+        assert!(chars[1..indent + 2].iter().all(|&c| c == ' '));
+        let suffix: String = chars
+            .iter()
+            .skip(indent + 2)
+            .take("more text".chars().count())
+            .collect();
+        assert_eq!(suffix, "more text");
+    }
+
+    #[test]
+    fn annotation_row_line_pads_trailing_cells_to_the_pane_width() {
+        let theme = Theme::default();
+        // Both the tagged first line and an untagged continuation line must
+        // reach exactly `width` display columns, so `annotation_bg` (applied
+        // by Paragraph only to occupied cells) reaches the pane's right edge.
+        let first = annotation_row_line("note", Some(Classification::Nit), 3, 40, &theme);
+        assert_eq!(first.width(), 40);
+        let continuation = annotation_row_line("more text", None, 3, 40, &theme);
+        assert_eq!(continuation.width(), 40);
+        // The padding is plain text appended as its own trailing span, not a
+        // change to existing spans' content.
+        let last = first.spans.last().expect("padding span present");
+        assert!(last.content.chars().all(|c| c == ' '));
+    }
+
+    #[test]
+    fn annotation_row_line_skips_padding_when_content_already_fills_or_exceeds_width() {
+        let theme = Theme::default();
+        // A width narrower than (or equal to) the row's own content must
+        // not panic and must add no padding span.
+        let unpadded = annotation_row_line("note", Some(Classification::Nit), 3, 0, &theme);
+        assert_eq!(unpadded.spans.len(), 2);
+        let content_width = unpadded.width();
+        let exact =
+            annotation_row_line("note", Some(Classification::Nit), 3, content_width, &theme);
+        assert_eq!(exact.spans.len(), 2);
+    }
+
+    #[test]
+    fn annotation_border_line_top_uses_top_left_corner_and_fills_width() {
+        let theme = Theme::default();
+        let line = annotation_border_line(true, 10, &theme);
+        assert_eq!(line.style.bg, Some(theme.annotation_bg));
+        let text = spans_to_string(&line.spans);
+        assert_eq!(
+            text,
+            "\u{256d}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
+        );
+        assert_eq!(line.spans[0].style.fg, Some(theme.annotation_accent));
+    }
+
+    #[test]
+    fn annotation_border_line_bottom_uses_bottom_left_corner() {
+        let theme = Theme::default();
+        let line = annotation_border_line(false, 5, &theme);
+        let text = spans_to_string(&line.spans);
+        assert_eq!(text, "\u{2570}\u{2500}\u{2500}\u{2500}\u{2500}");
+    }
+
+    #[test]
+    fn annotation_border_line_handles_zero_width_without_panicking() {
+        let theme = Theme::default();
+        let line = annotation_border_line(true, 0, &theme);
+        let text = spans_to_string(&line.spans);
+        assert_eq!(text, "\u{256d}");
+    }
+
+    #[test]
+    fn file_header_line_gets_standing_bg_when_not_selected() {
+        let theme = Theme::default();
+        let line = file_header_line(
+            "src/main.rs",
+            &None,
+            FileChangeKind::Modified,
+            false,
+            false,
+            false,
+            false,
+            StagedMarker::None,
+            40,
+            &theme,
+        );
+        assert_eq!(line.style.bg, Some(theme.file_header_bg));
+    }
+
+    #[test]
+    fn file_header_line_standing_bg_applies_when_collapsed_too() {
+        let theme = Theme::default();
+        let line = file_header_line(
+            "src/main.rs",
+            &None,
+            FileChangeKind::Modified,
+            false,
+            false,
+            false,
+            true,
+            StagedMarker::None,
+            40,
+            &theme,
+        );
+        assert_eq!(line.style.bg, Some(theme.file_header_bg));
+    }
+
+    #[test]
+    fn file_header_line_pads_trailing_cells_to_the_pane_width() {
+        let theme = Theme::default();
+        let line = file_header_line(
+            "src/main.rs",
+            &None,
+            FileChangeKind::Modified,
+            false,
+            false,
+            false,
+            false,
+            StagedMarker::None,
+            60,
+            &theme,
+        );
+        assert_eq!(line.width(), 60);
+    }
+
+    #[test]
+    fn file_header_line_skips_padding_when_content_already_fills_or_exceeds_width() {
+        let theme = Theme::default();
+        let unpadded = file_header_line(
+            "src/main.rs",
+            &None,
+            FileChangeKind::Modified,
+            false,
+            false,
+            false,
+            false,
+            StagedMarker::None,
+            0,
+            &theme,
+        );
+        let content_width = unpadded.width();
+        let exact = file_header_line(
+            "src/main.rs",
+            &None,
+            FileChangeKind::Modified,
+            false,
+            false,
+            false,
+            false,
+            StagedMarker::None,
+            content_width,
+            &theme,
+        );
+        assert_eq!(exact.width(), content_width);
+    }
+
+    #[test]
+    fn file_header_line_selected_wins_over_standing_bg() {
+        let theme = Theme::default();
+        let line = file_header_line(
+            "src/main.rs",
+            &None,
+            FileChangeKind::Modified,
+            true,
+            false,
+            false,
+            false,
+            StagedMarker::None,
+            40,
+            &theme,
+        );
+        assert_eq!(line.style.bg, Some(theme.selected_row_bg));
     }
 
     #[test]
@@ -528,9 +787,26 @@ mod tests {
         let row = Row::Line(sample_line_row(Some(1), Some(2)));
         let matches = HashSet::new();
         let theme = Theme::default();
-        let narrow = spans_to_string(&row_line(&row, 0, 0, &matches, None, 3, &theme).spans);
-        let wide = spans_to_string(&row_line(&row, 0, 0, &matches, None, 5, &theme).spans);
+        let narrow = spans_to_string(&row_line(&row, 0, 0, &matches, None, 3, 80, &theme).spans);
+        let wide = spans_to_string(&row_line(&row, 0, 0, &matches, None, 5, 80, &theme).spans);
         assert_ne!(narrow, wide);
         assert_eq!(wide.chars().count(), narrow.chars().count() + 4);
+    }
+
+    #[test]
+    fn row_line_threads_width_into_annotation_border_rows_only() {
+        let matches = HashSet::new();
+        let theme = Theme::default();
+        let border = Row::AnnotationBorder { top: true };
+        let narrow = spans_to_string(&row_line(&border, 0, 0, &matches, None, 3, 6, &theme).spans);
+        let wide = spans_to_string(&row_line(&border, 0, 0, &matches, None, 3, 12, &theme).spans);
+        assert_eq!(narrow.chars().count(), 6);
+        assert_eq!(wide.chars().count(), 12);
+
+        // A Line row ignores `width` entirely.
+        let line = Row::Line(sample_line_row(Some(1), Some(2)));
+        let at_6 = spans_to_string(&row_line(&line, 0, 0, &matches, None, 3, 6, &theme).spans);
+        let at_12 = spans_to_string(&row_line(&line, 0, 0, &matches, None, 3, 12, &theme).spans);
+        assert_eq!(at_6, at_12);
     }
 }
