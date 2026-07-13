@@ -1266,17 +1266,13 @@ index 1..2 100644
 fn refresh_keeps_selected_file_by_path_when_order_changes() {
     let a = raw_patch("a.rs", 1);
     let b = raw_patch("b.rs", 1);
-    // After the operation the diff comes back reordered: [b, a].
-    let (mut app, _calls) = app_with_fake(
-        vec![a.clone(), b.clone()],
-        DiffTarget::WorkingTree,
-        vec![b, a],
-        vec![],
-    );
-    app.apply(Action::NextFile); // select b.rs (index 1)
+    // The refresh picks up a new file that sorts before the selected one
+    // (an external edit landed), shifting its index: [b] -> [a, b].
+    let (mut app, _calls) =
+        app_with_fake(vec![b.clone()], DiffTarget::WorkingTree, vec![a, b], vec![]);
     app.apply(Action::ToggleStage); // stage b.rs whole-file, then refresh
     assert_eq!(app.view.files[app.view.selected_file].path, "b.rs");
-    assert_eq!(app.view.selected_file, 0); // b.rs moved to index 0
+    assert_eq!(app.view.selected_file, 1); // shifted by the new a.rs
 }
 
 #[test]
@@ -2002,6 +1998,113 @@ fn refresh_drops_collapse_entries_for_departed_files() {
     app.rebuild_rows();
     app.refresh();
     assert!(!app.view.collapse_contains("b.rs")); // entry cleaned up
+}
+
+// -- Stable path ordering (build_review) ---------------------------------
+
+/// A porcelain status entry for an untracked file (`??`).
+fn untracked_status(path: &str) -> FileStatus {
+    FileStatus {
+        kind: ChangeKind::Untracked,
+        staged: StatusCode::Unmodified,
+        unstaged: StatusCode::Untracked,
+        path: path.to_string(),
+        orig_path: None,
+    }
+}
+
+#[test]
+fn build_review_sorts_unstaged_untracked_and_fully_staged_by_path() {
+    // One flat list in path order, regardless of which source (diff,
+    // untracked status, fully-staged status) each entry came from.
+    let fake = FakeGit {
+        diff: vec![raw_patch("b.rs", 1), raw_patch("m.rs", 1)],
+        status: vec![
+            unstaged_entry("b.rs"),
+            unstaged_entry("m.rs"),
+            untracked_status("a.txt"),
+            untracked_status("z.txt"),
+            staged_entry("c.rs"),
+        ],
+        untracked_content: [
+            ("a.txt".to_string(), b"alpha\n".to_vec()),
+            ("z.txt".to_string(), b"zeta\n".to_vec()),
+        ]
+        .into_iter()
+        .collect(),
+        ..FakeGit::default()
+    };
+    let snapshot = build_review(&fake, &DiffTarget::WorkingTree).unwrap();
+    let paths: Vec<&str> = snapshot.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, vec!["a.txt", "b.rs", "c.rs", "m.rs", "z.txt"]);
+}
+
+#[test]
+fn build_review_keeps_patches_aligned_with_files_through_the_sort() {
+    // `patches` is index-aligned with `files`: after sorting, each real
+    // patch must still sit at its own file's index, and the synthetic
+    // entries (untracked, fully-staged header-only) must still be `None`.
+    let fake = FakeGit {
+        diff: vec![raw_patch("m.rs", 2), raw_patch("b.rs", 1)],
+        status: vec![
+            partial_entry("m.rs"),
+            unstaged_entry("b.rs"),
+            untracked_status("a.txt"),
+            staged_entry("c.rs"),
+        ],
+        untracked_content: [("a.txt".to_string(), b"alpha\n".to_vec())]
+            .into_iter()
+            .collect(),
+        ..FakeGit::default()
+    };
+    let snapshot = build_review(&fake, &DiffTarget::WorkingTree).unwrap();
+    assert_eq!(snapshot.files.len(), snapshot.patches.len());
+    for (file, patch) in snapshot.files.iter().zip(&snapshot.patches) {
+        match (file.path.as_str(), patch) {
+            // Diff-parsed files keep their own raw patch at their index.
+            ("b.rs" | "m.rs", Some(p)) => assert_eq!(p.path, file.path),
+            // Untracked and fully-staged entries have no real patch.
+            ("a.txt" | "c.rs", None) => {}
+            other => panic!("misaligned entry: {other:?}"),
+        }
+    }
+    // The partially staged file's two-hunk patch travels with it.
+    let m = snapshot
+        .files
+        .iter()
+        .position(|f| f.path == "m.rs")
+        .unwrap();
+    assert_eq!(snapshot.files[m].hunks.len(), 2);
+    assert_eq!(snapshot.patches[m].as_ref().unwrap().path, "m.rs");
+}
+
+#[test]
+fn staging_a_file_keeps_its_position_in_the_list() {
+    // Staging `b.rs` fully moves it out of the working diff and into the
+    // fully-staged synthesis path — but it must not move in the list, and
+    // the path-keyed cursor restore must keep the cursor on its section.
+    let a = raw_patch("a.rs", 1);
+    let b = raw_patch("b.rs", 1);
+    let c = raw_patch("c.rs", 1);
+    let (mut app, _calls, _diff, _status) = app_with_mutable_fake(
+        vec![a.clone(), b, c.clone()],
+        vec![],
+        vec![a, c], // refresh diff: b.rs is gone (fully staged)
+        vec![staged_entry("b.rs")],
+    );
+    app.view.cursor = app.view.header_row_of_file[1]; // onto b.rs's header
+    app.apply(Action::StageFile);
+    let paths: Vec<&str> = app.view.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, vec!["a.rs", "b.rs", "c.rs"], "b.rs must not move");
+    assert_eq!(
+        app.view.files[app.view.file_of_cursor()].path,
+        "b.rs",
+        "cursor follows the staged file in place"
+    );
+    assert_eq!(
+        app.staged_states.get("b.rs").copied(),
+        Some(StagedState::Full)
+    );
 }
 
 // -- Auto-refresh (working-tree polling) --------------------------------

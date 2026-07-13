@@ -208,7 +208,9 @@ pub struct StagedFile {
 /// paths that currently have staged changes.
 #[derive(Debug, Clone)]
 pub struct ReviewSnapshot {
-    /// Every file in the diff, in display order.
+    /// Every file in the diff, in display order: sorted by path
+    /// (byte-wise ascending), independent of staged state, so staging or
+    /// unstaging a file never moves it in the list.
     pub files: Vec<FileDiff>,
     /// The raw patch each entry of `files` was parsed from, by index.
     /// `None` for synthetic untracked entries and for fully-staged
@@ -337,9 +339,9 @@ pub fn build_review(
         // Fully-staged files never appear in the working-tree diff (their
         // changes are all in the index), yet the review must keep them as
         // sections so unstaging is one `S` on a header (spec Unit 2 —
-        // "nothing hides"). Union them in as header-only sections, in
-        // status order, after the unstaged/untracked entries. See
-        // 03-task-03-proofs.md for the design note on this choice.
+        // "nothing hides"). Union them in as header-only sections; the
+        // path sort below places them, like every other entry, by path.
+        // See 03-task-03-proofs.md for the design note on this choice.
         for entry in &status {
             if staged_state(entry) != StagedState::Full {
                 continue;
@@ -357,6 +359,17 @@ pub fn build_review(
             patches.push(None);
         }
     }
+
+    // One flat list in a stable, status-independent order: sort every entry
+    // by path (byte-wise), whatever source it came from. This is what keeps
+    // a file from teleporting when staging flips it between the diff-parsed
+    // and fully-staged-synthesized sources — only its marker and section
+    // content change, never its position. `patches` is index-aligned with
+    // `files`, so the two are sorted together.
+    let mut entries: Vec<(FileDiff, Option<RawFilePatch>)> =
+        files.into_iter().zip(patches).collect();
+    entries.sort_by(|a, b| a.0.path.cmp(&b.0.path));
+    let (files, patches) = entries.into_iter().unzip();
 
     Ok(ReviewSnapshot {
         files,

@@ -201,8 +201,12 @@ not the "render the file's staged diff inline" option.
 
 `build_review`, for the `WorkingTree` target, unions the unstaged diff with
 the fully-staged files from `git status` (those with staged changes and no
-unstaged changes, not already present in the unstaged diff), appended in
-status order **after** the unstaged and untracked entries. Each is a
+unstaged changes, not already present in the unstaged diff), merged into
+the one flat list that is **sorted by path** (byte-wise ascending) with
+every other entry. (Originally these sections were appended in status
+order after the unstaged/untracked entries; that ordering was superseded
+by the stable path sort so staging a file never moves it in the list —
+mirroring Zed's git-panel feel.) Each is a
 `FileDiff` with no hunks — `build_multibuffer` already renders a
 zero-content file as a single addressable header row (covered by task 2.0's
 `multibuffer_zero_content_file_is_header_only_but_addressable`), so the
@@ -224,8 +228,11 @@ localized to `build_review` + `rebuild_rows` per the task's guidance. Once a
 fully-staged file is edited again it re-enters via the real unstaged diff
 with full content, so no information is ever lost.
 
-Ordering is stable and tested implicitly by the refresh tests: unstaged-diff
-order, then untracked (status order), then fully-staged-only (status order).
+Ordering is stable, status-independent, and explicitly tested: all entries
+(diff-parsed, untracked, fully-staged header-only) sort together by path,
+so a file keeps its position when its staged state changes (see
+`build_review_sorts_unstaged_untracked_and_fully_staged_by_path` and
+`staging_a_file_keeps_its_position_in_the_list`).
 
 ## Decision (B): Visual selections are single-section
 
