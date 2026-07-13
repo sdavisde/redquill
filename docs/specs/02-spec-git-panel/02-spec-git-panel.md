@@ -73,7 +73,7 @@ The goal is that a reviewer never leaves redquill to answer "what branch am I on
 ## Non-Goals (Out of Scope)
 
 1. **Stash mutations**: no create/apply/pop/drop — the stash section is view-only, structured so actions can be added in a later spec.
-2. **Commit creation, branch switching, checkout, or remote management**: the write ceiling remains the index plus the three explicit remote operations. (Branch switching was later ratified as its own feature — see spec 03, docs/specs/03-spec-branch-worktree-switcher.md.)
+2. **Commit creation, branch switching, checkout, or remote management**: the write ceiling remains the index plus the three explicit remote operations. (Branch switching was later ratified as its own feature — see spec 03, docs/specs/03-spec-branch-worktree-switcher.md. Commit creation likewise — see spec 04, docs/specs/04-spec-commit-staged.md.)
 3. **Force push or any destructive git operation**: never, under any binding.
 4. **Confirmation dialogs**: remote ops run immediately on keypress by design; no modal prompts.
 5. **Credential handling**: redquill never reads, stores, or prompts for credentials; git's own machinery (ssh-agent, credential helpers) is the only path.

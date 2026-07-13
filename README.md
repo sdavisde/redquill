@@ -70,6 +70,7 @@ Vim-grammar keybindings, designed to be remappable (config layer planned — see
 | `f` | Fetch from the upstream remote (background, non-blocking) |
 | `p` | Pull from the upstream remote (background, non-blocking) |
 | `P` | Push to the upstream remote (background, non-blocking) |
+| `c` | Commit staged changes (inline message input: `Enter` commits, `Ctrl-j` newline, `Esc` cancels) |
 | `b` | Open the branch/worktree switcher |
 | `@` | Toggle the command log pane (also works from the diff view) |
 | `?` | Help (also works from the diff view) |

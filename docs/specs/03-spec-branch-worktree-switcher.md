@@ -54,11 +54,11 @@ The git-layer capability for this already exists — `9c98d97` added local-branc
 1. **Creating or deleting branches or worktrees**: this spec only switches between existing ones.
 2. **Force switching**: no `--force` or discard-changes variant of `git switch`.
 3. **Remote branch checkout**: the Branches tab lists local branches only.
-4. **Anything else spec 02 excluded**: stash mutations, commit creation, and additional remote management remain out of scope here too.
+4. **Anything else spec 02 excluded**: stash mutations, commit creation, and additional remote management remain out of scope here too. (Commit creation was later ratified as its own feature — see spec 04, docs/specs/04-spec-commit-staged.md.)
 
 ## Write Ceiling
 
-This spec extends the product's write ceiling (CLAUDE.md) to include `git switch`, run with a fixed argument vector — no shell interpolation, no `--force` variant, `--` always separating flags from the branch name. It supersedes spec 02 Non-Goal #2 ("commit creation, branch switching, checkout, or remote management") specifically for branch switching; the rest of that non-goal (commit creation, arbitrary checkout, remote management beyond fetch/pull/push) still stands.
+This spec extends the product's write ceiling (CLAUDE.md) to include `git switch`, run with a fixed argument vector — no shell interpolation, no `--force` variant, `--` always separating flags from the branch name. It supersedes spec 02 Non-Goal #2 ("commit creation, branch switching, checkout, or remote management") specifically for branch switching; the rest of that non-goal (commit creation, arbitrary checkout, remote management beyond fetch/pull/push) still stands. (Commit creation was later ratified separately — see spec 04, docs/specs/04-spec-commit-staged.md.)
 
 ## Technical Considerations
 
