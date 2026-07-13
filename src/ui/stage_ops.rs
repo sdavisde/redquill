@@ -213,8 +213,10 @@ pub struct ReviewSnapshot {
     /// unstaging a file never moves it in the list.
     pub files: Vec<FileDiff>,
     /// The raw patch each entry of `files` was parsed from, by index.
-    /// `None` for synthetic untracked entries and for fully-staged
-    /// header-only entries (which have no working-tree patch).
+    /// `None` for synthetic untracked entries and for fully-staged entries
+    /// with no textual hunks in the staged diff (e.g. a staged deletion or
+    /// binary file); a fully-staged entry with real staged hunks carries
+    /// its staged `RawFilePatch` here, same as any other file.
     pub patches: Vec<Option<RawFilePatch>>,
     /// Files with staged changes, per `git status`.
     pub staged: Vec<StagedFile>,
@@ -313,6 +315,16 @@ pub fn build_review(
     }
 
     if matches!(target, DiffTarget::WorkingTree) {
+        // Fully-staged files have no working-tree diff at all, so their
+        // real content only exists in the staged (`--staged`) diff. Fetch
+        // it once, indexed by path, so the synthesis loop below can give
+        // them real hunks instead of an empty header-only placeholder.
+        let staged_patches: HashMap<String, RawFilePatch> = ops
+            .diff(&DiffTarget::Staged)?
+            .into_iter()
+            .map(|patch| (patch.path.clone(), patch))
+            .collect();
+
         for entry in &status {
             if entry.kind != ChangeKind::Untracked {
                 continue;
@@ -338,10 +350,13 @@ pub fn build_review(
 
         // Fully-staged files never appear in the working-tree diff (their
         // changes are all in the index), yet the review must keep them as
-        // sections so unstaging is one `S` on a header (spec Unit 2 —
-        // "nothing hides"). Union them in as header-only sections; the
-        // path sort below places them, like every other entry, by path.
-        // See 03-task-03-proofs.md for the design note on this choice.
+        // sections so unstaging is one `S` on a header, and expanding shows
+        // their (staged) content rather than nothing (spec Unit 2 —
+        // "nothing hides"). Union them in from the staged diff fetched
+        // above, falling back to a header-only placeholder when there's no
+        // textual staged patch; the path sort below places them, like
+        // every other entry, by path. See 03-task-03-proofs.md for the
+        // design note on this choice.
         for entry in &status {
             if staged_state(entry) != StagedState::Full {
                 continue;
@@ -349,14 +364,28 @@ pub fn build_review(
             if files.iter().any(|f| f.path == entry.path) {
                 continue;
             }
-            files.push(FileDiff {
-                path: entry.path.clone(),
-                old_path: entry.orig_path.clone(),
-                kind: kind_from_staged_code(entry.staged),
-                is_binary: false,
-                hunks: Vec::new(),
-            });
-            patches.push(None);
+            match staged_patches.get(&entry.path) {
+                // The staged diff has real hunks for this path (the common
+                // case): parse them so the file is expandable and shows its
+                // (staged) content, not just a header.
+                Some(patch) => {
+                    files.push(FileDiff::from_patch(patch)?);
+                    patches.push(Some(patch.clone()));
+                }
+                // No staged patch (e.g. a staged deletion of a file with no
+                // textual hunks, or a binary file): fall back to the
+                // header-only placeholder so the section still exists.
+                None => {
+                    files.push(FileDiff {
+                        path: entry.path.clone(),
+                        old_path: entry.orig_path.clone(),
+                        kind: kind_from_staged_code(entry.staged),
+                        is_binary: false,
+                        hunks: Vec::new(),
+                    });
+                    patches.push(None);
+                }
+            }
         }
     }
 
@@ -560,5 +589,154 @@ mod tests {
             kind_from_staged_code(StatusCode::TypeChange),
             FileChangeKind::Modified
         );
+    }
+
+    /// A minimal [`StageOps`] fake for [`build_review`]: `diff` is
+    /// target-aware (separate working-tree and staged patch lists, as a
+    /// real backend's would be), `status` is fixed, and every other
+    /// operation is an unused no-op.
+    #[derive(Default)]
+    struct Fake {
+        working_tree_diff: Vec<RawFilePatch>,
+        staged_diff: Vec<RawFilePatch>,
+        status: Vec<FileStatus>,
+    }
+
+    impl StageOps for Fake {
+        fn diff(&self, target: &DiffTarget) -> Result<Vec<RawFilePatch>, GitError> {
+            match target {
+                DiffTarget::Staged => Ok(self.staged_diff.clone()),
+                _ => Ok(self.working_tree_diff.clone()),
+            }
+        }
+
+        fn status(&self) -> Result<Vec<FileStatus>, GitError> {
+            Ok(self.status.clone())
+        }
+
+        fn stage_file(&self, _path: &str) -> Result<(), GitError> {
+            Ok(())
+        }
+
+        fn unstage_file(&self, _path: &str) -> Result<(), GitError> {
+            Ok(())
+        }
+
+        fn apply_cached(&self, _patch: &str) -> Result<(), GitError> {
+            Ok(())
+        }
+
+        fn unapply_cached(&self, _patch: &str) -> Result<(), GitError> {
+            Ok(())
+        }
+
+        fn read_worktree_file(&self, _path: &str) -> Option<Vec<u8>> {
+            None
+        }
+
+        fn show_file(&self, _spec: &str) -> Option<String> {
+            None
+        }
+    }
+
+    /// A single-hunk raw patch for `path`, matching the minimal shape
+    /// `FileDiff::from_patch` needs to parse a non-empty hunk list.
+    fn one_hunk_patch(path: &str) -> RawFilePatch {
+        RawFilePatch {
+            path: path.to_string(),
+            old_path: None,
+            raw: format!(
+                "diff --git a/{path} b/{path}\nindex 1..2 100644\n--- a/{path}\n+++ b/{path}\n@@ -1,1 +1,1 @@\n-old\n+new\n"
+            ),
+            is_binary: false,
+        }
+    }
+
+    #[test]
+    fn fully_staged_file_gets_hunks_from_the_staged_diff() {
+        // `x.rs` is fully staged: it has no working-tree diff (its changes
+        // are all in the index), but it does have a staged one. Before the
+        // fix, `build_review` synthesized an empty, header-only `FileDiff`
+        // for it here; now it should carry the real staged hunks so the
+        // file stays expandable.
+        let fake = Fake {
+            working_tree_diff: Vec::new(),
+            staged_diff: vec![one_hunk_patch("x.rs")],
+            status: vec![status(
+                ChangeKind::Ordinary,
+                StatusCode::Modified,
+                StatusCode::Unmodified,
+                "x.rs",
+            )],
+        };
+
+        let review = build_review(&fake, &DiffTarget::WorkingTree).unwrap();
+
+        let idx = review
+            .files
+            .iter()
+            .position(|f| f.path == "x.rs")
+            .expect("x.rs must still appear as a section");
+        assert!(
+            !review.files[idx].hunks.is_empty(),
+            "expanding a fully-staged file must show its staged hunks, not an empty section"
+        );
+        assert!(
+            review.patches[idx].is_some(),
+            "a fully-staged file with a real staged patch must carry it, enabling hunk/line addressing"
+        );
+    }
+
+    #[test]
+    fn fully_staged_file_without_a_staged_patch_falls_back_to_a_header_only_placeholder() {
+        // No staged patch is found for `deleted.rs` (e.g. a staged deletion
+        // with no textual hunks, or a binary file): the section must still
+        // exist (so unstaging stays reachable) but degrades to the old
+        // header-only placeholder rather than erroring.
+        let fake = Fake {
+            working_tree_diff: Vec::new(),
+            staged_diff: Vec::new(),
+            status: vec![status(
+                ChangeKind::Ordinary,
+                StatusCode::Deleted,
+                StatusCode::Unmodified,
+                "deleted.rs",
+            )],
+        };
+
+        let review = build_review(&fake, &DiffTarget::WorkingTree).unwrap();
+
+        let idx = review
+            .files
+            .iter()
+            .position(|f| f.path == "deleted.rs")
+            .expect("deleted.rs must still appear as a section");
+        assert!(review.files[idx].hunks.is_empty());
+        assert!(review.patches[idx].is_none());
+    }
+
+    #[test]
+    fn staged_target_does_not_fetch_the_staged_diff_again() {
+        // When `target` is already `Staged`, `build_review` must not issue
+        // a second `diff(&Staged)` call — that extra fetch only exists to
+        // backfill fully-staged sections in a *working-tree* review.
+        let fake = Fake {
+            working_tree_diff: Vec::new(),
+            staged_diff: vec![one_hunk_patch("y.rs")],
+            status: vec![status(
+                ChangeKind::Ordinary,
+                StatusCode::Modified,
+                StatusCode::Unmodified,
+                "y.rs",
+            )],
+        };
+
+        let review = build_review(&fake, &DiffTarget::Staged).unwrap();
+
+        // `diff(&Staged)` already returns `y.rs` as the primary diff, so it
+        // must appear exactly once, not duplicated by the fully-staged
+        // synthesis path.
+        let count = review.files.iter().filter(|f| f.path == "y.rs").count();
+        assert_eq!(count, 1);
     }
 }

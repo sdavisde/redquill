@@ -146,6 +146,10 @@ impl ContentFake {
 
 impl StageOps for ContentFake {
     fn diff(&self, _target: &DiffTarget) -> Result<Vec<RawFilePatch>, GitError> {
+        // Empty for every target, including `DiffTarget::Staged`: the
+        // synthetic scenario has no staged files, so `build_review`'s
+        // extra staged-diff fetch (for fully-staged sections) measures its
+        // real, realistically-empty cost rather than a fabricated one.
         Ok(Vec::new())
     }
     fn status(&self) -> Result<Vec<crate::git::FileStatus>, GitError> {

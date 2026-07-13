@@ -795,6 +795,16 @@ enum StageCall {
 struct FakeGit {
     calls: Rc<RefCell<Vec<StageCall>>>,
     diff: Vec<RawFilePatch>,
+    // When `Some`, returned for `DiffTarget::Staged` calls instead of
+    // `diff`/`diff_override`, so a test can distinguish the working-tree
+    // diff from the staged (`--staged`) one -- e.g. giving a fully-staged
+    // file (absent from `diff`) real hunks here. `None` (the default)
+    // keeps the pre-existing, target-agnostic behavior: every target,
+    // `Staged` included, reads through `diff`/`diff_override` -- which is
+    // what tests whose *primary* review target is `DiffTarget::Staged`
+    // need, since for them that call isn't `build_review`'s working-tree
+    // backfill fetch but the one and only diff read.
+    staged_diff: Option<Vec<RawFilePatch>>,
     status: Vec<FileStatus>,
     // Interior-mutable overrides: when set, `diff`/`status` read through
     // these instead, so a test can mutate the refresh result mid-flow
@@ -834,7 +844,12 @@ impl FakeGit {
 }
 
 impl StageOps for FakeGit {
-    fn diff(&self, _target: &DiffTarget) -> Result<Vec<RawFilePatch>, GitError> {
+    fn diff(&self, target: &DiffTarget) -> Result<Vec<RawFilePatch>, GitError> {
+        if matches!(target, DiffTarget::Staged)
+            && let Some(staged) = &self.staged_diff
+        {
+            return Ok(staged.clone());
+        }
         match &self.diff_override {
             Some(h) => Ok(h.borrow().clone()),
             None => Ok(self.diff.clone()),
@@ -1805,6 +1820,49 @@ fn stage_file_stages_the_file_and_collapses_its_section() {
         Some(StagedState::Full)
     );
     assert_eq!(app.status_message.as_deref(), Some("staged a.rs"));
+}
+
+#[test]
+fn stage_file_then_expand_shows_the_staged_hunks_not_just_the_header() {
+    // Regression test: once a.rs becomes fully staged, `git diff` (working
+    // tree) no longer shows it at all -- only `git diff --staged` does.
+    // Before the fix, `build_review` synthesized an empty header-only
+    // section for it, so expanding it after staging showed nothing but the
+    // FileHeader row. It must now show the staged hunk/line rows.
+    let p = raw_patch("a.rs", 1);
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let fake = FakeGit {
+        calls: Rc::clone(&calls),
+        diff: Vec::new(), // gone from the working-tree diff after staging
+        staged_diff: Some(vec![p.clone()]),
+        status: vec![staged_entry("a.rs")],
+        ..FakeGit::default()
+    };
+    let snapshot = ReviewSnapshot {
+        files: vec![FileDiff::from_patch(&p).unwrap()],
+        patches: vec![Some(p)],
+        staged: Vec::new(),
+        staged_states: HashMap::new(),
+    };
+    let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
+
+    app.apply(Action::StageFile);
+    assert_eq!(
+        single_call(&calls),
+        StageCall::StageFile("a.rs".to_string())
+    );
+    assert!(app.view.is_collapsed("a.rs")); // fully-staged files auto-collapse
+
+    // Expand it (the `Z` gesture the user would press) and confirm the
+    // section shows real body rows, not just its header.
+    app.apply(Action::ToggleCollapse);
+    assert!(!app.view.is_collapsed("a.rs"));
+    assert!(
+        app.view.rows.len() > 1,
+        "expanding a fully-staged file must show hunk/line rows, not just its header; got rows {:?}",
+        app.view.rows
+    );
+    assert!(matches!(app.view.rows[1], Row::HunkHeader { .. }));
 }
 
 #[test]
