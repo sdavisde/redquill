@@ -19,7 +19,7 @@ use crate::highlight::TokenKind;
 
 use super::app::App;
 use super::rows::{LineRow, Row, StagedMarker};
-use super::theme::Theme;
+use super::theme::{Theme, blend};
 
 /// Width of the annotated-line dot column, rendered before the gutter.
 pub(super) const DOT_WIDTH: usize = 2;
@@ -160,22 +160,31 @@ pub(super) fn content_spans(
     spans
 }
 
-/// The line-level background, in priority order: the cursor row always
-/// wins (must stay visible over everything else), then a search match,
-/// then the diff-origin tint. `None` if nothing applies (an unselected,
-/// unmatched context line).
+/// The line-level background. The cursor row always carries a highlight,
+/// but it composites *over* whatever tint the row would otherwise show
+/// (search match first, then the diff-origin tint) via [`blend`], so a
+/// selected added line still reads green — just brighter — and a selected
+/// search match still reads as both. Unselected rows keep the match-then-
+/// origin precedence; `None` if nothing applies (an unselected, unmatched
+/// context line).
 pub(super) fn line_bg(
     origin: LineOrigin,
     selected: bool,
     is_match: bool,
     theme: &Theme,
 ) -> Option<ratatui::style::Color> {
-    if selected {
-        Some(theme.selected_row_bg)
-    } else if is_match {
+    let tint = if is_match {
         Some(theme.search_match_bg)
     } else {
         theme.origin_bg(origin)
+    };
+    if selected {
+        Some(match tint {
+            Some(tint) => blend(theme.selected_row_bg, tint),
+            None => theme.selected_row_bg,
+        })
+    } else {
+        tint
     }
 }
 
@@ -187,7 +196,15 @@ fn line_row_line(
     gutter_width: usize,
     theme: &Theme,
 ) -> Line<'static> {
-    let gutter_style = Style::default().fg(theme.gutter);
+    // The cursor row's line numbers get bold + a brighter fg (same width,
+    // no marker glyph) so the gutter itself signals the cursor position.
+    let gutter_style = if selected {
+        Style::default()
+            .fg(theme.gutter_cursor_fg)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.gutter)
+    };
     let mut spans = vec![
         dot_span(row.annotated, theme),
         Span::styled(gutter_number(row.old_line, gutter_width), gutter_style),
@@ -275,12 +292,18 @@ fn file_header_line(
     if pad > 0 {
         line.spans.push(Span::raw(" ".repeat(pad)));
     }
-    line.style = Style::default().bg(if selected {
-        theme.selected_row_bg
-    } else if is_match {
+    // The cursor row's highlight composites over the header's own tint
+    // (match tint first) rather than replacing it — same layering as
+    // [`line_bg`].
+    let tint = if is_match {
         theme.search_match_bg
     } else {
         theme.file_header_bg
+    };
+    line.style = Style::default().bg(if selected {
+        blend(theme.selected_row_bg, tint)
+    } else {
+        tint
     });
     line
 }
@@ -302,8 +325,16 @@ fn hunk_header_line(
         ),
     ];
     let mut line = Line::from(spans);
+    // Hunk headers have no standing tint of their own, so the cursor row
+    // gets the plain selection highlight — blended with the match tint
+    // when the header is also a search match.
     if selected {
-        line.style = Style::default().bg(theme.selected_row_bg);
+        let bg = if is_match {
+            blend(theme.selected_row_bg, theme.search_match_bg)
+        } else {
+            theme.selected_row_bg
+        };
+        line.style = Style::default().bg(bg);
     } else if is_match {
         line.style = Style::default().bg(theme.search_match_bg);
     }
@@ -522,6 +553,8 @@ pub fn viewport_height(area: Rect) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use ratatui::style::Color;
+
     use super::*;
 
     fn sample_line_row(old_line: Option<u32>, new_line: Option<u32>) -> LineRow {
@@ -765,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn file_header_line_selected_wins_over_standing_bg() {
+    fn file_header_line_selected_blends_the_cursor_highlight_with_its_standing_bg() {
         let theme = Theme::default();
         let line = file_header_line(
             "src/main.rs",
@@ -779,7 +812,104 @@ mod tests {
             40,
             &theme,
         );
+        assert_eq!(
+            line.style.bg,
+            Some(blend(theme.selected_row_bg, theme.file_header_bg))
+        );
+    }
+
+    #[test]
+    fn hunk_header_line_selected_gets_the_full_row_highlight() {
+        let theme = Theme::default();
+        let line = hunk_header_line("@@ -1,2 +1,2 @@", true, false, false, &theme);
         assert_eq!(line.style.bg, Some(theme.selected_row_bg));
+        // Selected + search match still reads as the cursor row: neither
+        // the bare match tint nor the bare selection color.
+        let both = hunk_header_line("@@ -1,2 +1,2 @@", true, false, true, &theme);
+        assert_ne!(both.style.bg, Some(theme.search_match_bg));
+        assert_ne!(both.style.bg, Some(theme.selected_row_bg));
+        assert!(both.style.bg.is_some());
+    }
+
+    #[test]
+    fn line_bg_selected_blends_with_the_origin_tint_instead_of_replacing_it() {
+        let theme = Theme::default();
+        let sel_added = line_bg(LineOrigin::Added, true, false, &theme);
+        let sel_removed = line_bg(LineOrigin::Removed, true, false, &theme);
+        let sel_context = line_bg(LineOrigin::Context, true, false, &theme);
+        // Context under the cursor is the plain selection highlight.
+        assert_eq!(sel_context, Some(theme.selected_row_bg));
+        // Added/removed keep their tint through selection: distinct from
+        // the plain selection bg, from their unselected tints, and from
+        // each other.
+        assert_ne!(sel_added, sel_context);
+        assert_ne!(sel_removed, sel_context);
+        assert_ne!(sel_added, sel_removed);
+        assert_ne!(sel_added, Some(theme.added_bg));
+        assert_ne!(sel_removed, Some(theme.removed_bg));
+        // The tint's dominant channel survives the blend: selected+added
+        // is greener, selected+removed redder, than selected+context.
+        let (Some(Color::Rgb(_, ag, _)), Some(Color::Rgb(rr, _, _)), Some(Color::Rgb(cr, cg, _))) =
+            (sel_added, sel_removed, sel_context)
+        else {
+            panic!("default theme blends must stay Rgb");
+        };
+        assert!(ag > cg);
+        assert!(rr > cr);
+    }
+
+    #[test]
+    fn line_bg_selected_search_match_still_reads_as_the_cursor_row() {
+        let theme = Theme::default();
+        let both = line_bg(LineOrigin::Context, true, true, &theme);
+        assert!(both.is_some());
+        assert_ne!(both, Some(theme.search_match_bg));
+        assert_ne!(both, Some(theme.selected_row_bg));
+    }
+
+    #[test]
+    fn line_bg_unselected_rows_keep_match_then_origin_precedence() {
+        let theme = Theme::default();
+        assert_eq!(
+            line_bg(LineOrigin::Added, false, true, &theme),
+            Some(theme.search_match_bg)
+        );
+        assert_eq!(
+            line_bg(LineOrigin::Added, false, false, &theme),
+            Some(theme.added_bg)
+        );
+        assert_eq!(line_bg(LineOrigin::Context, false, false, &theme), None);
+    }
+
+    #[test]
+    fn line_row_line_bolds_and_brightens_gutter_numbers_on_the_cursor_row() {
+        let row = sample_line_row(Some(7), Some(9));
+        let theme = Theme::default();
+        let selected = line_row_line(&row, true, false, None, 3, &theme);
+        for idx in [1, 3] {
+            assert_eq!(selected.spans[idx].style.fg, Some(theme.gutter_cursor_fg));
+            assert!(
+                selected.spans[idx]
+                    .style
+                    .add_modifier
+                    .contains(Modifier::BOLD)
+            );
+        }
+        let unselected = line_row_line(&row, false, false, None, 3, &theme);
+        for idx in [1, 3] {
+            assert_eq!(unselected.spans[idx].style.fg, Some(theme.gutter));
+            assert!(
+                !unselected.spans[idx]
+                    .style
+                    .add_modifier
+                    .contains(Modifier::BOLD)
+            );
+        }
+        // The gutter never changes width, only weight and color.
+        assert_eq!(
+            spans_to_string(&selected.spans),
+            spans_to_string(&unselected.spans)
+        );
     }
 
     #[test]

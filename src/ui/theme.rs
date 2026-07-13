@@ -41,6 +41,10 @@ pub struct Theme {
 
     // -- Chrome shared across the diff pane, sidebar, and panels --
     pub gutter: Color,
+    /// Gutter line-number foreground on the cursor row (rendered bold),
+    /// brighter than [`Theme::gutter`] so the row's numbers read as the
+    /// cursor position without any extra marker glyph.
+    pub gutter_cursor_fg: Color,
     pub dot_marker: Color,
     pub selected_row_bg: Color,
     pub search_match_bg: Color,
@@ -113,15 +117,16 @@ impl Default for Theme {
             context_fg: Color::Reset,
 
             gutter: Color::DarkGray,
+            gutter_cursor_fg: Color::Rgb(220, 220, 230),
             dot_marker: Color::Yellow,
-            selected_row_bg: Color::Rgb(30, 30, 40),
+            selected_row_bg: Color::Rgb(45, 55, 90),
             search_match_bg: Color::Rgb(60, 40, 70),
             search_prompt: Color::Cyan,
             annotation_text: Color::DarkGray,
             hunk_header: Color::Cyan,
             binary_placeholder: Color::DarkGray,
             status_message: Color::Yellow,
-            column_cursor_bg: Color::Rgb(70, 70, 100),
+            column_cursor_bg: Color::Rgb(110, 120, 170),
             annotation_bg: Color::Rgb(24, 22, 32),
             annotation_accent: Color::Rgb(140, 120, 200),
             file_header_bg: Color::Rgb(20, 24, 28),
@@ -212,6 +217,24 @@ impl Theme {
     }
 }
 
+/// Composites a selection highlight over a standing background tint by
+/// per-channel saturating addition of the two `Color::Rgb` values, so the
+/// result keeps the tint's hue (an added line under the cursor still reads
+/// green) while gaining the selection's brightness. If either side is not
+/// `Color::Rgb` (named/indexed colors have no portable channel values),
+/// falls back to `selection` unchanged — the cursor row must stay
+/// highlighted even under a non-Rgb theme.
+pub fn blend(selection: Color, tint: Color) -> Color {
+    match (selection, tint) {
+        (Color::Rgb(sr, sg, sb), Color::Rgb(tr, tg, tb)) => Color::Rgb(
+            sr.saturating_add(tr),
+            sg.saturating_add(tg),
+            sb.saturating_add(tb),
+        ),
+        _ => selection,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,5 +271,62 @@ mod tests {
         assert_eq!(theme.origin_bg(LineOrigin::Context), None);
         assert!(theme.origin_bg(LineOrigin::Added).is_some());
         assert!(theme.origin_bg(LineOrigin::Removed).is_some());
+    }
+
+    #[test]
+    fn blend_composites_rgb_channels_with_saturation() {
+        assert_eq!(
+            blend(Color::Rgb(45, 55, 90), Color::Rgb(20, 40, 20)),
+            Color::Rgb(65, 95, 110)
+        );
+        // Channels saturate at 255 instead of wrapping.
+        assert_eq!(
+            blend(Color::Rgb(200, 200, 200), Color::Rgb(100, 100, 100)),
+            Color::Rgb(255, 255, 255)
+        );
+    }
+
+    #[test]
+    fn blend_falls_back_to_the_selection_color_when_either_side_is_not_rgb() {
+        assert_eq!(
+            blend(Color::Rgb(45, 55, 90), Color::Green),
+            Color::Rgb(45, 55, 90)
+        );
+        assert_eq!(blend(Color::Blue, Color::Rgb(1, 2, 3)), Color::Blue);
+    }
+
+    /// Perceived brightness proxy for the contrast drift-guards below:
+    /// plain channel sum is enough to order these hand-picked constants.
+    fn channel_sum(c: Color) -> u32 {
+        match c {
+            Color::Rgb(r, g, b) => r as u32 + g as u32 + b as u32,
+            _ => 0,
+        }
+    }
+
+    #[test]
+    fn column_cursor_bg_stays_brighter_than_every_selected_row_blend() {
+        let theme = Theme::default();
+        let blends = [
+            theme.selected_row_bg,
+            blend(theme.selected_row_bg, theme.added_bg),
+            blend(theme.selected_row_bg, theme.removed_bg),
+            blend(theme.selected_row_bg, theme.search_match_bg),
+        ];
+        for bg in blends {
+            assert!(
+                channel_sum(theme.column_cursor_bg) > channel_sum(bg),
+                "column cursor {:?} must outshine row bg {bg:?}",
+                theme.column_cursor_bg
+            );
+        }
+    }
+
+    #[test]
+    fn selected_row_blends_are_brighter_than_their_unselected_tints() {
+        let theme = Theme::default();
+        for tint in [theme.added_bg, theme.removed_bg] {
+            assert!(channel_sum(blend(theme.selected_row_bg, tint)) > channel_sum(tint));
+        }
     }
 }
