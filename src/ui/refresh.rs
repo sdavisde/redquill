@@ -99,12 +99,13 @@ impl App {
     }
 
     /// Runs an [`App::auto_refresh`] unless a background reload would be
-    /// unwelcome: a remote op is mid-flight (its completion refreshes anyway,
-    /// and the intermediate tree is transient — mirrors lazygit pausing
-    /// background refreshes during its own git ops); the target is a fixed
-    /// range (nothing to pick up); the user has in-progress input or a
-    /// Visual selection anchored to positions a rebuild would move; or the
-    /// branch/worktree switcher modal is open (rebuilding under an open
+    /// unwelcome: a mutating git op (remote op or commit) is mid-flight (its
+    /// completion refreshes anyway, and the intermediate tree is transient —
+    /// mirrors lazygit pausing background refreshes during its own git ops);
+    /// the target is a fixed range (nothing to pick up); the user has
+    /// in-progress input (Compose, Search, or a commit message being typed)
+    /// or a Visual selection anchored to positions a rebuild would move; or
+    /// the branch/worktree switcher modal is open (rebuilding under an open
     /// modal is wasted work and could shift `panel_cursor`/`selected_file`
     /// mid-decision — the generation guard would keep it correct either
     /// way, but pausing avoids the churn).
@@ -114,7 +115,11 @@ impl App {
         }
         if matches!(
             self.mode,
-            Mode::Compose | Mode::Search | Mode::Visual { .. } | Mode::Switcher
+            Mode::Compose
+                | Mode::Search
+                | Mode::Visual { .. }
+                | Mode::Switcher
+                | Mode::CommitMessage
         ) {
             return;
         }
@@ -175,7 +180,11 @@ impl App {
             // a safe mode returns (matches the `maybe_auto_refresh` guard).
             if matches!(
                 self.mode,
-                Mode::Compose | Mode::Search | Mode::Visual { .. } | Mode::Switcher
+                Mode::Compose
+                    | Mode::Search
+                    | Mode::Visual { .. }
+                    | Mode::Switcher
+                    | Mode::CommitMessage
             ) {
                 continue;
             }

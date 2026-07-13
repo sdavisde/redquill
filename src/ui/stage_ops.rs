@@ -7,6 +7,7 @@
 //! have staged changes.
 
 use std::collections::HashMap;
+use std::process::Command;
 
 use thiserror::Error;
 
@@ -107,6 +108,18 @@ pub trait StageOps {
         let _ = name;
         Err(GitError::Parse("branch switch unavailable".into()))
     }
+    /// Builds the `git commit -m <message>` [`Command`] the commit gesture
+    /// (spec 04) spawns on the background poller — returned as a `Command`
+    /// rather than run here so the caller can execute it off the render
+    /// thread (see [`crate::git::commit_command`] for the fixed-argv
+    /// contract). The default returns `None`: backend-less contexts and
+    /// fakes that don't opt in degrade to a footer message, and a fake *can*
+    /// opt in with a synthetic command (e.g. `true`/`false`) to drive the
+    /// full spawn → poll → command-log pipeline without git.
+    fn commit_command(&self, message: &str) -> Option<Command> {
+        let _ = message;
+        None
+    }
 }
 
 impl StageOps for GitRunner {
@@ -164,6 +177,10 @@ impl StageOps for GitRunner {
 
     fn switch_branch(&self, name: &str) -> Result<(), GitError> {
         GitRunner::switch_branch(self, name)
+    }
+
+    fn commit_command(&self, message: &str) -> Option<Command> {
+        Some(crate::git::commit_command(message, self.root()))
     }
 
     fn async_review_builder(&self) -> Option<AsyncReviewBuilder> {

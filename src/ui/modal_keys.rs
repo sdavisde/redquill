@@ -574,6 +574,62 @@ pub(super) const COMPOSE_HINTS: &[ModalBinding<()>] = &[
     },
 ];
 
+// -- Commit-message modal (hint-only) ----------------------------------------
+
+/// Commit-message control keys (spec 04), for the help overlay and footer
+/// strip. Like Compose, the modal is free-text input (printable chars
+/// insert), so [`super::modes::handle_commit_message_key`] keeps a
+/// hand-written match; this table documents the non-text keys and the drift
+/// cross-check drives them through that handler.
+pub(super) const COMMIT_MESSAGE_HINTS: &[ModalBinding<()>] = &[
+    ModalBinding {
+        label: "Enter",
+        description: "Commit staged changes with this message",
+        keys: &[ModalKey::plain(KeyCode::Enter)],
+        action: (),
+        footer: Some(FooterHint {
+            rank: 1,
+            label: "commit",
+        }),
+    },
+    ModalBinding {
+        label: "Esc",
+        description: "Cancel back to the git panel",
+        keys: &[ModalKey::plain(KeyCode::Esc)],
+        action: (),
+        footer: Some(FooterHint {
+            rank: 2,
+            label: "cancel",
+        }),
+    },
+    ModalBinding {
+        label: "Ctrl-j",
+        description: "Insert newline (message body)",
+        keys: &[ModalKey::ctrl(KeyCode::Char('j'))],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Backspace",
+        description: "Delete character",
+        keys: &[ModalKey::plain(KeyCode::Backspace)],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Left/Right/Up/Down",
+        description: "Move within text",
+        keys: &[
+            ModalKey::plain(KeyCode::Left),
+            ModalKey::plain(KeyCode::Right),
+            ModalKey::plain(KeyCode::Up),
+            ModalKey::plain(KeyCode::Down),
+        ],
+        action: (),
+        footer: None,
+    },
+];
+
 // -- Search input (hint-only) ----------------------------------------------
 
 /// Search-input control keys, for the help overlay only. Like Compose, Search
@@ -1101,6 +1157,96 @@ index 111..222 100644
         }
     }
 
+    /// An `App` mid-commit-message with a three-line draft and the cursor at
+    /// the middle of the middle line, so *every* documented control key
+    /// produces an observable state change. No git backend is attached, so
+    /// `Enter` degrades to a footer message (still observable) rather than
+    /// spawning git.
+    fn commit_message_app() -> App {
+        use crate::ui::commit_message::CommitMessageState;
+        let mut app = app();
+        app.staged = vec![StagedFile {
+            path: "src/main.rs".to_string(),
+            letter: 'M',
+        }];
+        app.mode = Mode::Panel { cursor: 0 };
+        app.apply(crate::ui::Action::CommitStaged);
+        assert_eq!(app.mode, Mode::CommitMessage, "fixture must open the modal");
+        let state: &mut CommitMessageState = app.commit_message.as_mut().unwrap();
+        state.buffer = compose::TextBuffer::from_str("ab\ncd\nef");
+        state.buffer.cursor_row = 1;
+        state.buffer.cursor_col = 1;
+        app
+    }
+
+    /// Everything a commit-message control key could observably change:
+    /// the mode (Esc/Enter), the draft buffer (editing keys), and the footer
+    /// message (Enter's no-backend rejection).
+    fn commit_message_snapshot(app: &App) -> (Mode, Option<compose::TextBuffer>, Option<String>) {
+        (
+            app.mode,
+            app.commit_message.as_ref().map(|c| c.buffer.clone()),
+            app.status_message.clone(),
+        )
+    }
+
+    #[test]
+    fn every_commit_message_hint_key_is_consumed_by_the_handler() {
+        use crate::ui::modes::handle_commit_message_key;
+        for binding in COMMIT_MESSAGE_HINTS {
+            for key in binding.keys {
+                let mut app = commit_message_app();
+                let before = commit_message_snapshot(&app);
+                handle_commit_message_key(&mut app, key.event());
+                assert_ne!(
+                    before,
+                    commit_message_snapshot(&app),
+                    "Commit message {}: documented key must be consumed by handle_commit_message_key",
+                    binding.label
+                );
+            }
+        }
+    }
+
+    /// Control keys the commit-message hint table doesn't document must do
+    /// nothing — the reverse drift check: a key added to
+    /// `handle_commit_message_key` without a table row fails here. Printable
+    /// chars are exempt (free-text input).
+    #[test]
+    fn commit_message_handler_ignores_control_keys_absent_from_its_table() {
+        use crate::ui::modes::handle_commit_message_key;
+        let mut universe: Vec<KeyEvent> = [
+            KeyCode::Home,
+            KeyCode::End,
+            KeyCode::PageUp,
+            KeyCode::PageDown,
+            KeyCode::Tab,
+            KeyCode::BackTab,
+            KeyCode::Delete,
+            KeyCode::Insert,
+            KeyCode::F(1),
+        ]
+        .into_iter()
+        .map(|code| KeyEvent::new(code, KeyModifiers::NONE))
+        .collect();
+        for c in 'a'..='z' {
+            universe.push(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL));
+        }
+        for ev in universe {
+            if resolve(COMMIT_MESSAGE_HINTS, ev).is_some() {
+                continue; // documented in the table; covered above
+            }
+            let mut app = commit_message_app();
+            let before = commit_message_snapshot(&app);
+            handle_commit_message_key(&mut app, ev);
+            assert_eq!(
+                before,
+                commit_message_snapshot(&app),
+                "handle_commit_message_key consumed {ev:?}, which the commit-message hint table doesn't document"
+            );
+        }
+    }
+
     /// An `App` mid-Search with a non-empty pattern buffer, so every
     /// documented control key produces an observable state change.
     fn search_app() -> App {
@@ -1182,5 +1328,6 @@ index 111..222 100644
         assert!(resolve(SEARCH_HINTS, ev).is_none());
         assert!(resolve(SWITCHER_KEYS, ev).is_none());
         assert!(resolve(HELP_SEARCH_HINTS, ev).is_none());
+        assert!(resolve(COMMIT_MESSAGE_HINTS, ev).is_none());
     }
 }

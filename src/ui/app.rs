@@ -14,13 +14,15 @@ use crate::annotate::{AnnotationStore, Target};
 use crate::annotate::Side;
 use crate::diff::FileDiff;
 use crate::git::{
-    BranchStatus, CommitSummary, DiffTarget, RawFilePatch, RemoteOp, StashEntry, remote_command,
+    BranchStatus, CommitSummary, DiffTarget, RawFilePatch, RemoteOp, StashEntry,
+    commit_command_line, remote_command,
 };
 use crate::highlight::Highlighter;
 use crate::lsp::RequestId;
 
 use super::background::{BackgroundTasks, CommandOutcome, TaskId, run_command};
 use super::command_log::{CommandLog, CommandLogEntry};
+use super::commit_message::CommitMessageState;
 use super::compose::ComposeState;
 use super::diff_view_state::DiffViewState;
 use super::keymap::Action;
@@ -65,6 +67,8 @@ pub enum Mode {
     Peek,
     /// The branch/worktree switcher modal (`b`, panel scope) is open.
     Switcher,
+    /// The commit-message modal (`c`, panel scope, spec 04) is open.
+    CommitMessage,
 }
 
 /// The TUI's full state: the per-view diff state (files, selection, rows,
@@ -104,6 +108,9 @@ pub struct App {
     pub mode: Mode,
     /// The Compose modal's state, when `mode == Mode::Compose`.
     pub compose: Option<ComposeState>,
+    /// The commit-message modal's state, when `mode == Mode::CommitMessage`
+    /// (spec 04; see [`super::commit_message`]).
+    pub commit_message: Option<CommitMessageState>,
     /// The focused row index into `annotations` (insertion order) in the
     /// annotation list panel.
     pub list_cursor: usize,
@@ -215,21 +222,24 @@ pub struct App {
 }
 
 /// Which mutating background git operation is in flight (see
-/// [`InFlightGitOp`]): currently one of the three sanctioned remote ops. A
-/// closed enum so a new operation can't be added without updating
-/// [`GitOpKind::label`].
+/// [`InFlightGitOp`]): one of the three sanctioned remote ops, or a commit
+/// (spec 04, `docs/specs/04-spec-commit-staged.md`). A closed enum so a new
+/// operation can't be added without updating [`GitOpKind::label`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum GitOpKind {
     /// A fetch/pull/push.
     Remote(RemoteOp),
+    /// `git commit -m <message>`.
+    Commit,
 }
 
 impl GitOpKind {
     /// A short label for the running indicator and completion footer
-    /// (`"fetch"`, `"pull"`, `"push"`).
+    /// (`"fetch"`, `"pull"`, `"push"`, `"commit"`).
     pub(super) fn label(self) -> &'static str {
         match self {
             GitOpKind::Remote(op) => op.label(),
+            GitOpKind::Commit => "commit",
         }
     }
 }
@@ -272,6 +282,7 @@ impl App {
             annotations,
             mode: Mode::Normal,
             compose: None,
+            commit_message: None,
             list_cursor: 0,
             patches,
             target: DiffTarget::WorkingTree,
@@ -375,15 +386,19 @@ impl App {
     }
 
     /// Whether a keyboard-capturing overlay is currently up: the help overlay
-    /// (`help_open`), the Compose modal, the LSP peek overlay, or the
-    /// branch/worktree switcher modal. While one is, it shadows the diff
-    /// keymap and `q` is inert — an open overlay never quits the app. A
-    /// single predicate so this "is an overlay up?" check, otherwise spread
-    /// across `mode` and `help_open`, can't drift between call sites. The
-    /// command-log pane is deliberately excluded: it is a bottom pane, not a
-    /// full-screen overlay, and never captures `q`.
+    /// (`help_open`), the Compose modal, the LSP peek overlay, the
+    /// branch/worktree switcher modal, or the commit-message modal. While
+    /// one is, it shadows the diff keymap and `q` is inert — an open overlay
+    /// never quits the app. A single predicate so this "is an overlay up?"
+    /// check, otherwise spread across `mode` and `help_open`, can't drift
+    /// between call sites. The command-log pane is deliberately excluded: it
+    /// is a bottom pane, not a full-screen overlay, and never captures `q`.
     pub(super) fn overlay_active(&self) -> bool {
-        self.help_open || matches!(self.mode, Mode::Compose | Mode::Peek | Mode::Switcher)
+        self.help_open
+            || matches!(
+                self.mode,
+                Mode::Compose | Mode::Peek | Mode::Switcher | Mode::CommitMessage
+            )
     }
 
     /// Selects the file whose path is `path`: expands its section if
@@ -487,6 +502,7 @@ impl App {
             Action::RemoteFetch => self.request_remote_op(RemoteOp::Fetch),
             Action::RemotePull => self.request_remote_op(RemoteOp::Pull),
             Action::RemotePush => self.request_remote_op(RemoteOp::Push),
+            Action::CommitStaged => self.open_commit_message(),
             Action::OpenSwitcher => self.open_switcher(),
             Action::ToggleCommandLog => self.toggle_command_log(),
             Action::Refresh => self.manual_refresh(),
@@ -729,11 +745,50 @@ impl App {
         self.set_status_message(format!("{}\u{2026}", op.label()));
     }
 
-    /// Drains completed mutating background git ops (once per event-loop
-    /// tick, alongside [`super::code_intel::poll`]). For the in-flight op's
-    /// result it appends a [`CommandLogEntry`], clears the guard, re-runs the
-    /// full refresh (diff/status plus branch/stash reads), and sets a
-    /// success/failure footer summary. Foreign or stale task ids are ignored.
+    /// Requests a commit of the currently staged changes (spec 04 Unit 2):
+    /// `git commit -m <message>`, spawned on the same background pool and
+    /// single-flight guard [`App::request_remote_op`] uses (see
+    /// [`GitOpKind`]) — rejected with a footer message while a remote op or
+    /// another commit is already in flight. Without a git backend the
+    /// request degrades to a message, like every other git-backed gesture.
+    /// Returns whether the commit was actually spawned, so the modal's
+    /// submit handler can keep the typed message on a rejection. Callers
+    /// validate the message is non-blank first (see
+    /// [`App::submit_commit_message`]).
+    ///
+    /// The child command is a fixed argv (`["commit", "-m", message]`) with
+    /// `GIT_TERMINAL_PROMPT=0`, built behind the [`StageOps`] seam (see
+    /// [`crate::git::commit_command`]): the message is passed verbatim
+    /// (newlines preserved) as a single argv element — no shell — and no
+    /// flag beyond `-m` is ever possible, so hooks run normally (never
+    /// `--no-verify`) and the user's git config (signing, sign-off) applies.
+    pub(super) fn request_commit(&mut self, message: &str) -> bool {
+        if let Some(label) = self.running_op_label() {
+            self.set_status_message(format!("{label} already running — wait for it to finish"));
+            return false;
+        }
+        let Some(mut command) = self.stage_ops().and_then(|ops| ops.commit_command(message)) else {
+            self.set_status_message("commit unavailable (no git backend)");
+            return false;
+        };
+        let id = self.background.spawn(move || run_command(&mut command));
+        self.git_op = Some(InFlightGitOp {
+            id,
+            kind: GitOpKind::Commit,
+            command_line: commit_command_line(message),
+        });
+        self.set_status_message("commit\u{2026}");
+        true
+    }
+
+    /// Drains completed mutating background git ops — remote ops and commits
+    /// alike (once per event-loop tick, alongside
+    /// [`super::code_intel::poll`]). For the in-flight op's result it appends
+    /// a [`CommandLogEntry`], clears the guard, re-runs the full refresh
+    /// (diff/status plus branch/stash reads — which for a successful commit
+    /// also moves the committed files out of CHANGES and updates the
+    /// last-commit line and ahead/behind counts), and sets a success/failure
+    /// footer summary. Foreign or stale task ids are ignored.
     pub(super) fn poll_git_ops(&mut self) {
         let done = self.background.poll();
         for (id, result) in done {

@@ -100,6 +100,9 @@ pub enum Action {
     RemotePull,
     /// Push to the upstream remote on a background thread (panel scope).
     RemotePush,
+    /// Open the commit-message modal for the staged changes (panel scope,
+    /// spec 04); a footer message when nothing is staged.
+    CommitStaged,
     /// Open the branch/worktree switcher modal (panel scope).
     OpenSwitcher,
     /// Toggle the command-log pane (bound in both scopes).
@@ -435,7 +438,7 @@ impl Keymap {
                     FocusGitPanel,
                     "Close git panel",
                 )
-                .footer(6, "close"),
+                .footer(7, "close"),
                 p(
                     KeySeq::one(Char('j'), none),
                     PanelCursorDown,
@@ -462,6 +465,15 @@ impl Keymap {
                 .footer(3, "fetch"),
                 p(KeySeq::one(Char('p'), none), RemotePull, "Pull from remote").footer(4, "pull"),
                 p(KeySeq::one(Char('P'), none), RemotePush, "Push to remote").footer(5, "push"),
+                // Plain `c` is free in panel scope: `Compose` binds it in
+                // diff scope only, so the same physical key can commit here
+                // (spec 04) without touching the annotate gesture.
+                p(
+                    KeySeq::one(Char('c'), none),
+                    CommitStaged,
+                    "Commit staged changes",
+                )
+                .footer(6, "commit"),
                 // Wired here specifically so the git panel's footer strip can
                 // promise a working `? help` escape hatch (see `super::footer`):
                 // before this row, `?` was diff-scope only and did nothing while
@@ -1115,6 +1127,41 @@ mod tests {
         let b = key(KeyCode::Char('b'), KeyModifiers::NONE);
         assert_eq!(km.lookup_in(Scope::Panel, b), Some(Action::OpenSwitcher));
         assert_eq!(km.lookup_in(Scope::Diff, b), Some(Action::WordBackward));
+    }
+
+    // -- Commit staged (spec 04) ----------------------------------------------
+
+    /// Plain `c` commits only in panel scope; in diff scope it stays bound
+    /// to `Compose` (annotate), unaffected — the scope dimension keeps the
+    /// same physical key meaning different things per pane.
+    #[test]
+    fn c_commits_only_in_panel_scope_and_still_composes_in_diff_scope() {
+        let km = Keymap::default_map();
+        let c = key(KeyCode::Char('c'), KeyModifiers::NONE);
+        assert_eq!(km.lookup_in(Scope::Panel, c), Some(Action::CommitStaged));
+        assert_eq!(km.lookup_in(Scope::Diff, c), Some(Action::Compose));
+        // Ctrl-c stays the quit-discard chord in both scopes, undisturbed by
+        // the new plain-`c` panel row.
+        let ctrl_c = key(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(
+            km.lookup_in(Scope::Panel, ctrl_c),
+            Some(Action::QuitDiscard)
+        );
+        assert_eq!(km.lookup_in(Scope::Diff, ctrl_c), Some(Action::QuitDiscard));
+    }
+
+    /// The `c commit` hint is promoted into the panel footer strip, matching
+    /// the README's git-panel table.
+    #[test]
+    fn commit_staged_is_promoted_into_the_panel_footer() {
+        let km = Keymap::default_map();
+        let row = km
+            .bindings()
+            .iter()
+            .find(|b| b.scope == Scope::Panel && b.action == Action::CommitStaged)
+            .expect("panel-scope CommitStaged binding must exist");
+        assert_eq!(row.key_label(), "c");
+        assert_eq!(row.footer.map(|h| h.label), Some("commit"));
     }
 
     /// `@` toggles the command log from *both* scopes (it is a view toggle,

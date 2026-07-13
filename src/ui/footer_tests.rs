@@ -113,7 +113,7 @@ fn panel_mode_hints_match_the_curated_list_in_order() {
     let entries = panel_hints(&km);
     assert_eq!(
         keys(&entries),
-        vec!["j/k", "Enter", "f", "p", "P", "`", "?"]
+        vec!["j/k", "Enter", "f", "p", "P", "c", "`", "?"]
     );
     assert_eq!(
         labels(&entries),
@@ -123,6 +123,7 @@ fn panel_mode_hints_match_the_curated_list_in_order() {
             "fetch",
             "pull",
             "push",
+            "commit",
             "close",
             "help"
         ]

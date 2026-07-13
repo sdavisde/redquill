@@ -17,7 +17,8 @@ impl App {
             | Mode::Panel { .. }
             | Mode::Search
             | Mode::Peek
-            | Mode::Switcher => {}
+            | Mode::Switcher
+            | Mode::CommitMessage => {}
             Mode::Normal | Mode::Visual { .. } => {
                 if !self.annotations.is_empty() {
                     self.list_cursor = self.list_cursor.min(self.annotations.len() - 1);

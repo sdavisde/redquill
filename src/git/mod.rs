@@ -9,7 +9,10 @@
 //!   into [`BranchStatus`] (name/short-oid, upstream, ahead/behind), and
 //!   `git for-each-ref refs/heads` into the full [`LocalBranch`] list.
 //! - [`commit`] parses `git log -1 --format=<COMMIT_SUMMARY_FORMAT>` into a
-//!   [`CommitSummary`] (abbreviated hash + subject) for the tip commit.
+//!   [`CommitSummary`] (abbreviated hash + subject) for the tip commit, and
+//!   builds the spec 04 write command (`commit -m <message>`, the message
+//!   verbatim as one argv element, `GIT_TERMINAL_PROMPT=0`, never any flag
+//!   beyond `-m`).
 //! - [`stash`] parses `git stash list --format=<STASH_LIST_FORMAT>` into
 //!   [`StashEntry`] records.
 //! - [`worktree`] parses `git worktree list --porcelain` into
@@ -36,7 +39,9 @@ mod worktree;
 pub use branch::{
     BRANCH_LIST_FORMAT, BranchStatus, LocalBranch, parse_branch_headers, parse_branch_list,
 };
-pub use commit::{COMMIT_SUMMARY_FORMAT, CommitSummary, parse_commit_summary};
+pub use commit::{
+    COMMIT_SUMMARY_FORMAT, CommitSummary, commit_command, commit_command_line, parse_commit_summary,
+};
 pub use diff::{DiffTarget, RawFilePatch, split_patches};
 pub use error::GitError;
 pub use remote::{RemoteOp, remote_command};

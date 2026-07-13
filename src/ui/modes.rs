@@ -67,6 +67,59 @@ pub(super) fn handle_compose_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// Handles one key event while [`super::Mode::CommitMessage`] is active
+/// (spec 04): printable chars insert, Backspace deletes, arrow keys move
+/// within the text, `Ctrl-j` inserts a newline (message body), `Enter`
+/// submits the commit, `Esc` cancels back to the git panel. Mirrors
+/// [`handle_compose_key`] minus the classification cycling — the buffer is a
+/// plain commit message. `q` isn't a control key here, so it types a `q`
+/// rather than quitting (an open overlay never quits the app). Bypasses the
+/// [`super::Keymap`] table entirely; the documented keys live in
+/// [`modal_keys::COMMIT_MESSAGE_HINTS`], drift-tested in both directions.
+pub(super) fn handle_commit_message_key(app: &mut App, key: KeyEvent) {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Esc => app.close_commit_message(),
+        KeyCode::Enter => app.submit_commit_message(),
+        KeyCode::Char('j') if ctrl => {
+            if let Some(state) = app.commit_message.as_mut() {
+                state.buffer.newline();
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(state) = app.commit_message.as_mut() {
+                state.buffer.backspace();
+            }
+        }
+        KeyCode::Left => {
+            if let Some(state) = app.commit_message.as_mut() {
+                state.buffer.move_left();
+            }
+        }
+        KeyCode::Right => {
+            if let Some(state) = app.commit_message.as_mut() {
+                state.buffer.move_right();
+            }
+        }
+        KeyCode::Up => {
+            if let Some(state) = app.commit_message.as_mut() {
+                state.buffer.move_up();
+            }
+        }
+        KeyCode::Down => {
+            if let Some(state) = app.commit_message.as_mut() {
+                state.buffer.move_down();
+            }
+        }
+        KeyCode::Char(c) if !ctrl => {
+            if let Some(state) = app.commit_message.as_mut() {
+                state.buffer.insert_char(c);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Handles one key event while [`super::Mode::List`] is active: `j`/`k` move
 /// focus, `Enter` jumps to the annotation and closes the panel, `e` edits
 /// it, `d` deletes it, `a`/`Esc` close the panel. Dispatch is driven by
@@ -299,5 +352,38 @@ index 111..222 100644
             matches!(app.mode, Mode::Panel { .. }),
             "Esc still closes the switcher modal, back to the panel"
         );
+    }
+
+    /// An open overlay never quits the app: in the commit-message modal `q`
+    /// is free-text input — it types a `q` into the draft rather than
+    /// quitting — and Esc closes back to the git panel at its prior cursor
+    /// row, discarding the draft.
+    #[test]
+    fn commit_message_q_types_and_esc_closes_back_to_panel() {
+        use crate::ui::commit_message::CommitMessageState;
+        let mut app = App::new(vec![sample_file()]);
+        app.commit_message = Some(CommitMessageState::new(0));
+        app.mode = Mode::CommitMessage;
+        handle_commit_message_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        );
+        assert_eq!(
+            app.mode,
+            Mode::CommitMessage,
+            "q must not close the commit-message modal"
+        );
+        assert_eq!(
+            app.commit_message.as_ref().unwrap().buffer.text(),
+            "q",
+            "q is ordinary text input in the modal"
+        );
+        handle_commit_message_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(
+            app.mode,
+            Mode::Panel { cursor: 0 },
+            "Esc closes the modal back to the panel"
+        );
+        assert!(app.commit_message.is_none(), "the draft is discarded");
     }
 }

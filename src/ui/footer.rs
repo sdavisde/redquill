@@ -31,7 +31,8 @@ use crossterm::event::KeyEvent;
 use super::app::{App, Mode};
 use super::keymap::{Action, FooterHint, Keymap, Scope};
 use super::modal_keys::{
-    COMPOSE_HINTS, HELP_KEYS, LIST_KEYS, ModalBinding, PEEK_KEYS, STAGING_KEYS, SWITCHER_KEYS,
+    COMMIT_MESSAGE_HINTS, COMPOSE_HINTS, HELP_KEYS, LIST_KEYS, ModalBinding, PEEK_KEYS,
+    STAGING_KEYS, SWITCHER_KEYS,
 };
 use super::theme::Theme;
 
@@ -264,6 +265,7 @@ pub(super) fn build_hints(
         Mode::Peek => modal_hints(PEEK_KEYS),
         Mode::Switcher => modal_hints(SWITCHER_KEYS),
         Mode::Compose => modal_hints(COMPOSE_HINTS),
+        Mode::CommitMessage => modal_hints(COMMIT_MESSAGE_HINTS),
         // The search input occupies the footer itself; no hint strip.
         Mode::Search => Vec::new(),
     }

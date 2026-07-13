@@ -785,6 +785,7 @@ enum StageCall {
     Apply(String),
     Unapply(String),
     SwitchBranch(String),
+    Commit(String),
 }
 
 /// A recording [`StageOps`] fake: staging calls are appended to a
@@ -815,6 +816,11 @@ struct FakeGit {
     // simulates a `git switch` rejection (dirty tree, checked out
     // elsewhere, ...) with that stderr text.
     switch_branch_error: Option<String>,
+    // `None` (the default) mirrors the `StageOps` default: commit is
+    // unavailable. `Some(program)` opts in with a synthetic child command
+    // (e.g. `"true"`/`"false"`), driving the real spawn → poll → command-log
+    // pipeline without git.
+    commit_program: Option<String>,
 }
 
 impl FakeGit {
@@ -913,6 +919,13 @@ impl StageOps for FakeGit {
                 stderr: stderr.clone(),
             }),
         }
+    }
+
+    fn commit_command(&self, message: &str) -> Option<std::process::Command> {
+        self.calls
+            .borrow_mut()
+            .push(StageCall::Commit(message.to_string()));
+        self.commit_program.as_ref().map(std::process::Command::new)
     }
 }
 
@@ -1485,6 +1498,186 @@ fn completed_remote_op_logs_and_refreshes_preserving_staged_and_annotations() {
     assert_eq!(app.staged.len(), 1);
     assert_eq!(app.staged[0].path, "a.rs");
     assert_eq!(app.annotations.len(), 1);
+}
+
+// -- Commit staged (spec 04) --------------------------------------------
+
+/// An `App` over a fake backend whose `commit_command` yields `program`
+/// as the synthetic child, with one staged file so the commit gesture is
+/// available.
+fn commit_app(program: &str) -> (App, Rc<RefCell<Vec<StageCall>>>) {
+    let p = raw_patch("a.rs", 1);
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let fake = FakeGit {
+        calls: Rc::clone(&calls),
+        diff: vec![p.clone()],
+        status: vec![staged_entry("a.rs")],
+        commit_program: Some(program.to_string()),
+        ..FakeGit::default()
+    };
+    let snapshot = ReviewSnapshot {
+        files: vec![FileDiff::from_patch(&p).unwrap()],
+        patches: vec![Some(p)],
+        staged: vec![crate::ui::StagedFile {
+            path: "a.rs".to_string(),
+            letter: 'M',
+        }],
+        staged_states: HashMap::new(),
+    };
+    let app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
+    (app, calls)
+}
+
+/// A commit request is rejected while a remote op is in flight — the same
+/// single guard, no queueing, nothing spawned, and the message the modal
+/// holds isn't consumed (`request_commit` reports the rejection).
+#[test]
+fn commit_rejected_while_a_remote_op_is_in_flight() {
+    let (mut app, calls) = commit_app("true");
+    app.git_op = Some(in_flight_fetch(TaskId(3)));
+
+    assert!(!app.request_commit("fix: parser"));
+
+    assert_eq!(
+        app.git_op.as_ref().map(|o| o.kind),
+        Some(GitOpKind::Remote(RemoteOp::Fetch)),
+        "the in-flight fetch is untouched"
+    );
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_some_and(|m| m.contains("already running")),
+        "got {:?}",
+        app.status_message
+    );
+    assert!(
+        !calls
+            .borrow()
+            .iter()
+            .any(|c| matches!(c, StageCall::Commit(_))),
+        "the rejected request must not reach the backend"
+    );
+}
+
+/// The reverse direction of the single-flight invariant: a remote op is
+/// rejected while a commit is in flight.
+#[test]
+fn remote_op_rejected_while_a_commit_is_in_flight() {
+    let (mut app, _calls) = commit_app("true");
+    app.repo_root = Some(std::path::PathBuf::from("/tmp"));
+    app.git_op = Some(InFlightGitOp {
+        id: TaskId(9),
+        kind: GitOpKind::Commit,
+        command_line: "git commit -m \"x\"".to_string(),
+    });
+
+    app.request_remote_op(RemoteOp::Push);
+
+    assert_eq!(
+        app.git_op.as_ref().map(|o| o.kind),
+        Some(GitOpKind::Commit),
+        "the in-flight commit is untouched"
+    );
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("commit already running — wait for it to finish")
+    );
+}
+
+/// A branch-switch attempt is likewise blocked while a commit is in flight
+/// (both mutate the tree state the commit is mid-flight against).
+#[test]
+fn switcher_confirm_rejected_while_a_commit_is_in_flight() {
+    let fake = FakeGit {
+        branches: Some(two_branches()),
+        worktrees: Some(vec![]),
+        ..FakeGit::default()
+    };
+    let mut app = panel_app_with_git(fake);
+    app.apply(Action::FocusGitPanel);
+    app.apply(Action::OpenSwitcher);
+    app.switcher.as_mut().unwrap().move_down(); // -> feature, a real attempt
+    app.git_op = Some(InFlightGitOp {
+        id: TaskId(4),
+        kind: GitOpKind::Commit,
+        command_line: "git commit -m \"x\"".to_string(),
+    });
+
+    app.switcher_confirm();
+
+    assert_eq!(app.mode, Mode::Switcher, "modal stays open");
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_some_and(|m| m.contains("commit is running")),
+        "got {:?}",
+        app.status_message
+    );
+}
+
+/// The full commit pipeline over the trait seam with a synthetic successful
+/// child: the backend receives the message verbatim (newlines included),
+/// the guard is set with the commit label and released on drain, the
+/// command log gains a `git commit -m ...` entry, and the refresh re-reads
+/// the review.
+#[test]
+fn completed_commit_logs_and_refreshes_through_the_fake_backend() {
+    use std::time::{Duration, Instant};
+
+    let (mut app, calls) = commit_app("true");
+    let message = "feat: subject\n\nbody line";
+
+    assert!(app.request_commit(message));
+    assert_eq!(app.running_op_label(), Some("commit"));
+
+    // The backend saw the message verbatim, newlines preserved.
+    assert!(
+        calls
+            .borrow()
+            .iter()
+            .any(|c| matches!(c, StageCall::Commit(m) if m == message)),
+        "backend must receive the exact message"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.command_log.is_empty() && Instant::now() < deadline {
+        app.poll_git_ops();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    assert!(app.git_op.is_none(), "the guard is released");
+    let entry = app.command_log.entries().next().unwrap();
+    assert_eq!(
+        entry.command_line,
+        "git commit -m \"feat: subject\\n\\nbody line\""
+    );
+    assert!(entry.success);
+    assert_eq!(app.status_message.as_deref(), Some("commit succeeded"));
+}
+
+/// A failing commit (hook rejection, signing failure, ...) lands in the
+/// command log with its exit status and points at the log from the footer;
+/// no crash, guard released.
+#[test]
+fn failed_commit_reports_via_footer_and_command_log() {
+    use std::time::{Duration, Instant};
+
+    let (mut app, _calls) = commit_app("false");
+    assert!(app.request_commit("fix: parser"));
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.command_log.is_empty() && Instant::now() < deadline {
+        app.poll_git_ops();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    assert!(app.git_op.is_none(), "the guard is released");
+    let entry = app.command_log.entries().next().unwrap();
+    assert!(!entry.success);
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("commit failed \u{2014} see command log (@)")
+    );
 }
 
 #[test]

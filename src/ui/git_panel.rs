@@ -373,7 +373,8 @@ impl App {
             | Mode::Staging
             | Mode::Search
             | Mode::Peek
-            | Mode::Switcher => {}
+            | Mode::Switcher
+            | Mode::CommitMessage => {}
             Mode::Normal | Mode::Visual { .. } => {
                 self.mode = Mode::Panel { cursor: 0 };
                 self.panel_follow();
