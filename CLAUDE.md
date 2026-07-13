@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Operational guide for agents working in this repo. Read README.md first — it owns the vision, feature scope, keybinding map, and design principles. This file covers how to work here; don't duplicate the README into it.
+Operational guide for agents working in this repo. Read README.md first — it owns the vision, feature scope, and design principles. This file covers how to work here; don't duplicate the README into it.
 
 
 ## Contributing
@@ -70,5 +70,5 @@ Project-specific rules on top of it:
 - **What an agent working in this repo may run during a task** is narrower than the above: staging/unstaging only. Agents must not fetch, pull, or push on the user's behalf, and must not run the product's commit operation against the user's repo state, even though the product offers those operations to its human user through the git panel — an agent-run task is not the same context as a user pressing a panel keybind. (Committing an agent's own task work under the commit gates is a separate, unchanged workflow.)
 - Branch/worktree read models and a `git switch` runner exist in `src/git/` (commit `9c98d97`) as the git layer for the ratified branch/worktree switcher — see spec 03, docs/specs/03-spec-branch-worktree-switcher.md — implemented on the `worktree-git-switcher` branch.
 - Don't add dependencies casually — this ships as one lean static binary. Justify anything beyond the stack above in the PR/commit description.
-- Don't invent new keybindings that conflict with the README's map; propose changes to the map in README.md itself.
+- Don't invent new keybindings that conflict with the shared keymap tables in `src/ui/modal_keys.rs` (defaults in `src/ui/keymap.rs`); propose changes there so the `?` help overlay stays in sync.
 - If a task seems to require a web view, daemon, or network call, stop and ask — it's out of scope by design.
