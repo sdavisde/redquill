@@ -32,6 +32,8 @@ cargo fmt --check
 
 All four of build/test/clippy/fmt must pass before considering any task done.
 
+Git hooks are installed automatically by `cargo-husky` the first time `cargo test` builds dev-dependencies (scripts live in `.cargo-husky/hooks/`, checked into the repo). `pre-commit` runs `cargo fmt --check`; `pre-push` runs all four gates (build, test, clippy, fmt).
+
 ## Architecture map
 
 Keep these boundaries clean; they're the seams for testing and for future work:

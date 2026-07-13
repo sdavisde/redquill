@@ -1,0 +1,32 @@
+#!/bin/sh
+# Installed by cargo-husky (see Cargo.toml [dev-dependencies.cargo-husky]).
+# Runs the full commit gate before allowing a push: build, test, clippy, fmt.
+set -e
+
+echo "[pre-push] Running full gate before push (build, test, clippy, fmt)..."
+
+echo "[pre-push] 1/4 cargo build"
+if ! cargo build; then
+    echo "[pre-push] FAILED: cargo build" >&2
+    exit 1
+fi
+
+echo "[pre-push] 2/4 cargo test"
+if ! cargo test; then
+    echo "[pre-push] FAILED: cargo test" >&2
+    exit 1
+fi
+
+echo "[pre-push] 3/4 cargo clippy --all-targets -- -D warnings"
+if ! cargo clippy --all-targets -- -D warnings; then
+    echo "[pre-push] FAILED: cargo clippy --all-targets -- -D warnings" >&2
+    exit 1
+fi
+
+echo "[pre-push] 4/4 cargo fmt --check"
+if ! cargo fmt --check; then
+    echo "[pre-push] FAILED: cargo fmt --check (run 'cargo fmt' to fix)" >&2
+    exit 1
+fi
+
+echo "[pre-push] All gates passed."

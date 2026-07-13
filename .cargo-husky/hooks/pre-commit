@@ -1,0 +1,10 @@
+#!/bin/sh
+# Installed by cargo-husky (see Cargo.toml [dev-dependencies.cargo-husky]).
+# Fast local gate: formatting only. Full gate (build/test/clippy/fmt) runs on pre-push.
+set -e
+
+echo "[pre-commit] cargo fmt --check"
+if ! cargo fmt --check; then
+    echo "[pre-commit] FAILED: formatting check. Run 'cargo fmt' and try again." >&2
+    exit 1
+fi
