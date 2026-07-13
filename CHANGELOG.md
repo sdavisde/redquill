@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.0](https://github.com/sdavisde/redquill/compare/v0.5.0...v0.6.0) (2026-07-13)
+
+
+### Features
+
+* **ui:** add scrolloff to line motions and reveal hunk/file jumps at viewport top ([b7bfb8c](https://github.com/sdavisde/redquill/commit/b7bfb8c566195b7dc693b12120b3ceee96cf3f47))
+* **ui:** blend cursor-row highlight with diff tints and bold gutter line numbers ([6119754](https://github.com/sdavisde/redquill/commit/6119754d3d23c712718b643e093803d9a5867cb7))
+* **ui:** commit staged changes from the git panel ([897a501](https://github.com/sdavisde/redquill/commit/897a50145bcfbd6ea818791c40af4267322aba04))
+
+
+### Bug Fixes
+
+* allow viewing files after they've been staged ([35177c3](https://github.com/sdavisde/redquill/commit/35177c387afd6b6b1610db945d28a3058fbf67d5))
+* **ui:** keep files in stable path order when staged ([3fcd923](https://github.com/sdavisde/redquill/commit/3fcd92389feed1e15023fab2349ee148cba2bbbf))
+
 ## [0.5.0](https://github.com/sdavisde/redquill/compare/v0.4.1...v0.5.0) (2026-07-12)
 
 
