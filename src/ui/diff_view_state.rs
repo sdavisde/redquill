@@ -23,6 +23,13 @@ use super::rows::{MIN_GUTTER_WIDTH, Row, anchor_row_index};
 /// degenerate before the first draw.
 const DEFAULT_VIEWPORT_HEIGHT: usize = 20;
 
+/// The context margin (vim's `scrolloff`): line motions keep this many rows
+/// visible beyond the cursor in the direction of travel, and structural
+/// jumps place the target header this many rows from the top of the
+/// viewport. Degrades toward zero on viewports too small to honor it (see
+/// [`DiffViewState::scroll_margin`]).
+const SCROLLOFF: usize = 3;
+
 /// The per-view state: the diffed files, which one is selected, the
 /// flattened row model for that file, cursor and scroll positions, and the
 /// layout choice. Owned by [`super::App`] as a single field; `App` delegates
@@ -171,42 +178,46 @@ impl DiffViewState {
         (self.viewport_height / 2).max(1)
     }
 
-    /// Moves the cursor down one addressable row, then scrolls to follow it.
+    /// Moves the cursor down one addressable row, then scrolls to follow it
+    /// with a [`SCROLLOFF`] context margin.
     pub fn cursor_down(&mut self) {
         if !self.rows.is_empty() {
             let target = (self.cursor + 1).min(self.max_cursor());
             self.cursor = self.nearest_addressable(target, true);
         }
-        self.ensure_visible();
+        self.ensure_visible_scrolloff();
     }
 
-    /// Moves the cursor up one addressable row, then scrolls to follow it.
+    /// Moves the cursor up one addressable row, then scrolls to follow it
+    /// with a [`SCROLLOFF`] context margin.
     pub fn cursor_up(&mut self) {
         if !self.rows.is_empty() {
             let target = self.cursor.saturating_sub(1);
             self.cursor = self.nearest_addressable(target, false);
         }
-        self.ensure_visible();
+        self.ensure_visible_scrolloff();
     }
 
-    /// Moves the cursor down half a viewport, then scrolls to follow it.
+    /// Moves the cursor down half a viewport, then scrolls to follow it
+    /// with a [`SCROLLOFF`] context margin.
     pub fn half_page_down(&mut self) {
         if !self.rows.is_empty() {
             let step = self.half_page();
             let target = (self.cursor + step).min(self.max_cursor());
             self.cursor = self.nearest_addressable(target, true);
         }
-        self.ensure_visible();
+        self.ensure_visible_scrolloff();
     }
 
-    /// Moves the cursor up half a viewport, then scrolls to follow it.
+    /// Moves the cursor up half a viewport, then scrolls to follow it
+    /// with a [`SCROLLOFF`] context margin.
     pub fn half_page_up(&mut self) {
         if !self.rows.is_empty() {
             let step = self.half_page();
             let target = self.cursor.saturating_sub(step);
             self.cursor = self.nearest_addressable(target, false);
         }
-        self.ensure_visible();
+        self.ensure_visible_scrolloff();
     }
 
     /// Jumps the cursor to the first addressable row (top of the buffer),
@@ -255,10 +266,12 @@ impl DiffViewState {
     }
 
     /// Scrolls just enough to keep the cursor inside `[scroll, scroll +
-    /// viewport_height)`, and re-derives [`DiffViewState::selected_file`]
-    /// from the cursor's owning file. Called at the end of every motion, so
-    /// the sidebar highlight and pane title always follow the cursor across
-    /// file boundaries.
+    /// viewport_height)` (a plain edge clamp, no context margin), and
+    /// re-derives [`DiffViewState::selected_file`] from the cursor's owning
+    /// file. Used by the buffer-extreme jumps and by owners that reposition
+    /// the cursor directly (anchor jumps, refresh clamping); line motions
+    /// use [`DiffViewState::ensure_visible_scrolloff`] and structural jumps
+    /// use [`DiffViewState::reveal_at_top`] instead.
     pub fn ensure_visible(&mut self) {
         self.selected_file = self.file_of_cursor();
         if self.rows.is_empty() {
@@ -272,6 +285,68 @@ impl DiffViewState {
         }
     }
 
+    /// The effective context margin: [`SCROLLOFF`], shrunk so that twice the
+    /// margin still fits strictly inside the viewport. This keeps the
+    /// top/bottom follow conditions disjoint (no oscillation) and degrades
+    /// to a plain edge clamp on tiny viewports.
+    fn scroll_margin(&self) -> usize {
+        SCROLLOFF.min(self.viewport_height.saturating_sub(1) / 2)
+    }
+
+    /// The largest useful scroll offset: the one that puts the last row on
+    /// the bottom line of the viewport. Zero when everything fits.
+    fn max_scroll(&self) -> usize {
+        self.rows.len().saturating_sub(self.viewport_height)
+    }
+
+    /// Like [`DiffViewState::ensure_visible`], but keeps a
+    /// [`SCROLLOFF`]-sized context margin between the cursor and the
+    /// viewport edge in the direction of travel, degrading gracefully at
+    /// the buffer's edges (scroll never underflows past the top or runs
+    /// past [`DiffViewState::max_scroll`]).
+    pub fn ensure_visible_scrolloff(&mut self) {
+        self.selected_file = self.file_of_cursor();
+        if self.rows.is_empty() {
+            self.scroll = 0;
+            return;
+        }
+        let margin = self.scroll_margin();
+        if self.cursor < self.scroll + margin {
+            self.scroll = self.cursor.saturating_sub(margin);
+        } else if self.cursor + margin >= self.scroll + self.viewport_height {
+            self.scroll = (self.cursor + margin + 1)
+                .saturating_sub(self.viewport_height)
+                .min(self.max_scroll());
+        }
+    }
+
+    /// The reveal policy for structural jumps (hunk/section): the cursor
+    /// sits on the target's header row and `span_end` is the exclusive end
+    /// of that hunk/section. If the header row and the first few body rows
+    /// below it — `min(remaining body rows, viewport_height / 2)` — are
+    /// already fully visible, the scroll is left alone; otherwise the view
+    /// scrolls so the header sits [`SCROLLOFF`] rows from the top of the
+    /// viewport (clamped at the buffer's edges). Also re-derives
+    /// [`DiffViewState::selected_file`], like every other motion clamp.
+    fn reveal_at_top(&mut self, span_end: usize) {
+        self.selected_file = self.file_of_cursor();
+        if self.rows.is_empty() {
+            self.scroll = 0;
+            return;
+        }
+        let body = span_end.saturating_sub(self.cursor + 1);
+        let context = body.min(self.viewport_height / 2);
+        let already_fine = self.cursor >= self.scroll
+            && self.cursor + context < self.scroll + self.viewport_height;
+        if already_fine {
+            return;
+        }
+        self.scroll = self
+            .cursor
+            .saturating_sub(self.scroll_margin())
+            .min(self.max_scroll());
+    }
+
     /// Row indices of every `HunkHeader` in `rows`.
     fn hunk_header_rows(rows: &[Row]) -> Vec<usize> {
         rows.iter()
@@ -280,48 +355,64 @@ impl DiffViewState {
             .collect()
     }
 
+    /// The exclusive end row of the hunk whose header row is `header`: the
+    /// next hunk header in the same file section (`next_header`, if any —
+    /// callers pass the following entry of the already-built header list),
+    /// capped by the owning section's end so a hunk never bleeds into the
+    /// next file.
+    fn hunk_span_end(&self, header: usize, next_header: Option<usize>) -> usize {
+        let file = self.file_of_row.get(header).copied().unwrap_or(0);
+        let (_, section_end) = self.section_span(file);
+        next_header.unwrap_or(usize::MAX).min(section_end)
+    }
+
     /// Jumps the cursor to the next hunk header after the cursor anywhere in
     /// the buffer — crossing into neighboring expanded files' hunks
     /// automatically, since the whole buffer's rows are already built (a
     /// collapsed file contributes no hunk headers, so it's skipped). A no-op
-    /// if there is no hunk after the cursor.
+    /// if there is no hunk after the cursor. The view reveals the target
+    /// hunk near the top of the viewport (see
+    /// [`DiffViewState::reveal_at_top`]).
     pub fn next_hunk(&mut self) {
-        if let Some(&next) = Self::hunk_header_rows(&self.rows)
-            .iter()
-            .find(|&&i| i > self.cursor)
-        {
-            self.cursor = next;
-            self.ensure_visible();
+        let headers = Self::hunk_header_rows(&self.rows);
+        if let Some(pos) = headers.iter().position(|&i| i > self.cursor) {
+            self.cursor = headers[pos];
+            let end = self.hunk_span_end(headers[pos], headers.get(pos + 1).copied());
+            self.reveal_at_top(end);
         }
     }
 
     /// Jumps the cursor to the previous hunk header before the cursor
     /// anywhere in the buffer, crossing file boundaries backward. A no-op if
-    /// there is no hunk before the cursor.
+    /// there is no hunk before the cursor. Same reveal policy as
+    /// [`DiffViewState::next_hunk`] — landing near the top with the hunk
+    /// body visible below is right for backward jumps too.
     pub fn prev_hunk(&mut self) {
-        if let Some(&prev) = Self::hunk_header_rows(&self.rows)
-            .iter()
-            .rev()
-            .find(|&&i| i < self.cursor)
-        {
-            self.cursor = prev;
-            self.ensure_visible();
+        let headers = Self::hunk_header_rows(&self.rows);
+        if let Some(pos) = headers.iter().rposition(|&i| i < self.cursor) {
+            self.cursor = headers[pos];
+            let end = self.hunk_span_end(headers[pos], headers.get(pos + 1).copied());
+            self.reveal_at_top(end);
         }
     }
 
     /// Jumps the cursor to the next file's section header after the cursor.
-    /// A no-op at the last section. Repurposes `Tab`'s old next-file meaning.
+    /// A no-op at the last section. Repurposes `Tab`'s old next-file
+    /// meaning. Reveals the target section near the top of the viewport
+    /// (see [`DiffViewState::reveal_at_top`]).
     pub fn next_section(&mut self) {
         if let Some(&next) = self.header_row_of_file.iter().find(|&&h| h > self.cursor) {
             self.cursor = next;
             self.cursor_col = 0;
-            self.ensure_visible();
+            let (_, end) = self.section_span(self.file_of_cursor());
+            self.reveal_at_top(end);
         }
     }
 
     /// Jumps the cursor to the previous section header before the cursor
     /// (the current file's own header first, then earlier files). A no-op
-    /// before the first section. Repurposes `Shift-Tab`'s old meaning.
+    /// before the first section. Repurposes `Shift-Tab`'s old meaning. Same
+    /// reveal policy as [`DiffViewState::next_section`].
     pub fn prev_section(&mut self) {
         if let Some(&prev) = self
             .header_row_of_file
@@ -331,7 +422,8 @@ impl DiffViewState {
         {
             self.cursor = prev;
             self.cursor_col = 0;
-            self.ensure_visible();
+            let (_, end) = self.section_span(self.file_of_cursor());
+            self.reveal_at_top(end);
         }
     }
 
@@ -728,6 +820,200 @@ index 1..2 100644
 
         // An unknown path resolves to nothing.
         assert_eq!(view.anchor_row_in_buffer(&Target::file("missing.rs")), None);
+    }
+
+    /// A single-file patch whose one hunk carries `n` context lines,
+    /// producing a long scrollable section: row 0 is the file header, row 1
+    /// the hunk header, rows `2..2 + n` the lines.
+    fn long_raw(n: usize) -> String {
+        let mut s = format!(
+            "diff --git a/big.rs b/big.rs\nindex 1..2 100644\n--- a/big.rs\n+++ b/big.rs\n@@ -1,{n} +1,{n} @@\n"
+        );
+        for i in 0..n {
+            s.push_str(&format!(" line{i}\n"));
+        }
+        s
+    }
+
+    /// One file, two hunks with room between them: rows 0 file header,
+    /// 1 hunk-1 header, 2..=6 hunk-1 lines, 7 hunk-2 header, 8..=19 hunk-2
+    /// lines (20 rows total).
+    fn two_big_hunk_raw() -> String {
+        let mut s = String::from(
+            "diff --git a/f.rs b/f.rs\nindex 1..2 100644\n--- a/f.rs\n+++ b/f.rs\n@@ -1,5 +1,5 @@\n",
+        );
+        for i in 0..5 {
+            s.push_str(&format!(" a{i}\n"));
+        }
+        s.push_str("@@ -50,12 +50,12 @@\n");
+        for i in 0..12 {
+            s.push_str(&format!(" b{i}\n"));
+        }
+        s
+    }
+
+    #[test]
+    fn cursor_down_keeps_scrolloff_margin_below_the_cursor() {
+        let mut view = view_with_raw("big.rs", &long_raw(30)); // 32 rows
+        view.set_viewport_height(10);
+        // Near the top the margin is satisfied without scrolling.
+        for _ in 0..3 {
+            view.cursor_down();
+        }
+        assert_eq!(view.cursor, 3);
+        assert_eq!(view.scroll, 0);
+        // Once the cursor nears the bottom edge, the view scrolls so 3 rows
+        // stay visible below it: cursor sits at scroll + viewport - 1 - 3.
+        for _ in 0..7 {
+            view.cursor_down();
+        }
+        assert_eq!(view.cursor, 10);
+        assert_eq!(view.scroll, 4);
+    }
+
+    #[test]
+    fn cursor_up_keeps_scrolloff_margin_above_the_cursor() {
+        let mut view = view_with_raw("big.rs", &long_raw(30)); // 32 rows
+        view.set_viewport_height(10);
+        view.jump_to_bottom(); // plain clamp: cursor 31, scroll 22
+        assert_eq!(view.cursor, 31);
+        assert_eq!(view.scroll, 22);
+        for _ in 0..8 {
+            view.cursor_up();
+        }
+        // Mid-buffer, moving up keeps 3 rows of context above the cursor.
+        assert_eq!(view.cursor, 23);
+        assert_eq!(view.scroll, view.cursor - 3);
+        // All the way to the top: margin degrades, nothing underflows.
+        for _ in 0..40 {
+            view.cursor_up();
+        }
+        assert_eq!(view.cursor, 0);
+        assert_eq!(view.scroll, 0);
+    }
+
+    #[test]
+    fn scrolloff_stops_at_the_buffer_bottom_edge() {
+        let mut view = view_with_raw("big.rs", &long_raw(30)); // 32 rows
+        view.set_viewport_height(10);
+        for _ in 0..40 {
+            view.cursor_down();
+        }
+        // The margin degrades at the end: the last row sits on the bottom
+        // line rather than scrolling past the buffer.
+        assert_eq!(view.cursor, 31);
+        assert_eq!(view.scroll, 22);
+    }
+
+    #[test]
+    fn scrolloff_degrades_to_edge_clamp_on_a_tiny_viewport() {
+        let mut view = view_with_raw("big.rs", &long_raw(30));
+        view.set_viewport_height(2); // < 2 * SCROLLOFF + 1 -> margin 0
+        for step in 0..20 {
+            view.cursor_down();
+            assert!(view.scroll <= view.cursor, "step {step}: cursor above view");
+            assert!(
+                view.cursor < view.scroll + 2,
+                "step {step}: cursor below view"
+            );
+        }
+        for step in 0..20 {
+            view.cursor_up();
+            assert!(view.scroll <= view.cursor, "step {step}: cursor above view");
+            assert!(
+                view.cursor < view.scroll + 2,
+                "step {step}: cursor below view"
+            );
+        }
+    }
+
+    #[test]
+    fn scrolloff_margin_shrinks_to_fit_a_small_viewport() {
+        let mut view = view_with_raw("big.rs", &long_raw(30));
+        view.set_viewport_height(5); // margin shrinks to (5 - 1) / 2 = 2
+        for _ in 0..10 {
+            view.cursor_down();
+        }
+        assert_eq!(view.cursor, 10);
+        assert_eq!(view.cursor - view.scroll, 5 - 1 - 2);
+    }
+
+    #[test]
+    fn forward_hunk_jump_reveals_the_hunk_near_the_top() {
+        let mut view = view_with_raw("f.rs", &two_big_hunk_raw());
+        view.set_viewport_height(8);
+        view.next_hunk(); // hunk 1 header (row 1): header + body visible -> stay
+        assert_eq!(view.cursor, 1);
+        assert_eq!(view.scroll, 0);
+        view.next_hunk(); // hunk 2 header (row 7): body off-screen -> reveal
+        assert_eq!(view.cursor, 7);
+        assert_eq!(view.scroll, 4, "header sits SCROLLOFF rows from the top");
+    }
+
+    #[test]
+    fn hunk_jump_to_an_already_visible_hunk_leaves_scroll_alone() {
+        let mut view = view_with_raw("f.rs", &two_big_hunk_raw());
+        view.set_viewport_height(8);
+        // Cursor a few rows into hunk 2's body, header + 4 body rows all on
+        // screen (rows 4..12 visible).
+        view.cursor = 10;
+        view.scroll = 4;
+        view.prev_hunk();
+        assert_eq!(view.cursor, 7);
+        assert_eq!(view.scroll, 4, "already-visible target: no scroll change");
+    }
+
+    #[test]
+    fn backward_hunk_jump_from_below_reveals_the_hunk_near_the_top() {
+        let mut view = view_with_raw("f.rs", &two_big_hunk_raw());
+        view.set_viewport_height(8);
+        view.jump_to_bottom(); // cursor 19, scroll 12: hunk 2 header off-screen above
+        view.prev_hunk();
+        assert_eq!(view.cursor, 7);
+        assert_eq!(view.scroll, 4, "header sits SCROLLOFF rows from the top");
+    }
+
+    #[test]
+    fn section_jump_reveals_the_file_near_the_top() {
+        let files = vec![
+            file_with_raw("a.rs", &long_raw(12)),
+            file_with_raw("b.rs", &long_raw(12)),
+        ];
+        let mut view = multibuffer_view(files, &[false, false]);
+        view.set_viewport_height(8);
+        assert_eq!(view.header_row_of_file[1], 14);
+        view.next_section(); // b.rs header (row 14), far below the viewport
+        assert_eq!(view.cursor, 14);
+        assert_eq!(view.scroll, 11, "header sits SCROLLOFF rows from the top");
+        view.prev_section(); // a.rs header (row 0): clamps at the buffer top
+        assert_eq!(view.cursor, 0);
+        assert_eq!(view.scroll, 0);
+    }
+
+    #[test]
+    fn reveal_clamps_scroll_at_the_buffer_end() {
+        // b.rs is short (4 rows) and last: revealing its header at
+        // SCROLLOFF from the top would scroll past the end of the buffer,
+        // so the reveal clamps to the max useful scroll instead.
+        let files = vec![
+            file_with_raw("a.rs", &long_raw(12)),
+            file_with_raw("b.rs", &one_hunk_raw("b.rs")),
+        ];
+        let mut view = multibuffer_view(files, &[false, false]);
+        view.set_viewport_height(8);
+        view.next_section(); // b.rs header (row 14); 18 rows total
+        assert_eq!(view.cursor, 14);
+        assert_eq!(view.scroll, 10, "clamped so the last row fills the bottom");
+    }
+
+    #[test]
+    fn hunk_jump_on_a_tiny_viewport_keeps_the_header_visible() {
+        let mut view = view_with_raw("f.rs", &two_big_hunk_raw());
+        view.set_viewport_height(2); // margin degrades to 0
+        view.next_hunk();
+        view.next_hunk(); // hunk 2 header (row 7) -> revealed at the very top
+        assert_eq!(view.cursor, 7);
+        assert_eq!(view.scroll, 7);
     }
 
     #[test]
