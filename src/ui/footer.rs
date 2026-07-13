@@ -344,7 +344,7 @@ pub(super) fn footer_height(
     pending: Option<KeyEvent>,
 ) -> u16 {
     if matches!(app.mode, Mode::Search)
-        || app.remote_running_label().is_some()
+        || app.running_op_label().is_some()
         || app.status_message.is_some()
     {
         return 1;

@@ -109,7 +109,7 @@ impl App {
     /// mid-decision — the generation guard would keep it correct either
     /// way, but pausing avoids the churn).
     pub(super) fn maybe_auto_refresh(&mut self) {
-        if self.remote_op.is_some() || matches!(self.target, DiffTarget::Range(_)) {
+        if self.git_op.is_some() || matches!(self.target, DiffTarget::Range(_)) {
             return;
         }
         if matches!(

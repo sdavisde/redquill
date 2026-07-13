@@ -1287,9 +1287,10 @@ fn running_indicator_renders_while_a_remote_op_is_in_flight() {
             stderr: String::new(),
         }
     });
-    app.remote_op = Some(super::app::InFlightRemote {
+    app.git_op = Some(super::app::InFlightGitOp {
         id,
-        op: crate::git::RemoteOp::Fetch,
+        kind: super::app::GitOpKind::Remote(crate::git::RemoteOp::Fetch),
+        command_line: "git fetch".to_string(),
     });
 
     let backend = TestBackend::new(100, 30);
@@ -1519,7 +1520,7 @@ fn capture_task_03_smoke_transcript() {
 #[test]
 #[ignore = "writes the task-04 smoke transcript; 2s sleep + real git. run explicitly"]
 fn capture_task_04_smoke_transcript() {
-    use super::app::InFlightRemote;
+    use super::app::{GitOpKind, InFlightGitOp};
     use super::background::run_command;
     use crate::git::RemoteOp;
     use std::fmt::Write as _;
@@ -1565,16 +1566,17 @@ fn capture_task_04_smoke_transcript() {
         cmd.args(["-c", "sleep 2"]);
         run_command(&mut cmd)
     });
-    app.remote_op = Some(InFlightRemote {
+    app.git_op = Some(InFlightGitOp {
         id,
-        op: RemoteOp::Fetch,
+        kind: GitOpKind::Remote(RemoteOp::Fetch),
+        command_line: RemoteOp::Fetch.command_line(),
     });
     writeln!(
         out,
-        "t=+{:>4}ms spawned slow op (remote_op={:?}, running_label={:?})",
+        "t=+{:>4}ms spawned slow op (git_op={:?}, running_label={:?})",
         spawn_at.elapsed().as_millis(),
-        app.remote_op.map(|o| o.op),
-        app.remote_running_label(),
+        app.git_op.as_ref().map(|o| o.kind),
+        app.running_op_label(),
     )
     .unwrap();
 
@@ -1594,8 +1596,8 @@ fn capture_task_04_smoke_transcript() {
         );
         // Poll for completion the way the event loop does; the op is still
         // sleeping, so nothing drains — the guard stays set, log empty.
-        app.poll_remote();
-        let still_pending = app.remote_op.is_some() && app.command_log.is_empty();
+        app.poll_git_ops();
+        let still_pending = app.git_op.is_some() && app.command_log.is_empty();
         assert!(still_pending, "op must still be in flight during scrolling");
         writeln!(
             out,
@@ -1622,8 +1624,8 @@ fn capture_task_04_smoke_transcript() {
 
     // Let the op finish and drain it, recording when.
     let deadline = Instant::now() + Duration::from_secs(5);
-    while app.remote_op.is_some() && Instant::now() < deadline {
-        app.poll_remote();
+    while app.git_op.is_some() && Instant::now() < deadline {
+        app.poll_git_ops();
         std::thread::sleep(Duration::from_millis(10));
     }
     writeln!(
@@ -1638,7 +1640,7 @@ fn capture_task_04_smoke_transcript() {
     out.push_str("== Part (b): a non-fast-forward push rejection is logged ==\n");
     out.push_str("A file:// bare remote is advanced by a second clone; the local\n");
     out.push_str("clone commits too, so `git push` is rejected non-fast-forward.\n");
-    out.push_str("Driven through App::request_remote_op -> poll_remote (real spawn).\n\n");
+    out.push_str("Driven through App::request_remote_op -> poll_git_ops (real spawn).\n\n");
 
     let bare = tempfile::TempDir::new().unwrap();
     // Branch must be explicit: the host's init.defaultBranch config must not
@@ -1682,13 +1684,13 @@ fn capture_task_04_smoke_transcript() {
     writeln!(
         out,
         "spawned push (running_label={:?})",
-        app2.remote_running_label()
+        app2.running_op_label()
     )
     .unwrap();
 
     let deadline = Instant::now() + Duration::from_secs(10);
     while app2.command_log.is_empty() && Instant::now() < deadline {
-        app2.poll_remote();
+        app2.poll_git_ops();
         std::thread::sleep(Duration::from_millis(10));
     }
     let entry = app2

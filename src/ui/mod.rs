@@ -357,10 +357,11 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
             .saturating_add(text.chars().count() as u16)
             .min(footer_area.x + footer_area.width.saturating_sub(1));
         frame.set_cursor_position(Position::new(cursor_x, footer_area.y));
-    } else if let Some(label) = app.remote_running_label() {
-        // A remote op is in flight: show a persistent running indicator (it
-        // outlives the transient status message, which clears on the next
-        // keypress) so the user sees the non-blocking op is still working.
+    } else if let Some(label) = app.running_op_label() {
+        // A mutating background git op is in flight: show a persistent
+        // running indicator (it outlives the transient status message, which
+        // clears on the next keypress) so the user sees the non-blocking op
+        // is still working.
         let footer = Line::from(Span::styled(
             format!(" \u{27f3} {label}\u{2026}"),
             Style::default().fg(app.theme.status_message),
@@ -497,7 +498,7 @@ fn event_loop(
         }
 
         code_intel::poll(app);
-        app.poll_remote();
+        app.poll_git_ops();
         // Drain any completed background working-tree read every tick (cheap,
         // non-blocking) so its result lands promptly once the worker finishes.
         app.poll_refresh();

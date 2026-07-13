@@ -5,6 +5,16 @@ use crate::ui::compose::TextBuffer;
 use crate::ui::rows::StagedMarker;
 use crate::ui::stage_ops::{build_review, staged_from_status, staged_states_from_status};
 
+/// An in-flight fetch guard entry, for tests that mark an op as running
+/// without going through `request_remote_op`.
+fn in_flight_fetch(id: TaskId) -> InFlightGitOp {
+    InFlightGitOp {
+        id,
+        kind: GitOpKind::Remote(RemoteOp::Fetch),
+        command_line: RemoteOp::Fetch.command_line(),
+    }
+}
+
 fn file(path: &str, hunk_count: usize) -> FileDiff {
     let mut raw =
         format!("diff --git a/{path} b/{path}\nindex 1..2 100644\n--- a/{path}\n+++ b/{path}\n");
@@ -1369,16 +1379,16 @@ fn second_remote_request_while_one_in_flight_is_rejected_and_does_not_spawn() {
     // A repo root is present (so a request *could* spawn) and a fetch is
     // already recorded as in flight.
     app.repo_root = Some(std::path::PathBuf::from("/tmp"));
-    app.remote_op = Some(InFlightRemote {
-        id: TaskId(7),
-        op: RemoteOp::Fetch,
-    });
+    app.git_op = Some(in_flight_fetch(TaskId(7)));
 
     app.request_remote_op(RemoteOp::Pull);
 
     // The in-flight op is untouched (still the fetch), the request was
     // rejected with a message, and nothing new was spawned.
-    assert_eq!(app.remote_op.map(|o| o.op), Some(RemoteOp::Fetch));
+    assert_eq!(
+        app.git_op.as_ref().map(|o| o.kind),
+        Some(GitOpKind::Remote(RemoteOp::Fetch))
+    );
     assert!(
         app.status_message
             .as_deref()
@@ -1399,7 +1409,7 @@ fn remote_request_without_a_repo_root_is_a_message_only() {
     let mut app = App::new(vec![file("a.rs", 1)]);
     assert!(app.repo_root.is_none());
     app.request_remote_op(RemoteOp::Fetch);
-    assert!(app.remote_op.is_none());
+    assert!(app.git_op.is_none());
     assert_eq!(
         app.status_message.as_deref(),
         Some("remote operations unavailable (no repository)")
@@ -1453,15 +1463,12 @@ fn completed_remote_op_logs_and_refreshes_preserving_staged_and_annotations() {
     let id = app
         .background
         .spawn(|| run_command(&mut Command::new("true")));
-    app.remote_op = Some(InFlightRemote {
-        id,
-        op: RemoteOp::Fetch,
-    });
+    app.git_op = Some(in_flight_fetch(id));
 
     // Drain until the op is logged (mirrors the event-loop tick).
     let deadline = Instant::now() + Duration::from_secs(5);
     while app.command_log.is_empty() && Instant::now() < deadline {
-        app.poll_remote();
+        app.poll_git_ops();
         std::thread::sleep(Duration::from_millis(5));
     }
 
@@ -1471,7 +1478,7 @@ fn completed_remote_op_logs_and_refreshes_preserving_staged_and_annotations() {
     assert_eq!(entry.command_line, "git fetch");
     assert!(entry.success);
     // The guard is cleared, so a fresh op could start.
-    assert!(app.remote_op.is_none());
+    assert!(app.git_op.is_none());
     // Refresh ran: branch/stash re-read; staged markers + annotations survive.
     assert_eq!(app.branch.as_ref().unwrap().name, "main");
     assert_eq!(app.stashes.len(), 1);
@@ -1849,14 +1856,11 @@ fn maybe_auto_refresh_skips_while_a_remote_op_is_in_flight() {
         vec![],
     );
     *diff_h.borrow_mut() = vec![raw_patch("a.rs", 2)];
-    app.remote_op = Some(InFlightRemote {
-        id: TaskId(0),
-        op: RemoteOp::Fetch,
-    });
+    app.git_op = Some(in_flight_fetch(TaskId(0)));
     app.maybe_auto_refresh();
     assert_eq!(app.view.files[0].hunks.len(), 1, "skipped during remote op");
     // With the op cleared, the same pending edit is picked up.
-    app.remote_op = None;
+    app.git_op = None;
     app.maybe_auto_refresh();
     assert_eq!(app.view.files[0].hunks.len(), 2);
 }
@@ -3288,10 +3292,7 @@ fn enter_rejected_while_remote_op_in_flight() {
     app.apply(Action::FocusGitPanel);
     app.apply(Action::OpenSwitcher);
     app.switcher.as_mut().unwrap().move_down(); // -> feature, a real attempt
-    app.remote_op = Some(InFlightRemote {
-        id: TaskId(1),
-        op: RemoteOp::Fetch,
-    });
+    app.git_op = Some(in_flight_fetch(TaskId(1)));
 
     app.switcher_confirm();
 

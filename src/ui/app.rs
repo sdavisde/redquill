@@ -180,26 +180,30 @@ pub struct App {
     /// doesn't match is ignored. `pub(super)` for the code-intelligence
     /// module.
     pub(super) pending_lsp: Option<(RequestId, PeekKind)>,
-    /// The background-task poller remote operations run through. Spawning
-    /// returns immediately; [`App::poll_remote`] drains completed outcomes
-    /// once per event-loop tick.
+    /// The background-task poller every mutating background git operation
+    /// (see [`GitOpKind`]) runs through. Spawning returns immediately;
+    /// [`App::poll_git_ops`] drains completed outcomes once per event-loop
+    /// tick.
     pub(super) background: BackgroundTasks<CommandOutcome>,
     /// The in-memory, bounded log of every git command redquill ran, rendered
     /// in the toggleable command-log pane.
     pub(super) command_log: CommandLog,
-    /// The single remote operation currently in flight, if any. Enforces the
-    /// "at most one remote op at a time" guard: while this is `Some`, further
-    /// remote requests are rejected with a message rather than queued.
-    pub(super) remote_op: Option<InFlightRemote>,
+    /// The single mutating background git operation currently in flight, if
+    /// any. Enforces the "at most one mutating background git op at a time"
+    /// invariant: while this is `Some`, further requests are rejected with a
+    /// message rather than queued, and a branch-switch attempt is likewise
+    /// blocked (see the switcher's confirm handler in [`super::switcher`]).
+    pub(super) git_op: Option<InFlightGitOp>,
     /// Whether the command-log pane is open in the bottom-panel slot. Toggled
     /// with `@` from both the diff view and the focused panel.
     pub(super) command_log_open: bool,
     /// The background-task poller the async working-tree refresh runs through.
-    /// Separate from `background` so remote-op and refresh results never mix in
-    /// one drain. Yields `None` when the background read hit a git error.
+    /// Separate from `background` so a mutating git op's and refresh's results
+    /// never mix in one drain. Yields `None` when the background read hit a
+    /// git error.
     pub(super) refresh_tasks: BackgroundTasks<Option<ReviewSnapshot>>,
     /// The single async refresh currently in flight, if any (single-flight,
-    /// like `remote_op`). Carries the generation it was spawned at so a
+    /// like `git_op`). Carries the generation it was spawned at so a
     /// snapshot that predates a foreground refresh is discarded, not applied.
     pub(super) refresh_in_flight: Option<InFlightRefresh>,
     /// Bumped by every synchronous refresh — and therefore by every staging or
@@ -210,15 +214,46 @@ pub struct App {
     pub(super) refresh_generation: u64,
 }
 
-/// A remote operation that has been spawned and is awaiting completion. Its
-/// [`TaskId`] correlates the background result back to the operation so a
-/// stale or foreign task never clears the guard.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct InFlightRemote {
+/// Which mutating background git operation is in flight (see
+/// [`InFlightGitOp`]): currently one of the three sanctioned remote ops. A
+/// closed enum so a new operation can't be added without updating
+/// [`GitOpKind::label`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GitOpKind {
+    /// A fetch/pull/push.
+    Remote(RemoteOp),
+}
+
+impl GitOpKind {
+    /// A short label for the running indicator and completion footer
+    /// (`"fetch"`, `"pull"`, `"push"`).
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            GitOpKind::Remote(op) => op.label(),
+        }
+    }
+}
+
+/// A mutating background git operation that has been spawned and is
+/// awaiting completion (see [`GitOpKind`]). Its [`TaskId`] correlates the
+/// background result back to the operation so a stale or foreign task never
+/// clears the guard. At most one may be in flight at a time: a single
+/// "mutating background git op" invariant, rather than per-operation guards
+/// that must each cross-check the others.
+///
+/// `command_line` is captured at spawn time (rather than recomputed from
+/// `kind` on completion) so the completion handler doesn't need an
+/// operation's parameters just to log its command line verbatim.
+#[derive(Debug, Clone)]
+pub(super) struct InFlightGitOp {
     /// The background task delivering this operation's outcome.
     pub(super) id: TaskId,
-    /// Which remote operation is running (drives the label and command line).
-    pub(super) op: RemoteOp,
+    /// Which operation is running (drives the running-indicator/completion
+    /// label).
+    pub(super) kind: GitOpKind,
+    /// The full command line, for the command-log entry this op produces on
+    /// completion.
+    pub(super) command_line: String,
 }
 
 impl App {
@@ -261,7 +296,7 @@ impl App {
             pending_lsp: None,
             background: BackgroundTasks::new(),
             command_log: CommandLog::new(),
-            remote_op: None,
+            git_op: None,
             command_log_open: false,
             refresh_tasks: BackgroundTasks::new(),
             refresh_in_flight: None,
@@ -657,28 +692,27 @@ impl App {
         self.command_log_open = !self.command_log_open;
     }
 
-    /// The label of the remote operation currently in flight, if any (drives
-    /// the running indicator). `None` when nothing is running.
-    pub fn remote_running_label(&self) -> Option<&'static str> {
-        self.remote_op.as_ref().map(|o| o.op.label())
+    /// The label of the mutating background git op currently in flight (a
+    /// remote op or a commit), if any — drives the running indicator.
+    /// `None` when nothing is running.
+    pub fn running_op_label(&self) -> Option<&'static str> {
+        self.git_op.as_ref().map(|o| o.kind.label())
     }
 
     /// Requests a remote operation (`fetch`/`pull`/`push`), spawning it on a
     /// background thread so the render loop never blocks. Enforces the
-    /// single-in-flight guard: if a remote op is already running the request
-    /// is rejected with a status message and nothing is spawned. Without a
-    /// known repository root (git-less contexts) the request degrades to a
+    /// single-in-flight guard covering every mutating background git op (see
+    /// [`GitOpKind`]): if one is already running the request is rejected
+    /// with a status message and nothing is spawned. Without a known
+    /// repository root (git-less contexts) the request degrades to a
     /// message, like every other git-backed gesture.
     ///
     /// The child command is a fixed argv with `GIT_TERMINAL_PROMPT=0` (see
     /// [`crate::git::remote_command`]); no shell, no `--force`, no credential
     /// handling.
     pub(super) fn request_remote_op(&mut self, op: RemoteOp) {
-        if let Some(running) = self.remote_op.as_ref() {
-            self.set_status_message(format!(
-                "{} already running — wait for it to finish",
-                running.op.label()
-            ));
+        if let Some(label) = self.running_op_label() {
+            self.set_status_message(format!("{label} already running — wait for it to finish"));
             return;
         }
         let Some(root) = self.repo_root.clone() else {
@@ -687,37 +721,42 @@ impl App {
         };
         let mut command = remote_command(op, &root);
         let id = self.background.spawn(move || run_command(&mut command));
-        self.remote_op = Some(InFlightRemote { id, op });
+        self.git_op = Some(InFlightGitOp {
+            id,
+            kind: GitOpKind::Remote(op),
+            command_line: op.command_line(),
+        });
         self.set_status_message(format!("{}\u{2026}", op.label()));
     }
 
-    /// Drains completed background remote operations (once per event-loop
+    /// Drains completed mutating background git ops (once per event-loop
     /// tick, alongside [`super::code_intel::poll`]). For the in-flight op's
     /// result it appends a [`CommandLogEntry`], clears the guard, re-runs the
     /// full refresh (diff/status plus branch/stash reads), and sets a
     /// success/failure footer summary. Foreign or stale task ids are ignored.
-    pub(super) fn poll_remote(&mut self) {
+    pub(super) fn poll_git_ops(&mut self) {
         let done = self.background.poll();
         for (id, result) in done {
-            let Some(in_flight) = self.remote_op else {
+            let Some(in_flight) = self.git_op.as_ref() else {
                 continue;
             };
             if in_flight.id != id {
                 continue;
             }
-            let op = in_flight.op;
-            self.remote_op = None;
+            let kind = in_flight.kind;
+            let command_line = in_flight.command_line.clone();
+            self.git_op = None;
 
             let entry = match result {
                 Ok(outcome) => CommandLogEntry {
-                    command_line: op.command_line(),
+                    command_line,
                     success: outcome.success,
                     code: outcome.code,
                     stdout: outcome.stdout,
                     stderr: outcome.stderr,
                 },
                 Err(panic) => CommandLogEntry {
-                    command_line: op.command_line(),
+                    command_line,
                     success: false,
                     code: None,
                     stdout: String::new(),
@@ -728,16 +767,16 @@ impl App {
             self.command_log.push(entry);
 
             // Re-read the working tree so the changes list, branch header, and
-            // ahead/behind reflect the remote op; staged markers and
-            // annotations survive exactly as they do after any refresh.
+            // ahead/behind reflect the op; staged markers and annotations
+            // survive exactly as they do after any refresh.
             self.refresh();
 
             if success {
-                self.set_status_message(format!("{} succeeded", op.label()));
+                self.set_status_message(format!("{} succeeded", kind.label()));
             } else {
                 self.set_status_message(format!(
                     "{} failed \u{2014} see command log (@)",
-                    op.label()
+                    kind.label()
                 ));
             }
         }

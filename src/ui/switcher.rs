@@ -204,7 +204,7 @@ impl App {
     /// state the remote op is mid-flight against) — rejected with a footer
     /// message, modal left open, exactly like a second remote-op request.
     pub(super) fn switcher_confirm(&mut self) {
-        if let Some(label) = self.remote_running_label() {
+        if let Some(label) = self.running_op_label() {
             self.set_status_message(format!("{label} is running \u{2014} wait before switching"));
             return;
         }
