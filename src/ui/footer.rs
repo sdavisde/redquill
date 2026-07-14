@@ -130,9 +130,28 @@ fn find_key(km: &Keymap, scope: Scope, action: Action, want: &str) -> Option<Str
 }
 
 /// The Normal-mode idle strip: every [`Scope::Diff`] row [`Keymap::default_map`]
-/// tags with a [`FooterHint`], merged/sorted by [`keymap_hints`].
-fn normal_hints(km: &Keymap, staging_allowed: bool, code_intel_allowed: bool) -> Vec<FooterEntry> {
-    keymap_hints(km, Scope::Diff, staging_allowed, code_intel_allowed)
+/// tags with a [`FooterHint`], merged/sorted by [`keymap_hints`], plus a
+/// synthetic `Esc return` hint while a commit view (opened from the git
+/// panel's History tab, spec 05 Unit 3) is displayed — `Esc`'s table row has
+/// no single fixed label (it also closes help / cancels Visual, see
+/// `keymap.rs`'s doc on that row), so this situational label is added here in
+/// the [`visual_hints`] mold rather than forced into the static table.
+fn normal_hints(
+    km: &Keymap,
+    staging_allowed: bool,
+    code_intel_allowed: bool,
+    viewing_commit: bool,
+) -> Vec<FooterEntry> {
+    let mut entries = keymap_hints(km, Scope::Diff, staging_allowed, code_intel_allowed);
+    if viewing_commit {
+        entries.push(FooterEntry {
+            rank: 6,
+            key: "Esc".to_string(),
+            label: "return",
+        });
+        entries = sort_for_display(entries);
+    }
+    entries
 }
 
 /// The focused-git-panel idle strip: every [`Scope::Panel`] row tagged with a
@@ -264,24 +283,50 @@ fn help_open_hints() -> Vec<FooterEntry> {
     modal_hints(HELP_KEYS)
 }
 
+/// The capability/state flags [`build_hints`] needs, bundled into one struct
+/// so its own parameter count stays under clippy's `too_many_arguments`
+/// threshold — these are all independent booleans, not a cohesive type, but
+/// grouping them here is cheaper than growing the function signature further
+/// (see `super::mod`'s `draw` and [`super::footer_height`] for the two call
+/// sites that build one each frame).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FooterFlags {
+    /// `false` on a read-only diff range, hiding the inert stage gestures.
+    pub(super) staging_allowed: bool,
+    /// `false` whenever the target's new side isn't the live working tree,
+    /// hiding the inert `gd`/`gr`/`K` gestures.
+    pub(super) code_intel_allowed: bool,
+    /// Relabels the panel's `RemotePush` hint to `publish` (see
+    /// [`panel_hints`]); only consulted in [`Mode::Panel`].
+    pub(super) push_publishes: bool,
+    /// Adds the synthetic `Esc return` hint to the Normal strip (see
+    /// [`normal_hints`]); only consulted in [`Mode::Normal`].
+    pub(super) viewing_commit: bool,
+    /// `true` while the help overlay is open, short-circuiting to
+    /// [`help_open_hints`] regardless of `mode`.
+    pub(super) help_open: bool,
+}
+
 /// Builds the footer strip's hints for the current app state — the pure core
 /// [`super::footer_height`] and `super::draw`'s rendering both call, over
 /// explicit inputs rather than `&App` so it's unit-testable without
 /// constructing a whole app. `pending` is only consulted in
 /// [`Mode::Normal`]/[`Mode::Visual`] (the only modes that ever have a pending
-/// two-key prefix — see `super::event_loop`); `push_publishes` only in
-/// [`Mode::Panel`] (see [`panel_hints`]). `code_intel_allowed` hides `gd`/`gr`
-/// from a pending-prefix strip and (were one ever tagged) from the Normal
-/// idle strip, mirroring `staging_allowed`'s gating.
+/// two-key prefix — see `super::event_loop`). See [`FooterFlags`] for the
+/// rest.
 pub(super) fn build_hints(
     mode: Mode,
-    staging_allowed: bool,
-    code_intel_allowed: bool,
-    push_publishes: bool,
-    help_open: bool,
+    flags: FooterFlags,
     pending: Option<KeyEvent>,
     km: &Keymap,
 ) -> Vec<FooterEntry> {
+    let FooterFlags {
+        staging_allowed,
+        code_intel_allowed,
+        push_publishes,
+        viewing_commit,
+        help_open,
+    } = flags;
     if help_open {
         return help_open_hints();
     }
@@ -291,7 +336,7 @@ pub(super) fn build_hints(
         return pending_hints(km, prefix, code_intel_allowed);
     }
     match mode {
-        Mode::Normal => normal_hints(km, staging_allowed, code_intel_allowed),
+        Mode::Normal => normal_hints(km, staging_allowed, code_intel_allowed, viewing_commit),
         Mode::Visual { .. } => visual_hints(km, staging_allowed),
         Mode::Panel { .. } => panel_hints(km, push_publishes),
         Mode::List => modal_hints(LIST_KEYS),
@@ -389,10 +434,13 @@ pub(super) fn footer_height(
     let code_intel_allowed = app.target.supports_code_intel();
     let entries = build_hints(
         app.mode,
-        staging_allowed,
-        code_intel_allowed,
-        app.push_publishes(),
-        app.help_open,
+        FooterFlags {
+            staging_allowed,
+            code_intel_allowed,
+            push_publishes: app.push_publishes(),
+            viewing_commit: app.viewing_commit(),
+            help_open: app.help_open,
+        },
         pending,
         keymap,
     );

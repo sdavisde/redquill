@@ -14,8 +14,8 @@ use crate::annotate::{AnnotationStore, Target};
 use crate::annotate::Side;
 use crate::diff::FileDiff;
 use crate::git::{
-    BranchStatus, CommitSummary, DiffTarget, RawFilePatch, RemoteOp, StagingMode, StashEntry,
-    commit_command_line, remote_command,
+    BranchStatus, CommitLogEntry, CommitSummary, DiffTarget, RawFilePatch, RemoteOp, StagingMode,
+    StashEntry, commit_command_line, remote_command,
 };
 use crate::highlight::Highlighter;
 use crate::lsp::RequestId;
@@ -25,6 +25,7 @@ use super::command_log::{CommandLog, CommandLogEntry};
 use super::commit_message::CommitMessageState;
 use super::compose::ComposeState;
 use super::diff_view_state::DiffViewState;
+use super::history::InFlightHistory;
 use super::keymap::Action;
 use super::lsp_ops::LspClient;
 use super::peek::{PeekKind, PeekState};
@@ -36,6 +37,21 @@ use super::switcher::SwitcherState;
 use super::syntax::HighlightCache;
 use super::targeting;
 use super::theme::Theme;
+
+/// The git panel's two tabs (spec 05 Unit 3): Changes is the existing
+/// CHANGES/UNTRACKED/STASHES panel content; History lists the branch's commit
+/// log for opening a historical commit into the main diff view. Carried
+/// inside [`Mode::Panel`] (mode-scoped state), not a parallel `App` field,
+/// except for [`App::last_panel_tab`] — the deliberate exception documented
+/// there for state that must survive the panel losing focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PanelTab {
+    /// The CHANGES/UNTRACKED/STASHES sections (the pre-existing panel).
+    #[default]
+    Changes,
+    /// The commit-log list (spec 05 Unit 3).
+    History,
+}
 
 /// The interaction mode. Normal/Visual bindings dispatch through the
 /// [`super::keymap::Keymap`] table; Compose, List, and Staging handle their
@@ -55,12 +71,13 @@ pub enum Mode {
     List,
     /// The staging panel is open and focused.
     Staging,
-    /// The git panel (sidebar) holds focus: `cursor` navigates the
-    /// CHANGES/UNTRACKED/STASHES sections (an index into the flattened list
-    /// of navigable panel rows), bypassing the diff-scope keymap. Reset to 0
-    /// on entry; only exists while the panel is focused, so it can never carry
-    /// a stale index while inactive.
-    Panel { cursor: usize },
+    /// The git panel (sidebar) holds focus: `cursor` navigates the active
+    /// tab's rows (an index into that tab's flattened navigable-row list),
+    /// bypassing the diff-scope keymap; `tab` selects Changes vs. History
+    /// (see [`PanelTab`]). Reset to `cursor: 0` on entry; only exists while
+    /// the panel is focused, so it can never carry a stale index while
+    /// inactive.
+    Panel { cursor: usize, tab: PanelTab },
     /// The search input is open in the footer, composing a pattern.
     Search,
     /// The LSP peek overlay (`gd`/`gr`/`K` results) is open.
@@ -219,6 +236,66 @@ pub struct App {
     /// the staleness guard that stops a background read from clobbering a
     /// concurrent stage.
     pub(super) refresh_generation: u64,
+    /// Commit-log rows loaded so far for the git panel's History tab (spec
+    /// 05 Unit 3), newest first, accumulated page by page and never
+    /// discarded — re-entering the tab never re-fetches what's already
+    /// loaded. Empty until the first background page lands (or forever, in a
+    /// git-less context or a repository with no commits).
+    pub(super) history: Vec<CommitLogEntry>,
+    /// Whether a `git log` page past the last one returned fewer than a full
+    /// page — no more history to fetch. Sticky for the session (history never
+    /// shrinks).
+    pub(super) history_exhausted: bool,
+    /// The single background commit-log fetch in flight, if any
+    /// (single-flight, mirroring [`InFlightRefresh`]).
+    pub(super) history_in_flight: Option<InFlightHistory>,
+    /// Bumped whenever previously-loaded history is invalidated, so a
+    /// straggling fetch spawned before the bump is dropped on arrival rather
+    /// than applied (mirrors `refresh_generation`). Nothing in this task
+    /// invalidates history yet, so it starts at `0` and never advances in
+    /// production; the guard exists so a future invalidation point (e.g. a
+    /// branch switch) has somewhere to hook in without redesigning the
+    /// staleness contract, and is directly exercised by tests.
+    pub(super) history_generation: u64,
+    /// The background-task poller commit-log page fetches run through,
+    /// separate from `background`/`refresh_tasks` so their results are
+    /// drained independently (see [`App::poll_history`]).
+    pub(super) history_tasks: BackgroundTasks<Option<Vec<CommitLogEntry>>>,
+    /// Which git-panel tab focusing the panel lands on (see [`PanelTab`]).
+    /// Lives here rather than only in [`Mode::Panel`] because it must survive
+    /// the panel losing focus — "reopen the panel where you left off" is the
+    /// documented exception in `docs/rust-best-practices.md`'s state-design
+    /// guidance for state that must outlive mode exit.
+    pub(super) last_panel_tab: PanelTab,
+    /// The commit currently displayed by a commit view opened from the
+    /// History tab (its metadata, looked up from `history` rather than
+    /// re-fetched), for [`super::diff_view`]'s header block. `None` for every
+    /// other target.
+    pub(super) active_commit: Option<CommitLogEntry>,
+    /// The suspended prior view, set when a commit view is opened and
+    /// restored on return (`Esc`). A struct field — not part of `Mode` —
+    /// because it must survive `Mode::Normal` for the life of the commit
+    /// view (the same "must survive mode exit" exception `last_panel_tab`
+    /// documents). `Some` only while a commit view is open.
+    pub(super) suspended_view: Option<SuspendedView>,
+}
+
+/// The prior view state suspended while a commit view (opened from the git
+/// panel's History tab) is displayed, restored verbatim by
+/// [`super::git_panel::App::return_from_commit_view`]. See
+/// [`App::suspended_view`] for why this lives in a struct field.
+pub(super) struct SuspendedView {
+    /// The diff target being reviewed before the commit view opened.
+    pub(super) target: DiffTarget,
+    /// The full per-view state (files, rows, cursor, scroll, collapse map)
+    /// for `target`.
+    pub(super) view: DiffViewState,
+    /// `target`'s raw patches, index-aligned with `view.files`.
+    pub(super) patches: Vec<Option<RawFilePatch>>,
+    /// `target`'s staged-file list.
+    pub(super) staged: Vec<StagedFile>,
+    /// `target`'s per-path staged-state map.
+    pub(super) staged_states: HashMap<String, StagedState>,
 }
 
 /// Which mutating background git operation is in flight (see
@@ -312,6 +389,14 @@ impl App {
             refresh_tasks: BackgroundTasks::new(),
             refresh_in_flight: None,
             refresh_generation: 0,
+            history: Vec::new(),
+            history_exhausted: false,
+            history_in_flight: None,
+            history_generation: 0,
+            history_tasks: BackgroundTasks::new(),
+            last_panel_tab: PanelTab::default(),
+            active_commit: None,
+            suspended_view: None,
         };
         app.rebuild_rows();
         app
@@ -499,6 +584,7 @@ impl App {
             Action::PanelCursorDown => self.panel_move_down(),
             Action::PanelCursorUp => self.panel_move_up(),
             Action::PanelSelect => self.panel_select(),
+            Action::TogglePanelTab => self.toggle_panel_tab(),
             Action::RemoteFetch => self.request_remote_op(RemoteOp::Fetch),
             Action::RemotePull => self.request_remote_op(RemoteOp::Pull),
             Action::RemotePush => self.request_remote_op(self.remote_push_op()),

@@ -69,9 +69,10 @@ impl App {
             .take()
             .map(|s| s.panel_cursor)
             .unwrap_or(0);
-        let len = super::git_panel::navigable_rows(self).len();
+        let len = self.panel_row_count();
         self.mode = Mode::Panel {
             cursor: cursor.min(len.saturating_sub(1)),
+            tab: self.last_panel_tab,
         };
     }
 
@@ -134,7 +135,10 @@ mod tests {
             path: "a.rs".to_string(),
             letter: 'M',
         }];
-        app.mode = Mode::Panel { cursor: 1 };
+        app.mode = Mode::Panel {
+            cursor: 1,
+            tab: crate::ui::app::PanelTab::Changes,
+        };
         app
     }
 
@@ -158,7 +162,13 @@ mod tests {
         app.staged.clear();
         app.open_commit_message();
         assert!(app.commit_message.is_none());
-        assert_eq!(app.mode, Mode::Panel { cursor: 1 });
+        assert_eq!(
+            app.mode,
+            Mode::Panel {
+                cursor: 1,
+                tab: crate::ui::app::PanelTab::Changes
+            }
+        );
         assert_eq!(
             app.status_message.as_deref(),
             Some("nothing staged to commit")
@@ -182,7 +192,13 @@ mod tests {
         let mut app = panel_app_with_staged();
         app.open_commit_message();
         app.close_commit_message();
-        assert_eq!(app.mode, Mode::Panel { cursor: 1 });
+        assert_eq!(
+            app.mode,
+            Mode::Panel {
+                cursor: 1,
+                tab: crate::ui::app::PanelTab::Changes
+            }
+        );
         assert!(app.commit_message.is_none());
     }
 
@@ -191,7 +207,13 @@ mod tests {
         let mut app = panel_app_with_staged();
         app.mode = Mode::CommitMessage;
         app.close_commit_message();
-        assert_eq!(app.mode, Mode::Panel { cursor: 0 });
+        assert_eq!(
+            app.mode,
+            Mode::Panel {
+                cursor: 0,
+                tab: crate::ui::app::PanelTab::Changes
+            }
+        );
     }
 
     // -- submit_commit_message -------------------------------------------------

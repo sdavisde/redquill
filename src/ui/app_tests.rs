@@ -775,7 +775,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use crate::git::{ChangeKind, FileStatus, GitError, StatusCode};
+use crate::git::{ChangeKind, CommitLogEntry, FileStatus, GitError, StatusCode};
 
 /// One recorded call against the fake staging backend.
 #[derive(Debug, Clone, PartialEq)]
@@ -831,6 +831,12 @@ struct FakeGit {
     // (e.g. `"true"`/`"false"`), driving the real spawn → poll → command-log
     // pipeline without git.
     commit_program: Option<String>,
+    // Per-sha patches served for `DiffTarget::Commit(sha)`; a sha absent
+    // here falls back to `diff`/`diff_override` like every other target.
+    commit_diff: std::collections::HashMap<String, Vec<RawFilePatch>>,
+    // The full commit-log list `commit_log` pages over (newest first); empty
+    // by default, mirroring the `StageOps` trait default (unavailable).
+    commit_log_entries: Vec<CommitLogEntry>,
 }
 
 impl FakeGit {
@@ -845,6 +851,11 @@ impl FakeGit {
 
 impl StageOps for FakeGit {
     fn diff(&self, target: &DiffTarget) -> Result<Vec<RawFilePatch>, GitError> {
+        if let DiffTarget::Commit(sha) = target
+            && let Some(patches) = self.commit_diff.get(sha)
+        {
+            return Ok(patches.clone());
+        }
         if matches!(target, DiffTarget::Staged)
             && let Some(staged) = &self.staged_diff
         {
@@ -941,6 +952,12 @@ impl StageOps for FakeGit {
             .borrow_mut()
             .push(StageCall::Commit(message.to_string()));
         self.commit_program.as_ref().map(std::process::Command::new)
+    }
+
+    fn commit_log(&self, count: u32, skip: u32) -> Result<Vec<CommitLogEntry>, GitError> {
+        let start = (skip as usize).min(self.commit_log_entries.len());
+        let end = (start + count as usize).min(self.commit_log_entries.len());
+        Ok(self.commit_log_entries[start..end].to_vec())
     }
 }
 
@@ -3373,7 +3390,13 @@ fn focus_git_panel_toggles_mode_both_ways() {
     assert_eq!(app.mode, Mode::Normal);
     assert!(!app.git_panel_focused());
     app.apply(Action::FocusGitPanel);
-    assert_eq!(app.mode, Mode::Panel { cursor: 0 });
+    assert_eq!(
+        app.mode,
+        Mode::Panel {
+            cursor: 0,
+            tab: crate::ui::app::PanelTab::Changes
+        }
+    );
     assert!(app.git_panel_focused());
     app.apply(Action::FocusGitPanel);
     assert_eq!(app.mode, Mode::Normal);
@@ -3426,7 +3449,10 @@ fn panel_enter_on_file_selects_it_and_returns_focus_to_diff() {
 fn panel_enter_on_untracked_file_selects_it() {
     let mut app = panel_app();
     app.apply(Action::FocusGitPanel);
-    app.mode = Mode::Panel { cursor: 2 }; // notes.md, the lone UNTRACKED row
+    app.mode = Mode::Panel {
+        cursor: 2,
+        tab: crate::ui::app::PanelTab::Changes,
+    }; // notes.md, the lone UNTRACKED row
     app.apply(Action::PanelSelect);
     assert_eq!(app.view.selected_file, 2);
     assert_eq!(app.mode, Mode::Normal);
@@ -3436,11 +3462,20 @@ fn panel_enter_on_untracked_file_selects_it() {
 fn panel_enter_on_stash_is_a_no_op_and_stays_focused() {
     let mut app = panel_app();
     app.apply(Action::FocusGitPanel);
-    app.mode = Mode::Panel { cursor: 3 }; // first stash row
+    app.mode = Mode::Panel {
+        cursor: 3,
+        tab: crate::ui::app::PanelTab::Changes,
+    }; // first stash row
     let selected_before = app.view.selected_file;
     app.apply(Action::PanelSelect);
     assert_eq!(app.view.selected_file, selected_before); // unchanged
-    assert_eq!(app.mode, Mode::Panel { cursor: 3 }); // still focused on the panel
+    assert_eq!(
+        app.mode,
+        Mode::Panel {
+            cursor: 3,
+            tab: crate::ui::app::PanelTab::Changes
+        }
+    ); // still focused on the panel
 }
 
 #[test]
@@ -3755,7 +3790,10 @@ fn apply_snapshot_clamps_panel_cursor() {
         vec![a.clone(), b, c],
         vec![],
     );
-    app.mode = Mode::Panel { cursor: 2 }; // c.rs, the last navigable row
+    app.mode = Mode::Panel {
+        cursor: 2,
+        tab: crate::ui::app::PanelTab::Changes,
+    }; // c.rs, the last navigable row
 
     // An external change shrinks the review down to a single file.
     *diff_h.borrow_mut() = vec![a];

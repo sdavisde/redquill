@@ -50,7 +50,7 @@ fn keys(entries: &[FooterEntry]) -> Vec<String> {
 #[test]
 fn normal_mode_hints_match_the_curated_list_in_order() {
     let km = Keymap::default_map();
-    let entries = normal_hints(&km, true, true);
+    let entries = normal_hints(&km, true, true, false);
     assert_eq!(
         keys(&entries),
         vec!["j/k", "]", "za", "Space", "S", "c", "/", "`", "?"]
@@ -71,10 +71,26 @@ fn normal_mode_hints_match_the_curated_list_in_order() {
     );
 }
 
+/// While a commit view (opened from the git panel's History tab, spec 05
+/// Unit 3) is displayed, the Normal strip gains a synthetic `Esc return`
+/// hint — `Esc`'s table row is generic ("Close help / cancel selection /
+/// return from a commit view"), so this situational label comes from the
+/// `viewing_commit` flag rather than the static table.
+#[test]
+fn normal_mode_hints_gain_esc_return_while_viewing_a_commit() {
+    let km = Keymap::default_map();
+    let entries = normal_hints(&km, true, true, true);
+    assert!(labels(&entries).contains(&"return"));
+    assert!(keys(&entries).contains(&"Esc".to_string()));
+    // Absent otherwise.
+    let without = normal_hints(&km, true, true, false);
+    assert!(!labels(&without).contains(&"return"));
+}
+
 #[test]
 fn normal_mode_hints_exclude_staging_when_not_allowed() {
     let km = Keymap::default_map();
-    let entries = normal_hints(&km, false, true);
+    let entries = normal_hints(&km, false, true, false);
     assert!(!labels(&entries).contains(&"stage hunk"));
     assert!(!labels(&entries).contains(&"stage file"));
     // Everything else survives.
@@ -113,7 +129,7 @@ fn panel_mode_hints_match_the_curated_list_in_order() {
     let entries = panel_hints(&km, false);
     assert_eq!(
         keys(&entries),
-        vec!["j/k", "Enter", "f", "p", "P", "c", "`", "?"]
+        vec!["j/k", "Enter", "f", "p", "P", "c", "`", "Tab", "?"]
     );
     assert_eq!(
         labels(&entries),
@@ -125,6 +141,7 @@ fn panel_mode_hints_match_the_curated_list_in_order() {
             "push",
             "commit",
             "close",
+            "tab",
             "help"
         ]
     );
@@ -140,7 +157,7 @@ fn panel_push_hint_relabels_to_publish_on_an_unpublished_branch() {
     let entries = panel_hints(&km, true);
     assert_eq!(
         keys(&entries),
-        vec!["j/k", "Enter", "f", "p", "P", "c", "`", "?"]
+        vec!["j/k", "Enter", "f", "p", "P", "c", "`", "Tab", "?"]
     );
     assert_eq!(
         labels(&entries),
@@ -152,6 +169,7 @@ fn panel_push_hint_relabels_to_publish_on_an_unpublished_branch() {
             "publish",
             "commit",
             "close",
+            "tab",
             "help"
         ]
     );
@@ -209,7 +227,18 @@ fn compose_mode_hints_are_just_save_and_discard() {
 #[test]
 fn search_mode_has_no_hint_strip() {
     let km = Keymap::default_map();
-    let entries = build_hints(Mode::Search, true, true, false, false, None, &km);
+    let entries = build_hints(
+        Mode::Search,
+        FooterFlags {
+            staging_allowed: true,
+            code_intel_allowed: true,
+            push_publishes: false,
+            viewing_commit: false,
+            help_open: false,
+        },
+        None,
+        &km,
+    );
     assert!(entries.is_empty());
 }
 
@@ -226,11 +255,17 @@ fn help_open_takes_precedence_over_the_mode_strip() {
     // Even in Mode::Panel (which has its own curated strip), an open help
     // overlay wins.
     let entries = build_hints(
-        Mode::Panel { cursor: 0 },
-        true,
-        true,
-        false,
-        true,
+        Mode::Panel {
+            cursor: 0,
+            tab: crate::ui::app::PanelTab::Changes,
+        },
+        FooterFlags {
+            staging_allowed: true,
+            code_intel_allowed: true,
+            push_publishes: false,
+            viewing_commit: false,
+            help_open: true,
+        },
         None,
         &km,
     );
@@ -269,9 +304,31 @@ fn pending_g_drops_gd_and_gr_when_code_intel_is_disallowed() {
 fn pending_prefix_replaces_the_mode_strip_in_normal_and_visual() {
     let km = Keymap::default_map();
     let g = Some(key(KeyCode::Char('g')));
-    let normal = build_hints(Mode::Normal, true, true, false, false, g, &km);
+    let normal = build_hints(
+        Mode::Normal,
+        FooterFlags {
+            staging_allowed: true,
+            code_intel_allowed: true,
+            push_publishes: false,
+            viewing_commit: false,
+            help_open: false,
+        },
+        g,
+        &km,
+    );
     assert_eq!(keys(&normal), vec!["gd", "gg", "gr"]);
-    let visual = build_hints(Mode::Visual { anchor: 0 }, true, true, false, false, g, &km);
+    let visual = build_hints(
+        Mode::Visual { anchor: 0 },
+        FooterFlags {
+            staging_allowed: true,
+            code_intel_allowed: true,
+            push_publishes: false,
+            viewing_commit: false,
+            help_open: false,
+        },
+        g,
+        &km,
+    );
     assert_eq!(keys(&visual), vec!["gd", "gg", "gr"]);
 }
 
@@ -279,7 +336,18 @@ fn pending_prefix_replaces_the_mode_strip_in_normal_and_visual() {
 fn build_hints_drops_gd_and_gr_from_the_pending_strip_when_code_intel_is_disallowed() {
     let km = Keymap::default_map();
     let g = Some(key(KeyCode::Char('g')));
-    let normal = build_hints(Mode::Normal, true, false, false, false, g, &km);
+    let normal = build_hints(
+        Mode::Normal,
+        FooterFlags {
+            staging_allowed: true,
+            code_intel_allowed: false,
+            push_publishes: false,
+            viewing_commit: false,
+            help_open: false,
+        },
+        g,
+        &km,
+    );
     assert_eq!(keys(&normal), vec!["gg"]);
 }
 
@@ -290,7 +358,21 @@ fn build_hints_drops_gd_and_gr_from_the_pending_strip_when_code_intel_is_disallo
 fn pending_prefix_is_ignored_outside_normal_and_visual() {
     let km = Keymap::default_map();
     let g = Some(key(KeyCode::Char('g')));
-    let panel = build_hints(Mode::Panel { cursor: 0 }, true, true, false, false, g, &km);
+    let panel = build_hints(
+        Mode::Panel {
+            cursor: 0,
+            tab: crate::ui::app::PanelTab::Changes,
+        },
+        FooterFlags {
+            staging_allowed: true,
+            code_intel_allowed: true,
+            push_publishes: false,
+            viewing_commit: false,
+            help_open: false,
+        },
+        g,
+        &km,
+    );
     assert_eq!(panel, panel_hints(&km, false));
 }
 
@@ -324,20 +406,48 @@ fn every_mode_produces_a_nonempty_strip_except_search() {
     for mode in [
         Mode::Normal,
         Mode::Visual { anchor: 0 },
-        Mode::Panel { cursor: 0 },
+        Mode::Panel {
+            cursor: 0,
+            tab: crate::ui::app::PanelTab::Changes,
+        },
         Mode::List,
         Mode::Staging,
         Mode::Peek,
         Mode::Switcher,
         Mode::Compose,
     ] {
-        let entries = build_hints(mode, true, true, false, false, None, &km);
+        let entries = build_hints(
+            mode,
+            FooterFlags {
+                staging_allowed: true,
+                code_intel_allowed: true,
+                push_publishes: false,
+                viewing_commit: false,
+                help_open: false,
+            },
+            None,
+            &km,
+        );
         assert!(
             !entries.is_empty(),
             "{mode:?} produced an empty footer strip"
         );
     }
-    assert!(build_hints(Mode::Search, true, true, false, false, None, &km).is_empty());
+    assert!(
+        build_hints(
+            Mode::Search,
+            FooterFlags {
+                staging_allowed: true,
+                code_intel_allowed: true,
+                push_publishes: false,
+                viewing_commit: false,
+                help_open: false,
+            },
+            None,
+            &km
+        )
+        .is_empty()
+    );
 }
 
 /// Every entry a mode's strip derives from a table carries the key text of
@@ -437,7 +547,10 @@ fn visual_stage_lines_actually_does_something() {
 #[test]
 fn panel_help_hint_is_real_and_shadows_panel_dispatch() {
     let mut app = app();
-    app.mode = Mode::Panel { cursor: 0 };
+    app.mode = Mode::Panel {
+        cursor: 0,
+        tab: crate::ui::app::PanelTab::Changes,
+    };
     let keymap = Keymap::default_map();
     let mut pending = None;
     dispatch_key(&mut app, &keymap, &mut pending, key(KeyCode::Char('?')));
@@ -467,7 +580,7 @@ fn panel_help_hint_is_real_and_shadows_panel_dispatch() {
 #[test]
 fn generous_width_fits_the_whole_normal_strip_on_one_line() {
     let km = Keymap::default_map();
-    let entries = normal_hints(&km, true, true);
+    let entries = normal_hints(&km, true, true, false);
     let lines = wrap_hints(&entries, 120);
     assert_eq!(lines.len(), 1);
     let shown: usize = lines.iter().map(Vec::len).sum();
@@ -477,7 +590,7 @@ fn generous_width_fits_the_whole_normal_strip_on_one_line() {
 #[test]
 fn medium_width_wraps_to_two_lines_without_splitting_a_hint() {
     let km = Keymap::default_map();
-    let entries = normal_hints(&km, true, true);
+    let entries = normal_hints(&km, true, true, false);
     let lines = wrap_hints(&entries, 60);
     assert_eq!(lines.len(), 2);
     let shown: usize = lines.iter().map(Vec::len).sum();
@@ -494,7 +607,7 @@ fn medium_width_wraps_to_two_lines_without_splitting_a_hint() {
 #[test]
 fn narrow_width_drops_lowest_priority_hints_but_keeps_help() {
     let km = Keymap::default_map();
-    let entries = normal_hints(&km, true, true);
+    let entries = normal_hints(&km, true, true, false);
     let lines = wrap_hints(&entries, 20);
     assert!(lines.len() <= 2);
     let shown: usize = lines.iter().map(Vec::len).sum();
@@ -510,7 +623,7 @@ fn narrow_width_drops_lowest_priority_hints_but_keeps_help() {
 fn dropping_never_removes_help_while_anything_else_remains() {
     // An adversarially narrow width: keeps forcing drops down to the wire.
     let km = Keymap::default_map();
-    let entries = normal_hints(&km, true, true);
+    let entries = normal_hints(&km, true, true, false);
     let lines = wrap_hints(&entries, 8);
     let shown_labels: Vec<&str> = lines.iter().flatten().map(|e| e.label).collect();
     assert!(shown_labels.contains(&"help"));
@@ -530,7 +643,18 @@ fn footer_height_is_one_row_when_status_message_is_set() {
 fn footer_height_matches_wrap_hints_row_count() {
     let km = Keymap::default_map();
     let a = app();
-    let entries = build_hints(a.mode, true, true, false, a.help_open, None, &km);
+    let entries = build_hints(
+        a.mode,
+        FooterFlags {
+            staging_allowed: true,
+            code_intel_allowed: true,
+            push_publishes: false,
+            viewing_commit: false,
+            help_open: a.help_open,
+        },
+        None,
+        &km,
+    );
     let expected = wrap_hints(&entries, 60).len() as u16;
     assert_eq!(footer_height(60, &a, &km, None), expected);
 }

@@ -381,7 +381,10 @@ index 111..222 100644
         handle_commit_message_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(
             app.mode,
-            Mode::Panel { cursor: 0 },
+            Mode::Panel {
+                cursor: 0,
+                tab: crate::ui::app::PanelTab::Changes
+            },
             "Esc closes the modal back to the panel"
         );
         assert!(app.commit_message.is_none(), "the draft is discarded");

@@ -92,8 +92,13 @@ pub enum Action {
     /// Move the git panel's cursor up one navigable row (panel scope).
     PanelCursorUp,
     /// Open the git panel cursor's file in the diff and return focus to it;
-    /// a no-op on stash/header rows (panel scope).
+    /// a no-op on stash/header rows (panel scope). On the History tab,
+    /// opens the highlighted commit into the main diff view instead (spec
+    /// 05 Unit 3).
     PanelSelect,
+    /// Toggles the git panel between its Changes and History tabs (panel
+    /// scope, spec 05 Unit 3).
+    TogglePanelTab,
     /// Fetch from the upstream remote on a background thread (panel scope).
     RemoteFetch,
     /// Pull from the upstream remote on a background thread (panel scope).
@@ -345,7 +350,18 @@ impl Keymap {
                 )
                 .footer(3, "fold"),
                 d(KeySeq::one(Char('?'), none), ToggleHelp, "Toggle help").footer(0, "help"),
-                d(KeySeq::one(Esc, none), ToggleHelp, "Close help"),
+                // This row's `Action` (`ToggleHelp`) only tells the table
+                // Esc is *bound*, so the overlay lists it; the actual
+                // dispatch is a hand-written cascade in `mod.rs`'s
+                // `dispatch_key` (close help / cancel a Visual selection /
+                // return from a commit view opened via the History tab,
+                // spec 05 Unit 3) — the same multi-duty-single-key pattern
+                // Visual-cancel already used before this addition.
+                d(
+                    KeySeq::one(Esc, none),
+                    ToggleHelp,
+                    "Close help / cancel selection / return from a commit view",
+                ),
                 d(
                     KeySeq::one(Char('v'), none),
                     EnterVisual,
@@ -454,9 +470,15 @@ impl Keymap {
                 p(
                     KeySeq::one(Enter, none),
                     PanelSelect,
-                    "Focus diff on this file",
+                    "Focus diff on this file (History tab: open the commit)",
                 )
                 .footer(2, "open file"),
+                p(
+                    KeySeq::one(Tab, none),
+                    TogglePanelTab,
+                    "Switch Changes / History tab",
+                )
+                .footer(8, "tab"),
                 p(
                     KeySeq::one(Char('f'), none),
                     RemoteFetch,

@@ -29,6 +29,7 @@ mod diff_view_state;
 mod footer;
 mod git_panel;
 mod help;
+mod history;
 mod keymap;
 mod list_panel;
 mod lsp_ops;
@@ -48,6 +49,7 @@ mod switcher_modal;
 mod syntax;
 mod targeting;
 mod theme;
+mod time_format;
 
 pub use app::{App, Mode};
 pub use diff_view_state::DiffViewState;
@@ -211,16 +213,20 @@ fn dispatch_key(
             let had_pending = pending.is_some();
             let action = keymap.resolve(pending, key);
 
-            // Esc only ever closes an already-open help overlay or cancels
-            // an in-progress Visual selection; it is never bound to opening
-            // help, unlike `?` (see keymap.rs). This runs only when nothing
-            // was pending — an Esc that cancelled a pending `g` prefix
-            // (handled inside `resolve`) stops there instead.
+            // Esc only ever closes an already-open help overlay, cancels an
+            // in-progress Visual selection, or returns from a commit view
+            // opened via the git panel's History tab (spec 05 Unit 3); it is
+            // never bound to opening help, unlike `?` (see keymap.rs). This
+            // runs only when nothing was pending — an Esc that cancelled a
+            // pending `g` prefix (handled inside `resolve`) stops there
+            // instead.
             if key.code == KeyCode::Esc && !had_pending {
                 if app.help_open {
                     app.help_open = false;
                 } else if matches!(app.mode, Mode::Visual { .. }) {
                     app.apply(Action::EnterVisual);
+                } else if app.viewing_commit() {
+                    app.return_from_commit_view();
                 }
                 return Flow::Continue;
             }
@@ -383,10 +389,13 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
         let code_intel_allowed = app.target.supports_code_intel();
         let entries = footer::build_hints(
             app.mode,
-            staging_allowed,
-            code_intel_allowed,
-            app.push_publishes(),
-            app.help_open,
+            footer::FooterFlags {
+                staging_allowed,
+                code_intel_allowed,
+                push_publishes: app.push_publishes(),
+                viewing_commit: app.viewing_commit(),
+                help_open: app.help_open,
+            },
             pending,
             keymap,
         );
@@ -496,8 +505,10 @@ fn event_loop(
         let (main_area, _) = split_footer(full_area, footer_h);
         let (_, right_area) = split_layout(main_area, app.git_panel_focused());
         let (diff_area, _) = split_right(right_area, bottom_open(app));
-        app.view
-            .set_viewport_height(diff_view::viewport_height(diff_area));
+        app.view.set_viewport_height(diff_view::viewport_height(
+            diff_area,
+            app.active_commit.is_some(),
+        ));
 
         terminal.draw(|frame| draw(frame, app, keymap, pending_prefix))?;
 
@@ -525,6 +536,9 @@ fn event_loop(
         // Drain any completed background working-tree read every tick (cheap,
         // non-blocking) so its result lands promptly once the worker finishes.
         app.poll_refresh();
+        // Drain any completed History-tab commit-log page fetch (spec 05
+        // Unit 3), same cadence as the other pollers.
+        app.poll_history();
 
         // Spawn a working-tree read on a fixed cadence (independent of
         // keypresses) so external edits appear without the user asking. The
@@ -548,3 +562,7 @@ mod git_switch_integration_tests;
 #[cfg(test)]
 #[path = "commit_integration_tests.rs"]
 mod commit_integration_tests;
+
+#[cfg(test)]
+#[path = "history_integration_tests.rs"]
+mod history_integration_tests;

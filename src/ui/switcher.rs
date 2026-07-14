@@ -166,9 +166,10 @@ impl App {
     /// open (e.g. a background refresh completing).
     pub fn close_switcher(&mut self) {
         let cursor = self.switcher.take().map(|s| s.panel_cursor).unwrap_or(0);
-        let len = super::git_panel::navigable_rows(self).len();
+        let len = self.panel_row_count();
         self.mode = Mode::Panel {
             cursor: cursor.min(len.saturating_sub(1)),
+            tab: self.last_panel_tab,
         };
     }
 
@@ -562,10 +563,19 @@ index 111..222 100644
     #[test]
     fn open_switcher_without_backend_sets_footer_message() {
         let mut app = App::new(vec![sample_file()]);
-        app.mode = Mode::Panel { cursor: 0 };
+        app.mode = Mode::Panel {
+            cursor: 0,
+            tab: crate::ui::app::PanelTab::Changes,
+        };
         app.open_switcher();
         assert!(app.switcher.is_none());
-        assert_eq!(app.mode, Mode::Panel { cursor: 0 });
+        assert_eq!(
+            app.mode,
+            Mode::Panel {
+                cursor: 0,
+                tab: crate::ui::app::PanelTab::Changes
+            }
+        );
         assert!(app.status_message.is_some());
     }
 
@@ -574,6 +584,12 @@ index 111..222 100644
         let mut app = App::new(vec![sample_file()]);
         app.mode = Mode::Switcher;
         app.close_switcher();
-        assert_eq!(app.mode, Mode::Panel { cursor: 0 });
+        assert_eq!(
+            app.mode,
+            Mode::Panel {
+                cursor: 0,
+                tab: crate::ui::app::PanelTab::Changes
+            }
+        );
     }
 }

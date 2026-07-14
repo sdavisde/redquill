@@ -8,18 +8,20 @@ use std::collections::HashSet;
 use std::ops::Range;
 
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::annotate::Classification;
 use crate::diff::{FileChangeKind, LineOrigin, WordSpan};
+use crate::git::CommitLogEntry;
 use crate::highlight::TokenKind;
 
 use super::app::App;
 use super::rows::{LineRow, Row, StagedMarker};
 use super::theme::{Theme, blend};
+use super::time_format::absolute_date;
 
 /// Width of the annotated-line dot column, rendered before the gutter.
 pub(super) const DOT_WIDTH: usize = 2;
@@ -488,11 +490,76 @@ pub(super) fn row_line(
     }
 }
 
+/// The commit-view header block (spec 05 Unit 3): short SHA, author name,
+/// absolute date, and the commit subject, rendered above the diff whenever a
+/// commit view (opened from the git panel's History tab) is displayed.
+fn commit_header_line(commit: &CommitLogEntry, theme: &Theme) -> Line<'static> {
+    Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            commit.short_sha.clone(),
+            Style::default()
+                .fg(theme.dir_prefix)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            commit.author_name.clone(),
+            Style::default().fg(theme.footer_text),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            absolute_date(commit.timestamp),
+            Style::default().fg(theme.dir_prefix),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            commit.subject.clone(),
+            Style::default()
+                .fg(theme.footer_text)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ])
+}
+
+/// How many rows the commit-view header block reserves at the top of the
+/// diff pane: one when a commit view is displayed, zero otherwise. The
+/// single number [`split_area`] derives its layout from, so [`render`] and
+/// [`viewport_height`] can never disagree about how much of the pane the
+/// header consumes.
+fn commit_header_rows(has_commit_header: bool) -> u16 {
+    u16::from(has_commit_header)
+}
+
+/// Splits `area` into the commit-header rect (empty/zero-height when there is
+/// no commit view) and the remaining diff-pane rect.
+fn split_area(area: Rect, has_commit_header: bool) -> (Rect, Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(commit_header_rows(has_commit_header)),
+            Constraint::Min(0),
+        ])
+        .split(area);
+    (chunks[0], chunks[1])
+}
+
 /// Renders the diff pane into `area`: a bordered block titled with the
 /// selected file's path, containing the visible slice of `app.view.rows`
 /// starting at `app.view.scroll`. Renders a centered "no changes" message when
-/// there are no files at all.
+/// there are no files at all. When `app.active_commit` is `Some` (a commit
+/// view opened from the History tab), a one-row header block (short SHA,
+/// author, absolute date, subject — see [`commit_header_line`]) renders above
+/// the bordered diff block instead of inside it, per spec 05 Unit 3.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+    let (header_area, diff_area) = split_area(area, app.active_commit.is_some());
+    if let Some(commit) = &app.active_commit {
+        frame.render_widget(
+            Paragraph::new(commit_header_line(commit, &app.theme)),
+            header_area,
+        );
+    }
+
     let title = app
         .view
         .files
@@ -513,12 +580,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         let paragraph = Paragraph::new("no changes")
             .block(block)
             .alignment(Alignment::Center);
-        frame.render_widget(paragraph, area);
+        frame.render_widget(paragraph, diff_area);
         return;
     }
 
-    let inner_height = area.height.saturating_sub(2) as usize;
-    let inner_width = area.width.saturating_sub(2) as usize;
+    let inner_height = diff_area.height.saturating_sub(2) as usize;
+    let inner_width = diff_area.width.saturating_sub(2) as usize;
     let start = app.view.scroll;
     let end = (start + inner_height.max(1)).min(app.view.rows.len());
     let matches: HashSet<usize> = app.search.matches.iter().copied().collect();
@@ -541,14 +608,16 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .collect();
 
     let paragraph = Paragraph::new(lines).block(block);
-    frame.render_widget(paragraph, area);
+    frame.render_widget(paragraph, diff_area);
 }
 
 /// The diff pane's inner content height for a given outer `area` (accounts
-/// for the block's top/bottom border), used to keep half-page motion in
-/// sync with what's actually visible.
-pub fn viewport_height(area: Rect) -> usize {
-    area.height.saturating_sub(2).max(1) as usize
+/// for the block's top/bottom border, and — via [`split_area`] — the
+/// commit-view header row when `has_commit_header` is set), used to keep
+/// half-page motion in sync with what's actually visible.
+pub fn viewport_height(area: Rect, has_commit_header: bool) -> usize {
+    let (_, diff_area) = split_area(area, has_commit_header);
+    diff_area.height.saturating_sub(2).max(1) as usize
 }
 
 #[cfg(test)]

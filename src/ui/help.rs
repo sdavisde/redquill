@@ -63,8 +63,8 @@ fn group_of(action: Action) -> &'static str {
         Search | SearchNext | SearchPrev => "Search",
         ToggleList | ToggleHelp | FocusGitPanel | ToggleCommandLog | Refresh => "Panels",
         GotoDefinition | GotoReferences | Hover => "Code intelligence",
-        PanelCursorDown | PanelCursorUp | PanelSelect | RemoteFetch | RemotePull | RemotePush
-        | CommitStaged | OpenSwitcher => "Git panel",
+        PanelCursorDown | PanelCursorUp | PanelSelect | TogglePanelTab | RemoteFetch
+        | RemotePull | RemotePush | CommitStaged | OpenSwitcher => "Git panel",
         Quit | QuitDiscard => "Quit",
     }
 }

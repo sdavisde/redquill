@@ -74,7 +74,7 @@ Task list for `05-spec-diff-sources.md`. Parent tasks 1.0–5.0 map 1:1 to the s
 - [x] 2.4 Add the log invocation to `runner.rs` with count/skip pagination parameters (closed types → fixed argv; `GIT_TERMINAL_PROMPT=0` as elsewhere), and export the module from `git/mod.rs`.
 - [x] 2.5 Tempdir integration tests for the three commit-shape cases (normal, merge, root) and for log pagination (two pages, stable ordering). Run gates; commit as `feat(git):`.
 
-### [ ] 3.0 Git panel History tab and commit view (UI)
+### [x] 3.0 Git panel History tab and commit view (UI)
 
 #### 3.0 Proof Artifact(s)
 
@@ -86,13 +86,13 @@ Task list for `05-spec-diff-sources.md`. Parent tasks 1.0–5.0 map 1:1 to the s
 
 #### 3.0 Tasks
 
-- [ ] 3.1 Add panel tab state (`Changes` / `History`) to the git panel; register the panel-scoped toggle key in `modal_keys.rs` + `keymap.rs` (suggested default `Tab`; verify no conflict in the shared tables first) so the `?` overlay updates via the existing drift-tested path.
-- [ ] 3.2 Wire background history loading in `background.rs` following the existing fetch/pull/push pattern: spawn `git log` page fetch off-thread, single-flight flag, generation counter to drop stale results, drain via the per-tick poll. History tab shows a loading placeholder until page 1 arrives; scrolling near the end requests the next page. Add UI-state tests asserting (a) the placeholder state before the first page lands and (b) a stale-generation history result is dropped, not applied.
-- [ ] 3.3 Render History rows in `git_panel.rs`: two lines per commit — subject truncated to panel width plus an unpushed marker for the first `ahead` commits (reuse the existing ahead/behind read model); dimmed second line `author · relative-time · short-sha`. Extract relative-time formatting as a pure function with unit tests.
-- [ ] 3.4 Implement open-commit: Enter on the highlighted row suspends the current view state (target, files, cursor, collapse, staged markers) and rebuilds the multibuffer via `build_review` for `DiffTarget::Commit(sha)`; render the commit header block above the diff in `diff_view.rs`.
-- [ ] 3.5 Implement return: `Esc` (registered in the shared tables) restores the suspended view state; `q` from a commit view quits and emits as usual. Write UI-state round-trip tests (open → navigate → return → assert prior state intact).
-- [ ] 3.6 Assert capability gating in commit view via tests: staging keys inert and absent from help/footer, no code-intel, no auto-refresh tick for the commit target, annotations (line/range/hunk/file) fully functional.
-- [ ] 3.7 Run perf tripwires and all four gates; capture the two proof screenshots; commit as `feat(ui):`.
+- [x] 3.1 Add panel tab state (`Changes` / `History`) to the git panel; register the panel-scoped toggle key in `modal_keys.rs` + `keymap.rs` (suggested default `Tab`; verify no conflict in the shared tables first) so the `?` overlay updates via the existing drift-tested path.
+- [x] 3.2 Wire background history loading in `background.rs` following the existing fetch/pull/push pattern: spawn `git log` page fetch off-thread, single-flight flag, generation counter to drop stale results, drain via the per-tick poll. History tab shows a loading placeholder until page 1 arrives; scrolling near the end requests the next page. Add UI-state tests asserting (a) the placeholder state before the first page lands and (b) a stale-generation history result is dropped, not applied.
+- [x] 3.3 Render History rows in `git_panel.rs`: two lines per commit — subject truncated to panel width plus an unpushed marker for the first `ahead` commits (reuse the existing ahead/behind read model); dimmed second line `author · relative-time · short-sha`. Extract relative-time formatting as a pure function with unit tests.
+- [x] 3.4 Implement open-commit: Enter on the highlighted row suspends the current view state (target, files, cursor, collapse, staged markers) and rebuilds the multibuffer via `build_review` for `DiffTarget::Commit(sha)`; render the commit header block above the diff in `diff_view.rs`.
+- [x] 3.5 Implement return: `Esc` (registered in the shared tables) restores the suspended view state; `q` from a commit view quits and emits as usual. Write UI-state round-trip tests (open → navigate → return → assert prior state intact).
+- [x] 3.6 Assert capability gating in commit view via tests: staging keys inert and absent from help/footer, no code-intel, no auto-refresh tick for the commit target, annotations (line/range/hunk/file) fully functional.
+- [x] 3.7 Run perf tripwires and all four gates; capture the two proof screenshots; commit as `feat(ui):`.
 
 ### [ ] 4.0 Source-aware annotation output
 

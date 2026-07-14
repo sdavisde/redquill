@@ -17,12 +17,14 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 
-use crate::git::{BranchStatus, CommitSummary};
+use crate::git::{BranchStatus, CommitLogEntry, CommitSummary, DiffTarget};
 
 use super::app::App;
-use super::app::Mode;
-use super::stage_ops::StagedState;
+use super::app::{Mode, PanelTab, SuspendedView};
+use super::diff_view_state::DiffViewState;
+use super::stage_ops::{StagedState, build_review};
 use super::theme::Theme;
+use super::time_format::{now_unix, relative_time};
 
 /// One navigable panel row: either a diff file (index into `app.view.files`)
 /// or a stash (index into `app.stashes`). Section-header and branch-title
@@ -208,6 +210,68 @@ fn branch_title(branch: Option<&BranchStatus>) -> String {
     title
 }
 
+/// One tab label in the panel's title (`Changes` / `History`, spec 05 Unit
+/// 3): underlined and bold when `active`, dimmed otherwise — a Zed-style tab
+/// strip rendered as part of the border title rather than a separate row, so
+/// it stays "inside the existing panel chrome" per the spec's design notes.
+fn tab_span(label: &'static str, active: bool, theme: &Theme) -> Span<'static> {
+    if active {
+        Span::styled(
+            label,
+            Style::default()
+                .fg(theme.focused_border)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        )
+    } else {
+        Span::styled(label, Style::default().fg(theme.dir_prefix))
+    }
+}
+
+/// The panel's full block title: the branch header plus the Changes/History
+/// tab strip.
+fn panel_title(branch: Option<&BranchStatus>, tab: PanelTab, theme: &Theme) -> Line<'static> {
+    Line::from(vec![
+        Span::raw(branch_title(branch)),
+        Span::raw("  "),
+        tab_span("Changes", tab == PanelTab::Changes, theme),
+        Span::raw(" "),
+        tab_span("History", tab == PanelTab::History, theme),
+    ])
+}
+
+/// A History-tab row: two lines (subject + unpushed marker; dimmed `author ·
+/// relative-time · short-sha`), matching Zed's row anatomy (spec 05 Design
+/// Considerations). `now` is the caller's wall-clock read (kept a parameter
+/// so [`super::time_format::relative_time`] stays pure and independently
+/// testable). Long subjects/meta lines are left to ratatui's own line
+/// clipping to the panel width, the same way file paths elsewhere in this
+/// panel are never manually truncated.
+fn history_item(
+    entry: &CommitLogEntry,
+    unpushed: bool,
+    now: i64,
+    theme: &Theme,
+) -> ListItem<'static> {
+    let mut subject_spans = Vec::new();
+    if unpushed {
+        subject_spans.push(Span::styled(
+            "\u{25cf} ",
+            Style::default().fg(theme.staged_indicator),
+        ));
+    }
+    subject_spans.push(Span::raw(entry.subject.clone()));
+    let meta = format!(
+        "  {} \u{b7} {} \u{b7} {}",
+        entry.author_name,
+        relative_time(now, entry.timestamp),
+        entry.short_sha
+    );
+    ListItem::new(vec![
+        Line::from(subject_spans),
+        Line::from(Span::styled(meta, Style::default().fg(theme.dir_prefix))),
+    ])
+}
+
 /// Renders the git panel into `area`.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // The list fills the panel above a three-row bottom section: counts, the
@@ -219,87 +283,120 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     let theme = &app.theme;
     let focused = app.git_panel_focused();
+    let tab = app.panel_tab();
     let mut items: Vec<ListItem> = Vec::new();
     // Flat index (into `items`) of the currently selected diff file, used to
     // highlight it when the panel is *not* focused (as the old sidebar did).
     let mut selected_row: Option<usize> = None;
-    // `items` index of each navigable row (parallel to `navigable_rows`), used
+    // `items` index of each navigable row (parallel to `navigable_rows` on the
+    // Changes tab, or one-to-one with `app.history` on the History tab), used
     // to highlight the panel cursor when the panel *is* focused.
     let mut nav_item_indices: Vec<usize> = Vec::new();
 
-    // CHANGES: tracked files (those with a real patch), in display order.
-    let tracked: Vec<usize> = (0..app.view.files.len())
-        .filter(|&i| !app.untracked_paths.contains(&app.view.files[i].path))
-        .collect();
-    if !tracked.is_empty() {
-        items.push(ListItem::new(section_header("CHANGES".to_string(), theme)));
-        for &i in &tracked {
-            let f = &app.view.files[i];
-            let state = app.staged_states.get(&f.path).copied().unwrap_or_default();
-            let mut line = file_line(f.kind.letter(), &f.path, state, theme);
-            if let Some(old) = &f.old_path {
-                let (_, old_base) = split_path(old);
-                line.spans.push(Span::styled(
-                    format!(" \u{2190} {old_base}"),
+    match tab {
+        PanelTab::Changes => {
+            // CHANGES: tracked files (those with a real patch), in display order.
+            let tracked: Vec<usize> = (0..app.view.files.len())
+                .filter(|&i| !app.untracked_paths.contains(&app.view.files[i].path))
+                .collect();
+            if !tracked.is_empty() {
+                items.push(ListItem::new(section_header("CHANGES".to_string(), theme)));
+                for &i in &tracked {
+                    let f = &app.view.files[i];
+                    let state = app.staged_states.get(&f.path).copied().unwrap_or_default();
+                    let mut line = file_line(f.kind.letter(), &f.path, state, theme);
+                    if let Some(old) = &f.old_path {
+                        let (_, old_base) = split_path(old);
+                        line.spans.push(Span::styled(
+                            format!(" \u{2190} {old_base}"),
+                            Style::default().fg(theme.dir_prefix),
+                        ));
+                    }
+                    if i == app.view.selected_file {
+                        selected_row = Some(items.len());
+                    }
+                    nav_item_indices.push(items.len());
+                    items.push(ListItem::new(line));
+                }
+            }
+
+            // UNTRACKED: files git isn't tracking yet.
+            let untracked: Vec<usize> = (0..app.view.files.len())
+                .filter(|&i| app.untracked_paths.contains(&app.view.files[i].path))
+                .collect();
+            if !untracked.is_empty() {
+                items.push(ListItem::new(section_header(
+                    "UNTRACKED".to_string(),
+                    theme,
+                )));
+                for &i in &untracked {
+                    let f = &app.view.files[i];
+                    if i == app.view.selected_file {
+                        selected_row = Some(items.len());
+                    }
+                    nav_item_indices.push(items.len());
+                    items.push(ListItem::new(untracked_line(&f.path, theme)));
+                }
+            }
+
+            // STASHES: view-only, `<index> <message>` rows under a counted header.
+            if !app.stashes.is_empty() {
+                items.push(ListItem::new(section_header(
+                    format!("STASHES ({})", app.stashes.len()),
+                    theme,
+                )));
+                for (i, stash) in app.stashes.iter().enumerate() {
+                    nav_item_indices.push(items.len());
+                    items.push(ListItem::new(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(format!("{i} "), Style::default().fg(theme.dir_prefix)),
+                        Span::raw(stash.message.clone()),
+                    ])));
+                }
+            }
+        }
+        PanelTab::History => {
+            if app.history.is_empty() {
+                let text = if app.history_loading() {
+                    "loading\u{2026}"
+                } else {
+                    "no commits"
+                };
+                items.push(ListItem::new(Line::from(Span::styled(
+                    text,
                     Style::default().fg(theme.dir_prefix),
-                ));
+                ))));
+            } else {
+                let ahead = app
+                    .branch
+                    .as_ref()
+                    .and_then(|b| b.ahead_behind)
+                    .map(|(ahead, _)| ahead as usize)
+                    .unwrap_or(0);
+                let now = now_unix();
+                for (i, entry) in app.history.iter().enumerate() {
+                    nav_item_indices.push(items.len());
+                    items.push(history_item(entry, i < ahead, now, theme));
+                }
             }
-            if i == app.view.selected_file {
-                selected_row = Some(items.len());
-            }
-            nav_item_indices.push(items.len());
-            items.push(ListItem::new(line));
-        }
-    }
-
-    // UNTRACKED: files git isn't tracking yet.
-    let untracked: Vec<usize> = (0..app.view.files.len())
-        .filter(|&i| app.untracked_paths.contains(&app.view.files[i].path))
-        .collect();
-    if !untracked.is_empty() {
-        items.push(ListItem::new(section_header(
-            "UNTRACKED".to_string(),
-            theme,
-        )));
-        for &i in &untracked {
-            let f = &app.view.files[i];
-            if i == app.view.selected_file {
-                selected_row = Some(items.len());
-            }
-            nav_item_indices.push(items.len());
-            items.push(ListItem::new(untracked_line(&f.path, theme)));
-        }
-    }
-
-    // STASHES: view-only, `<index> <message>` rows under a counted header.
-    if !app.stashes.is_empty() {
-        items.push(ListItem::new(section_header(
-            format!("STASHES ({})", app.stashes.len()),
-            theme,
-        )));
-        for (i, stash) in app.stashes.iter().enumerate() {
-            nav_item_indices.push(items.len());
-            items.push(ListItem::new(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(format!("{i} "), Style::default().fg(theme.dir_prefix)),
-                Span::raw(stash.message.clone()),
-            ])));
         }
     }
 
     // When focused, the panel cursor drives the highlight; otherwise the
-    // selected diff file does (the old passive behavior). The panel cursor is
-    // kept in range at its mutation points and re-clamped on every refresh
-    // (see `App::apply_snapshot`), so no clamp is needed here.
+    // selected diff file does (the old passive behavior, Changes tab only —
+    // History has no "currently selected diff file" to fall back to). The
+    // panel cursor is kept in range at its mutation points and re-clamped on
+    // every refresh (see `App::apply_snapshot`), so no clamp is needed here.
     let highlight = if focused {
         nav_item_indices.get(app.panel_cursor()).copied()
     } else {
         selected_row
     };
 
-    let mut block = Block::default()
-        .borders(Borders::ALL)
-        .title(branch_title(app.branch.as_ref()));
+    let mut block =
+        Block::default()
+            .borders(Borders::ALL)
+            .title(panel_title(app.branch.as_ref(), tab, theme));
     if focused {
         block = block.border_style(
             Style::default()
@@ -358,15 +455,39 @@ impl App {
     /// [`render`] and [`App::panel_select`] read it only while focused.
     pub(super) fn panel_cursor(&self) -> usize {
         match self.mode {
-            Mode::Panel { cursor } => cursor,
+            Mode::Panel { cursor, .. } => cursor,
             _ => 0,
         }
     }
 
-    /// Toggles git-panel focus: from Normal/Visual it focuses the panel
-    /// (its cursor starts at the top); from the focused panel it returns
-    /// to Normal. A no-op while another modal (Compose/List/Staging/Search/
-    /// Peek) owns the keyboard, mirroring the other panel toggles.
+    /// The git panel's active tab (see [`PanelTab`]) when the panel is
+    /// focused, else `self.last_panel_tab` — so callers that need "which tab
+    /// would render/act on" (e.g. deciding a footer label) get a sensible
+    /// answer even when the panel isn't currently focused.
+    pub(super) fn panel_tab(&self) -> PanelTab {
+        match self.mode {
+            Mode::Panel { tab, .. } => tab,
+            _ => self.last_panel_tab,
+        }
+    }
+
+    /// The active tab's row count: [`navigable_rows`]'s length on Changes,
+    /// `self.history`'s length on History. The single tab-aware length every
+    /// cursor-clamping call site (`close_switcher`, `close_commit_message`,
+    /// `apply_snapshot`'s panel-cursor clamp) shares, so they can't
+    /// disagree about which list a stray cursor is being clamped against.
+    pub(super) fn panel_row_count(&self) -> usize {
+        match self.panel_tab() {
+            PanelTab::Changes => navigable_rows(self).len(),
+            PanelTab::History => self.history.len(),
+        }
+    }
+
+    /// Toggles git-panel focus: from Normal/Visual it focuses the panel, on
+    /// whichever tab it was last showing (`self.last_panel_tab`), cursor
+    /// reset to the top; from the focused panel it returns to Normal. A
+    /// no-op while another modal (Compose/List/Staging/Search/Peek) owns the
+    /// keyboard, mirroring the other panel toggles.
     pub(super) fn toggle_git_panel(&mut self) {
         match self.mode {
             Mode::Panel { .. } => self.mode = Mode::Normal,
@@ -378,27 +499,60 @@ impl App {
             | Mode::Switcher
             | Mode::CommitMessage => {}
             Mode::Normal | Mode::Visual { .. } => {
-                self.mode = Mode::Panel { cursor: 0 };
+                self.mode = Mode::Panel {
+                    cursor: 0,
+                    tab: self.last_panel_tab,
+                };
+                if self.last_panel_tab == PanelTab::History {
+                    self.ensure_history_loaded();
+                }
                 self.panel_follow();
             }
         }
     }
 
-    /// Moves the panel cursor down one navigable row, clamped at the last.
-    /// A no-op unless the panel is focused.
+    /// Switches the git panel between its Changes and History tabs (`Tab`,
+    /// panel scope, spec 05 Unit 3): resets the cursor to the top (mirrors
+    /// focusing the panel), remembers the new tab in `last_panel_tab` so
+    /// re-focusing the panel later lands back here, and kicks off the
+    /// History tab's first page fetch the first time it's opened. A no-op
+    /// unless the panel is focused.
+    pub(super) fn toggle_panel_tab(&mut self) {
+        let Mode::Panel { cursor, tab } = &mut self.mode else {
+            return;
+        };
+        *tab = match *tab {
+            PanelTab::Changes => PanelTab::History,
+            PanelTab::History => PanelTab::Changes,
+        };
+        *cursor = 0;
+        let new_tab = *tab;
+        self.last_panel_tab = new_tab;
+        if new_tab == PanelTab::History {
+            self.ensure_history_loaded();
+        }
+    }
+
+    /// Moves the panel cursor down one navigable row of the active tab,
+    /// clamped at the last; on the History tab this also triggers the next
+    /// page's prefetch once the cursor nears the end of what's loaded. A
+    /// no-op unless the panel is focused.
     pub fn panel_move_down(&mut self) {
-        let len = navigable_rows(self).len();
-        if let Mode::Panel { cursor } = &mut self.mode {
+        let len = self.panel_row_count();
+        if let Mode::Panel { cursor, .. } = &mut self.mode {
             *cursor = moved_cursor(*cursor, len, true);
+        }
+        if self.panel_tab() == PanelTab::History {
+            self.maybe_prefetch_history(self.panel_cursor());
         }
         self.panel_follow();
     }
 
-    /// Moves the panel cursor up one navigable row, clamped at the first.
-    /// A no-op unless the panel is focused.
+    /// Moves the panel cursor up one navigable row of the active tab,
+    /// clamped at the first. A no-op unless the panel is focused.
     pub fn panel_move_up(&mut self) {
-        let len = navigable_rows(self).len();
-        if let Mode::Panel { cursor } = &mut self.mode {
+        let len = self.panel_row_count();
+        if let Mode::Panel { cursor, .. } = &mut self.mode {
             *cursor = moved_cursor(*cursor, len, false);
         }
         self.panel_follow();
@@ -408,10 +562,16 @@ impl App {
     /// whose file isn't already selected, scrolls the multibuffer to that
     /// file's section (expanding it if collapsed) via
     /// [`App::select_file_by_path`]. Stash rows, an empty panel, and an
-    /// out-of-range cursor leave the diff untouched. Pure in-memory — never
-    /// re-runs git. Always stays in `Mode::Panel`; the caller decides
-    /// whether to also move focus (see [`App::panel_select`]).
+    /// out-of-range cursor leave the diff untouched. A no-op on the History
+    /// tab — its rows have nothing to auto-follow into; opening a commit
+    /// needs an explicit `Enter` (see [`App::panel_select`]). Pure in-memory
+    /// on the Changes tab — never re-runs git. Always stays in
+    /// `Mode::Panel`; the caller decides whether to also move focus (see
+    /// [`App::panel_select`]).
     pub(super) fn panel_follow(&mut self) {
+        if self.panel_tab() == PanelTab::History {
+            return;
+        }
         let rows = navigable_rows(self);
         if let Some(PanelRow::File(i)) = rows.get(self.panel_cursor())
             && *i != self.view.selected_file
@@ -421,16 +581,116 @@ impl App {
         }
     }
 
-    /// Acts on the panel cursor's current row: a file row follows the diff
-    /// to that file (via [`App::panel_follow`]) and returns focus to the
-    /// diff; a stash row (or an out-of-range cursor) is a no-op, leaving the
-    /// panel focused.
+    /// Acts on the panel cursor's current row: on the Changes tab, a file
+    /// row follows the diff to that file (via [`App::panel_follow`]) and
+    /// returns focus to the diff; a stash row (or an out-of-range cursor) is
+    /// a no-op, leaving the panel focused. On the History tab, opens the
+    /// highlighted commit into the main diff view (see
+    /// [`App::open_commit_view`]); an out-of-range cursor (an empty or
+    /// still-loading list) is a no-op.
     pub fn panel_select(&mut self) {
-        let rows = navigable_rows(self);
-        if let Some(PanelRow::File(_)) = rows.get(self.panel_cursor()) {
-            self.panel_follow();
-            self.mode = Mode::Normal;
+        match self.panel_tab() {
+            PanelTab::Changes => {
+                let rows = navigable_rows(self);
+                if let Some(PanelRow::File(_)) = rows.get(self.panel_cursor()) {
+                    self.panel_follow();
+                    self.mode = Mode::Normal;
+                }
+            }
+            PanelTab::History => {
+                if let Some(entry) = self.history.get(self.panel_cursor()) {
+                    let sha = entry.sha.clone();
+                    self.open_commit_view(sha);
+                }
+            }
         }
+    }
+
+    /// Whether a commit view is currently suspending a prior view (see
+    /// [`App::suspended_view`]) — the single predicate
+    /// [`super::dispatch_key`]'s Esc handling and any future call site
+    /// consult, so "is a commit view open?" can't be answered inconsistently
+    /// (mirrors [`App::overlay_active`]'s role for overlays).
+    pub(super) fn viewing_commit(&self) -> bool {
+        self.suspended_view.is_some()
+    }
+
+    /// Opens `sha` (a full commit hash from `self.history`) into the main
+    /// diff view: builds its review via [`build_review`] against
+    /// `DiffTarget::Commit(sha)`, suspends the prior view state the first
+    /// time a commit is opened (further commits opened without returning in
+    /// between replace the displayed commit but leave the *original*
+    /// suspension untouched, so `Esc` always returns to the true starting
+    /// point — see [`App::suspended_view`]'s doc), and returns focus to the
+    /// diff (`Mode::Normal`) so navigation/annotation gestures work
+    /// immediately. A git/parse failure leaves the current view unchanged
+    /// with a footer message; no git backend degrades the same way every
+    /// other git-backed gesture does.
+    pub(super) fn open_commit_view(&mut self, sha: String) {
+        let Some(ops) = self.stage_ops.as_deref() else {
+            self.set_status_message("commit view unavailable (no git backend)");
+            return;
+        };
+        let target = DiffTarget::Commit(sha.clone());
+        let snapshot = match build_review(ops, &target) {
+            Ok(s) => s,
+            Err(e) => {
+                self.set_status_message(e.to_string());
+                return;
+            }
+        };
+        // The commit's header metadata is already in `self.history` (it was
+        // clicked from there), so opening a commit needs no extra git call
+        // just to populate the header block.
+        let header = self.history.iter().find(|c| c.sha == sha).cloned();
+
+        if self.suspended_view.is_none() {
+            let new_view = DiffViewState::new(snapshot.files);
+            let old_view = std::mem::replace(&mut self.view, new_view);
+            self.suspended_view = Some(SuspendedView {
+                target: std::mem::replace(&mut self.target, target),
+                view: old_view,
+                patches: std::mem::replace(&mut self.patches, snapshot.patches),
+                staged: std::mem::replace(&mut self.staged, snapshot.staged),
+                staged_states: std::mem::replace(&mut self.staged_states, snapshot.staged_states),
+            });
+        } else {
+            self.target = target;
+            self.view = DiffViewState::new(snapshot.files);
+            self.patches = snapshot.patches;
+            self.staged = snapshot.staged;
+            self.staged_states = snapshot.staged_states;
+        }
+        self.active_commit = header;
+        self.recompute_untracked();
+        // The just-suspended (or just-replaced) content shares this cache by
+        // path; clearing it prevents the commit's highlighted spans from
+        // cross-contaminating the suspended view's cache entries (and vice
+        // versa on return).
+        self.highlight_cache.clear();
+        self.rebuild_rows();
+        self.mode = Mode::Normal;
+    }
+
+    /// Restores the view suspended by [`App::open_commit_view`] (`Esc` from
+    /// a commit view): the prior target, diff-view state (files, rows,
+    /// cursor, scroll, collapse map), patches, and staged state come back
+    /// verbatim, `active_commit` clears, and focus returns to
+    /// `Mode::Normal`. A no-op if no commit view is open.
+    pub(super) fn return_from_commit_view(&mut self) {
+        let Some(suspended) = self.suspended_view.take() else {
+            return;
+        };
+        self.target = suspended.target;
+        self.view = suspended.view;
+        self.patches = suspended.patches;
+        self.staged = suspended.staged;
+        self.staged_states = suspended.staged_states;
+        self.active_commit = None;
+        self.recompute_untracked();
+        self.highlight_cache.clear();
+        self.rebuild_rows();
+        self.mode = Mode::Normal;
     }
 }
 
@@ -755,7 +1015,10 @@ mod tests {
     #[test]
     fn panel_cursor_motion_follows_file_rows() {
         let mut app = mixed_app();
-        app.mode = Mode::Panel { cursor: 0 }; // a.rs, already selected (selected_file starts at 0)
+        app.mode = Mode::Panel {
+            cursor: 0,
+            tab: PanelTab::Changes,
+        }; // a.rs, already selected (selected_file starts at 0)
         app.panel_move_down(); // -> b.rs
         assert_eq!(app.panel_cursor(), 1);
         assert_eq!(app.view.selected_file, 1);
@@ -767,7 +1030,10 @@ mod tests {
     #[test]
     fn panel_cursor_on_stash_row_leaves_diff_selection() {
         let mut app = mixed_app();
-        app.mode = Mode::Panel { cursor: 1 };
+        app.mode = Mode::Panel {
+            cursor: 1,
+            tab: PanelTab::Changes,
+        };
         app.panel_follow(); // -> b.rs selected
         assert_eq!(app.view.selected_file, 1);
         app.panel_move_down(); // -> notes.md
@@ -781,7 +1047,10 @@ mod tests {
     #[test]
     fn panel_follow_on_empty_panel_is_noop() {
         let mut app = App::new(vec![]);
-        app.mode = Mode::Panel { cursor: 0 };
+        app.mode = Mode::Panel {
+            cursor: 0,
+            tab: PanelTab::Changes,
+        };
         app.panel_follow();
         assert_eq!(app.panel_cursor(), 0);
         assert_eq!(app.view.selected_file, 0);
@@ -809,7 +1078,10 @@ mod tests {
         app.view.set_collapsed("b.rs", true);
         app.rebuild_rows();
         assert!(app.view.is_collapsed("b.rs"));
-        app.mode = Mode::Panel { cursor: 0 };
+        app.mode = Mode::Panel {
+            cursor: 0,
+            tab: PanelTab::Changes,
+        };
         app.panel_move_down(); // onto b.rs's row
         assert_eq!(app.panel_cursor(), 1);
         assert_eq!(app.view.selected_file, 1);
@@ -820,7 +1092,10 @@ mod tests {
     #[test]
     fn enter_on_file_row_returns_focus_with_file_selected() {
         let mut app = mixed_app();
-        app.mode = Mode::Panel { cursor: 1 }; // b.rs
+        app.mode = Mode::Panel {
+            cursor: 1,
+            tab: PanelTab::Changes,
+        }; // b.rs
         app.panel_select();
         assert_eq!(app.mode, Mode::Normal);
         assert_eq!(app.view.selected_file, 1);
@@ -830,8 +1105,139 @@ mod tests {
     #[test]
     fn enter_on_stash_row_is_noop_keeping_panel_focus() {
         let mut app = mixed_app();
-        app.mode = Mode::Panel { cursor: 3 }; // stash 0
+        app.mode = Mode::Panel {
+            cursor: 3,
+            tab: PanelTab::Changes,
+        }; // stash 0
         app.panel_select();
         assert!(matches!(app.mode, Mode::Panel { .. }));
+    }
+
+    // -- History tab (spec 05 Unit 3) ---------------------------------------
+    //
+    // These are UI-state/TestBackend-buffer proofs, not real-terminal
+    // screenshots (this sandbox has no controlling TTY — see
+    // `05-task-03-proofs.md`'s TTY-deferred section); they exercise the same
+    // rendering code path a real terminal would.
+
+    use super::super::background::TaskId;
+    use super::super::history::InFlightHistory;
+    use crate::git::CommitLogEntry;
+
+    fn commit(sha: &str, subject: &str, author: &str, ts: i64) -> CommitLogEntry {
+        CommitLogEntry {
+            sha: sha.to_string(),
+            short_sha: sha[..sha.len().min(7)].to_string(),
+            subject: subject.to_string(),
+            author_name: author.to_string(),
+            timestamp: ts,
+        }
+    }
+
+    fn app_on_history_tab() -> App {
+        let mut app = App::new(vec![sample_file("session.rs")]);
+        app.mode = Mode::Panel {
+            cursor: 0,
+            tab: PanelTab::History,
+        };
+        app
+    }
+
+    #[test]
+    fn history_tab_shows_a_loading_placeholder_before_the_first_page_lands() {
+        let mut app = app_on_history_tab();
+        // Simulate a fetch in flight without actually spawning a thread.
+        app.history_in_flight = Some(InFlightHistory {
+            id: TaskId(0),
+            generation: app.history_generation,
+        });
+        let content = render_panel(&app);
+        assert!(content.contains("loading"));
+    }
+
+    #[test]
+    fn history_tab_shows_no_commits_when_nothing_is_in_flight_and_history_is_empty() {
+        let app = app_on_history_tab();
+        let content = render_panel(&app);
+        assert!(content.contains("no commits"));
+        assert!(!content.contains("loading"));
+    }
+
+    #[test]
+    fn history_tab_renders_commit_rows_with_subject_meta_and_unpushed_marker() {
+        let mut app = app_on_history_tab();
+        app.branch = Some(branch("main", Some("origin/main"), Some((1, 0))));
+        app.history = vec![
+            commit("abc1234full", "feat: new thing", "Jane Dev", 1_700_000_000),
+            commit("def5678full", "fix: old bug", "Jane Dev", 1_600_000_000),
+        ];
+        let content = render_panel(&app);
+        assert!(content.contains("feat: new thing"));
+        assert!(content.contains("fix: old bug"));
+        // The unpushed marker (●) decorates only the first `ahead` (1) row.
+        assert!(content.contains("\u{25cf}"));
+        assert!(content.contains("Jane Dev"));
+        assert!(content.contains("abc1234"));
+    }
+
+    #[test]
+    fn panel_title_shows_both_tab_labels_regardless_of_which_is_active() {
+        let mut app = App::new(vec![sample_file("session.rs")]);
+        app.mode = Mode::Panel {
+            cursor: 0,
+            tab: PanelTab::Changes,
+        };
+        let content = render_panel(&app);
+        assert!(content.contains("Changes"));
+        assert!(content.contains("History"));
+    }
+
+    #[test]
+    fn moving_the_cursor_down_the_history_tab_stops_at_the_last_loaded_row() {
+        let mut app = app_on_history_tab();
+        app.history = vec![
+            commit("a", "one", "Dev", 1_700_000_000),
+            commit("b", "two", "Dev", 1_700_000_000),
+        ];
+        app.history_exhausted = true;
+        app.panel_move_down();
+        app.panel_move_down();
+        app.panel_move_down(); // clamps at the last row
+        assert_eq!(app.panel_cursor(), 1);
+    }
+
+    /// `Tab` switches tabs, resets the cursor, and remembers the tab for the
+    /// next time the panel is focused.
+    #[test]
+    fn toggle_panel_tab_switches_and_resets_cursor() {
+        let mut app = mixed_app();
+        app.mode = Mode::Panel {
+            cursor: 2,
+            tab: PanelTab::Changes,
+        };
+        app.toggle_panel_tab();
+        assert_eq!(app.panel_tab(), PanelTab::History);
+        assert_eq!(app.panel_cursor(), 0);
+        assert_eq!(app.last_panel_tab, PanelTab::History);
+
+        app.toggle_panel_tab();
+        assert_eq!(app.panel_tab(), PanelTab::Changes);
+        assert_eq!(app.panel_cursor(), 0);
+    }
+
+    /// Re-focusing the panel lands on whichever tab was last active, not
+    /// always Changes.
+    #[test]
+    fn refocusing_the_panel_remembers_the_last_active_tab() {
+        let mut app = mixed_app();
+        app.mode = Mode::Panel {
+            cursor: 0,
+            tab: PanelTab::Changes,
+        };
+        app.toggle_panel_tab(); // -> History
+        app.toggle_git_panel(); // unfocus
+        assert_eq!(app.mode, Mode::Normal);
+        app.toggle_git_panel(); // refocus
+        assert_eq!(app.panel_tab(), PanelTab::History);
     }
 }

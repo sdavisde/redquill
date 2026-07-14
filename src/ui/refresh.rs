@@ -305,8 +305,8 @@ impl App {
         // it needs clamping outside its own motion helpers — so the panel
         // renderer can trust it. Inactive (unfocused) panels carry no cursor.
         if matches!(self.mode, Mode::Panel { .. }) {
-            let len = super::git_panel::navigable_rows(self).len();
-            if let Mode::Panel { cursor } = &mut self.mode {
+            let len = self.panel_row_count();
+            if let Mode::Panel { cursor, .. } = &mut self.mode {
                 *cursor = (*cursor).min(len.saturating_sub(1));
             }
         }
