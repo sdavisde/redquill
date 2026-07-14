@@ -108,3 +108,32 @@ changed line (`j`/`k`), `c`, type a comment, `Enter`; repeat for two more
 lines in a second file; then `q`. stdout begins with `Reviewing: <short-sha>`
 followed by the three annotations in the standard per-annotation format —
 pipe it to an agent per the README example.
+
+## Consumer half — result (orchestrator-run, 2026-07-14)
+
+**Verdict: MET.** The fixture repo was re-derived byte-identically in a
+scratch directory (newest commit resolved to short SHA `4ad0302`), the
+emission above was regenerated with that run's `Reviewing:` line, and handed
+verbatim — together with only the repo path — to a fresh agent (Claude Haiku
+4.5, the smallest current tier) framed exactly as the README pipe:
+"address this review feedback".
+
+The agent resolved all three sites with no additional hints:
+
+| Site | Resolved revision | Line content quoted | Added-in-commit verified |
+| --- | --- | --- | --- |
+| `alpha.txt:4` | `4ad0302e58dc…` "feat: extend both files" | `alpha 4` | yes (parent has 3 lines) |
+| `alpha.txt:5` | same | `alpha 5` | yes |
+| `beta.txt:4` | same | `beta 4` | yes |
+
+It additionally restated each comment's requested change correctly and
+confirmed the `(+)` markers matched the commit's new side via
+`git diff <rev>^ <rev>`. Full agent transcript excerpt:
+
+> All three sites resolved successfully. Each annotation refers to content
+> added in commit `4ad0302e58dc908c69309fd1c36868f7e39080f4`, with the `(+)`
+> markers correctly indicating lines that exist only on the "after" side of
+> the diff.
+
+That a minimum-tier agent resolves the emission unaided demonstrates the
+output is self-describing (Success Metric 2, consumer half).

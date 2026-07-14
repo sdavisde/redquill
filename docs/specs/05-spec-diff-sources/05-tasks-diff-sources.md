@@ -124,7 +124,7 @@ Task list for `05-spec-diff-sources.md`. Parent tasks 1.0–5.0 map 1:1 to the s
 - [x] 5.2 Source each hint's key from the shared keymap tables (`modal_keys.rs`/`keymap.rs`) at render time — no key literals in the welcome text — and add a drift-style test that fails if a hinted action's key is missing or renamed.
 - [x] 5.3 UI-state tests for the lifecycle (empty → welcome; content arrives via refresh → welcome gone; History-opened commit with empty diff → target-appropriate wording). Capture the screenshot proof; run gates; commit as `feat(ui):`.
 
-### [~] 6.0 User acceptance — prove the core problems are fixed
+### [x] 6.0 User acceptance — prove the core problems are fixed
 
 #### 6.0 Proof Artifact(s)
 
@@ -136,6 +136,6 @@ Task list for `05-spec-diff-sources.md`. Parent tasks 1.0–5.0 map 1:1 to the s
 #### 6.0 Tasks
 
 - [x] 6.1 Script the dead-end journey in a tempdir repo (fresh commits, clean tree); record the exact keystroke path and verify each step was discoverable from the welcome hints or `?` alone; save transcript + screenshot to `proofs/`.
-- [~] 6.2 Run the round-trip: annotate 3 lines across 2 files of a historical commit, quit, pipe stdout to an agent; verify the agent resolves all three sites (correct revision and lines); save the transcript to `proofs/`. (Producer half done — emission + ground truth in `proofs/round-trip-emission.md`; consumer half — handing the emission to a separate agent — is run by the orchestrator.)
+- [x] 6.2 Run the round-trip: annotate 3 lines across 2 files of a historical commit, quit, pipe stdout to an agent; verify the agent resolves all three sites (correct revision and lines); save the transcript to `proofs/`. (Producer half: emission + ground truth in `proofs/round-trip-emission.md`. Consumer half: orchestrator handed the emission to a fresh Haiku-tier agent, which resolved all three sites — result appended to the same proof file.)
 - [x] 6.3 Cross-check the commit-view help overlay against behavior (confirm 3.6's tests cover the ReadOnly state; extend if not); capture the no-lies screenshot.
 - [x] 6.4 Dogfood: review the implementation commits of tasks 1.0–5.0 in redquill via the History tab; save the emitted annotations to `proofs/dogfood-review.md`; fix or file anything that made the review unpleasant before marking this spec done.
