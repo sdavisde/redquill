@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::annotate::{AnnotationStore, Target};
+use crate::annotate::{AnnotationStore, Source, Target};
 // `Side` is only referenced by test-only helpers here (and by the `super::*`
 // re-export the `tests` module relies on), so gate it to avoid an unused
 // import in the production build.
@@ -759,13 +759,43 @@ impl App {
                     .set_classification(id, compose.classification);
             }
             None => {
-                let _ = self
-                    .annotations
-                    .add(compose.target, compose.classification, &body);
+                let source = self.annotation_source();
+                let _ = self.annotations.add_with_source(
+                    compose.target,
+                    compose.classification,
+                    &body,
+                    source,
+                );
             }
         }
         self.mode = Mode::Normal;
         self.refresh_rows();
+    }
+
+    /// Derives the [`Source`] to record for an annotation composed against
+    /// the current view: the active [`DiffTarget`]'s kind, using
+    /// `active_commit`'s already-`core.abbrev`-aware short SHA for a commit
+    /// target rather than having `annotate/` (or this method) recompute an
+    /// abbreviation of its own. Falls back to the full rev string if a
+    /// commit is somehow open with no matching `active_commit` entry (should
+    /// not happen in practice — `open_commit_view` always sets both
+    /// together — but a defensive fallback costs one line and avoids a
+    /// panic path per the repository's error-handling rules).
+    fn annotation_source(&self) -> Source {
+        match &self.target {
+            DiffTarget::WorkingTree => Source::WorkingTree,
+            DiffTarget::Staged => Source::Staged,
+            DiffTarget::Range(spec) => Source::Range(spec.clone()),
+            DiffTarget::Commit(sha) => {
+                let short_sha = self
+                    .active_commit
+                    .as_ref()
+                    .filter(|commit| &commit.sha == sha)
+                    .map(|commit| commit.short_sha.clone())
+                    .unwrap_or_else(|| sha.clone());
+                Source::Commit(short_sha)
+            }
+        }
     }
 
     // -- Staging -----------------------------------------------------------

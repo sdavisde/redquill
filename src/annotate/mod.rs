@@ -1,7 +1,7 @@
 //! The annotation model, its persistence, and stdout serialization.
 //!
-//! - [`model`] — [`Classification`], [`Side`], [`Target`], [`Annotation`],
-//!   and [`AnnotateError`].
+//! - [`model`] — [`Classification`], [`Side`], [`Target`], [`Source`],
+//!   [`Annotation`], and [`AnnotateError`].
 //! - [`store`] — [`AnnotationStore`], an in-memory, insertion-ordered
 //!   collection of annotations with add/remove/edit/iter/for_path.
 //! - [`markdown`] — [`render_markdown`], which emits the public-contract
@@ -13,5 +13,5 @@ mod model;
 mod store;
 
 pub use markdown::render_markdown;
-pub use model::{AnnotateError, Annotation, Classification, Side, Target};
+pub use model::{AnnotateError, Annotation, Classification, Side, Source, Target};
 pub use store::AnnotationStore;

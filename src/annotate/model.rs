@@ -84,6 +84,50 @@ pub enum Side {
     New,
 }
 
+/// Which diff source an annotation was authored against.
+///
+/// This is a plain, `annotate`-owned snapshot of the reviewed source — not a
+/// re-export of `git::DiffTarget`. `annotate/` deliberately does not import
+/// `git::DiffTarget`: that type also carries capability methods
+/// (`is_live`/`staging_mode`/`supports_code_intel`) that are a `ui`-facing
+/// concern annotate has no business depending on, and its `Range`/`Commit`
+/// payloads are raw git rev-specs the UI layer already has to interpret
+/// (e.g. resolving a commit's short SHA via the commit-log read model). This
+/// type carries only the sliver of information [`crate::annotate::markdown`]
+/// needs to print the `Reviewing:` metadata line: the source's kind, plus an
+/// already-resolved display string for the non-worktree variants. The `ui`
+/// layer (which already depends on both `git` and `annotate`) is responsible
+/// for deriving a `Source` from the live `DiffTarget` at annotation time.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Source {
+    /// The working tree vs. the index — the default, and the only source
+    /// that produces no `Reviewing:` metadata line.
+    #[default]
+    WorkingTree,
+    /// The index vs. `HEAD`.
+    Staged,
+    /// An explicit range or ref expression, stored exactly as the user
+    /// typed/selected it (e.g. `"main..feature"`).
+    Range(String),
+    /// A single commit, stored as its short SHA (already resolved by the
+    /// caller — `annotate` never talks to git to compute one).
+    Commit(String),
+}
+
+impl Source {
+    /// The label printed after `Reviewing: ` for a non-worktree source.
+    /// Callers should not print a metadata line at all for
+    /// [`Source::WorkingTree`] — see the markdown module's grouping logic.
+    pub fn label(&self) -> &str {
+        match self {
+            Source::WorkingTree => "working tree",
+            Source::Staged => "staged",
+            Source::Range(spec) => spec,
+            Source::Commit(short_sha) => short_sha,
+        }
+    }
+}
+
 /// What an [`Annotation`] is attached to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
@@ -193,6 +237,9 @@ pub struct Annotation {
     pub classification: Classification,
     /// The comment body, guaranteed non-empty after trimming.
     pub body: String,
+    /// The diff source this annotation was authored against. Defaults to
+    /// [`Source::WorkingTree`]; see [`AnnotationStore::add_with_source`].
+    pub source: Source,
 }
 
 /// Validates and normalizes an annotation body: trims surrounding
@@ -290,5 +337,21 @@ mod tests {
     fn validate_body_rejects_empty_and_whitespace_only() {
         assert_eq!(validate_body(""), Err(AnnotateError::EmptyBody));
         assert_eq!(validate_body("   \n\t "), Err(AnnotateError::EmptyBody));
+    }
+
+    #[test]
+    fn source_default_is_working_tree() {
+        assert_eq!(Source::default(), Source::WorkingTree);
+    }
+
+    #[test]
+    fn source_label_matches_the_format_contract() {
+        assert_eq!(Source::WorkingTree.label(), "working tree");
+        assert_eq!(Source::Staged.label(), "staged");
+        assert_eq!(
+            Source::Range("main..feature".to_string()).label(),
+            "main..feature"
+        );
+        assert_eq!(Source::Commit("abc1234".to_string()).label(), "abc1234");
     }
 }

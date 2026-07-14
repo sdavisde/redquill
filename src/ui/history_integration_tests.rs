@@ -97,6 +97,23 @@ fn wait_for_history(app: &mut App) {
     }
 }
 
+/// Presses `j` until the cursor lands on a `Row::Line`, bounded by the row
+/// count so a view with no line rows (or a cursor that stops advancing)
+/// can't spin the test forever — mirrors the bounded pattern
+/// `commit_view_annotations_are_fully_functional` already uses inline.
+fn advance_to_line_row(app: &mut App, keymap: &Keymap, pending: &mut Option<KeyEvent>) {
+    for _ in 0..=app.view.rows.len() {
+        if matches!(app.view.rows.get(app.view.cursor), Some(Row::Line(_))) {
+            return;
+        }
+        let before = app.view.cursor;
+        press(app, keymap, pending, KeyCode::Char('j'));
+        if app.view.cursor == before {
+            return;
+        }
+    }
+}
+
 /// Opens the git panel and switches to the History tab, waiting for the
 /// first page to land.
 fn open_history_tab(app: &mut App, keymap: &Keymap, pending: &mut Option<KeyEvent>) {
@@ -358,6 +375,62 @@ fn commit_view_annotations_are_fully_functional() {
         app.annotations.len(),
         1,
         "the annotation must have been recorded"
+    );
+}
+
+/// Spec 05 Unit 4's scripted CLI proof, run end-to-end against a real
+/// throwaway repo instead of an interactive terminal (this sandbox has no
+/// controlling TTY — see the task's proof artifact for the equivalent
+/// manual steps): annotating a line in a commit view and rendering the
+/// store produces a `Reviewing: <short-sha>` metadata line naming exactly
+/// the opened commit. `repo_with_history()`'s working tree is clean (its own
+/// doc: "then a clean working tree" — the dead-end scenario this spec
+/// targets), so there is no working-tree diff to additionally annotate here;
+/// the working-tree-first / mixed-grouping ordering itself is covered
+/// byte-exactly by `annotate::markdown`'s own tests, which don't need a real
+/// repo.
+#[test]
+fn annotating_a_commit_view_records_a_reviewing_line_with_the_short_sha() {
+    let tmp = repo_with_history();
+    let mut app = app_for(tmp.path());
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    open_history_tab(&mut app, &keymap, &mut pending);
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter);
+    let opened_short_sha = app
+        .active_commit
+        .clone()
+        .expect("opening a commit sets active_commit")
+        .short_sha;
+
+    advance_to_line_row(&mut app, &keymap, &mut pending);
+    assert!(
+        matches!(app.view.rows.get(app.view.cursor), Some(Row::Line(_))),
+        "commit view must have a line row to annotate"
+    );
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('c'));
+    for ch in "reviewed against the commit".chars() {
+        press(&mut app, &keymap, &mut pending, KeyCode::Char(ch));
+    }
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter);
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(app.annotations.len(), 1);
+
+    let rendered = crate::annotate::render_markdown(&app.annotations);
+    let expected_reviewing_line = format!("Reviewing: {opened_short_sha}");
+    assert!(
+        rendered.contains(&expected_reviewing_line),
+        "expected {expected_reviewing_line:?} in:\n{rendered}"
+    );
+    assert_eq!(
+        rendered.matches("Reviewing:").count(),
+        1,
+        "exactly one Reviewing: line for the single non-worktree group:\n{rendered}"
+    );
+    assert!(
+        rendered.starts_with(&expected_reviewing_line),
+        "no working-tree group precedes the only (commit) group here:\n{rendered}"
     );
 }
 

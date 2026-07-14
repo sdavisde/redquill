@@ -1,7 +1,7 @@
 //! [`AnnotationStore`]: an in-memory, insertion-ordered collection of
 //! [`Annotation`]s.
 
-use super::model::{AnnotateError, Annotation, Classification, Target, validate_body};
+use super::model::{AnnotateError, Annotation, Classification, Source, Target, validate_body};
 
 /// An in-memory, insertion-ordered collection of annotations.
 ///
@@ -19,12 +19,32 @@ impl AnnotationStore {
         AnnotationStore::default()
     }
 
-    /// Adds a new annotation, validating the body, and returns its id.
+    /// Adds a new annotation authored against the default working-tree
+    /// source, validating the body, and returns its id. Equivalent to
+    /// [`AnnotationStore::add_with_source`] with `Source::WorkingTree` — the
+    /// vast majority of call sites (every existing test fixture, and any
+    /// future working-tree-only session) never need to think about sources
+    /// at all.
     pub fn add(
         &mut self,
         target: Target,
         classification: Classification,
         body: impl Into<String>,
+    ) -> Result<usize, AnnotateError> {
+        self.add_with_source(target, classification, body, Source::WorkingTree)
+    }
+
+    /// Adds a new annotation authored against `source`, validating the body,
+    /// and returns its id. Callers outside the working-tree flow (e.g. the
+    /// compose modal when a commit/range/staged view is active) use this so
+    /// the emitted markdown can group and label non-worktree annotations —
+    /// see `crate::annotate::markdown`.
+    pub fn add_with_source(
+        &mut self,
+        target: Target,
+        classification: Classification,
+        body: impl Into<String>,
+        source: Source,
     ) -> Result<usize, AnnotateError> {
         let body = validate_body(&body.into())?;
         let id = self.next_id;
@@ -34,6 +54,7 @@ impl AnnotationStore {
             target,
             classification,
             body,
+            source,
         });
         Ok(id)
     }
@@ -108,6 +129,32 @@ impl AnnotationStore {
 mod tests {
     use super::*;
     use crate::annotate::model::Side;
+
+    #[test]
+    fn add_records_working_tree_as_the_default_source() {
+        let mut store = AnnotationStore::new();
+        store
+            .add(Target::file("a.rs"), Classification::Nit, "note")
+            .unwrap();
+        assert_eq!(store.iter().next().unwrap().source, Source::WorkingTree);
+    }
+
+    #[test]
+    fn add_with_source_records_the_given_source() {
+        let mut store = AnnotationStore::new();
+        store
+            .add_with_source(
+                Target::file("a.rs"),
+                Classification::Nit,
+                "note",
+                Source::Commit("abc1234".to_string()),
+            )
+            .unwrap();
+        assert_eq!(
+            store.iter().next().unwrap().source,
+            Source::Commit("abc1234".to_string())
+        );
+    }
 
     #[test]
     fn add_assigns_sequential_ids_starting_at_zero() {

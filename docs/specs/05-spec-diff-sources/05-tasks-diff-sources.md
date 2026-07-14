@@ -94,7 +94,7 @@ Task list for `05-spec-diff-sources.md`. Parent tasks 1.0–5.0 map 1:1 to the s
 - [x] 3.6 Assert capability gating in commit view via tests: staging keys inert and absent from help/footer, no code-intel, no auto-refresh tick for the commit target, annotations (line/range/hunk/file) fully functional.
 - [x] 3.7 Run perf tripwires and all four gates; capture the two proof screenshots; commit as `feat(ui):`.
 
-### [ ] 4.0 Source-aware annotation output
+### [x] 4.0 Source-aware annotation output
 
 #### 4.0 Proof Artifact(s)
 
@@ -105,10 +105,10 @@ Task list for `05-spec-diff-sources.md`. Parent tasks 1.0–5.0 map 1:1 to the s
 
 #### 4.0 Tasks
 
-- [ ] 4.1 Extend the annotation model (`annotate/model.rs`) so each annotation records the diff target it was created against; working-tree remains the default. Update persistence/construction call sites.
-- [ ] 4.2 TDD: byte-exact tests first — (a) working-tree-only fixture identical to current output, (b) mixed fixture with grouped output (`Reviewing: <spec>` line preceding each non-worktree group; working-tree group first, no metadata line). Then implement grouped emission in `annotate/markdown.rs`.
-- [ ] 4.3 Fix the metadata-line syntax as part of the format contract (commit → `Reviewing: <short-sha>`, range → `Reviewing: <range-as-typed>`, staged → `Reviewing: staged`) and document it in the `annotate` module doc and README format section.
-- [ ] 4.4 Run the scripted CLI proof and all four gates; commit as `feat(annotate):`.
+- [x] 4.1 Extend the annotation model (`annotate/model.rs`) so each annotation records the diff target it was created against; working-tree remains the default. Update persistence/construction call sites.
+- [x] 4.2 TDD: byte-exact tests first — (a) working-tree-only fixture identical to current output, (b) mixed fixture with grouped output (`Reviewing: <spec>` line preceding each non-worktree group; working-tree group first, no metadata line). Then implement grouped emission in `annotate/markdown.rs`.
+- [x] 4.3 Fix the metadata-line syntax as part of the format contract (commit → `Reviewing: <short-sha>`, range → `Reviewing: <range-as-typed>`, staged → `Reviewing: staged`) and document it in the `annotate` module doc and README format section.
+- [x] 4.4 Run the scripted CLI proof and all four gates; commit as `feat(annotate):`.
 
 ### [ ] 5.0 Empty-diff welcome state
 
