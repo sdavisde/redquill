@@ -222,12 +222,12 @@ pub struct App {
 }
 
 /// Which mutating background git operation is in flight (see
-/// [`InFlightGitOp`]): one of the three sanctioned remote ops, or a commit
+/// [`InFlightGitOp`]): one of the sanctioned remote ops, or a commit
 /// (spec 04, `docs/specs/04-spec-commit-staged.md`). A closed enum so a new
 /// operation can't be added without updating [`GitOpKind::label`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum GitOpKind {
-    /// A fetch/pull/push.
+    /// A fetch/pull/push/publish.
     Remote(RemoteOp),
     /// `git commit -m <message>`.
     Commit,
@@ -235,7 +235,7 @@ pub(super) enum GitOpKind {
 
 impl GitOpKind {
     /// A short label for the running indicator and completion footer
-    /// (`"fetch"`, `"pull"`, `"push"`, `"commit"`).
+    /// (`"fetch"`, `"pull"`, `"push"`, `"publish"`, `"commit"`).
     pub(super) fn label(self) -> &'static str {
         match self {
             GitOpKind::Remote(op) => op.label(),
@@ -501,7 +501,7 @@ impl App {
             Action::PanelSelect => self.panel_select(),
             Action::RemoteFetch => self.request_remote_op(RemoteOp::Fetch),
             Action::RemotePull => self.request_remote_op(RemoteOp::Pull),
-            Action::RemotePush => self.request_remote_op(RemoteOp::Push),
+            Action::RemotePush => self.request_remote_op(self.remote_push_op()),
             Action::CommitStaged => self.open_commit_message(),
             Action::OpenSwitcher => self.open_switcher(),
             Action::ToggleCommandLog => self.toggle_command_log(),
@@ -715,7 +715,31 @@ impl App {
         self.git_op.as_ref().map(|o| o.kind.label())
     }
 
-    /// Requests a remote operation (`fetch`/`pull`/`push`), spawning it on a
+    /// The concrete operation the push keybind ([`Action::RemotePush`]) runs
+    /// right now: [`RemoteOp::Publish`] when the current branch has no
+    /// upstream configured (the first push must create the remote branch and
+    /// set it as upstream), plain [`RemoteOp::Push`] otherwise. Detached HEAD
+    /// and unknown branch state fall back to plain push, whose own git error
+    /// is the clearest signal in those states. The single place this question
+    /// is answered — the footer hint and the panel's keybind line relabel
+    /// from it via [`App::push_publishes`], so the label can never disagree
+    /// with what the key does.
+    pub(super) fn remote_push_op(&self) -> RemoteOp {
+        match &self.branch {
+            Some(b) if !b.detached && b.upstream.is_none() => RemoteOp::Publish,
+            _ => RemoteOp::Push,
+        }
+    }
+
+    /// Whether the push keybind currently publishes (see
+    /// [`App::remote_push_op`]) — the predicate the footer strip and the git
+    /// panel's keybind line use to pick the `publish` label.
+    pub(super) fn push_publishes(&self) -> bool {
+        self.remote_push_op() == RemoteOp::Publish
+    }
+
+    /// Requests a remote operation (`fetch`/`pull`/`push`/`publish`),
+    /// spawning it on a
     /// background thread so the render loop never blocks. Enforces the
     /// single-in-flight guard covering every mutating background git op (see
     /// [`GitOpKind`]): if one is already running the request is rejected

@@ -1,5 +1,6 @@
-//! Fixed-argv construction of the three sanctioned remote operations
-//! (fetch / pull / push).
+//! Fixed-argv construction of the sanctioned remote operations
+//! (fetch / pull / push, plus push's publish flavor for unpublished
+//! branches).
 //!
 //! Security is enforced *by construction* here, not by discipline at the call
 //! site: [`RemoteOp`] is a closed enum whose only argument vector comes from
@@ -13,7 +14,7 @@
 use std::path::Path;
 use std::process::Command;
 
-/// One of the three sanctioned remote operations.
+/// One of the sanctioned remote operations.
 ///
 /// Deliberately a closed enum with no payload: an operation cannot carry
 /// caller-supplied arguments, so no variant can smuggle in `--force` or any
@@ -27,6 +28,12 @@ pub enum RemoteOp {
     Pull,
     /// `git push` — publish local commits to the upstream (never `--force`).
     Push,
+    /// `git push --set-upstream origin HEAD` — first push of a branch with no
+    /// upstream configured, creating the same-named remote branch and setting
+    /// it as upstream. `HEAD` is git's own refspec for the current branch, so
+    /// the argv stays fixed — no branch name is ever interpolated — and it is
+    /// still never `--force`.
+    Publish,
 }
 
 impl RemoteOp {
@@ -37,13 +44,19 @@ impl RemoteOp {
             RemoteOp::Fetch => &["fetch"],
             RemoteOp::Pull => &["pull"],
             RemoteOp::Push => &["push"],
+            RemoteOp::Publish => &["push", "--set-upstream", "origin", "HEAD"],
         }
     }
 
-    /// A short human-readable label (`"fetch"`, `"pull"`, `"push"`) for the
-    /// running indicator and the completion summary.
+    /// A short human-readable label (`"fetch"`, `"pull"`, `"push"`,
+    /// `"publish"`) for the running indicator and the completion summary.
     pub fn label(self) -> &'static str {
-        self.args()[0]
+        match self {
+            RemoteOp::Fetch => "fetch",
+            RemoteOp::Pull => "pull",
+            RemoteOp::Push => "push",
+            RemoteOp::Publish => "publish",
+        }
     }
 
     /// The full command line as shown in the command log, e.g. `git fetch`.
@@ -72,11 +85,22 @@ mod tests {
     use std::ffi::OsStr;
     use std::path::PathBuf;
 
+    const ALL_OPS: [RemoteOp; 4] = [
+        RemoteOp::Fetch,
+        RemoteOp::Pull,
+        RemoteOp::Push,
+        RemoteOp::Publish,
+    ];
+
     #[test]
     fn each_variant_has_its_fixed_argv() {
         assert_eq!(RemoteOp::Fetch.args(), &["fetch"]);
         assert_eq!(RemoteOp::Pull.args(), &["pull"]);
         assert_eq!(RemoteOp::Push.args(), &["push"]);
+        assert_eq!(
+            RemoteOp::Publish.args(),
+            &["push", "--set-upstream", "origin", "HEAD"]
+        );
     }
 
     #[test]
@@ -84,23 +108,28 @@ mod tests {
         assert_eq!(RemoteOp::Fetch.label(), "fetch");
         assert_eq!(RemoteOp::Pull.label(), "pull");
         assert_eq!(RemoteOp::Push.label(), "push");
+        assert_eq!(RemoteOp::Publish.label(), "publish");
         assert_eq!(RemoteOp::Fetch.command_line(), "git fetch");
         assert_eq!(RemoteOp::Pull.command_line(), "git pull");
         assert_eq!(RemoteOp::Push.command_line(), "git push");
+        assert_eq!(
+            RemoteOp::Publish.command_line(),
+            "git push --set-upstream origin HEAD"
+        );
     }
 
     #[test]
-    fn no_variant_can_carry_force_or_any_extra_flag() {
-        for op in [RemoteOp::Fetch, RemoteOp::Pull, RemoteOp::Push] {
+    fn no_variant_can_carry_force_or_a_force_refspec() {
+        for op in ALL_OPS {
             let args = op.args();
-            // Exactly the subcommand, nothing else — so `--force`, `-f`,
-            // `+ref` refspecs, and every other flag are impossible.
-            assert_eq!(args.len(), 1, "{op:?} must carry exactly one arg");
+            // The argv is fixed per variant (see each_variant_has_its_fixed_argv);
+            // this pins the security property directly: no force flag and no
+            // `+`-prefixed (force-push) refspec can ever appear.
             assert!(
                 !args
                     .iter()
-                    .any(|a| a.contains("force") || a.starts_with('-')),
-                "{op:?} args must never contain a flag: {args:?}"
+                    .any(|a| a.contains("force") || *a == "-f" || a.starts_with('+')),
+                "{op:?} args must never force: {args:?}"
             );
         }
     }
@@ -127,7 +156,7 @@ mod tests {
 
     #[test]
     fn remote_command_never_sets_a_force_argument() {
-        for op in [RemoteOp::Fetch, RemoteOp::Pull, RemoteOp::Push] {
+        for op in ALL_OPS {
             let cmd = remote_command(op, Path::new("."));
             let has_force = cmd
                 .get_args()

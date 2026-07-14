@@ -464,7 +464,12 @@ impl Keymap {
                 )
                 .footer(3, "fetch"),
                 p(KeySeq::one(Char('p'), none), RemotePull, "Pull from remote").footer(4, "pull"),
-                p(KeySeq::one(Char('P'), none), RemotePush, "Push to remote").footer(5, "push"),
+                p(
+                    KeySeq::one(Char('P'), none),
+                    RemotePush,
+                    "Push to remote (publishes an unpublished branch)",
+                )
+                .footer(5, "push"),
                 // Plain `c` is free in panel scope: `Compose` binds it in
                 // diff scope only, so the same physical key can commit here
                 // (spec 04) without touching the annotate gesture.

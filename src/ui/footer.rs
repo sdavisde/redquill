@@ -131,8 +131,27 @@ fn normal_hints(km: &Keymap, staging_allowed: bool) -> Vec<FooterEntry> {
 /// The focused-git-panel idle strip: every [`Scope::Panel`] row tagged with a
 /// [`FooterHint`]. Panel bindings are never staging mutations, so nothing is
 /// gated on `staging_allowed`.
-fn panel_hints(km: &Keymap) -> Vec<FooterEntry> {
-    keymap_hints(km, Scope::Panel, true)
+///
+/// `push_publishes` relabels the [`Action::RemotePush`] hint to `publish`
+/// when the branch has no upstream (see `App::push_publishes`) — a
+/// presentation-side relabel in the [`visual_hints`] mold, because the static
+/// table can't carry a state-dependent label; the key and its promotion still
+/// come from the table.
+fn panel_hints(km: &Keymap, push_publishes: bool) -> Vec<FooterEntry> {
+    let mut entries = keymap_hints(km, Scope::Panel, true);
+    if push_publishes
+        && let Some(hint) = km
+            .bindings()
+            .iter()
+            .find(|b| b.scope == Scope::Panel && b.action == Action::RemotePush)
+            .and_then(|b| b.footer)
+        && let Some(entry) = entries
+            .iter_mut()
+            .find(|e| e.rank == hint.rank && e.label == hint.label)
+    {
+        entry.label = "publish";
+    }
+    entries
 }
 
 /// Visual mode's strip: presentation-side relabels of the same Diff-scope
@@ -240,10 +259,12 @@ fn help_open_hints() -> Vec<FooterEntry> {
 /// explicit inputs rather than `&App` so it's unit-testable without
 /// constructing a whole app. `pending` is only consulted in
 /// [`Mode::Normal`]/[`Mode::Visual`] (the only modes that ever have a pending
-/// two-key prefix — see `super::event_loop`).
+/// two-key prefix — see `super::event_loop`); `push_publishes` only in
+/// [`Mode::Panel`] (see [`panel_hints`]).
 pub(super) fn build_hints(
     mode: Mode,
     staging_allowed: bool,
+    push_publishes: bool,
     help_open: bool,
     pending: Option<KeyEvent>,
     km: &Keymap,
@@ -259,7 +280,7 @@ pub(super) fn build_hints(
     match mode {
         Mode::Normal => normal_hints(km, staging_allowed),
         Mode::Visual { .. } => visual_hints(km, staging_allowed),
-        Mode::Panel { .. } => panel_hints(km),
+        Mode::Panel { .. } => panel_hints(km, push_publishes),
         Mode::List => modal_hints(LIST_KEYS),
         Mode::Staging => modal_hints(STAGING_KEYS),
         Mode::Peek => modal_hints(PEEK_KEYS),
@@ -352,7 +373,14 @@ pub(super) fn footer_height(
         return 1;
     }
     let staging_allowed = !matches!(app.target, crate::git::DiffTarget::Range(_));
-    let entries = build_hints(app.mode, staging_allowed, app.help_open, pending, keymap);
+    let entries = build_hints(
+        app.mode,
+        staging_allowed,
+        app.push_publishes(),
+        app.help_open,
+        pending,
+        keymap,
+    );
     if entries.is_empty() {
         return 1;
     }

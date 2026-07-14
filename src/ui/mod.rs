@@ -380,8 +380,14 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
         // Lowest priority: no search/remote-op/status message is active, so
         // show the context-sensitive hint strip (see `footer`).
         let staging_allowed = !matches!(app.target, crate::git::DiffTarget::Range(_));
-        let entries =
-            footer::build_hints(app.mode, staging_allowed, app.help_open, pending, keymap);
+        let entries = footer::build_hints(
+            app.mode,
+            staging_allowed,
+            app.push_publishes(),
+            app.help_open,
+            pending,
+            keymap,
+        );
         let lines = footer::render_hint_strip(&entries, footer_area.width, &app.theme);
         frame.render_widget(ratatui::widgets::Paragraph::new(lines), footer_area);
     }

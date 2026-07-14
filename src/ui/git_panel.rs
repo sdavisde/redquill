@@ -156,10 +156,12 @@ fn commit_line(commit: Option<&CommitSummary>, theme: &Theme) -> Line<'static> {
 }
 
 /// The remote-operation keybind hints for the bottom section: `f fetch`,
-/// `p pull`, `P push`, with each key emphasized in the help-key color and its
-/// label dimmed. These surface the existing bindings (see the panel keymap);
-/// the panel doesn't add any new action.
-fn remote_keys_line(theme: &Theme) -> Line<'static> {
+/// `p pull`, `P push` (or `P publish` while the branch has no upstream —
+/// `push_publishes`, mirroring the footer strip's relabel), with each key
+/// emphasized in the help-key color and its label dimmed. These surface the
+/// existing bindings (see the panel keymap); the panel doesn't add any new
+/// action.
+fn remote_keys_line(theme: &Theme, push_publishes: bool) -> Line<'static> {
     let key = |k: &'static str| {
         Span::styled(
             k,
@@ -176,7 +178,7 @@ fn remote_keys_line(theme: &Theme) -> Line<'static> {
         key("p"),
         label(" pull  "),
         key("P"),
-        label(" push"),
+        label(if push_publishes { " publish" } else { " push" }),
     ])
 }
 
@@ -338,7 +340,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .split(chunks[1]);
     frame.render_widget(counts, footer[0]);
     frame.render_widget(commit_line(app.last_commit.as_ref(), theme), footer[1]);
-    frame.render_widget(remote_keys_line(theme), footer[2]);
+    frame.render_widget(remote_keys_line(theme, app.push_publishes()), footer[2]);
 }
 
 /// The git panel's focus and navigation handlers, split out of `app.rs`
@@ -612,11 +614,24 @@ mod tests {
 
     #[test]
     fn bottom_section_shows_fetch_pull_push_keybind_hints() {
-        let app = App::new(vec![sample_file("session.rs")]);
+        let mut app = App::new(vec![sample_file("session.rs")]);
+        app.branch = Some(branch("main", Some("origin/main"), Some((0, 0))));
         let content = render_panel(&app);
         assert!(content.contains("f fetch"));
         assert!(content.contains("p pull"));
         assert!(content.contains("P push"));
+        assert!(!content.contains("P publish"));
+    }
+
+    /// On a branch with no upstream, `P` publishes (see
+    /// `App::remote_push_op`), so the keybind line must say so.
+    #[test]
+    fn bottom_section_relabels_push_to_publish_on_an_unpublished_branch() {
+        let mut app = App::new(vec![sample_file("session.rs")]);
+        app.branch = Some(branch("feature", None, None));
+        let content = render_panel(&app);
+        assert!(content.contains("P publish"));
+        assert!(!content.contains("P push"));
     }
 
     // -- Empty states ------------------------------------------------------

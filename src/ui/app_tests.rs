@@ -1426,6 +1426,29 @@ fn second_remote_request_while_one_in_flight_is_rejected_and_does_not_spawn() {
     );
 }
 
+/// The push keybind resolves to `Publish` only on a normal branch with no
+/// upstream configured; a configured upstream, a detached HEAD, and unknown
+/// branch state all resolve to plain `Push`.
+#[test]
+fn remote_push_op_publishes_only_an_unpublished_branch() {
+    let branch = |detached: bool, upstream: Option<&str>| crate::git::BranchStatus {
+        name: "feature".to_string(),
+        detached,
+        upstream: upstream.map(|s| s.to_string()),
+        ahead_behind: None,
+    };
+    let mut app = App::new(vec![file("a.rs", 1)]);
+
+    assert_eq!(app.remote_push_op(), RemoteOp::Push, "unknown branch state");
+    app.branch = Some(branch(false, Some("origin/feature")));
+    assert_eq!(app.remote_push_op(), RemoteOp::Push, "upstream configured");
+    app.branch = Some(branch(true, None));
+    assert_eq!(app.remote_push_op(), RemoteOp::Push, "detached HEAD");
+    app.branch = Some(branch(false, None));
+    assert_eq!(app.remote_push_op(), RemoteOp::Publish, "no upstream");
+    assert!(app.push_publishes());
+}
+
 /// Without a known repository root, a remote request degrades to a footer
 /// message rather than panicking or spawning.
 #[test]

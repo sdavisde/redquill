@@ -110,7 +110,7 @@ fn visual_mode_hints_exclude_stage_lines_when_not_allowed() {
 #[test]
 fn panel_mode_hints_match_the_curated_list_in_order() {
     let km = Keymap::default_map();
-    let entries = panel_hints(&km);
+    let entries = panel_hints(&km, false);
     assert_eq!(
         keys(&entries),
         vec!["j/k", "Enter", "f", "p", "P", "c", "`", "?"]
@@ -123,6 +123,33 @@ fn panel_mode_hints_match_the_curated_list_in_order() {
             "fetch",
             "pull",
             "push",
+            "commit",
+            "close",
+            "help"
+        ]
+    );
+}
+
+/// On an unpublished branch (`push_publishes`), the `P` hint relabels to
+/// `publish` — same key, same slot, only the label changes — matching what
+/// `Action::RemotePush` actually runs in that state (see
+/// `App::remote_push_op`).
+#[test]
+fn panel_push_hint_relabels_to_publish_on_an_unpublished_branch() {
+    let km = Keymap::default_map();
+    let entries = panel_hints(&km, true);
+    assert_eq!(
+        keys(&entries),
+        vec!["j/k", "Enter", "f", "p", "P", "c", "`", "?"]
+    );
+    assert_eq!(
+        labels(&entries),
+        vec![
+            "move",
+            "open file",
+            "fetch",
+            "pull",
+            "publish",
             "commit",
             "close",
             "help"
@@ -182,7 +209,7 @@ fn compose_mode_hints_are_just_save_and_discard() {
 #[test]
 fn search_mode_has_no_hint_strip() {
     let km = Keymap::default_map();
-    let entries = build_hints(Mode::Search, true, false, None, &km);
+    let entries = build_hints(Mode::Search, true, false, false, None, &km);
     assert!(entries.is_empty());
 }
 
@@ -198,7 +225,7 @@ fn help_open_takes_precedence_over_the_mode_strip() {
     let km = Keymap::default_map();
     // Even in Mode::Panel (which has its own curated strip), an open help
     // overlay wins.
-    let entries = build_hints(Mode::Panel { cursor: 0 }, true, true, None, &km);
+    let entries = build_hints(Mode::Panel { cursor: 0 }, true, false, true, None, &km);
     assert_eq!(labels(&entries), vec!["scroll", "filter", "close"]);
 }
 
@@ -224,9 +251,9 @@ fn pending_g_shows_every_g_completion_sorted_by_key() {
 fn pending_prefix_replaces_the_mode_strip_in_normal_and_visual() {
     let km = Keymap::default_map();
     let g = Some(key(KeyCode::Char('g')));
-    let normal = build_hints(Mode::Normal, true, false, g, &km);
+    let normal = build_hints(Mode::Normal, true, false, false, g, &km);
     assert_eq!(keys(&normal), vec!["gd", "gg", "gr"]);
-    let visual = build_hints(Mode::Visual { anchor: 0 }, true, false, g, &km);
+    let visual = build_hints(Mode::Visual { anchor: 0 }, true, false, false, g, &km);
     assert_eq!(keys(&visual), vec!["gd", "gg", "gr"]);
 }
 
@@ -237,8 +264,8 @@ fn pending_prefix_replaces_the_mode_strip_in_normal_and_visual() {
 fn pending_prefix_is_ignored_outside_normal_and_visual() {
     let km = Keymap::default_map();
     let g = Some(key(KeyCode::Char('g')));
-    let panel = build_hints(Mode::Panel { cursor: 0 }, true, false, g, &km);
-    assert_eq!(panel, panel_hints(&km));
+    let panel = build_hints(Mode::Panel { cursor: 0 }, true, false, false, g, &km);
+    assert_eq!(panel, panel_hints(&km, false));
 }
 
 #[test]
@@ -278,13 +305,13 @@ fn every_mode_produces_a_nonempty_strip_except_search() {
         Mode::Switcher,
         Mode::Compose,
     ] {
-        let entries = build_hints(mode, true, false, None, &km);
+        let entries = build_hints(mode, true, false, false, None, &km);
         assert!(
             !entries.is_empty(),
             "{mode:?} produced an empty footer strip"
         );
     }
-    assert!(build_hints(Mode::Search, true, false, None, &km).is_empty());
+    assert!(build_hints(Mode::Search, true, false, false, None, &km).is_empty());
 }
 
 /// Every entry a mode's strip derives from a table carries the key text of
@@ -477,7 +504,7 @@ fn footer_height_is_one_row_when_status_message_is_set() {
 fn footer_height_matches_wrap_hints_row_count() {
     let km = Keymap::default_map();
     let a = app();
-    let entries = build_hints(a.mode, true, a.help_open, None, &km);
+    let entries = build_hints(a.mode, true, false, a.help_open, None, &km);
     let expected = wrap_hints(&entries, 60).len() as u16;
     assert_eq!(footer_height(60, &a, &km, None), expected);
 }
