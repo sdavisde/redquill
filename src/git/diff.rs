@@ -27,6 +27,11 @@ pub enum DiffTarget {
     Staged,
     /// An explicit range or ref expression (`git diff <range>`).
     Range(String),
+    /// A single commit's own changes: what that commit introduced relative
+    /// to its first parent (`git diff <rev>^ <rev>`), or relative to git's
+    /// empty tree for a root commit. The payload is any revision spec git
+    /// accepts (full/short SHA, `HEAD`, etc.).
+    Commit(String),
 }
 
 /// Which staging action (if any) a diff target supports — the direction
@@ -57,6 +62,7 @@ impl DiffTarget {
             DiffTarget::WorkingTree => true,
             DiffTarget::Staged => false,
             DiffTarget::Range(_) => false,
+            DiffTarget::Commit(_) => false,
         }
     }
 
@@ -67,6 +73,7 @@ impl DiffTarget {
             DiffTarget::WorkingTree => StagingMode::Stage,
             DiffTarget::Staged => StagingMode::Unstage,
             DiffTarget::Range(_) => StagingMode::ReadOnly,
+            DiffTarget::Commit(_) => StagingMode::ReadOnly,
         }
     }
 
@@ -79,6 +86,7 @@ impl DiffTarget {
             DiffTarget::WorkingTree => true,
             DiffTarget::Staged => false,
             DiffTarget::Range(_) => false,
+            DiffTarget::Commit(_) => false,
         }
     }
 }
@@ -232,6 +240,14 @@ mod tests {
     #[test]
     fn range_capability_triple() {
         let target = DiffTarget::Range("main..HEAD".to_string());
+        assert!(!target.is_live());
+        assert_eq!(target.staging_mode(), StagingMode::ReadOnly);
+        assert!(!target.supports_code_intel());
+    }
+
+    #[test]
+    fn commit_capability_triple() {
+        let target = DiffTarget::Commit("HEAD".to_string());
         assert!(!target.is_live());
         assert_eq!(target.staging_mode(), StagingMode::ReadOnly);
         assert!(!target.supports_code_intel());

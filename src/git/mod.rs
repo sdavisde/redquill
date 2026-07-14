@@ -18,7 +18,13 @@
 //! - [`worktree`] parses `git worktree list --porcelain` into
 //!   [`WorktreeEntry`] records.
 //! - [`diff`] splits `git diff` output into raw per-file [`RawFilePatch`]es
-//!   (no hunk parsing — see [`crate::diff::parse_hunks`] for that).
+//!   (no hunk parsing — see [`crate::diff::parse_hunks`] for that); its
+//!   [`DiffTarget::Commit`] variant is a single commit's own changes (first
+//!   -parent diff, root commit against the empty tree).
+//! - [`log`] parses `git log --format=<log::COMMIT_LOG_FORMAT>` into
+//!   [`CommitLogEntry`] records (full/short SHA, subject, author, timestamp)
+//!   for the git panel's commit-history read model; pagination (count/skip)
+//!   is a parameter of [`GitRunner::commit_log`], not of the parser.
 //! - [`remote`] builds the three sanctioned remote operations (fetch / pull /
 //!   push) as fixed argument vectors with `GIT_TERMINAL_PROMPT=0`, never
 //!   `--force` — the write/network ceiling.
@@ -29,6 +35,7 @@ mod branch;
 mod commit;
 mod diff;
 mod error;
+mod log;
 mod remote;
 mod runner;
 mod stage;
@@ -44,6 +51,7 @@ pub use commit::{
 };
 pub use diff::{DiffTarget, RawFilePatch, StagingMode, split_patches};
 pub use error::GitError;
+pub use log::{COMMIT_LOG_FORMAT, CommitLogEntry, parse_commit_log};
 pub use remote::{RemoteOp, remote_command};
 pub use runner::GitRunner;
 pub use stage::{build_hunk_patch, build_line_patch};

@@ -57,7 +57,7 @@ Task list for `05-spec-diff-sources.md`. Parent tasks 1.0–5.0 map 1:1 to the s
 - [x] 1.3 Gate code-intel: return early from LSP request dispatch and peek-preview reads in `code_intel.rs` when `!target.supports_code_intel()`, and drive the code-intel key visibility in help/footer from the same predicate via the shared key tables (mirror how staging keys hide today).
 - [x] 1.4 Write the degradation contract in the `code_intel.rs` module doc (code-intel silently absent when the new side isn't the live working tree, and why that's deliberate). Manually verify the `main..HEAD` proof, run all four gates, commit as `fix:` (this changes observable behavior on range/staged views).
 
-### [ ] 2.0 Single-commit diff target and commit-log read model (git layer)
+### [x] 2.0 Single-commit diff target and commit-log read model (git layer)
 
 #### 2.0 Proof Artifact(s)
 
@@ -68,11 +68,11 @@ Task list for `05-spec-diff-sources.md`. Parent tasks 1.0–5.0 map 1:1 to the s
 
 #### 2.0 Tasks
 
-- [ ] 2.1 TDD: extend `DiffTarget` with `Commit(String)`; the compiler forces capability decisions (add the triple + tests from 1.1's table). Implement acquisition in `runner.rs`: `git diff --no-color --no-ext-diff -M <rev>^ <rev>` with rev passed as discrete argv elements; when `git rev-parse --verify <rev>^` fails (root commit), diff against git's empty tree instead.
-- [ ] 2.2 Add `Commit` arms to `content_source` in `syntax.rs`: old side `<rev>^:<path>` (empty-content fallback for root commits), new side `<rev>:<path>`; unit tests per the existing `content_source` test pattern.
-- [ ] 2.3 TDD: create `src/git/log.rs` with `CommitLogEntry { sha, short_sha, subject, author_name, timestamp }` and a parser for a NUL-delimited `git log --format` record layout; parser tests first, including hostile subjects and empty repos. No TUI types in signatures.
-- [ ] 2.4 Add the log invocation to `runner.rs` with count/skip pagination parameters (closed types → fixed argv; `GIT_TERMINAL_PROMPT=0` as elsewhere), and export the module from `git/mod.rs`.
-- [ ] 2.5 Tempdir integration tests for the three commit-shape cases (normal, merge, root) and for log pagination (two pages, stable ordering). Run gates; commit as `feat(git):`.
+- [x] 2.1 TDD: extend `DiffTarget` with `Commit(String)`; the compiler forces capability decisions (add the triple + tests from 1.1's table). Implement acquisition in `runner.rs`: `git diff --no-color --no-ext-diff -M <rev>^ <rev>` with rev passed as discrete argv elements; when `git rev-parse --verify <rev>^` fails (root commit), diff against git's empty tree instead.
+- [x] 2.2 Add `Commit` arms to `content_source` in `syntax.rs`: old side `<rev>^:<path>` (empty-content fallback for root commits), new side `<rev>:<path>`; unit tests per the existing `content_source` test pattern.
+- [x] 2.3 TDD: create `src/git/log.rs` with `CommitLogEntry { sha, short_sha, subject, author_name, timestamp }` and a parser for a NUL-delimited `git log --format` record layout; parser tests first, including hostile subjects and empty repos. No TUI types in signatures.
+- [x] 2.4 Add the log invocation to `runner.rs` with count/skip pagination parameters (closed types → fixed argv; `GIT_TERMINAL_PROMPT=0` as elsewhere), and export the module from `git/mod.rs`.
+- [x] 2.5 Tempdir integration tests for the three commit-shape cases (normal, merge, root) and for log pagination (two pages, stable ordering). Run gates; commit as `feat(git):`.
 
 ### [ ] 3.0 Git panel History tab and commit view (UI)
 

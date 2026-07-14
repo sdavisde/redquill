@@ -46,11 +46,17 @@ fn split_range(r: &str) -> Option<(String, String)> {
 /// - New side: `WorkingTree` -> the worktree file; `Staged` -> the index
 ///   blob (`:0:<path>`); `Range(r)` -> if `r` contains `..`, the blob at
 ///   the ref right of the last `..` (empty means the worktree file, e.g.
-///   `main..`); otherwise (a bare ref) the worktree file.
+///   `main..`); otherwise (a bare ref) the worktree file; `Commit(rev)` ->
+///   `<rev>:<path>`, the blob as that commit left it.
 /// - Old side (for `Removed` lines): `WorkingTree` -> the index blob
 ///   (`:0:<path>`, i.e. what staging would currently produce); `Staged` ->
 ///   `HEAD:<path>`; `Range(r)` -> the blob at the ref left of the last
-///   `..` if present, else `<r>:<path>` for a bare ref.
+///   `..` if present, else `<r>:<path>` for a bare ref; `Commit(rev)` ->
+///   `<rev>^:<path>`, the blob as the commit's parent left it. For a root
+///   commit `<rev>^` doesn't resolve, so [`super::stage_ops::StageOps::show_file`]
+///   returns `None` and highlighting degrades to no content — the same
+///   graceful fallback any unresolvable spec gets, never a special case
+///   here (this function stays pure and I/O-free).
 pub(super) fn content_source(
     target: &DiffTarget,
     side: Side,
@@ -67,6 +73,7 @@ pub(super) fn content_source(
                 }
                 _ => ContentSource::Worktree(path.to_string()),
             },
+            DiffTarget::Commit(rev) => ContentSource::Show(format!("{rev}:{path}")),
         },
         Side::Old => {
             let src = old_path.unwrap_or(path);
@@ -77,6 +84,7 @@ pub(super) fn content_source(
                     Some((left, _)) => ContentSource::Show(format!("{left}:{src}")),
                     None => ContentSource::Show(format!("{r}:{src}")),
                 },
+                DiffTarget::Commit(rev) => ContentSource::Show(format!("{rev}^:{src}")),
             }
         }
     }
@@ -348,12 +356,116 @@ mod tests {
     }
 
     #[test]
+    fn new_side_commit_is_rev_colon_path() {
+        assert_eq!(
+            content_source(
+                &DiffTarget::Commit("abc123".to_string()),
+                Side::New,
+                "a.rs",
+                None
+            ),
+            ContentSource::Show("abc123:a.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn old_side_commit_is_rev_caret_colon_path() {
+        assert_eq!(
+            content_source(
+                &DiffTarget::Commit("abc123".to_string()),
+                Side::Old,
+                "a.rs",
+                None
+            ),
+            ContentSource::Show("abc123^:a.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn old_side_commit_prefers_old_path_for_renames() {
+        assert_eq!(
+            content_source(
+                &DiffTarget::Commit("abc123".to_string()),
+                Side::Old,
+                "new.rs",
+                Some("old.rs")
+            ),
+            ContentSource::Show("abc123^:old.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn new_side_commit_ignores_old_path_even_for_renames() {
+        assert_eq!(
+            content_source(
+                &DiffTarget::Commit("abc123".to_string()),
+                Side::New,
+                "new.rs",
+                Some("old.rs")
+            ),
+            ContentSource::Show("abc123:new.rs".to_string())
+        );
+    }
+
+    #[test]
     fn new_side_ignores_old_path_even_for_renames() {
         // The new side always reads the current path; old_path only
         // matters on the old side.
         assert_eq!(
             content_source(&DiffTarget::Staged, Side::New, "new.rs", Some("old.rs")),
             ContentSource::Show(":0:new.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn root_commit_old_side_degrades_to_no_content_not_a_panic() {
+        // A root commit has no parent, so `<rev>^:<path>` never resolves.
+        // fetch_content must degrade to `None` (fall through to
+        // `show_file`'s own "unresolvable spec" contract) rather than the
+        // git layer needing any root-commit special case.
+        struct RootCommitOps;
+        impl StageOps for RootCommitOps {
+            fn diff(
+                &self,
+                _target: &DiffTarget,
+            ) -> Result<Vec<crate::git::RawFilePatch>, crate::git::GitError> {
+                Ok(Vec::new())
+            }
+            fn status(&self) -> Result<Vec<crate::git::FileStatus>, crate::git::GitError> {
+                Ok(Vec::new())
+            }
+            fn stage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+                Ok(())
+            }
+            fn unstage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+                Ok(())
+            }
+            fn apply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+                Ok(())
+            }
+            fn unapply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+                Ok(())
+            }
+            fn read_worktree_file(&self, _path: &str) -> Option<Vec<u8>> {
+                None
+            }
+            fn show_file(&self, spec: &str) -> Option<String> {
+                // `<rev>^:<path>` never resolves for a root commit; every
+                // other spec would.
+                if spec.contains('^') {
+                    None
+                } else {
+                    Some("fn main() {}\n".to_string())
+                }
+            }
+        }
+
+        let ops = RootCommitOps;
+        let target = DiffTarget::Commit("root".to_string());
+        assert_eq!(fetch_content(&ops, &target, "a.rs", None, Side::Old), None);
+        assert_eq!(
+            fetch_content(&ops, &target, "a.rs", None, Side::New),
+            Some("fn main() {}\n".to_string())
         );
     }
 
