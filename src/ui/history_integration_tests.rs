@@ -531,3 +531,429 @@ fn opening_a_commit_with_an_empty_diff_shows_commit_appropriate_welcome_wording(
         "must not reuse the working-tree wording for a commit target"
     );
 }
+
+// ==========================================================================
+// Spec 05 Unit 6 (task 6.0): user-acceptance gate — the Success Metrics
+// proven from a user's point of view, driven through the real key-dispatch
+// pipeline against throwaway repos. Each test below backs a proof file under
+// docs/specs/05-spec-diff-sources/proofs/. Every test also `eprintln!`s the
+// artifact it captures (a rendered-buffer "screenshot" or the verbatim stdout
+// emission), invisible under a normal `cargo test` run but reprintable with
+// `cargo test <name> -- --nocapture` — that is how the verbatim text in the
+// proof files was captured, reproducibly, with no throwaway debug edits.
+// ==========================================================================
+
+/// Renders the full app screen through the real [`draw`] into a
+/// [`TestBackend`] and returns it as newline-joined rows with trailing
+/// whitespace trimmed — the TTY-less stand-in for a screenshot.
+fn screenshot(app: &App, keymap: &Keymap, w: u16, h: u16) -> String {
+    let backend = TestBackend::new(w, h);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| draw(frame, app, keymap, None))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let mut out = String::new();
+    for y in 0..h {
+        let mut line = String::new();
+        for x in 0..w {
+            line.push_str(buffer[(x, y)].symbol());
+        }
+        out.push_str(line.trim_end());
+        out.push('\n');
+    }
+    out
+}
+
+/// Moves the diff-view cursor to `target` row index by pressing `j`/`k`
+/// through the real dispatch pipeline, bounded so a stuck cursor can't spin
+/// forever. Returns once the cursor is on `target` (or gives up).
+fn move_cursor_to(app: &mut App, keymap: &Keymap, pending: &mut Option<KeyEvent>, target: usize) {
+    for _ in 0..=app.view.rows.len() {
+        use std::cmp::Ordering;
+        match app.view.cursor.cmp(&target) {
+            Ordering::Equal => return,
+            Ordering::Less => {
+                let before = app.view.cursor;
+                press(app, keymap, pending, KeyCode::Char('j'));
+                if app.view.cursor == before {
+                    return;
+                }
+            }
+            Ordering::Greater => {
+                let before = app.view.cursor;
+                press(app, keymap, pending, KeyCode::Char('k'));
+                if app.view.cursor == before {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// The row index of the first [`Row::Line`] whose new-side content equals
+/// `content` — used to steer the cursor onto a specific added line so the
+/// annotated site's `path:line` ground truth is deterministic.
+fn added_line_row(app: &App, content: &str) -> usize {
+    app.view
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Line(l) if l.content == content))
+        .unwrap_or_else(|| panic!("no line row with content {content:?}"))
+}
+
+/// Composes an annotation with `body` on whatever target the cursor row
+/// currently resolves to, through the real Compose key flow.
+fn annotate_here(app: &mut App, keymap: &Keymap, pending: &mut Option<KeyEvent>, body: &str) {
+    press(app, keymap, pending, KeyCode::Char('c'));
+    assert_eq!(app.mode, Mode::Compose, "c must open Compose");
+    for ch in body.chars() {
+        press(app, keymap, pending, KeyCode::Char(ch));
+    }
+    press(app, keymap, pending, KeyCode::Enter);
+    assert_eq!(
+        app.mode,
+        Mode::Normal,
+        "Enter must submit and return to Normal"
+    );
+}
+
+// -- 6.1 Dead-end journey (Success Metric 1) --------------------------------
+
+/// The dead-end disappears: launching in a repo where the agent already
+/// committed (clean working tree) shows the welcome state, and using ONLY
+/// what the welcome hints and the `?` overlay teach, a user reaches the
+/// newest commit's diff in 3 keystrokes (`` ` `` -> Tab -> Enter), well
+/// within the spec's <=5 budget. Each step's discoverability is proven by
+/// asserting the naming text is literally on screen before the key is pressed.
+#[test]
+fn dead_end_journey_reaches_the_newest_commit_in_a_handful_of_keys() {
+    let tmp = repo_with_history();
+    let mut app = app_for(tmp.path());
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    // Launch state: clean tree -> WorkingTree diff has zero files -> welcome.
+    assert!(
+        app.view.files.is_empty(),
+        "fixture must launch with a clean tree"
+    );
+    let welcome = screenshot(&app, &keymap, 100, 30);
+    eprintln!("=== 6.1 launch (welcome state) ===\n{welcome}");
+    assert!(
+        welcome.contains("No uncommitted changes"),
+        "welcome must name the situation:\n{welcome}"
+    );
+    // Discoverability of steps 1 and 2: the welcome literally names the git
+    // panel and the History tab, each with its key.
+    assert!(
+        welcome.contains("open the git panel"),
+        "welcome must teach opening the git panel:\n{welcome}"
+    );
+    assert!(
+        welcome.contains("switch to the History tab to review recent commits"),
+        "welcome must teach the History tab:\n{welcome}"
+    );
+    assert!(
+        welcome.contains("open help"),
+        "welcome must teach the ? overlay:\n{welcome}"
+    );
+
+    // Keystroke 1: `` ` `` — the "open the git panel" hint.
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('`'));
+    assert!(
+        matches!(app.mode, Mode::Panel { .. }),
+        "step 1 opens the panel"
+    );
+
+    // Keystroke 2: Tab — the "switch to the History tab" hint.
+    press(&mut app, &keymap, &mut pending, KeyCode::Tab);
+    assert_eq!(
+        app.panel_tab(),
+        PanelTab::History,
+        "step 2 switches to History"
+    );
+    wait_for_history(&mut app);
+    assert!(
+        !app.history.is_empty(),
+        "History must load the repo's commits"
+    );
+
+    let history_view = screenshot(&app, &keymap, 100, 30);
+    eprintln!("=== 6.1 after ` then Tab (History tab) ===\n{history_view}");
+
+    // Discoverability of step 3, signal 1: the always-visible footer strip
+    // (bottom row) already promises `Enter open file` while the panel is
+    // focused — no overlay needed.
+    assert!(
+        history_view
+            .lines()
+            .last()
+            .unwrap_or("")
+            .contains("Enter open file"),
+        "the panel footer must promise Enter opens the highlighted row:\n{history_view}"
+    );
+    // Discoverability of step 3, signal 2: the `?` overlay's Git-panel
+    // section spells out that Enter opens the commit. It's a long, scrollable
+    // list, so use the overlay's own `/` filter (what a user would do) to
+    // bring that row into one viewport.
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('?'));
+    assert!(app.help_open, "? must open the help overlay from the panel");
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('/'));
+    for ch in "open the commit".chars() {
+        press(&mut app, &keymap, &mut pending, KeyCode::Char(ch));
+    }
+    let help_view = screenshot(&app, &keymap, 100, 30);
+    eprintln!("=== 6.1 ? overlay filtered to /open the commit ===\n{help_view}");
+    assert!(
+        help_view.contains("open the commit"),
+        "the ? overlay must teach that Enter opens the commit:\n{help_view}"
+    );
+    // Close the overlay again (does not consume a journey keystroke — it is
+    // the optional "learn the control" detour, not part of the 3-key path).
+    press(&mut app, &keymap, &mut pending, KeyCode::Esc); // clears the filter
+    press(&mut app, &keymap, &mut pending, KeyCode::Esc); // closes the overlay
+    assert!(!app.help_open, "Esc closes the overlay");
+    assert!(
+        matches!(app.mode, Mode::Panel { .. }),
+        "still on the focused panel after learning"
+    );
+    assert_eq!(
+        app.panel_tab(),
+        PanelTab::History,
+        "still on History after learning"
+    );
+
+    // Keystroke 3: Enter — opens the newest commit (cursor rests on row 0).
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter);
+    assert!(
+        matches!(app.target, DiffTarget::Commit(_)),
+        "step 3 opens the highlighted commit"
+    );
+    assert!(app.viewing_commit(), "a commit view must now be open");
+    assert!(
+        !app.view.files.is_empty(),
+        "the newest commit's diff must be shown"
+    );
+    let opened = app
+        .active_commit
+        .clone()
+        .expect("commit header must be set");
+    assert_eq!(
+        opened.subject, "third commit",
+        "must open the NEWEST commit"
+    );
+
+    let commit_view = screenshot(&app, &keymap, 100, 30);
+    eprintln!("=== 6.1 after Enter (newest commit diff) ===\n{commit_view}");
+    assert!(
+        commit_view.contains(&opened.short_sha),
+        "the commit-view header must show the opened commit's short SHA:\n{commit_view}"
+    );
+
+    // The whole journey used exactly 3 semantic keystrokes to content.
+    // (`? ... Esc` was the discoverability detour, not part of the path.)
+}
+
+// -- 6.2 History round-trip, producer half (Success Metric 2) ---------------
+
+/// A base commit then a feature commit extending two files, so the newest
+/// commit's own diff (rev^..rev) adds `alpha 4`/`alpha 5` to alpha.txt and
+/// `beta 4` to beta.txt — three added lines across two files, with stable,
+/// known `path:line` ground truth.
+fn repo_with_two_file_commit() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    git(dir, &["init", "-q", "-b", "main"]);
+    git(dir, &["config", "user.email", "test@redquill.invalid"]);
+    git(dir, &["config", "user.name", "redquill test"]);
+    git(dir, &["config", "core.hooksPath", ".git/hooks"]);
+    git(dir, &["config", "commit.gpgsign", "false"]);
+    write(dir, "alpha.txt", "alpha 1\nalpha 2\nalpha 3\n");
+    write(dir, "beta.txt", "beta 1\nbeta 2\nbeta 3\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "base: two files"]);
+    write(
+        dir,
+        "alpha.txt",
+        "alpha 1\nalpha 2\nalpha 3\nalpha 4\nalpha 5\n",
+    );
+    write(dir, "beta.txt", "beta 1\nbeta 2\nbeta 3\nbeta 4\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "feat: extend both files"]);
+    tmp
+}
+
+/// The fix-loop works on history: opening a historical commit, annotating 3
+/// lines across 2 files, and rendering the store produces stdout an agent can
+/// act on — exactly one `Reviewing: <short-sha>` line for the whole non-
+/// working-tree group, then the three `## path:line (+)` sites resolvable
+/// against that revision.
+#[test]
+fn history_round_trip_producer_emits_three_sites_across_two_files_under_one_reviewing_line() {
+    let tmp = repo_with_two_file_commit();
+    let mut app = app_for(tmp.path());
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    open_history_tab(&mut app, &keymap, &mut pending);
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter); // newest commit
+    let opened = app.active_commit.clone().expect("commit header set");
+    assert_eq!(opened.subject, "feat: extend both files");
+
+    // Site 1 + 2: two added lines in alpha.txt.
+    let row = added_line_row(&app, "alpha 4");
+    move_cursor_to(&mut app, &keymap, &mut pending, row);
+    annotate_here(
+        &mut app,
+        &keymap,
+        &mut pending,
+        "rename this to something clearer",
+    );
+    let row = added_line_row(&app, "alpha 5");
+    move_cursor_to(&mut app, &keymap, &mut pending, row);
+    annotate_here(&mut app, &keymap, &mut pending, "possible off-by-one here");
+    // Site 3: an added line in beta.txt.
+    let row = added_line_row(&app, "beta 4");
+    move_cursor_to(&mut app, &keymap, &mut pending, row);
+    annotate_here(&mut app, &keymap, &mut pending, "add a test covering this");
+
+    assert_eq!(app.annotations.len(), 3, "three sites annotated");
+
+    let emission = crate::annotate::render_markdown(&app.annotations);
+    eprintln!(
+        "=== 6.2 verbatim stdout emission (short SHA {}) ===\n{emission}",
+        opened.short_sha
+    );
+
+    // Exactly one Reviewing: line, for the single commit group, naming the
+    // opened commit's short SHA.
+    assert_eq!(
+        emission.matches("Reviewing:").count(),
+        1,
+        "one Reviewing: line for the single commit group:\n{emission}"
+    );
+    assert!(
+        emission.starts_with(&format!("Reviewing: {}", opened.short_sha)),
+        "emission must open with the commit's Reviewing: line:\n{emission}"
+    );
+    // All three sites present, spanning both files, resolvable by path:line.
+    for header in [
+        "## alpha.txt:4 (+)",
+        "## alpha.txt:5 (+)",
+        "## beta.txt:4 (+)",
+    ] {
+        assert!(
+            emission.contains(header),
+            "missing annotated site {header:?}:\n{emission}"
+        );
+    }
+}
+
+// -- 6.3 No-lies check (Success Metric 3) -----------------------------------
+
+/// The tool never lies: in a commit view, the `?` overlay lists the keys that
+/// work (navigation, comment, quit, the Git-panel section, return) and OMITS
+/// the capabilities a read-only historical target can't perform — staging
+/// (`stage`) and code-intel (`definition`/`references`/`hover`) — matching
+/// their inert behavior proven by the task-3.6 tests above. This cross-checks
+/// the rendered overlay itself, not just the `binding_hidden` predicate.
+#[test]
+fn commit_view_help_overlay_shows_only_truthful_keys() {
+    let tmp = repo_with_history();
+    let mut app = app_for(tmp.path());
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    open_history_tab(&mut app, &keymap, &mut pending);
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter);
+    assert!(matches!(app.target, DiffTarget::Commit(_)));
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('?'));
+    assert!(app.help_open);
+    // The unfiltered top-of-overlay is the primary visible evidence: in a
+    // commit view its Stage section is reduced to just `s Toggle staging
+    // panel` (the panel toggle still works) and there is NO Code intelligence
+    // section at all — the inert file/hunk-stage and gd/gr/K keys are simply
+    // gone, not listed-but-dead.
+    let overlay_top = screenshot(&app, &keymap, 100, 40);
+    eprintln!("=== 6.3 commit-view ? overlay (unfiltered, top) ===\n{overlay_top}");
+
+    // The diff-line stage gestures live in the top viewport's Stage section
+    // (right after Annotate): in a commit view that section is reduced to the
+    // one affordance that genuinely still works — `s Toggle staging panel`,
+    // which shows the index regardless of the diff target — with the inert
+    // `Space`/`S` diff-line stage gestures gone.
+    assert!(
+        overlay_top.contains("Toggle staging panel"),
+        "the staging-panel toggle genuinely works and must stay listed:\n{overlay_top}"
+    );
+    for gone in ["Stage/unstage hunk", "Stage/unstage file"] {
+        assert!(
+            !overlay_top.contains(gone),
+            "the inert diff-line stage gesture {gone:?} must be gone:\n{overlay_top}"
+        );
+    }
+
+    // Exhaustive, viewport-independent cross-check of the "no lies" property:
+    // help.rs builds the overlay's diff-scope rows by dropping every
+    // `binding_hidden` binding, so this proves that at NO scroll position can
+    // an inert stage-line/code-intel key appear — and that every *other*
+    // diff-scope key stays listed (because it genuinely works). This is the
+    // same predicate the rendered overlay is built from, checked over the
+    // whole keymap rather than one screen.
+    let read_only = app.target.staging_mode() == crate::git::StagingMode::ReadOnly;
+    let code_intel = app.target.supports_code_intel();
+    assert!(
+        read_only && !code_intel,
+        "a commit target is read-only, no code-intel"
+    );
+    for binding in keymap.bindings() {
+        if binding.scope != keymap::Scope::Diff {
+            continue;
+        }
+        let inert = matches!(
+            binding.action,
+            Action::ToggleStage
+                | Action::StageFile
+                | Action::GotoDefinition
+                | Action::GotoReferences
+                | Action::Hover
+        );
+        // staging_allowed=false, code_intel_allowed=false in a commit view.
+        assert_eq!(
+            help::binding_hidden(binding.action, false, false),
+            inert,
+            "commit-view overlay lists exactly the keys that work: {:?} \
+             (hidden should be {inert})",
+            binding.action
+        );
+    }
+
+    // Presence, via the overlay's own `/` filter (searches the whole list
+    // into one viewport, exactly what a user would do), using strings unique
+    // to the working key's own row so a modal-section mention can't spoof it.
+    let filter_shot = |app: &mut App, pending: &mut Option<KeyEvent>, query: &str| -> String {
+        press(app, &keymap, pending, KeyCode::Char('/'));
+        for ch in query.chars() {
+            press(app, &keymap, pending, KeyCode::Char(ch));
+        }
+        let shot = screenshot(app, &keymap, 100, 40);
+        press(app, &keymap, pending, KeyCode::Esc); // clear filter for the next query
+        shot
+    };
+    for (query, expected) in [
+        ("emit annotations", "Quit and emit annotations"),
+        ("return from a commit view", "return from a commit view"),
+        ("Changes / History", "Switch Changes / History tab"),
+        ("Comment on", "Comment on line/hunk/file"),
+    ] {
+        let shot = filter_shot(&mut app, &mut pending, query);
+        eprintln!("=== 6.3 filter /{query} (must list a working key) ===\n{shot}");
+        assert!(
+            shot.contains(expected),
+            "the working key {expected:?} must be listed in the commit-view \
+             overlay, but /{query} did not surface it:\n{shot}"
+        );
+    }
+}
