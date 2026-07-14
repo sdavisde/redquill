@@ -29,6 +29,60 @@ pub enum DiffTarget {
     Range(String),
 }
 
+/// Which staging action (if any) a diff target supports — the direction
+/// [`crate::ui`]'s staging gestures (`space`/`S`/the staging panel) apply, or
+/// [`StagingMode::ReadOnly`] when the target has no index comparison to
+/// stage/unstage against at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StagingMode {
+    /// The target compares the working tree to the index: staging gestures
+    /// move changes *into* the index (`git add` semantics).
+    Stage,
+    /// The target compares the index to `HEAD`: staging gestures move
+    /// changes *out of* the index (`git restore --staged` semantics).
+    Unstage,
+    /// The target is a fixed historical comparison with no index on either
+    /// side, so no staging gesture applies.
+    ReadOnly,
+}
+
+impl DiffTarget {
+    /// Whether this source's content can change out from under the app while
+    /// it's running (independent of any git action the user takes here) —
+    /// drives whether auto-refresh polls the target at all and whether
+    /// untracked files get synthesized into the diff (only meaningful for a
+    /// source that reflects the live working tree).
+    pub fn is_live(&self) -> bool {
+        match self {
+            DiffTarget::WorkingTree => true,
+            DiffTarget::Staged => false,
+            DiffTarget::Range(_) => false,
+        }
+    }
+
+    /// Which staging direction (if any) this target supports — see
+    /// [`StagingMode`].
+    pub fn staging_mode(&self) -> StagingMode {
+        match self {
+            DiffTarget::WorkingTree => StagingMode::Stage,
+            DiffTarget::Staged => StagingMode::Unstage,
+            DiffTarget::Range(_) => StagingMode::ReadOnly,
+        }
+    }
+
+    /// Whether LSP code-intelligence requests (`gd`/`gr`/`K`) are valid
+    /// against this target: true only when the diff's new side is the live
+    /// working tree on disk, since that's the only content an LSP server can
+    /// be asked about with on-disk-accurate positions.
+    pub fn supports_code_intel(&self) -> bool {
+        match self {
+            DiffTarget::WorkingTree => true,
+            DiffTarget::Staged => false,
+            DiffTarget::Range(_) => false,
+        }
+    }
+}
+
 /// Splits a combined unified diff into one [`RawFilePatch`] per file.
 ///
 /// Boundaries are `diff --git` lines at the start of a line; the text between
@@ -152,6 +206,36 @@ fn parse_patch(raw: &str) -> RawFilePatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- Capability triple: is_live / staging_mode / supports_code_intel ---
+    //
+    // One test per variant asserting the full triple in a single place, so
+    // the exhaustive-match methods above and this table can't silently drift
+    // apart (rust-best-practices: data-driven invariants).
+
+    #[test]
+    fn working_tree_capability_triple() {
+        let target = DiffTarget::WorkingTree;
+        assert!(target.is_live());
+        assert_eq!(target.staging_mode(), StagingMode::Stage);
+        assert!(target.supports_code_intel());
+    }
+
+    #[test]
+    fn staged_capability_triple() {
+        let target = DiffTarget::Staged;
+        assert!(!target.is_live());
+        assert_eq!(target.staging_mode(), StagingMode::Unstage);
+        assert!(!target.supports_code_intel());
+    }
+
+    #[test]
+    fn range_capability_triple() {
+        let target = DiffTarget::Range("main..HEAD".to_string());
+        assert!(!target.is_live());
+        assert_eq!(target.staging_mode(), StagingMode::ReadOnly);
+        assert!(!target.supports_code_intel());
+    }
 
     #[test]
     fn splits_single_modified_file() {
