@@ -110,7 +110,7 @@ Task list for `05-spec-diff-sources.md`. Parent tasks 1.0–5.0 map 1:1 to the s
 - [x] 4.3 Fix the metadata-line syntax as part of the format contract (commit → `Reviewing: <short-sha>`, range → `Reviewing: <range-as-typed>`, staged → `Reviewing: staged`) and document it in the `annotate` module doc and README format section.
 - [x] 4.4 Run the scripted CLI proof and all four gates; commit as `feat(annotate):`.
 
-### [ ] 5.0 Empty-diff welcome state
+### [x] 5.0 Empty-diff welcome state
 
 #### 5.0 Proof Artifact(s)
 
@@ -120,9 +120,9 @@ Task list for `05-spec-diff-sources.md`. Parent tasks 1.0–5.0 map 1:1 to the s
 
 #### 5.0 Tasks
 
-- [ ] 5.1 Add an empty-state detection point at the review-build boundary (zero files for the active target) and render a centered welcome block in the diff area: one line naming the situation per target ("No uncommitted changes", "Nothing staged", "Empty diff for <range>"), then 3–4 action hints.
-- [ ] 5.2 Source each hint's key from the shared keymap tables (`modal_keys.rs`/`keymap.rs`) at render time — no key literals in the welcome text — and add a drift-style test that fails if a hinted action's key is missing or renamed.
-- [ ] 5.3 UI-state tests for the lifecycle (empty → welcome; content arrives via refresh → welcome gone; History-opened commit with empty diff → target-appropriate wording). Capture the screenshot proof; run gates; commit as `feat(ui):`.
+- [x] 5.1 Add an empty-state detection point at the review-build boundary (zero files for the active target) and render a centered welcome block in the diff area: one line naming the situation per target ("No uncommitted changes", "Nothing staged", "Empty diff for <range>"), then 3–4 action hints.
+- [x] 5.2 Source each hint's key from the shared keymap tables (`modal_keys.rs`/`keymap.rs`) at render time — no key literals in the welcome text — and add a drift-style test that fails if a hinted action's key is missing or renamed.
+- [x] 5.3 UI-state tests for the lifecycle (empty → welcome; content arrives via refresh → welcome gone; History-opened commit with empty diff → target-appropriate wording). Capture the screenshot proof; run gates; commit as `feat(ui):`.
 
 ### [ ] 6.0 User acceptance — prove the core problems are fixed
 

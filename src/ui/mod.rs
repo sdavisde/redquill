@@ -50,6 +50,7 @@ mod syntax;
 mod targeting;
 mod theme;
 mod time_format;
+mod welcome;
 
 pub use app::{App, Mode};
 pub use diff_view_state::DiffViewState;
@@ -341,7 +342,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     if let Some(sidebar_area) = sidebar_area {
         git_panel::render(frame, sidebar_area, app);
     }
-    diff_view::render(frame, diff_area, app);
+    diff_view::render(frame, diff_area, app, keymap);
     if let Some(panel_area) = panel_area {
         // The command log, when open, owns the slot regardless of mode; else
         // the mode's own bottom panel renders.

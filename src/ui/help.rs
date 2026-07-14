@@ -69,8 +69,11 @@ fn group_of(action: Action) -> &'static str {
     }
 }
 
-/// Centers a `width` x `height` rect inside `area`.
-fn centered(area: Rect, width: u16, height: u16) -> Rect {
+/// Centers a `width` x `height` rect inside `area`. Shared with
+/// [`super::welcome`], which centers its situation/hints block the same way
+/// inside the diff pane rather than duplicating the two-axis `Flex::Center`
+/// dance.
+pub(super) fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let [area] = Layout::horizontal([Constraint::Length(width)])
         .flex(Flex::Center)
         .areas(area);

@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::ops::Range;
 
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -19,9 +19,11 @@ use crate::git::CommitLogEntry;
 use crate::highlight::TokenKind;
 
 use super::app::App;
+use super::keymap::Keymap;
 use super::rows::{LineRow, Row, StagedMarker};
 use super::theme::{Theme, blend};
 use super::time_format::absolute_date;
+use super::welcome;
 
 /// Width of the annotated-line dot column, rendered before the gutter.
 pub(super) const DOT_WIDTH: usize = 2;
@@ -551,7 +553,7 @@ fn split_area(area: Rect, has_commit_header: bool) -> (Rect, Rect) {
 /// view opened from the History tab), a one-row header block (short SHA,
 /// author, absolute date, subject — see [`commit_header_line`]) renders above
 /// the bordered diff block instead of inside it, per spec 05 Unit 3.
-pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
     let (header_area, diff_area) = split_area(area, app.active_commit.is_some());
     if let Some(commit) = &app.active_commit {
         frame.render_widget(
@@ -577,10 +579,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     if app.view.files.is_empty() {
-        let paragraph = Paragraph::new("no changes")
-            .block(block)
-            .alignment(Alignment::Center);
-        frame.render_widget(paragraph, diff_area);
+        // Spec 05 Unit 5: the empty-diff welcome state, replacing the bare
+        // "no changes" placeholder with situational wording plus a small set
+        // of keyed next steps sourced from the shared keymap table.
+        welcome::render(
+            frame,
+            diff_area,
+            block,
+            &app.target,
+            app.active_commit.as_ref(),
+            keymap,
+            &app.theme,
+        );
         return;
     }
 

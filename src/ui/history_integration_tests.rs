@@ -16,6 +16,8 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 use tempfile::TempDir;
 
 use super::app::PanelTab;
@@ -469,4 +471,63 @@ fn panel_scope_keymap_documents_the_tab_toggle() {
         .find(|b| b.scope == keymap::Scope::Panel && b.action == Action::TogglePanelTab)
         .expect("TogglePanelTab must be a registered panel-scope binding");
     assert_eq!(row.key_label(), "Tab");
+}
+
+// -- Empty-diff welcome state, commit-view wording (spec 05 Unit 5) ---------
+
+/// A repo like `repo_with_history()` plus one more commit on top that
+/// introduces no changes (`git commit --allow-empty`) — opening this one
+/// from History yields a `DiffTarget::Commit` whose own diff has zero files,
+/// the case task 5.3 asks for explicitly ("History-opened commit with an
+/// empty diff → target-appropriate wording").
+fn repo_with_history_and_a_trailing_empty_commit() -> TempDir {
+    let tmp = repo_with_history();
+    git(
+        tmp.path(),
+        &["commit", "-qm", "empty commit", "--allow-empty"],
+    );
+    tmp
+}
+
+/// Opening a commit whose own diff introduces no changes shows the
+/// commit-appropriate welcome wording (naming that commit's short SHA), not
+/// the working-tree phrase and not a blank buffer.
+#[test]
+fn opening_a_commit_with_an_empty_diff_shows_commit_appropriate_welcome_wording() {
+    let tmp = repo_with_history_and_a_trailing_empty_commit();
+    let mut app = app_for(tmp.path());
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    open_history_tab(&mut app, &keymap, &mut pending);
+    assert_eq!(app.history[0].subject, "empty commit", "newest first");
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter);
+
+    assert!(
+        app.view.files.is_empty(),
+        "the opened commit must have introduced no changes"
+    );
+    let short_sha = app
+        .active_commit
+        .clone()
+        .expect("opening a commit sets active_commit")
+        .short_sha;
+
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+    let expected = format!("Empty commit diff for {short_sha}");
+    assert!(
+        content.contains(&expected),
+        "expected {expected:?} in:\n{content}"
+    );
+    assert!(
+        !content.contains("No uncommitted changes"),
+        "must not reuse the working-tree wording for a commit target"
+    );
 }
