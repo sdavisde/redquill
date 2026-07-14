@@ -372,7 +372,7 @@ pub(super) fn footer_height(
     {
         return 1;
     }
-    let staging_allowed = !matches!(app.target, crate::git::DiffTarget::Range(_));
+    let staging_allowed = app.target.staging_mode() != crate::git::StagingMode::ReadOnly;
     let entries = build_hints(
         app.mode,
         staging_allowed,

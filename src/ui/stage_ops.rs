@@ -314,7 +314,7 @@ pub fn build_review(
         patches.push(Some(patch));
     }
 
-    if matches!(target, DiffTarget::WorkingTree) {
+    if target.is_live() {
         // Fully-staged files have no working-tree diff at all, so their
         // real content only exists in the staged (`--staged`) diff. Fetch
         // it once, indexed by path, so the synthesis loop below can give

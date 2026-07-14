@@ -14,7 +14,7 @@ use crate::annotate::{AnnotationStore, Target};
 use crate::annotate::Side;
 use crate::diff::FileDiff;
 use crate::git::{
-    BranchStatus, CommitSummary, DiffTarget, RawFilePatch, RemoteOp, StashEntry,
+    BranchStatus, CommitSummary, DiffTarget, RawFilePatch, RemoteOp, StagingMode, StashEntry,
     commit_command_line, remote_command,
 };
 use crate::highlight::Highlighter;
@@ -536,7 +536,7 @@ impl App {
     /// read-only range target and a missing git backend both degrade to a
     /// footer message; a git failure leaves state unchanged.
     fn stage_file(&mut self) {
-        if matches!(self.target, DiffTarget::Range(_)) {
+        if self.target.staging_mode() == StagingMode::ReadOnly {
             self.set_status_message("read-only diff target");
             return;
         }

@@ -42,7 +42,7 @@ pub use branch::{
 pub use commit::{
     COMMIT_SUMMARY_FORMAT, CommitSummary, commit_command, commit_command_line, parse_commit_summary,
 };
-pub use diff::{DiffTarget, RawFilePatch, split_patches};
+pub use diff::{DiffTarget, RawFilePatch, StagingMode, split_patches};
 pub use error::GitError;
 pub use remote::{RemoteOp, remote_command};
 pub use runner::GitRunner;
