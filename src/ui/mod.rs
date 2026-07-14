@@ -380,9 +380,11 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
         // Lowest priority: no search/remote-op/status message is active, so
         // show the context-sensitive hint strip (see `footer`).
         let staging_allowed = app.target.staging_mode() != crate::git::StagingMode::ReadOnly;
+        let code_intel_allowed = app.target.supports_code_intel();
         let entries = footer::build_hints(
             app.mode,
             staging_allowed,
+            code_intel_allowed,
             app.push_publishes(),
             app.help_open,
             pending,
@@ -393,6 +395,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     }
     if app.help_open {
         let staging_allowed = app.target.staging_mode() != crate::git::StagingMode::ReadOnly;
+        let code_intel_allowed = app.target.supports_code_intel();
         let search = app
             .help_search
             .as_ref()
@@ -402,7 +405,15 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
             viewport: &app.help_viewport,
             search,
         };
-        help::render(frame, area, keymap, &app.theme, staging_allowed, &state);
+        help::render(
+            frame,
+            area,
+            keymap,
+            &app.theme,
+            staging_allowed,
+            code_intel_allowed,
+            &state,
+        );
     }
     if matches!(app.mode, Mode::Compose) {
         compose_modal::render(frame, area, app);

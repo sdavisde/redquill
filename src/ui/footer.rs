@@ -58,13 +58,20 @@ fn sort_for_display(mut entries: Vec<FooterEntry>) -> Vec<FooterEntry> {
 /// Groups `km`'s bindings in `scope` that carry a [`FooterHint`], merging
 /// rows that share an identical hint (same rank *and* label) into one entry
 /// whose key text joins both rows' key labels with `/` (the `j`/`k` "move"
-/// pairing). `staging_allowed` hides the same staging-mutation rows the help
-/// overlay hides (see [`super::help::binding_hidden`]) — `false` on a
-/// read-only diff range.
-fn keymap_hints(km: &Keymap, scope: Scope, staging_allowed: bool) -> Vec<FooterEntry> {
+/// pairing). `staging_allowed`/`code_intel_allowed` hide the same
+/// capability-gated rows the help overlay hides (see
+/// [`super::help::binding_hidden`]) — `staging_allowed` is `false` on a
+/// read-only diff range, `code_intel_allowed` is `false` whenever the
+/// target's new side isn't the live working tree.
+fn keymap_hints(
+    km: &Keymap,
+    scope: Scope,
+    staging_allowed: bool,
+    code_intel_allowed: bool,
+) -> Vec<FooterEntry> {
     let mut grouped: Vec<(FooterHint, Vec<String>)> = Vec::new();
     for b in km.bindings().iter().filter(|b| b.scope == scope) {
-        if super::help::binding_hidden(b.action, staging_allowed) {
+        if super::help::binding_hidden(b.action, staging_allowed, code_intel_allowed) {
             continue;
         }
         let Some(hint) = b.footer else { continue };
@@ -124,13 +131,13 @@ fn find_key(km: &Keymap, scope: Scope, action: Action, want: &str) -> Option<Str
 
 /// The Normal-mode idle strip: every [`Scope::Diff`] row [`Keymap::default_map`]
 /// tags with a [`FooterHint`], merged/sorted by [`keymap_hints`].
-fn normal_hints(km: &Keymap, staging_allowed: bool) -> Vec<FooterEntry> {
-    keymap_hints(km, Scope::Diff, staging_allowed)
+fn normal_hints(km: &Keymap, staging_allowed: bool, code_intel_allowed: bool) -> Vec<FooterEntry> {
+    keymap_hints(km, Scope::Diff, staging_allowed, code_intel_allowed)
 }
 
 /// The focused-git-panel idle strip: every [`Scope::Panel`] row tagged with a
-/// [`FooterHint`]. Panel bindings are never staging mutations, so nothing is
-/// gated on `staging_allowed`.
+/// [`FooterHint`]. Panel bindings are never staging mutations or code-intel
+/// requests, so nothing is gated on either capability.
 ///
 /// `push_publishes` relabels the [`Action::RemotePush`] hint to `publish`
 /// when the branch has no upstream (see `App::push_publishes`) — a
@@ -138,7 +145,7 @@ fn normal_hints(km: &Keymap, staging_allowed: bool) -> Vec<FooterEntry> {
 /// table can't carry a state-dependent label; the key and its promotion still
 /// come from the table.
 fn panel_hints(km: &Keymap, push_publishes: bool) -> Vec<FooterEntry> {
-    let mut entries = keymap_hints(km, Scope::Panel, true);
+    let mut entries = keymap_hints(km, Scope::Panel, true, true);
     if push_publishes
         && let Some(hint) = km
             .bindings()
@@ -229,11 +236,14 @@ fn fallback_pending_label(action: Action) -> &'static str {
 /// pending: every [`Scope::Diff`] two-key binding whose first chord matches
 /// `prefix`, via [`Keymap::completions_for`] — never a hardcoded per-prefix
 /// list, so a newly bound two-key sequence shows up automatically. Sorted by
-/// key text for a stable, predictable order.
-fn pending_hints(km: &Keymap, prefix: KeyEvent) -> Vec<FooterEntry> {
+/// key text for a stable, predictable order. `code_intel_allowed` drops
+/// `gd`/`gr` the same way [`super::help::binding_hidden`] hides them from the
+/// help overlay, so a pending `g` never advertises an inert code-intel jump.
+fn pending_hints(km: &Keymap, prefix: KeyEvent, code_intel_allowed: bool) -> Vec<FooterEntry> {
     let mut entries: Vec<FooterEntry> = km
         .completions_for(Scope::Diff, prefix)
         .into_iter()
+        .filter(|b| !super::help::binding_hidden(b.action, true, code_intel_allowed))
         .map(|b| FooterEntry {
             rank: 1,
             key: b.key_label(),
@@ -260,10 +270,13 @@ fn help_open_hints() -> Vec<FooterEntry> {
 /// constructing a whole app. `pending` is only consulted in
 /// [`Mode::Normal`]/[`Mode::Visual`] (the only modes that ever have a pending
 /// two-key prefix — see `super::event_loop`); `push_publishes` only in
-/// [`Mode::Panel`] (see [`panel_hints`]).
+/// [`Mode::Panel`] (see [`panel_hints`]). `code_intel_allowed` hides `gd`/`gr`
+/// from a pending-prefix strip and (were one ever tagged) from the Normal
+/// idle strip, mirroring `staging_allowed`'s gating.
 pub(super) fn build_hints(
     mode: Mode,
     staging_allowed: bool,
+    code_intel_allowed: bool,
     push_publishes: bool,
     help_open: bool,
     pending: Option<KeyEvent>,
@@ -275,10 +288,10 @@ pub(super) fn build_hints(
     if let Some(prefix) = pending
         && matches!(mode, Mode::Normal | Mode::Visual { .. })
     {
-        return pending_hints(km, prefix);
+        return pending_hints(km, prefix, code_intel_allowed);
     }
     match mode {
-        Mode::Normal => normal_hints(km, staging_allowed),
+        Mode::Normal => normal_hints(km, staging_allowed, code_intel_allowed),
         Mode::Visual { .. } => visual_hints(km, staging_allowed),
         Mode::Panel { .. } => panel_hints(km, push_publishes),
         Mode::List => modal_hints(LIST_KEYS),
@@ -373,9 +386,11 @@ pub(super) fn footer_height(
         return 1;
     }
     let staging_allowed = app.target.staging_mode() != crate::git::StagingMode::ReadOnly;
+    let code_intel_allowed = app.target.supports_code_intel();
     let entries = build_hints(
         app.mode,
         staging_allowed,
+        code_intel_allowed,
         app.push_publishes(),
         app.help_open,
         pending,

@@ -102,14 +102,30 @@ fn key_line(key: &str, description: &str, key_width: usize, theme: &Theme) -> Li
     ])
 }
 
-/// Whether `action` is a staging *mutation* the current diff target can't
-/// perform, so it must be hidden from the help overlay. On a read-only range
-/// target the file/hunk/line stage gestures are inert no-ops (see
-/// [`super::app::App::stage_file`] / [`super::staging::toggle_stage`]), so
-/// listing them would be untruthful; the staging-panel toggle stays visible
-/// because it still works (it shows the index regardless of target).
-pub(super) fn binding_hidden(action: Action, staging_allowed: bool) -> bool {
-    !staging_allowed && matches!(action, Action::ToggleStage | Action::StageFile)
+/// Whether `action` is a capability the current diff target can't perform,
+/// so it must be hidden from the help overlay (and, via the same predicate,
+/// the footer strip — see `super::footer`'s `keymap_hints`/`pending_hints`).
+///
+/// - On a read-only range target the file/hunk/line stage gestures are inert
+///   no-ops (see [`super::app::App::stage_file`] / [`super::staging::toggle_stage`]),
+///   so listing them would be untruthful; the staging-panel toggle stays
+///   visible because it still works (it shows the index regardless of
+///   target).
+/// - On any target whose new side isn't the live working tree, `gd`/`gr`/`K`
+///   are inert no-ops too (see [`super::code_intel::request`], gated on
+///   [`crate::git::DiffTarget::supports_code_intel`]), so they're hidden the
+///   same way.
+pub(super) fn binding_hidden(
+    action: Action,
+    staging_allowed: bool,
+    code_intel_allowed: bool,
+) -> bool {
+    (!staging_allowed && matches!(action, Action::ToggleStage | Action::StageFile))
+        || (!code_intel_allowed
+            && matches!(
+                action,
+                Action::GotoDefinition | Action::GotoReferences | Action::Hover
+            ))
 }
 
 /// Flattens a per-mode key table (see [`super::modal_keys`]) into the
@@ -177,7 +193,10 @@ pub struct HelpViewState<'a> {
 /// [`Keymap`] table are grouped Navigation / Annotate / Panels / Quit, with
 /// Compose-mode and List-mode hints appended below (those modes bypass the
 /// table entirely, so they aren't in it). `staging_allowed` is `false` on a
-/// read-only range target, hiding the inert file/hunk staging gestures.
+/// read-only range target, hiding the inert file/hunk staging gestures;
+/// `code_intel_allowed` is `false` whenever the target's new side isn't the
+/// live working tree, hiding the inert `gd`/`gr`/`K` gestures the same way
+/// (see [`binding_hidden`]).
 ///
 /// The box caps its height to ~4/5 of `area` and scrolls the overflow; see
 /// [`HelpViewState`] for the scroll/filter fields `state` carries.
@@ -187,6 +206,7 @@ pub fn render(
     keymap: &Keymap,
     theme: &Theme,
     staging_allowed: bool,
+    code_intel_allowed: bool,
     state: &HelpViewState,
 ) {
     let scroll = state.scroll;
@@ -216,7 +236,7 @@ pub fn render(
         let group_bindings: Vec<&Binding> = bindings
             .iter()
             .filter(|b| b.scope == Scope::Diff && group_of(b.action) == group)
-            .filter(|b| !binding_hidden(b.action, staging_allowed))
+            .filter(|b| !binding_hidden(b.action, staging_allowed, code_intel_allowed))
             .filter(|b| row_matches(&b.key_label(), b.description, query))
             .collect();
         if group_bindings.is_empty() {
@@ -425,5 +445,39 @@ mod tests {
                 binding.key_label(),
             );
         }
+    }
+
+    // -- Capability gating: binding_hidden ----------------------------------
+
+    #[test]
+    fn code_intel_actions_hidden_only_when_code_intel_disallowed() {
+        for action in [
+            Action::GotoDefinition,
+            Action::GotoReferences,
+            Action::Hover,
+        ] {
+            assert!(
+                binding_hidden(action, true, false),
+                "{action:?} must be hidden when code-intel is unsupported"
+            );
+            assert!(
+                !binding_hidden(action, true, true),
+                "{action:?} must be shown when code-intel is supported"
+            );
+        }
+    }
+
+    #[test]
+    fn staging_actions_are_unaffected_by_code_intel_allowed() {
+        for action in [Action::ToggleStage, Action::StageFile] {
+            assert!(binding_hidden(action, false, true));
+            assert!(!binding_hidden(action, true, true));
+        }
+    }
+
+    #[test]
+    fn unrelated_actions_are_never_hidden_by_either_flag() {
+        assert!(!binding_hidden(Action::CursorDown, false, false));
+        assert!(!binding_hidden(Action::Quit, false, false));
     }
 }
