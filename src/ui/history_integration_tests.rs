@@ -84,6 +84,7 @@ fn press(app: &mut App, keymap: &Keymap, pending: &mut Option<KeyEvent>, code: K
         app,
         keymap,
         pending,
+        &mut None,
         KeyEvent::new(code, KeyModifiers::NONE),
     );
 }
@@ -444,6 +445,7 @@ fn q_from_a_commit_view_quits_and_would_emit_annotations() {
     let mut app = app_for(tmp.path());
     let keymap = Keymap::default_map();
     let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
 
     open_history_tab(&mut app, &keymap, &mut pending);
     press(&mut app, &keymap, &mut pending, KeyCode::Enter);
@@ -452,6 +454,7 @@ fn q_from_a_commit_view_quits_and_would_emit_annotations() {
         &mut app,
         &keymap,
         &mut pending,
+        &mut pending_count,
         KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
     );
     assert!(matches!(flow, Flow::Quit(QuitOutcome::Emit)));
@@ -876,7 +879,7 @@ fn commit_view_help_overlay_shows_only_truthful_keys() {
     // panel` (the panel toggle still works) and there is NO Code intelligence
     // section at all — the inert file/hunk-stage and gd/gr/K keys are simply
     // gone, not listed-but-dead.
-    let overlay_top = screenshot(&app, &keymap, 100, 40);
+    let overlay_top = screenshot(&app, &keymap, 100, 55);
     eprintln!("=== 6.3 commit-view ? overlay (unfiltered, top) ===\n{overlay_top}");
 
     // The diff-line stage gestures live in the top viewport's Stage section

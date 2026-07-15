@@ -396,7 +396,7 @@ fn help_overlay_hides_staging_rows_on_a_range_target() {
 /// On the working-tree target every staging gesture is listed.
 #[test]
 fn help_overlay_shows_staging_rows_on_the_working_tree_target() {
-    let backend = TestBackend::new(100, 44);
+    let backend = TestBackend::new(100, 55);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
     app.help_open = true; // target defaults to WorkingTree
@@ -497,8 +497,9 @@ fn help_overlay_scrolls_to_reveal_lower_sections() {
 
     // Jump to the bottom through the real dispatch path, then redraw.
     let mut pending = None;
+    let mut pending_count: Option<usize> = None;
     let end = KeyEvent::new(KeyCode::End, KeyModifiers::NONE);
-    let _ = dispatch_key(&mut app, &keymap, &mut pending, end);
+    let _ = dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, end);
     terminal
         .draw(|frame| draw(frame, &app, &keymap, None))
         .unwrap();
@@ -526,19 +527,20 @@ fn help_filter_enter_locks_and_two_escapes_close() {
     app.help_open = true;
     let keymap = Keymap::default_map();
     let mut pending = None;
+    let mut pending_count: Option<usize> = None;
 
     let slash = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
-    dispatch_key(&mut app, &keymap, &mut pending, slash);
+    dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, slash);
     assert_eq!(app.help_search, Some((String::new(), true)));
 
     for c in ['q', 'u', 'i', 't'] {
         let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
-        dispatch_key(&mut app, &keymap, &mut pending, key);
+        dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, key);
     }
     assert_eq!(app.help_search, Some(("quit".to_string(), true)));
 
     let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-    dispatch_key(&mut app, &keymap, &mut pending, enter);
+    dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, enter);
     assert_eq!(app.help_search, Some(("quit".to_string(), false)));
     assert!(
         app.help_open,
@@ -546,18 +548,296 @@ fn help_filter_enter_locks_and_two_escapes_close() {
     );
 
     let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
-    dispatch_key(&mut app, &keymap, &mut pending, esc);
+    dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, esc);
     assert_eq!(app.help_search, None, "first Esc clears the locked filter");
     assert!(
         app.help_open,
         "clearing the filter must not close the overlay"
     );
 
-    dispatch_key(&mut app, &keymap, &mut pending, esc);
+    dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, esc);
     assert!(
         !app.help_open,
         "second Esc, with no filter left, closes the overlay"
     );
+}
+
+// -- Count-prefix dispatch (3j, 10j, 0, 3gg, ...) ---------------------------
+
+/// `sample_file` has 5 addressable rows (0..=4): FileHeader, HunkHeader,
+/// context, removed, added.
+fn press_digits(
+    app: &mut App,
+    keymap: &Keymap,
+    pending: &mut Option<KeyEvent>,
+    pending_count: &mut Option<usize>,
+    digits: &str,
+) {
+    for c in digits.chars() {
+        dispatch_key(
+            app,
+            keymap,
+            pending,
+            pending_count,
+            KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+        );
+    }
+}
+
+#[test]
+fn count_prefix_repeats_a_motion_n_times() {
+    let mut app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+    let mut pending = None;
+    let mut pending_count: Option<usize> = None;
+
+    press_digits(&mut app, &keymap, &mut pending, &mut pending_count, "3");
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+    );
+    assert_eq!(app.view.cursor, 3, "3j must move the cursor down 3 rows");
+    assert_eq!(
+        pending_count, None,
+        "the count must reset once the motion applies"
+    );
+}
+
+#[test]
+fn count_prefix_accumulates_across_multiple_digits() {
+    let mut app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+    let mut pending = None;
+    let mut pending_count: Option<usize> = None;
+
+    // "10j" clamps at the last addressable row (4), but proves "1" then "0"
+    // combined into ten rather than acting as two separate counts.
+    press_digits(&mut app, &keymap, &mut pending, &mut pending_count, "1");
+    assert_eq!(pending_count, Some(1));
+    press_digits(&mut app, &keymap, &mut pending, &mut pending_count, "0");
+    assert_eq!(
+        pending_count,
+        Some(10),
+        "a `0` after a digit continues the count rather than acting as CursorLineStart"
+    );
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+    );
+    assert_eq!(app.view.cursor, app.view.max_cursor());
+}
+
+#[test]
+fn bare_zero_moves_column_cursor_to_line_start() {
+    let mut app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+    let mut pending = None;
+    let mut pending_count: Option<usize> = None;
+
+    // Land on the added line ("    new();"), move right twice, then `0`.
+    for _ in 0..2 {
+        dispatch_key(
+            &mut app,
+            &keymap,
+            &mut pending,
+            &mut pending_count,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        );
+    }
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+    );
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+    );
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+    );
+    assert_eq!(app.view.effective_column(), Some(2));
+
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('0'), KeyModifiers::NONE),
+    );
+    assert_eq!(app.view.effective_column(), Some(0));
+    assert_eq!(pending_count, None);
+}
+
+#[test]
+fn count_is_silently_dropped_for_a_non_repeatable_action() {
+    // `gg` (JumpToTop) has no "repeat" meaning; a count typed before it must
+    // not panic, double-apply, or leak into the next keypress.
+    let mut app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+    let mut pending = None;
+    let mut pending_count: Option<usize> = None;
+
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+    );
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+    );
+    assert_eq!(app.view.cursor, 2);
+
+    press_digits(&mut app, &keymap, &mut pending, &mut pending_count, "3");
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+    );
+    assert_eq!(
+        pending_count,
+        Some(3),
+        "the count must survive the pending `g` prefix, not be dropped early"
+    );
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+    );
+    assert_eq!(app.view.cursor, 0, "gg still just jumps to the top");
+    assert_eq!(pending_count, None, "the count must not leak past gg");
+
+    // The count must not silently reapply to the next keystroke either.
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+    );
+    assert_eq!(app.view.cursor, 1, "a single j, not a leaked 3j");
+}
+
+#[test]
+fn a_non_repeatable_action_applies_exactly_once_despite_a_count() {
+    let mut app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+    let mut pending = None;
+    let mut pending_count: Option<usize> = None;
+
+    press_digits(&mut app, &keymap, &mut pending, &mut pending_count, "3");
+    // Space (ToggleStage) is a toggle, not a motion: applying it 3 times
+    // would just flip staged state back and forth, so the count must be
+    // ignored (applied exactly once) rather than repeated.
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+    );
+    assert!(
+        app.status_message.is_some(),
+        "Space must still act exactly once (no git backend -> footer message)"
+    );
+}
+
+#[test]
+fn esc_mid_count_cancels_it() {
+    let mut app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+    let mut pending = None;
+    let mut pending_count: Option<usize> = None;
+
+    press_digits(&mut app, &keymap, &mut pending, &mut pending_count, "5");
+    assert_eq!(pending_count, Some(5));
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    );
+    assert_eq!(pending_count, None, "Esc must cancel an in-progress count");
+
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+    );
+    assert_eq!(app.view.cursor, 1, "a plain j, not a leaked 5j");
+}
+
+#[test]
+fn unbound_key_mid_count_cancels_it() {
+    let mut app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+    let mut pending = None;
+    let mut pending_count: Option<usize> = None;
+
+    press_digits(&mut app, &keymap, &mut pending, &mut pending_count, "4");
+    // A capital `Z`-with-shift-only key that isn't bound anywhere resolves
+    // to no action and must drop the count.
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE),
+    );
+    assert_eq!(pending_count, None, "an unbound key must cancel the count");
+
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+    );
+    assert_eq!(app.view.cursor, 1, "a plain j, not a leaked 4j");
+}
+
+/// Direct unit coverage of `repeat_count` itself: the cap, and that a
+/// non-repeatable action always collapses to exactly 1 regardless of count.
+#[test]
+fn repeat_count_caps_and_ignores_non_repeatable_actions() {
+    assert_eq!(repeat_count(Action::CursorDown, Some(5)), 5);
+    assert_eq!(repeat_count(Action::CursorDown, None), 1);
+    assert_eq!(
+        repeat_count(Action::CursorDown, Some(50_000)),
+        MAX_COUNT,
+        "a count is clamped by the digit-accumulation cap before it ever reaches repeat_count, \
+         but repeat_count itself must not blow past MAX_COUNT either"
+    );
+    assert_eq!(repeat_count(Action::JumpToTop, Some(5)), 1);
+    assert_eq!(repeat_count(Action::ToggleStage, Some(5)), 1);
 }
 
 /// Closing the help overlay (either `?` or the overlay's own Close action)
@@ -1190,12 +1470,14 @@ fn sidebar_rect_and_render_scale_with_terminal_width_when_panel_focused() {
 fn panel_focus_key_dispatch_smoke() {
     let keymap = Keymap::default_map();
     let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
     let mut app = panel_smoke_app();
-    let press = |app: &mut App, pending: &mut Option<KeyEvent>, code: KeyCode| {
+    let mut press = |app: &mut App, pending: &mut Option<KeyEvent>, code: KeyCode| {
         let _ = dispatch_key(
             app,
             &keymap,
             pending,
+            &mut pending_count,
             KeyEvent::new(code, KeyModifiers::NONE),
         );
     };
@@ -1270,6 +1552,7 @@ fn panel_focus_key_dispatch_smoke() {
 fn quit_family_quits_from_focused_panel() {
     let keymap = Keymap::default_map();
     let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
     let cases = [
         (
             KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
@@ -1288,7 +1571,7 @@ fn quit_family_quits_from_focused_panel() {
         let mut app = panel_smoke_app();
         app.apply(Action::FocusGitPanel);
         assert!(matches!(app.mode, Mode::Panel { .. }));
-        match dispatch_key(&mut app, &keymap, &mut pending, ev) {
+        match dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, ev) {
             Flow::Quit(outcome) => assert_eq!(outcome, want, "wrong quit outcome for {ev:?}"),
             Flow::Continue => panic!("{ev:?} should quit from the focused panel"),
         }
@@ -1307,6 +1590,7 @@ fn quit_family_quits_from_focused_panel() {
 fn b_in_panel_mode_opens_switcher_through_dispatch_key() {
     let keymap = Keymap::default_map();
     let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
     let mut app = panel_smoke_app();
     app.apply(Action::FocusGitPanel);
     assert!(matches!(app.mode, Mode::Panel { .. }));
@@ -1314,6 +1598,7 @@ fn b_in_panel_mode_opens_switcher_through_dispatch_key() {
         &mut app,
         &keymap,
         &mut pending,
+        &mut pending_count,
         KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE),
     );
     assert!(matches!(app.mode, Mode::Panel { .. }));
@@ -1329,12 +1614,14 @@ fn b_in_panel_mode_opens_switcher_through_dispatch_key() {
 fn b_in_normal_mode_still_word_jumps() {
     let keymap = Keymap::default_map();
     let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
     let mut app = panel_smoke_app();
     assert_eq!(app.mode, Mode::Normal);
     dispatch_key(
         &mut app,
         &keymap,
         &mut pending,
+        &mut pending_count,
         KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE),
     );
     assert_eq!(
@@ -1352,6 +1639,7 @@ fn b_in_normal_mode_still_word_jumps() {
 fn esc_restores_panel_cursor_row() {
     let keymap = Keymap::default_map();
     let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
     let mut app = panel_smoke_app();
     app.apply(Action::FocusGitPanel);
     app.apply(Action::PanelCursorDown);
@@ -1368,6 +1656,7 @@ fn esc_restores_panel_cursor_row() {
         &mut app,
         &keymap,
         &mut pending,
+        &mut pending_count,
         KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
     );
     assert!(matches!(app.mode, Mode::Panel { .. }));
@@ -1384,6 +1673,7 @@ fn esc_restores_panel_cursor_row() {
 fn q_is_inert_inside_switcher() {
     let keymap = Keymap::default_map();
     let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
     let mut app = panel_smoke_app();
     app.switcher = Some(super::switcher::SwitcherState::new(vec![], vec![], None, 0));
     app.mode = Mode::Switcher;
@@ -1391,6 +1681,7 @@ fn q_is_inert_inside_switcher() {
         &mut app,
         &keymap,
         &mut pending,
+        &mut pending_count,
         KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
     ) {
         Flow::Quit(_) => panic!("q must not quit from inside the switcher modal"),
@@ -1410,12 +1701,14 @@ fn q_is_inert_inside_switcher() {
 fn q_is_inert_while_help_overlay_open() {
     let keymap = Keymap::default_map();
     let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
     let mut app = panel_smoke_app();
     app.help_open = true;
     let flow = dispatch_key(
         &mut app,
         &keymap,
         &mut pending,
+        &mut pending_count,
         KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
     );
     assert!(
@@ -1427,6 +1720,7 @@ fn q_is_inert_while_help_overlay_open() {
         &mut app,
         &keymap,
         &mut pending,
+        &mut pending_count,
         KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
     );
     assert!(!app.help_open, "? still closes the help overlay");
@@ -1440,6 +1734,7 @@ fn q_is_inert_while_help_overlay_open() {
 fn at_toggles_command_log_from_both_scopes_and_renders_in_bottom_slot() {
     let keymap = Keymap::default_map();
     let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
     let mut app = panel_smoke_app();
     app.command_log.push(super::command_log::CommandLogEntry {
         command_line: "git push".to_string(),
@@ -1453,7 +1748,7 @@ fn at_toggles_command_log_from_both_scopes_and_renders_in_bottom_slot() {
 
     // Diff scope: `@` opens the log.
     assert!(!app.command_log_open);
-    dispatch_key(&mut app, &keymap, &mut pending, at);
+    dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, at);
     assert!(app.command_log_open);
 
     // It renders in the bottom slot with the failed entry and its stderr.
@@ -1474,13 +1769,19 @@ fn at_toggles_command_log_from_both_scopes_and_renders_in_bottom_slot() {
     assert!(content.contains("non-fast-forward"));
 
     // `@` again closes it.
-    dispatch_key(&mut app, &keymap, &mut pending, at);
+    dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, at);
     assert!(!app.command_log_open);
 
     // Panel scope toggles it too: focus the panel, then `@`.
-    dispatch_key(&mut app, &keymap, &mut pending, backtick);
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        backtick,
+    );
     assert!(matches!(app.mode, Mode::Panel { .. }));
-    dispatch_key(&mut app, &keymap, &mut pending, at);
+    dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, at);
     assert!(app.command_log_open);
     // Still focused on the panel — the log toggle is orthogonal to focus.
     assert!(matches!(app.mode, Mode::Panel { .. }));
@@ -1603,6 +1904,7 @@ fn capture_task_03_smoke_transcript() {
 
     let keymap = Keymap::default_map();
     let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
     let mut app = panel_smoke_app();
     let backend = TestBackend::new(60, 20);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -1628,6 +1930,7 @@ fn capture_task_03_smoke_transcript() {
                 app,
                 &keymap,
                 pending,
+                &mut pending_count,
                 KeyEvent::new(code, KeyModifiers::NONE),
             );
         }
@@ -1775,6 +2078,7 @@ fn capture_task_04_smoke_transcript() {
 
     let keymap = Keymap::default_map();
     let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
     let mut app = panel_smoke_app();
 
     let spawn_at = Instant::now();
@@ -1809,6 +2113,7 @@ fn capture_task_04_smoke_transcript() {
             &mut app,
             &keymap,
             &mut pending,
+            &mut pending_count,
             KeyEvent::new(code, KeyModifiers::NONE),
         );
         // Poll for completion the way the event loop does; the op is still

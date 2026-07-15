@@ -29,6 +29,11 @@ pub enum Action {
     CursorLeft,
     /// Move the column cursor right within the cursor row's content.
     CursorRight,
+    /// Move the column cursor to the start of the cursor row's content.
+    CursorLineStart,
+    /// Move the column cursor to the last character of the cursor row's
+    /// content.
+    CursorLineEnd,
     /// Jump the column cursor to the start of the next word.
     WordForward,
     /// Jump the column cursor to the start of the previous word.
@@ -37,6 +42,10 @@ pub enum Action {
     HalfPageDown,
     /// Move the cursor up half a viewport.
     HalfPageUp,
+    /// Move the cursor down a full viewport.
+    FullPageDown,
+    /// Move the cursor up a full viewport.
+    FullPageUp,
     /// Jump the cursor to the top of the diff buffer.
     JumpToTop,
     /// Jump the cursor to the bottom of the diff buffer.
@@ -51,6 +60,12 @@ pub enum Action {
     PrevFile,
     /// Toggle the collapse state of the file section under the cursor.
     ToggleCollapse,
+    /// Scroll the viewport so the cursor sits at its vertical center.
+    RecenterCursor,
+    /// Scroll the viewport so the cursor sits near its top.
+    ScrollCursorTop,
+    /// Scroll the viewport so the cursor sits near its bottom.
+    ScrollCursorBottom,
     /// Toggle the help overlay.
     ToggleHelp,
     /// Enter Visual mode at the cursor row (Normal), or cancel Visual mode
@@ -79,6 +94,12 @@ pub enum Action {
     SearchNext,
     /// Jump to the previous search match, wrapping around.
     SearchPrev,
+    /// Search for the word under the column cursor, jumping to the next
+    /// occurrence.
+    SearchWordForward,
+    /// Search for the word under the column cursor, jumping to the previous
+    /// occurrence.
+    SearchWordBackward,
     /// Request `textDocument/definition` for the cursor's position.
     GotoDefinition,
     /// Request `textDocument/references` for the cursor's position.
@@ -306,6 +327,16 @@ impl Keymap {
                     "Move column cursor right",
                 ),
                 d(
+                    KeySeq::one(Char('0'), none),
+                    CursorLineStart,
+                    "Move column cursor to start of line",
+                ),
+                d(
+                    KeySeq::one(Char('$'), none),
+                    CursorLineEnd,
+                    "Move column cursor to end of line",
+                ),
+                d(
                     KeySeq::one(Char('w'), none),
                     WordForward,
                     "Jump column cursor to next word",
@@ -324,6 +355,16 @@ impl Keymap {
                     KeySeq::one(Char('u'), ctrl),
                     HalfPageUp,
                     "Scroll half page up",
+                ),
+                d(
+                    KeySeq::one(Char('f'), ctrl),
+                    FullPageDown,
+                    "Scroll full page down",
+                ),
+                d(
+                    KeySeq::one(Char('b'), ctrl),
+                    FullPageUp,
+                    "Scroll full page up",
                 ),
                 d(
                     KeySeq::two(Char('g'), none, Char('g'), none),
@@ -349,6 +390,21 @@ impl Keymap {
                     "Collapse/expand file section",
                 )
                 .footer(3, "fold"),
+                d(
+                    KeySeq::two(Char('z'), none, Char('z'), none),
+                    RecenterCursor,
+                    "Center viewport on cursor",
+                ),
+                d(
+                    KeySeq::two(Char('z'), none, Char('t'), none),
+                    ScrollCursorTop,
+                    "Scroll cursor to top of viewport",
+                ),
+                d(
+                    KeySeq::two(Char('z'), none, Char('b'), none),
+                    ScrollCursorBottom,
+                    "Scroll cursor to bottom of viewport",
+                ),
                 d(KeySeq::one(Char('?'), none), ToggleHelp, "Toggle help").footer(0, "help"),
                 // This row's `Action` (`ToggleHelp`) only tells the table
                 // Esc is *bound*, so the overlay lists it; the actual
@@ -421,6 +477,16 @@ impl Keymap {
                     KeySeq::one(Char('N'), none),
                     SearchPrev,
                     "Previous search match",
+                ),
+                d(
+                    KeySeq::one(Char('*'), none),
+                    SearchWordForward,
+                    "Search word under cursor, next occurrence",
+                ),
+                d(
+                    KeySeq::one(Char('#'), none),
+                    SearchWordBackward,
+                    "Search word under cursor, previous occurrence",
                 ),
                 d(
                     KeySeq::two(Char('g'), none, Char('d'), none),
@@ -831,6 +897,37 @@ mod tests {
     }
 
     #[test]
+    fn zz_zt_zb_resolve_via_lookup_double() {
+        let km = Keymap::default_map();
+        let z = key(KeyCode::Char('z'), KeyModifiers::NONE);
+        assert_eq!(
+            km.lookup_double(z, key(KeyCode::Char('z'), KeyModifiers::NONE)),
+            Some(Action::RecenterCursor)
+        );
+        assert_eq!(
+            km.lookup_double(z, key(KeyCode::Char('t'), KeyModifiers::NONE)),
+            Some(Action::ScrollCursorTop)
+        );
+        assert_eq!(
+            km.lookup_double(z, key(KeyCode::Char('b'), KeyModifiers::NONE)),
+            Some(Action::ScrollCursorBottom)
+        );
+    }
+
+    #[test]
+    fn resolve_completes_zz_across_two_events() {
+        let km = Keymap::default_map();
+        let mut pending = None;
+        assert_eq!(
+            km.resolve(&mut pending, key(KeyCode::Char('z'), KeyModifiers::NONE)),
+            None
+        );
+        let action = km.resolve(&mut pending, key(KeyCode::Char('z'), KeyModifiers::NONE));
+        assert_eq!(action, Some(Action::RecenterCursor));
+        assert_eq!(pending, None);
+    }
+
+    #[test]
     fn key_label_formats_modifiers_and_special_keys() {
         let km = Keymap::default_map();
         let labels: Vec<String> = km.bindings().iter().map(Binding::key_label).collect();
@@ -862,6 +959,43 @@ mod tests {
         assert_eq!(
             km.lookup(key(KeyCode::Char('b'), KeyModifiers::NONE)),
             Some(Action::WordBackward)
+        );
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('0'), KeyModifiers::NONE)),
+            Some(Action::CursorLineStart)
+        );
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('$'), KeyModifiers::NONE)),
+            Some(Action::CursorLineEnd)
+        );
+    }
+
+    #[test]
+    fn full_page_keys_require_ctrl_and_are_distinct_from_half_page() {
+        let km = Keymap::default_map();
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('f'), KeyModifiers::CONTROL)),
+            Some(Action::FullPageDown)
+        );
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('b'), KeyModifiers::CONTROL)),
+            Some(Action::FullPageUp)
+        );
+        // Plain 'f'/'b' with no modifier are unbound (`b` alone is the word-
+        // backward motion only without Ctrl, already covered above).
+        assert_eq!(km.lookup(key(KeyCode::Char('f'), KeyModifiers::NONE)), None);
+    }
+
+    #[test]
+    fn star_and_hash_resolve_to_search_word_actions() {
+        let km = Keymap::default_map();
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('*'), KeyModifiers::NONE)),
+            Some(Action::SearchWordForward)
+        );
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('#'), KeyModifiers::NONE)),
+            Some(Action::SearchWordBackward)
         );
     }
 
@@ -1285,13 +1419,23 @@ mod tests {
     // -- `completions_for`: pending-prefix completions -----------------------
 
     #[test]
-    fn completions_for_z_is_just_za() {
+    fn completions_for_z_is_za_zz_zt_and_zb() {
         let km = Keymap::default_map();
         let z = key(KeyCode::Char('z'), KeyModifiers::NONE);
-        let completions = km.completions_for(Scope::Diff, z);
-        assert_eq!(completions.len(), 1);
-        assert_eq!(completions[0].action, Action::ToggleCollapse);
-        assert_eq!(completions[0].key_label(), "za");
+        let mut actions: Vec<Action> = km
+            .completions_for(Scope::Diff, z)
+            .into_iter()
+            .map(|b| b.action)
+            .collect();
+        actions.sort_by_key(|a| format!("{a:?}"));
+        let mut expected = vec![
+            Action::ToggleCollapse,
+            Action::RecenterCursor,
+            Action::ScrollCursorTop,
+            Action::ScrollCursorBottom,
+        ];
+        expected.sort_by_key(|a| format!("{a:?}"));
+        assert_eq!(actions, expected);
     }
 
     #[test]

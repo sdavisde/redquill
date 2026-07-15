@@ -556,13 +556,20 @@ impl App {
             Action::JumpToBottom => self.view.jump_to_bottom(),
             Action::CursorLeft => self.view.move_column_left(),
             Action::CursorRight => self.view.move_column_right(),
+            Action::CursorLineStart => self.view.move_column_to_line_start(),
+            Action::CursorLineEnd => self.view.move_column_to_line_end(),
             Action::WordForward => self.view.move_word_forward(),
             Action::WordBackward => self.view.move_word_backward(),
+            Action::FullPageDown => self.view.full_page_down(),
+            Action::FullPageUp => self.view.full_page_up(),
             Action::NextHunk => self.view.next_hunk(),
             Action::PrevHunk => self.view.prev_hunk(),
             Action::NextFile => self.view.next_section(),
             Action::PrevFile => self.view.prev_section(),
             Action::ToggleCollapse => self.toggle_collapse(),
+            Action::RecenterCursor => self.view.recenter_cursor(),
+            Action::ScrollCursorTop => self.view.scroll_cursor_top(),
+            Action::ScrollCursorBottom => self.view.scroll_cursor_bottom(),
             Action::ToggleHelp => {
                 self.help_open = !self.help_open;
                 self.help_scroll.set(0);
@@ -577,6 +584,8 @@ impl App {
             Action::Search => self.enter_search(),
             Action::SearchNext => self.search_advance(true),
             Action::SearchPrev => self.search_advance(false),
+            Action::SearchWordForward => self.search_word_under_cursor(true),
+            Action::SearchWordBackward => self.search_word_under_cursor(false),
             Action::GotoDefinition => super::code_intel::request(self, PeekKind::Definition),
             Action::GotoReferences => super::code_intel::request(self, PeekKind::References),
             Action::Hover => super::code_intel::request(self, PeekKind::Hover),
@@ -1052,6 +1061,21 @@ impl App {
             self.set_status_message(format!("match {k}/{}", self.search.matches.len()));
         }
     }
+
+    /// Applies the `*`/`#` gesture: seeds a new search pattern from the word
+    /// under the column cursor, then jumps to the next (`*`) or previous
+    /// (`#`) occurrence via [`App::search_advance`] — same footer messages,
+    /// same wraparound. `"no word under cursor"` if the cursor isn't
+    /// directly on a word char (see [`DiffViewState::word_at_cursor`]).
+    fn search_word_under_cursor(&mut self, forward: bool) {
+        let Some(word) = self.view.word_at_cursor() else {
+            self.set_status_message("no word under cursor");
+            return;
+        };
+        self.search.pattern = Some(word);
+        self.search.recompute(&self.view.rows);
+        self.search_advance(forward);
+    }
 }
 
 /// Which [`Action`]s remain live in [`Mode::Visual`]. Everything else
@@ -1064,8 +1088,13 @@ fn visual_mode_allows(action: Action) -> bool {
             | Action::CursorUp
             | Action::CursorLeft
             | Action::CursorRight
+            | Action::CursorLineStart
+            | Action::CursorLineEnd
             | Action::WordForward
             | Action::WordBackward
+            | Action::RecenterCursor
+            | Action::ScrollCursorTop
+            | Action::ScrollCursorBottom
             | Action::EnterVisual
             | Action::Compose
             | Action::ToggleList

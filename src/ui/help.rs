@@ -55,12 +55,13 @@ const GROUP_ORDER: [&str; 8] = [
 fn group_of(action: Action) -> &'static str {
     use Action::*;
     match action {
-        CursorDown | CursorUp | CursorLeft | CursorRight | WordForward | WordBackward
-        | HalfPageDown | HalfPageUp | JumpToTop | JumpToBottom | NextHunk | PrevHunk | NextFile
-        | PrevFile | ToggleCollapse => "Navigation",
+        CursorDown | CursorUp | CursorLeft | CursorRight | CursorLineStart | CursorLineEnd
+        | WordForward | WordBackward | HalfPageDown | HalfPageUp | FullPageDown | FullPageUp
+        | JumpToTop | JumpToBottom | NextHunk | PrevHunk | NextFile | PrevFile | ToggleCollapse
+        | RecenterCursor | ScrollCursorTop | ScrollCursorBottom => "Navigation",
         EnterVisual | Compose => "Annotate",
         ToggleStage | StageFile | ToggleStagingPanel => "Stage",
-        Search | SearchNext | SearchPrev => "Search",
+        Search | SearchNext | SearchPrev | SearchWordForward | SearchWordBackward => "Search",
         ToggleList | ToggleHelp | FocusGitPanel | ToggleCommandLog | Refresh => "Panels",
         GotoDefinition | GotoReferences | Hover => "Code intelligence",
         PanelCursorDown | PanelCursorUp | PanelSelect | TogglePanelTab | RemoteFetch

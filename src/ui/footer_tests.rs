@@ -275,11 +275,14 @@ fn help_open_takes_precedence_over_the_mode_strip() {
 // -- Pending two-key prefix ------------------------------------------------
 
 #[test]
-fn pending_z_shows_only_za() {
+fn pending_z_shows_za_zb_zt_and_zz_sorted_by_key() {
     let km = Keymap::default_map();
     let entries = pending_hints(&km, key(KeyCode::Char('z')), true);
-    assert_eq!(keys(&entries), vec!["za"]);
-    assert_eq!(labels(&entries), vec!["fold"]);
+    assert_eq!(keys(&entries), vec!["za", "zb", "zt", "zz"]);
+    assert_eq!(
+        labels(&entries),
+        vec!["fold", "cursor to bottom", "cursor to top", "center"]
+    );
 }
 
 #[test]
@@ -493,11 +496,30 @@ fn visual_esc_cancel_actually_returns_to_normal() {
     let mut app = app();
     let keymap = Keymap::default_map();
     let mut pending = None;
+    let mut pending_count: Option<usize> = None;
     // Land on a Row::Line, enter Visual, then Esc.
-    dispatch_key(&mut app, &keymap, &mut pending, key(KeyCode::Char('j')));
-    dispatch_key(&mut app, &keymap, &mut pending, key(KeyCode::Char('j')));
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        key(KeyCode::Char('j')),
+    );
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        key(KeyCode::Char('j')),
+    );
     assert!(matches!(app.view.rows[app.view.cursor], Row::Line(_)));
-    dispatch_key(&mut app, &keymap, &mut pending, key(KeyCode::Char('v')));
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        key(KeyCode::Char('v')),
+    );
     assert!(
         matches!(app.mode, Mode::Visual { .. }),
         "v must enter Visual"
@@ -506,6 +528,7 @@ fn visual_esc_cancel_actually_returns_to_normal() {
         &mut app,
         &keymap,
         &mut pending,
+        &mut pending_count,
         KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
     );
     assert_eq!(
@@ -520,10 +543,35 @@ fn visual_comment_selection_actually_opens_compose() {
     let mut app = app();
     let keymap = Keymap::default_map();
     let mut pending = None;
-    dispatch_key(&mut app, &keymap, &mut pending, key(KeyCode::Char('j')));
-    dispatch_key(&mut app, &keymap, &mut pending, key(KeyCode::Char('j')));
-    dispatch_key(&mut app, &keymap, &mut pending, key(KeyCode::Char('v')));
-    dispatch_key(&mut app, &keymap, &mut pending, key(KeyCode::Char('c')));
+    let mut pending_count: Option<usize> = None;
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        key(KeyCode::Char('j')),
+    );
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        key(KeyCode::Char('j')),
+    );
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        key(KeyCode::Char('v')),
+    );
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        key(KeyCode::Char('c')),
+    );
     assert_eq!(app.mode, Mode::Compose, "Visual `c` must open Compose");
 }
 
@@ -532,10 +580,35 @@ fn visual_stage_lines_actually_does_something() {
     let mut app = app();
     let keymap = Keymap::default_map();
     let mut pending = None;
-    dispatch_key(&mut app, &keymap, &mut pending, key(KeyCode::Char('j')));
-    dispatch_key(&mut app, &keymap, &mut pending, key(KeyCode::Char('j')));
-    dispatch_key(&mut app, &keymap, &mut pending, key(KeyCode::Char('v')));
-    dispatch_key(&mut app, &keymap, &mut pending, key(KeyCode::Char(' ')));
+    let mut pending_count: Option<usize> = None;
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        key(KeyCode::Char('j')),
+    );
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        key(KeyCode::Char('j')),
+    );
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        key(KeyCode::Char('v')),
+    );
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        key(KeyCode::Char(' ')),
+    );
     // No git backend attached, so staging degrades to a footer message —
     // still an observable effect proving Space is live in Visual mode.
     assert!(app.status_message.is_some(), "Visual Space must act");
@@ -553,11 +626,24 @@ fn panel_help_hint_is_real_and_shadows_panel_dispatch() {
     };
     let keymap = Keymap::default_map();
     let mut pending = None;
-    dispatch_key(&mut app, &keymap, &mut pending, key(KeyCode::Char('?')));
+    let mut pending_count: Option<usize> = None;
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        key(KeyCode::Char('?')),
+    );
     assert!(app.help_open, "`?` must open help from the panel");
     assert!(matches!(app.mode, Mode::Panel { .. }), "mode stays Panel");
     let scroll_before = app.help_scroll.get();
-    dispatch_key(&mut app, &keymap, &mut pending, key(KeyCode::Char('j')));
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        key(KeyCode::Char('j')),
+    );
     assert!(
         app.help_scroll.get() > scroll_before,
         "j must scroll help, not move the panel cursor, while help is open over the panel"
@@ -566,6 +652,7 @@ fn panel_help_hint_is_real_and_shadows_panel_dispatch() {
         &mut app,
         &keymap,
         &mut pending,
+        &mut pending_count,
         KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
     );
     assert!(!app.help_open, "Esc must close help");

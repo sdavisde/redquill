@@ -152,6 +152,7 @@ fn press(app: &mut App, keymap: &Keymap, pending: &mut Option<KeyEvent>, code: K
         app,
         keymap,
         pending,
+        &mut None,
         KeyEvent::new(code, KeyModifiers::NONE),
     );
 }

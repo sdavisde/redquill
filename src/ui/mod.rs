@@ -63,7 +63,7 @@ pub use theme::Theme;
 use std::io::{self, Stderr};
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -179,16 +179,59 @@ enum Flow {
     Quit(QuitOutcome),
 }
 
+/// The largest numeric prefix [`dispatch_key`]'s digit interception will
+/// accumulate — a mistyped run of digits shouldn't be able to turn a single
+/// keypress into a render-loop hitch on a large diff.
+const MAX_COUNT: usize = 1000;
+
+/// How many times to apply `action` for an accumulated count prefix (`None`
+/// if the user typed no digits before this key). Only pure motions honor a
+/// count; everything else (toggles, staging, LSP requests, mode changes,
+/// `JumpToTop`/`JumpToBottom`) always applies exactly once regardless of a
+/// stray accumulated count — repeating e.g. `ToggleStage` N times would just
+/// flip state back and forth, and `gg`/`G` have no natural "repeat" meaning
+/// (v1 does not reinterpret `3gg` as "goto line 3").
+fn repeat_count(action: Action, count: Option<usize>) -> usize {
+    use Action::*;
+    let repeatable = matches!(
+        action,
+        CursorDown
+            | CursorUp
+            | CursorLeft
+            | CursorRight
+            | WordForward
+            | WordBackward
+            | NextHunk
+            | PrevHunk
+            | NextFile
+            | PrevFile
+            | HalfPageDown
+            | HalfPageUp
+            | FullPageDown
+            | FullPageUp
+            | SearchNext
+            | SearchPrev
+    );
+    if repeatable {
+        count.unwrap_or(1).clamp(1, MAX_COUNT)
+    } else {
+        1
+    }
+}
+
 /// Dispatches one key-press event, mutating `app`. This is the single entry
 /// point the blocking event loop and the headless key-driver tests both go
 /// through, so tests exercise the *real* dispatch path (mode routing, the
 /// diff-scope pending-prefix machine, panel-scope resolution, Esc handling)
 /// rather than a copy of it. `pending` carries a `g`-prefix across calls in
-/// diff scope (see [`Keymap::resolve`]).
+/// diff scope (see [`Keymap::resolve`]); `pending_count` carries an
+/// accumulating numeric prefix (`3`, `1` then `0`, ...) the same way, applied
+/// via [`repeat_count`] once a motion resolves.
 fn dispatch_key(
     app: &mut App,
     keymap: &Keymap,
     pending: &mut Option<KeyEvent>,
+    pending_count: &mut Option<usize>,
     key: KeyEvent,
 ) -> Flow {
     // Transient footer messages last exactly until the next keypress
@@ -221,15 +264,43 @@ fn dispatch_key(
             // the screen), Esc/Enter/`?` close it (`q` is inert — an open
             // overlay never quits the app). This shadows the diff keymap so
             // `j`/`k` scroll the overlay rather than the diff underneath. Any
-            // pending `g` prefix is irrelevant here, so drop it.
+            // pending `g` prefix (or numeric count) is irrelevant here, so
+            // drop both.
             if app.overlay_active() {
                 *pending = None;
+                *pending_count = None;
                 handle_help_key(app, key);
                 return Flow::Continue;
             }
 
+            // Digit interception, ahead of the keymap: only while no two-key
+            // prefix is already pending (a count always precedes it, e.g.
+            // `3gg`, never interleaves with it). `1'..='9'` always
+            // accumulate; a bare `0` is the `CursorLineStart` motion (falls
+            // through unconsumed to `keymap.resolve` below) but a `0` typed
+            // *after* another digit continues the count, exactly like vim.
+            if pending.is_none() && key.modifiers == KeyModifiers::NONE {
+                if let KeyCode::Char(c @ '1'..='9') = key.code {
+                    let digit = c.to_digit(10).unwrap_or(0) as usize;
+                    *pending_count = Some(
+                        pending_count
+                            .unwrap_or(0)
+                            .saturating_mul(10)
+                            .saturating_add(digit)
+                            .min(MAX_COUNT),
+                    );
+                    return Flow::Continue;
+                }
+                if key.code == KeyCode::Char('0') && pending_count.is_some() {
+                    *pending_count =
+                        Some(pending_count.unwrap_or(0).saturating_mul(10).min(MAX_COUNT));
+                    return Flow::Continue;
+                }
+            }
+
             let had_pending = pending.is_some();
             let action = keymap.resolve(pending, key);
+            let just_started_sequence = !had_pending && pending.is_some();
 
             // Esc only ever closes an already-open help overlay, cancels an
             // in-progress Visual selection, or returns from a commit view
@@ -237,8 +308,9 @@ fn dispatch_key(
             // never bound to opening help, unlike `?` (see keymap.rs). This
             // runs only when nothing was pending — an Esc that cancelled a
             // pending `g` prefix (handled inside `resolve`) stops there
-            // instead.
+            // instead. Esc always cancels an in-progress count too.
             if key.code == KeyCode::Esc && !had_pending {
+                *pending_count = None;
                 if app.help_open {
                     app.help_open = false;
                 } else if matches!(app.mode, Mode::Visual { .. }) {
@@ -250,12 +322,25 @@ fn dispatch_key(
             }
 
             let Some(action) = action else {
+                // A two-key sequence just starting (e.g. the `g` of `3gg`)
+                // isn't "nothing happened" — the count must survive to see
+                // the sequence's second key. Anything else that resolved to
+                // no action (an unbound key, or a cancelled/unknown second
+                // key) abandons any in-progress count, matching vim.
+                if !just_started_sequence {
+                    *pending_count = None;
+                }
                 return Flow::Continue;
             };
+            let count = pending_count.take();
             match action {
                 Action::Quit => return Flow::Quit(QuitOutcome::Emit),
                 Action::QuitDiscard => return Flow::Quit(QuitOutcome::Discard),
-                other => app.apply(other),
+                other => {
+                    for _ in 0..repeat_count(other, count) {
+                        app.apply(other);
+                    }
+                }
             }
         }
     }
@@ -509,6 +594,11 @@ fn event_loop(
     // second key to complete `gd`/`gr` (see `Keymap::resolve`).
     let mut pending_prefix: Option<KeyEvent> = None;
 
+    // Tracks an accumulating numeric count (`3`, `1`+`0`, ...) across loop
+    // iterations while it awaits the motion key it will repeat (see
+    // `dispatch_key`'s digit interception).
+    let mut pending_count: Option<usize> = None;
+
     // When the working tree was last polled for external changes.
     let mut last_auto_refresh = Instant::now();
 
@@ -536,7 +626,7 @@ fn event_loop(
         if event::poll(POLL_INTERVAL)? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    match dispatch_key(app, keymap, &mut pending_prefix, key) {
+                    match dispatch_key(app, keymap, &mut pending_prefix, &mut pending_count, key) {
                         Flow::Quit(outcome) => return Ok(outcome),
                         Flow::Continue => {}
                     }

@@ -92,6 +92,7 @@ fn press(app: &mut App, keymap: &Keymap, pending: &mut Option<KeyEvent>, code: K
         app,
         keymap,
         pending,
+        &mut None,
         KeyEvent::new(code, KeyModifiers::NONE),
     );
 }
@@ -185,12 +186,13 @@ fn multiline_message_reaches_git_verbatim() {
     let mut app = app_for(dir);
     let keymap = Keymap::default_map();
     let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
 
     open_commit_modal(&mut app, &keymap, &mut pending);
     type_text(&mut app, &keymap, &mut pending, "feat: subject");
     let ctrl_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL);
-    dispatch_key(&mut app, &keymap, &mut pending, ctrl_j);
-    dispatch_key(&mut app, &keymap, &mut pending, ctrl_j);
+    dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, ctrl_j);
+    dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, ctrl_j);
     type_text(&mut app, &keymap, &mut pending, "body $(hostname) `pwd`");
     press(&mut app, &keymap, &mut pending, KeyCode::Enter);
     wait_for_commit(&mut app);
@@ -314,12 +316,14 @@ fn q_through_dispatch_types_into_the_message_rather_than_quitting() {
     let mut app = app_for(tmp.path());
     let keymap = Keymap::default_map();
     let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
 
     open_commit_modal(&mut app, &keymap, &mut pending);
     let flow = dispatch_key(
         &mut app,
         &keymap,
         &mut pending,
+        &mut pending_count,
         KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
     );
     assert!(

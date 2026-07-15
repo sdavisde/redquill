@@ -509,6 +509,116 @@ impl DiffViewState {
         }
         self.cursor_col = i;
     }
+
+    /// Scrolls so the cursor sits at the vertical center of the viewport (the
+    /// `zz` gesture), clamped so the buffer's last row never scrolls above
+    /// the bottom of the viewport. A no-op on an empty diff.
+    pub fn recenter_cursor(&mut self) {
+        self.selected_file = self.file_of_cursor();
+        if self.rows.is_empty() {
+            self.scroll = 0;
+            return;
+        }
+        let half = self.viewport_height / 2;
+        self.scroll = self.cursor.saturating_sub(half).min(self.max_scroll());
+    }
+
+    /// Scrolls so the cursor sits near the top of the viewport (the `zt`
+    /// gesture), keeping the same [`SCROLLOFF`]-derived margin above it that
+    /// [`DiffViewState::reveal_at_top`] uses, and degrading the same way at
+    /// the buffer's edges. A no-op on an empty diff.
+    pub fn scroll_cursor_top(&mut self) {
+        self.selected_file = self.file_of_cursor();
+        if self.rows.is_empty() {
+            self.scroll = 0;
+            return;
+        }
+        self.scroll = self
+            .cursor
+            .saturating_sub(self.scroll_margin())
+            .min(self.max_scroll());
+    }
+
+    /// Scrolls so the cursor sits near the bottom of the viewport (the `zb`
+    /// gesture), keeping the same margin below it. A no-op on an empty diff.
+    pub fn scroll_cursor_bottom(&mut self) {
+        self.selected_file = self.file_of_cursor();
+        if self.rows.is_empty() {
+            self.scroll = 0;
+            return;
+        }
+        self.scroll = (self.cursor + self.scroll_margin() + 1)
+            .saturating_sub(self.viewport_height)
+            .min(self.max_scroll());
+    }
+
+    /// Moves the column cursor to the start of the cursor row's content (the
+    /// `0` motion). A no-op on non-[`Row::Line`] rows.
+    pub fn move_column_to_line_start(&mut self) {
+        if self.cursor_line_content().is_some() {
+            self.cursor_col = 0;
+        }
+    }
+
+    /// Moves the column cursor to the last character of the cursor row's
+    /// content (the `$` motion). A no-op on non-[`Row::Line`] rows or an
+    /// empty line.
+    pub fn move_column_to_line_end(&mut self) {
+        let Some(content) = self.cursor_line_content() else {
+            return;
+        };
+        let len = content.chars().count();
+        if len == 0 {
+            return;
+        }
+        self.cursor_col = len - 1;
+    }
+
+    /// Moves the cursor down a full viewport (the `Ctrl-f` gesture), then
+    /// scrolls to follow it with a [`SCROLLOFF`] context margin. Mirrors
+    /// [`DiffViewState::half_page_down`] at double the step.
+    pub fn full_page_down(&mut self) {
+        if !self.rows.is_empty() {
+            let step = self.viewport_height.max(1);
+            let target = (self.cursor + step).min(self.max_cursor());
+            self.cursor = self.nearest_addressable(target, true);
+        }
+        self.ensure_visible_scrolloff();
+    }
+
+    /// Moves the cursor up a full viewport (the `Ctrl-b` gesture). Mirrors
+    /// [`DiffViewState::half_page_up`] at double the step.
+    pub fn full_page_up(&mut self) {
+        if !self.rows.is_empty() {
+            let step = self.viewport_height.max(1);
+            let target = self.cursor.saturating_sub(step);
+            self.cursor = self.nearest_addressable(target, false);
+        }
+        self.ensure_visible_scrolloff();
+    }
+
+    /// The word (alphanumeric/underscore run) containing the column cursor,
+    /// for the `*`/`#` gestures. `None` if the cursor isn't on a
+    /// [`Row::Line`] row, or the char at the column cursor isn't a word char
+    /// — deliberately narrower than vim's "nearest word forward", which this
+    /// doesn't implement.
+    pub fn word_at_cursor(&self) -> Option<String> {
+        let content = self.cursor_line_content()?;
+        let chars: Vec<char> = content.chars().collect();
+        let col = self.cursor_col.min(chars.len().saturating_sub(1));
+        let c = *chars.get(col)?;
+        if !is_word_char(c) {
+            return None;
+        }
+        let start = (0..=col)
+            .rev()
+            .take_while(|&i| is_word_char(chars[i]))
+            .last()?;
+        let end = (col..chars.len())
+            .take_while(|&i| is_word_char(chars[i]))
+            .last()?;
+        Some(chars[start..=end].iter().collect())
+    }
 }
 
 /// Whether `c` is part of a "word" for `w`/`b` column motion: alphanumeric
@@ -1038,5 +1148,195 @@ index 1..2 100644
         view.ensure_visible();
         assert!(view.cursor < view.rows.len());
         assert!(view.rows[view.cursor].is_addressable());
+    }
+
+    // -- zz/zt/zb: viewport recenter ------------------------------------------
+
+    #[test]
+    fn recenter_cursor_centers_the_viewport_on_the_cursor() {
+        let mut view = view_with_raw("big.rs", &long_raw(30)); // 32 rows
+        view.set_viewport_height(10);
+        view.cursor = 20;
+        view.recenter_cursor();
+        assert_eq!(view.scroll, 15); // 20 - 10/2
+    }
+
+    #[test]
+    fn recenter_cursor_clamps_at_both_buffer_edges() {
+        let mut view = view_with_raw("big.rs", &long_raw(30)); // 32 rows
+        view.set_viewport_height(10);
+        view.cursor = 2;
+        view.recenter_cursor();
+        assert_eq!(view.scroll, 0, "near the top: scroll never underflows");
+        view.jump_to_bottom(); // cursor 31
+        view.recenter_cursor();
+        assert_eq!(
+            view.scroll,
+            view.max_scroll(),
+            "near the bottom: scroll clamps at the max useful offset"
+        );
+    }
+
+    #[test]
+    fn recenter_cursor_is_a_noop_on_empty_diff() {
+        let mut view = DiffViewState::new(vec![]);
+        view.recenter_cursor();
+        assert_eq!(view.scroll, 0);
+    }
+
+    #[test]
+    fn scroll_cursor_top_places_the_cursor_a_margin_below_the_top() {
+        let mut view = view_with_raw("big.rs", &long_raw(30)); // 32 rows
+        view.set_viewport_height(10);
+        view.cursor = 20;
+        view.scroll_cursor_top();
+        assert_eq!(view.scroll, 20 - SCROLLOFF);
+    }
+
+    #[test]
+    fn scroll_cursor_top_clamps_at_both_buffer_edges() {
+        let mut view = view_with_raw("big.rs", &long_raw(30));
+        view.set_viewport_height(10);
+        view.cursor = 1;
+        view.scroll_cursor_top();
+        assert_eq!(view.scroll, 0);
+        view.jump_to_bottom();
+        view.scroll_cursor_top();
+        assert_eq!(view.scroll, view.max_scroll());
+    }
+
+    #[test]
+    fn scroll_cursor_bottom_places_the_cursor_a_margin_above_the_bottom() {
+        let mut view = view_with_raw("big.rs", &long_raw(30)); // 32 rows
+        view.set_viewport_height(10);
+        view.cursor = 20;
+        view.scroll_cursor_bottom();
+        assert_eq!(view.scroll, 20 + SCROLLOFF + 1 - 10);
+    }
+
+    #[test]
+    fn scroll_cursor_bottom_clamps_at_both_buffer_edges() {
+        let mut view = view_with_raw("big.rs", &long_raw(30));
+        view.set_viewport_height(10);
+        view.cursor = 0;
+        view.scroll_cursor_bottom();
+        assert_eq!(view.scroll, 0);
+        view.jump_to_bottom();
+        view.scroll_cursor_bottom();
+        assert_eq!(view.scroll, view.max_scroll());
+    }
+
+    // -- 0/$: line-start/line-end column motion -------------------------------
+
+    #[test]
+    fn line_start_and_end_jump_the_column_cursor_to_the_line_edges() {
+        let raw = "\
+diff --git a/f.rs b/f.rs
+index 1..2 100644
+--- a/f.rs
++++ b/f.rs
+@@ -1,1 +1,1 @@
+ abcde
+";
+        let mut view = view_with_raw("f.rs", raw);
+        view.cursor_down(); // hunk header
+        view.cursor_down(); // "abcde"
+        view.move_column_right();
+        view.move_column_right();
+        assert_eq!(view.effective_column(), Some(2));
+        view.move_column_to_line_end();
+        assert_eq!(view.effective_column(), Some(4));
+        view.move_column_to_line_start();
+        assert_eq!(view.effective_column(), Some(0));
+    }
+
+    #[test]
+    fn line_start_and_end_are_noops_off_a_line_row() {
+        let mut view = view_with_raw("f.rs", sample_raw());
+        assert!(matches!(view.rows[view.cursor], Row::FileHeader { .. }));
+        view.move_column_to_line_end();
+        view.move_column_to_line_start();
+        assert_eq!(view.cursor_col, 0);
+    }
+
+    // -- Ctrl-f/Ctrl-b: full-page scroll ---------------------------------------
+
+    #[test]
+    fn full_page_down_moves_a_full_viewport_then_clamps() {
+        let mut view = view_with_raw("big.rs", &long_raw(30)); // 32 rows
+        view.set_viewport_height(10);
+        view.full_page_down();
+        assert_eq!(view.cursor, 10);
+        view.full_page_down();
+        assert_eq!(view.cursor, 20);
+        view.full_page_down();
+        assert_eq!(view.cursor, 30);
+        view.full_page_down();
+        assert_eq!(view.cursor, 31, "clamps at the last addressable row");
+    }
+
+    #[test]
+    fn full_page_up_moves_a_full_viewport_then_clamps_at_zero() {
+        let mut view = view_with_raw("big.rs", &long_raw(30)); // 32 rows
+        view.set_viewport_height(10);
+        view.jump_to_bottom(); // cursor 31
+        view.full_page_up();
+        assert_eq!(view.cursor, 21);
+        view.full_page_up();
+        assert_eq!(view.cursor, 11);
+        view.full_page_up();
+        assert_eq!(view.cursor, 1);
+        view.full_page_up();
+        assert_eq!(view.cursor, 0);
+    }
+
+    #[test]
+    fn full_page_motions_are_noops_on_empty_diff() {
+        let mut view = DiffViewState::new(vec![]);
+        view.full_page_down();
+        assert_eq!(view.cursor, 0);
+        view.full_page_up();
+        assert_eq!(view.cursor, 0);
+    }
+
+    // -- */#: word-under-cursor extraction ------------------------------------
+
+    #[test]
+    fn word_at_cursor_returns_the_word_char_run_containing_the_column_cursor() {
+        let raw = "\
+diff --git a/f.rs b/f.rs
+index 1..2 100644
+--- a/f.rs
++++ b/f.rs
+@@ -1,1 +1,1 @@
+ hello_world foo-bar
+";
+        let mut view = view_with_raw("f.rs", raw);
+        view.cursor_down(); // hunk header
+        view.cursor_down(); // "hello_world foo-bar"
+        view.cursor_col = 3; // inside "hello_world"
+        assert_eq!(view.word_at_cursor().as_deref(), Some("hello_world"));
+        view.cursor_col = 16; // inside "bar"
+        assert_eq!(view.word_at_cursor().as_deref(), Some("bar"));
+    }
+
+    #[test]
+    fn word_at_cursor_is_none_on_punctuation_or_off_a_line_row() {
+        let raw = "\
+diff --git a/f.rs b/f.rs
+index 1..2 100644
+--- a/f.rs
++++ b/f.rs
+@@ -1,1 +1,1 @@
+ foo-bar
+";
+        let mut view = view_with_raw("f.rs", raw);
+        view.cursor_down();
+        view.cursor_down(); // "foo-bar"
+        view.cursor_col = 3; // the '-'
+        assert_eq!(view.word_at_cursor(), None);
+
+        view.cursor = 0; // file header row: not a Line row
+        assert_eq!(view.word_at_cursor(), None);
     }
 }

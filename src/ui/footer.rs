@@ -247,6 +247,9 @@ fn fallback_pending_label(action: Action) -> &'static str {
         Action::GotoDefinition => "definition",
         Action::GotoReferences => "references",
         Action::JumpToTop => "top",
+        Action::RecenterCursor => "center",
+        Action::ScrollCursorTop => "cursor to top",
+        Action::ScrollCursorBottom => "cursor to bottom",
         _ => "",
     }
 }
