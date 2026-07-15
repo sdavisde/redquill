@@ -165,6 +165,35 @@ pub enum Target {
         /// Path of the annotated file, relative to the repo root.
         path: String,
     },
+    /// A single line in a file's *current worktree content* — not anchored
+    /// to either side of a diff (spec 06 Unit 3: the read-only file view).
+    ///
+    /// The file view always synthesizes an all-context body from the live
+    /// worktree (never a historical revision — see
+    /// [`crate::annotate::model::Source::WorkingTree`]'s doc), so a
+    /// `WorktreeLine`/`WorktreeRange` annotation always composes with the
+    /// [`Source::WorkingTree`] group in [`super::markdown`]'s `Reviewing:`
+    /// grouping: it is never accompanied by its own metadata line, and it
+    /// sits in the same, always-first group as ordinary working-tree diff
+    /// annotations. Serializes with the `(=)` marker — see the `markdown`
+    /// module doc for the exact header shapes.
+    WorktreeLine {
+        /// Path of the annotated file, relative to the repo root.
+        path: String,
+        /// 1-based line number.
+        line: u32,
+    },
+    /// An inclusive span of lines in a file's current worktree content —
+    /// the range counterpart to [`Target::WorktreeLine`]; see its doc for
+    /// how it composes with `Reviewing:` grouping.
+    WorktreeRange {
+        /// Path of the annotated file, relative to the repo root.
+        path: String,
+        /// 1-based, inclusive start line.
+        start: u32,
+        /// 1-based, inclusive end line. Must be `>= start`.
+        end: u32,
+    },
 }
 
 impl Target {
@@ -212,13 +241,52 @@ impl Target {
         Target::File { path: path.into() }
     }
 
+    /// Builds a [`Target::WorktreeLine`].
+    pub fn worktree_line(path: impl Into<String>, line: u32) -> Target {
+        Target::WorktreeLine {
+            path: path.into(),
+            line,
+        }
+    }
+
+    /// Builds a [`Target::WorktreeRange`], validating `start <= end`.
+    pub fn worktree_range(
+        path: impl Into<String>,
+        start: u32,
+        end: u32,
+    ) -> Result<Target, AnnotateError> {
+        if start > end {
+            return Err(AnnotateError::InvalidRange { start, end });
+        }
+        Ok(Target::WorktreeRange {
+            path: path.into(),
+            start,
+            end,
+        })
+    }
+
     /// The path this target is attached to, regardless of variant.
     pub fn path(&self) -> &str {
         match self {
             Target::Line { path, .. }
             | Target::Range { path, .. }
             | Target::Hunk { path, .. }
-            | Target::File { path } => path,
+            | Target::File { path }
+            | Target::WorktreeLine { path, .. }
+            | Target::WorktreeRange { path, .. } => path,
+        }
+    }
+
+    /// The anchor line to land on when navigating back to this target's
+    /// location: the line itself for [`Target::WorktreeLine`], the start
+    /// line for [`Target::WorktreeRange`]. `None` for every other variant —
+    /// callers use `path()` position lookups plus row-model anchoring for
+    /// those instead (see `App::jump_to_annotation`).
+    pub fn worktree_anchor_line(&self) -> Option<u32> {
+        match self {
+            Target::WorktreeLine { line, .. } => Some(*line),
+            Target::WorktreeRange { start, .. } => Some(*start),
+            _ => None,
         }
     }
 }
@@ -337,6 +405,85 @@ mod tests {
     fn validate_body_rejects_empty_and_whitespace_only() {
         assert_eq!(validate_body(""), Err(AnnotateError::EmptyBody));
         assert_eq!(validate_body("   \n\t "), Err(AnnotateError::EmptyBody));
+    }
+
+    // -- Target::WorktreeLine / Target::WorktreeRange (task 4.1) ------------
+
+    #[test]
+    fn worktree_line_builds_expected_variant() {
+        assert_eq!(
+            Target::worktree_line("docs/notes.md", 44),
+            Target::WorktreeLine {
+                path: "docs/notes.md".to_string(),
+                line: 44,
+            }
+        );
+    }
+
+    #[test]
+    fn worktree_range_builds_expected_variant() {
+        assert_eq!(
+            Target::worktree_range("docs/notes.md", 10, 20).unwrap(),
+            Target::WorktreeRange {
+                path: "docs/notes.md".to_string(),
+                start: 10,
+                end: 20,
+            }
+        );
+    }
+
+    #[test]
+    fn worktree_range_rejects_start_after_end() {
+        let err = Target::worktree_range("docs/notes.md", 10, 5).unwrap_err();
+        assert_eq!(err, AnnotateError::InvalidRange { start: 10, end: 5 });
+    }
+
+    #[test]
+    fn worktree_range_allows_equal_start_and_end() {
+        assert!(Target::worktree_range("docs/notes.md", 5, 5).is_ok());
+    }
+
+    #[test]
+    fn worktree_targets_report_their_path() {
+        assert_eq!(
+            Target::worktree_line("docs/notes.md", 1).path(),
+            "docs/notes.md"
+        );
+        assert_eq!(
+            Target::worktree_range("docs/notes.md", 1, 2)
+                .unwrap()
+                .path(),
+            "docs/notes.md"
+        );
+    }
+
+    #[test]
+    fn worktree_anchor_line_resolves_line_and_range_start_only() {
+        assert_eq!(
+            Target::worktree_line("a.rs", 44).worktree_anchor_line(),
+            Some(44)
+        );
+        assert_eq!(
+            Target::worktree_range("a.rs", 10, 20)
+                .unwrap()
+                .worktree_anchor_line(),
+            Some(10)
+        );
+        assert_eq!(Target::file("a.rs").worktree_anchor_line(), None);
+        assert_eq!(
+            Target::line("a.rs", 1, Side::New).worktree_anchor_line(),
+            None
+        );
+        assert_eq!(
+            Target::range("a.rs", 1, 2, Side::New)
+                .unwrap()
+                .worktree_anchor_line(),
+            None
+        );
+        assert_eq!(
+            Target::hunk("a.rs", 1, 2).unwrap().worktree_anchor_line(),
+            None
+        );
     }
 
     #[test]
