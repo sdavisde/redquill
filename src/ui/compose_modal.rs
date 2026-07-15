@@ -70,7 +70,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         target_label(&compose.target),
         compose.classification.label()
     );
-    let footer = " Enter submit  Ctrl-j newline  Ctrl-t classification  Esc cancel ";
+    let footer = " Enter submit  Shift-Enter/Ctrl-j newline  Ctrl-t class  Esc cancel ";
 
     // Soft-wrap against the modal's inner width (60% slice minus the two
     // border columns), so the wrapped-row count sets the modal height and the

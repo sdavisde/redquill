@@ -47,7 +47,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         return;
     };
 
-    let footer = " Enter commit  Ctrl-j newline  Esc cancel ";
+    let footer = " Enter commit  Shift-Enter/Ctrl-j newline  Esc cancel ";
 
     // Soft-wrap against the modal's inner width (60% slice minus the two
     // border columns); the wrapped-row count sets the height and the cursor
@@ -128,9 +128,11 @@ index 111..222 100644
     }
 
     fn render_modal(app: &App) -> String {
-        let backend = TestBackend::new(80, 24);
+        // 100 wide so the 60%-width modal's footer (which now names the
+        // Shift-Enter/Ctrl-j newline keys) renders without truncation.
+        let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
-        let area = Rect::new(0, 0, 80, 24);
+        let area = Rect::new(0, 0, 100, 24);
         terminal.draw(|frame| render(frame, area, app)).unwrap();
         terminal
             .backend()
@@ -163,7 +165,7 @@ index 111..222 100644
         assert!(content.contains("fix: parser"));
         assert!(content.contains("body line"));
         assert!(content.contains("Enter commit"));
-        assert!(content.contains("Ctrl-j newline"));
+        assert!(content.contains("Shift-Enter/Ctrl-j newline"));
         assert!(content.contains("Esc cancel"));
     }
 
