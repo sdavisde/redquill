@@ -441,3 +441,7 @@ fn relative_path(root: &Path, path: &Path) -> String {
 #[cfg(test)]
 #[path = "engine_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "engine_perf_tests.rs"]
+mod perf_tests;
