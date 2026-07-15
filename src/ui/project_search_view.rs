@@ -125,17 +125,21 @@ fn render_summary_line(frame: &mut Frame, area: Rect, state: &ProjectSearchState
 
 /// The byte ranges within `text` (already stripped of its line terminator)
 /// that fall in `match_spans`, split into styled runs — matched runs get
-/// `theme.search_match_bg` (the same highlight color the finder and in-diff
-/// search use), everything else plain. Operates on `char_indices` so byte
-/// offsets always land on a char boundary, never panicking on multi-byte
-/// UTF-8 content.
+/// `theme.search_match_fg` (blue) plus bold, everything else plain. The
+/// matched substring's *text* carries the emphasis rather than a background
+/// tint (spec 06 round-1 UX fix: a background-only treatment didn't read as
+/// high-contrast enough) — see [`Theme::search_match_fg`]'s doc for why this
+/// is scoped to Project Search and the fuzzy finder rather than the in-diff
+/// `/` search, which keeps its own `search_match_bg` treatment. Operates on
+/// `char_indices` so byte offsets always land on a char boundary, never
+/// panicking on multi-byte UTF-8 content.
 fn highlighted_line_spans(
     text: &str,
     match_spans: &[Range<usize>],
     theme: &Theme,
 ) -> Vec<Span<'static>> {
     let matched_style = Style::default()
-        .bg(theme.search_match_bg)
+        .fg(theme.search_match_fg)
         .add_modifier(Modifier::BOLD);
     let plain_style = Style::default();
 
@@ -175,7 +179,12 @@ fn highlighted_line_spans(
 /// [`super::switcher_modal`]/[`super::file_finder_modal`]) — versus a plain
 /// `UNDERLINED` marker while [`SearchFocus::Input`] has focus: still shows
 /// where `Enter` would jump, without reading as "drive me with j/k" when
-/// keystrokes are actually going to the query.
+/// keystrokes are actually going to the query. A matched span's own blue+bold
+/// [`Theme::search_match_fg`] survives either style: `REVERSED` (a terminal
+/// attribute, not a ratatui-level overwrite) renders the span's explicit blue
+/// foreground as the cell's background instead, so the matched substring
+/// still visibly reads as "the blue one" on the selected row; `UNDERLINED`
+/// doesn't touch fg/bg at all.
 fn selection_style(focus: SearchFocus) -> Style {
     match focus {
         SearchFocus::Input => Style::default().add_modifier(Modifier::UNDERLINED),
@@ -450,6 +459,38 @@ index 111..222 100644
 
         let content = render_view(&app);
         assert!(content.contains("no matches"));
+    }
+
+    // -- Match highlight styling (round-1 UX fix) -------------------------
+
+    #[test]
+    fn matched_run_gets_blue_bold_foreground_not_a_background_tint() {
+        let theme = Theme::default();
+        #[allow(clippy::single_range_in_vec_init)]
+        let spans = highlighted_line_spans("let needle = 1;", &[4..10], &theme);
+        let matched = spans
+            .iter()
+            .find(|s| s.content.as_ref() == "needle")
+            .expect("the matched run must be its own span");
+        assert_eq!(matched.style.fg, Some(theme.search_match_fg));
+        assert!(matched.style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(
+            matched.style.bg, None,
+            "match emphasis must ride the foreground, not a background tint"
+        );
+    }
+
+    #[test]
+    fn plain_runs_around_a_match_stay_unstyled() {
+        let theme = Theme::default();
+        #[allow(clippy::single_range_in_vec_init)]
+        let spans = highlighted_line_spans("let needle = 1;", &[4..10], &theme);
+        let plain = spans
+            .iter()
+            .find(|s| s.content.as_ref() == "let ")
+            .expect("a plain run must precede the match");
+        assert_eq!(plain.style.fg, None);
+        assert_eq!(plain.style.bg, None);
     }
 
     // -- Focus model (round-1 UX fix) -------------------------------------

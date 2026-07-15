@@ -23,12 +23,16 @@ fn centered(area: Rect, width_pct: u16, height_pct: u16) -> Rect {
 }
 
 /// Builds one result row's spans: the path with every char index in
-/// `positions` emphasized in `theme.search_match_bg` — the same highlight
-/// color the in-diff search uses for its matches, so "this substring matched
-/// your query" reads consistently across the app.
-fn match_row(path: &str, positions: &[u32], theme: &super::theme::Theme) -> ListItem<'static> {
+/// `positions` emphasized via `theme.search_match_fg` (blue) plus bold — the
+/// same match-emphasis treatment [`super::project_search_view`]'s results
+/// list uses (spec 06 round-1 UX fix: the matched substring's *text* itself
+/// carries the emphasis, not just a background tint), so "this substring
+/// matched your query" reads consistently, and with high contrast, across
+/// the app. Split out from [`match_row`] so it's directly unit-testable
+/// without constructing a `ListItem`.
+fn match_spans(path: &str, positions: &[u32], theme: &super::theme::Theme) -> Vec<Span<'static>> {
     let matched_style = Style::default()
-        .bg(theme.search_match_bg)
+        .fg(theme.search_match_fg)
         .add_modifier(Modifier::BOLD);
     let plain_style = Style::default();
     let mut spans = Vec::with_capacity(path.chars().count());
@@ -40,7 +44,12 @@ fn match_row(path: &str, positions: &[u32], theme: &super::theme::Theme) -> List
         };
         spans.push(Span::styled(ch.to_string(), style));
     }
-    ListItem::new(Line::from(spans))
+    spans
+}
+
+/// Builds one result row as a [`ListItem`] from [`match_spans`].
+fn match_row(path: &str, positions: &[u32], theme: &super::theme::Theme) -> ListItem<'static> {
+    ListItem::new(Line::from(match_spans(path, positions, theme)))
 }
 
 /// Renders the fuzzy file finder modal, centered over `area`. A no-op if
@@ -196,5 +205,24 @@ index 111..222 100644
         app.finder = Some(state);
         let content = render_finder(&app);
         assert!(content.contains("no matches"));
+    }
+
+    #[test]
+    fn matched_chars_get_blue_bold_foreground_not_a_background_tint() {
+        let theme = crate::ui::theme::Theme::default();
+        let spans = match_spans("main.rs", &[0, 1, 2, 3], &theme);
+        for (i, span) in spans.iter().enumerate() {
+            if i < 4 {
+                assert_eq!(span.style.fg, Some(theme.search_match_fg));
+                assert!(span.style.add_modifier.contains(Modifier::BOLD));
+                assert_eq!(
+                    span.style.bg, None,
+                    "match emphasis must ride the foreground, not a background tint"
+                );
+            } else {
+                assert_eq!(span.style.fg, None, "unmatched chars must stay unstyled");
+                assert_eq!(span.style.bg, None);
+            }
+        }
     }
 }

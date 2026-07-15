@@ -48,6 +48,15 @@ pub struct Theme {
     pub dot_marker: Color,
     pub selected_row_bg: Color,
     pub search_match_bg: Color,
+    /// Foreground carried by query-match spans in the Project Search results
+    /// list and the fuzzy file finder modal (spec 06 round-1 UX fix): a
+    /// vivid blue + bold, so the matched substring's *text* itself reads as
+    /// emphasized rather than relying solely on a background tint (the
+    /// original `search_match_bg`-only treatment didn't read as high-contrast
+    /// enough per user acceptance feedback). Not used by the in-diff `/`
+    /// search highlight, which keeps its own `search_match_bg` treatment
+    /// untouched — this is scoped to the two surfaces the feedback named.
+    pub search_match_fg: Color,
     pub search_prompt: Color,
     pub annotation_text: Color,
     pub hunk_header: Color,
@@ -121,6 +130,7 @@ impl Default for Theme {
             dot_marker: Color::Yellow,
             selected_row_bg: Color::Rgb(45, 55, 90),
             search_match_bg: Color::Rgb(60, 40, 70),
+            search_match_fg: Color::Rgb(100, 180, 255),
             search_prompt: Color::Cyan,
             annotation_text: Color::DarkGray,
             hunk_header: Color::Cyan,
