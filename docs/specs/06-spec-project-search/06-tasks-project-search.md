@@ -83,7 +83,7 @@ The embedded ripgrep engine behind Project Search — pure module, no TUI types,
 - [x] 2.5 Perf tripwire: generate a several-thousand-file corpus in a tempdir, measure query→first-batch and full-scan in debug, budget 10–20× measured, loop-amortize; add alongside the existing tripwires in `src/ui/perf_tests.rs` (or `src/search/` if a purer seam fits — keep the established style).
 - [x] 2.6 Gates green; finish `proofs/task-2-engine.md` (dependency cost + test run summary).
 
-### [ ] 3.0 Project Search view (`g/`): live query, toggles, result navigation
+### [x] 3.0 Project Search view (`g/`): live query, toggles, result navigation
 
 Ships spec Unit 2's UI on top of task 2.0's engine.
 
@@ -95,12 +95,12 @@ Ships spec Unit 2's UI on top of task 2.0's engine.
 
 #### 3.0 Tasks
 
-- [ ] 3.1 Search mode: `Mode` variant + state in `src/ui/app.rs`/`src/ui/project_search.rs` — query buffer, toggle states (case/word/literal), results grouped by file, selection + scroll, generation counter, debounce deadline.
-- [ ] 3.2 TDD background wiring: debounce (~120–150ms after last keystroke, min query length 2), spawn engine scan on a worker with the abort flag + generation; drain result batches once per tick next to the existing polls in `src/ui/mod.rs`; drop stale generations; abort the in-flight scan on query change or mode exit; single-flight guard.
-- [ ] 3.3 Full-screen render in `src/ui/project_search_view.rs`: input line with toggle indicators (e.g. `[re] [Cc] [w]`), file-grouped results with match-span emphasis (reuse existing highlight/theme utilities), summary line ("N matches in M files", cap + skip indicators), inline regex-error line that never wipes the previous good results.
-- [ ] 3.4 Result navigation: list motions through grouped results; `Enter` opens the task-1.0 file view at the hit line (cursor on it); `Esc` from the file view returns to the search view with query/toggles/results/selection intact; `Esc` from the search view restores the exact prior diff position.
-- [ ] 3.5 Keymap: `g/` sequence + action in `src/ui/keymap.rs`; search-mode table in `src/ui/modal_keys.rs` including `Alt-c` (case), `Alt-w` (word), `Alt-r` (regex↔literal); drift tests both directions; footer + `?` updated.
-- [ ] 3.6 Gates green; record the primary journey with timing notes in `proofs/task-3-project-search.md`.
+- [x] 3.1 Search mode: `Mode` variant + state in `src/ui/app.rs`/`src/ui/project_search.rs` — query buffer, toggle states (case/word/literal), results grouped by file, selection + scroll, generation counter, debounce deadline.
+- [x] 3.2 TDD background wiring: debounce (~120–150ms after last keystroke, min query length 2), spawn engine scan on a worker with the abort flag + generation; drain result batches once per tick next to the existing polls in `src/ui/mod.rs`; drop stale generations; abort the in-flight scan on query change or mode exit; single-flight guard.
+- [x] 3.3 Full-screen render in `src/ui/project_search_view.rs`: input line with toggle indicators (e.g. `[re] [Cc] [w]`), file-grouped results with match-span emphasis (reuse existing highlight/theme utilities), summary line ("N matches in M files", cap + skip indicators), inline regex-error line that never wipes the previous good results.
+- [x] 3.4 Result navigation: list motions through grouped results; `Enter` opens the task-1.0 file view at the hit line (cursor on it); `Esc` from the file view returns to the search view with query/toggles/results/selection intact; `Esc` from the search view restores the exact prior diff position.
+- [x] 3.5 Keymap: `g/` sequence + action in `src/ui/keymap.rs`; search-mode table in `src/ui/modal_keys.rs` including `Alt-c` (case), `Alt-w` (word), `Alt-r` (regex↔literal); drift tests both directions; footer + `?` updated.
+- [x] 3.6 Gates green; record the primary journey with timing notes in `proofs/task-3-project-search.md`.
 
 ### [ ] 4.0 Annotations on non-diff lines: `(=)` marker + output contract
 
