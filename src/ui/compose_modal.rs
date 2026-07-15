@@ -11,16 +11,25 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use crate::annotate::{Side, Target};
 
 use super::app::App;
+use super::textwrap;
 
-/// Centers a rect `width_pct`% wide and `height` rows tall inside `area`.
-fn centered(area: Rect, width_pct: u16, height: u16) -> Rect {
-    let [area] = Layout::horizontal([Constraint::Percentage(width_pct)])
+/// The horizontal slice a 60%-wide modal occupies within `area` (full height,
+/// centered). Its width feeds the wrap layout, and its `x`/`width` are shared
+/// by the final popup — the vertical centering only sets `y`/`height`.
+fn horizontal_slice(area: Rect) -> Rect {
+    let [slice] = Layout::horizontal([Constraint::Percentage(60)])
         .flex(Flex::Center)
         .areas(area);
-    let [area] = Layout::vertical([Constraint::Length(height)])
+    slice
+}
+
+/// Centers a `height`-tall popup vertically within the (already
+/// horizontally-centered) `slice`.
+fn centered_in(slice: Rect, height: u16) -> Rect {
+    let [popup] = Layout::vertical([Constraint::Length(height)])
         .flex(Flex::Center)
-        .areas(area);
-    area
+        .areas(slice);
+    popup
 }
 
 fn side_marker(side: Side) -> &'static str {
@@ -63,33 +72,49 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     );
     let footer = " Enter submit  Ctrl-j newline  Ctrl-t classification  Esc cancel ";
 
-    let content_height = compose.buffer.lines.len() as u16;
+    // Soft-wrap against the modal's inner width (60% slice minus the two
+    // border columns), so the wrapped-row count sets the modal height and the
+    // cursor math below shares the exact same layout.
+    let slice = horizontal_slice(area);
+    let wrap_width = (slice.width.saturating_sub(2)).max(1) as usize;
+    let wrapped = textwrap::layout(&compose.buffer.lines, wrap_width);
+
+    let content_height = wrapped.rows.len() as u16;
     let height = (content_height + 2)
         .max(4)
         .min(area.height.saturating_sub(2));
-    let popup = centered(area, 60, height);
+    let popup = centered_in(slice, height);
 
     frame.render_widget(Clear, popup);
-
-    let lines: Vec<Line> = compose
-        .buffer
-        .lines
-        .iter()
-        .map(|l| Line::from(l.clone()))
-        .collect();
 
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title)
         .title_bottom(Line::from(footer));
     let inner = block.inner(popup);
-    let paragraph = Paragraph::new(lines).block(block);
+
+    // Scroll offset derived (not stored) from the cursor's visual row so the
+    // cursor is always on screen: keep it on the last visible row once the
+    // content outgrows the viewport, otherwise no scroll.
+    let (cursor_vrow, cursor_vcol) =
+        wrapped.cursor_position(compose.buffer.cursor_row, compose.buffer.cursor_col);
+    let visible_rows = inner.height as usize;
+    let scroll = cursor_vrow.saturating_sub(visible_rows.saturating_sub(1));
+
+    let lines: Vec<Line> = wrapped
+        .rows
+        .iter()
+        .map(|r| Line::from(textwrap::row_str(&compose.buffer.lines[r.logical_line], r)))
+        .collect();
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .scroll((scroll as u16, 0));
     frame.render_widget(paragraph, popup);
 
-    // Place the terminal cursor at the buffer's edit position, clamped
-    // inside the inner content area so a very long line doesn't push it
-    // off-screen.
-    let cursor_x = inner.x + (compose.buffer.cursor_col as u16).min(inner.width.saturating_sub(1));
-    let cursor_y = inner.y + (compose.buffer.cursor_row as u16).min(inner.height.saturating_sub(1));
+    // Place the terminal cursor at its true wrapped position minus the scroll
+    // offset. The only clamp is the terminal reality that column == width has
+    // no cell (right border) — not the old edge-clamp that let long lines lie.
+    let cursor_x = inner.x + (cursor_vcol as u16).min(inner.width.saturating_sub(1));
+    let cursor_y = inner.y + (cursor_vrow.saturating_sub(scroll)) as u16;
     frame.set_cursor_position(Position::new(cursor_x, cursor_y));
 }

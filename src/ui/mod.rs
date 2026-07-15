@@ -53,6 +53,7 @@ mod switcher;
 mod switcher_modal;
 mod syntax;
 mod targeting;
+mod textwrap;
 mod theme;
 mod time_format;
 mod welcome;
