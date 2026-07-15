@@ -110,20 +110,37 @@ fn split_footer(area: Rect, footer_height: u16) -> (Rect, Rect) {
     (chunks[0], chunks[1])
 }
 
+/// Sidebar width: 30% of the containing area's width, clamped to `[40, 72]`
+/// columns. The floor deliberately widens the sidebar beyond the historical
+/// fixed 32 on narrow terminals (136 cols and below all get 40); the cap
+/// keeps a very wide terminal from dedicating an unreasonable share to the
+/// sidebar. `total` is widened to `u32` before the multiply so `total * 3`
+/// can never overflow `u16` — the widest input, `u16::MAX`, scales to
+/// `19660`, itself well within `u16`, so the final cast back is always in
+/// range.
+fn sidebar_width(total: u16) -> u16 {
+    let scaled = (u32::from(total) * 3 / 10) as u16;
+    scaled.clamp(40, 72)
+}
+
 /// Splits the main content area into the sidebar and diff-pane rects. The
 /// sidebar is hidden by default and only occupies its slot while the git
 /// panel is focused (`Mode::Panel`) — visibility coincides exactly with
 /// focus, no separate state field. Mirrors [`split_right`]'s
 /// `(area, None)`-when-hidden pattern; when hidden the diff pane gets the
-/// full width. The sidebar renders on the right when shown; see
-/// `docs/config-layer.md` for making this (and its width) configurable.
+/// full width. The sidebar renders on the right when shown, at
+/// [`sidebar_width`]'s proportional-with-clamps width; see
+/// `docs/config-layer.md` for making the side and width configurable.
 fn split_layout(area: Rect, show_sidebar: bool) -> (Option<Rect>, Rect) {
     if !show_sidebar {
         return (None, area);
     }
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(0), Constraint::Length(32)])
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(sidebar_width(area.width)),
+        ])
         .split(area);
     (Some(chunks[1]), chunks[0])
 }

@@ -29,6 +29,37 @@ index 111..222 100644
     .unwrap()
 }
 
+/// `sidebar_width` is 30% of the containing area, clamped to `[40, 72]` —
+/// pure arithmetic, no terminal involved. Narrow terminals (`80` included)
+/// sit on the floor of 40; the rest walk the proportional band and both
+/// clamps, including the boundary just below/at the point where 30% first
+/// exceeds the floor (`136` -> `40` still clamped, `137` -> `41` unclamped)
+/// and the point where it first reaches the cap (`239` -> `71`,
+/// `240` -> `72`).
+#[test]
+fn sidebar_width_matches_ratified_table() {
+    let cases: &[(u16, u16)] = &[
+        (0, 40),
+        (80, 40),
+        (120, 40),
+        (136, 40),
+        (137, 41),
+        (160, 48),
+        (200, 60),
+        (239, 71),
+        (240, 72),
+        (300, 72),
+        (65535, 72),
+    ];
+    for &(total, expected) in cases {
+        assert_eq!(
+            sidebar_width(total),
+            expected,
+            "sidebar_width({total}) should be {expected}"
+        );
+    }
+}
+
 /// Renders a small `App` to a `TestBackend` and asserts the diff pane shows
 /// expected content. No real terminal is touched. The git panel sidebar is
 /// hidden by default (see `sidebar_hidden_in_normal_mode_shown_when_panel_focused`
@@ -1013,7 +1044,9 @@ fn top_border_hot(
 #[test]
 fn focused_pane_border_emphasis_follows_the_toggle() {
     let width = 80usize;
-    let panel_start = width - 32;
+    // Derived, not a literal: the sidebar's left edge tracks `sidebar_width`
+    // so this test can't silently drift when the ratio/clamps change.
+    let panel_start = width - sidebar_width(width as u16) as usize;
     let backend = TestBackend::new(width as u16, 20);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = panel_smoke_app();
@@ -1063,6 +1096,87 @@ fn focused_pane_border_emphasis_follows_the_toggle() {
         !content.contains("git: main"),
         "sidebar should hide again once focus returns to the diff"
     );
+}
+
+/// The sidebar rect widens/narrows with the terminal per `sidebar_width`'s
+/// clamped-30% rule, and that's reflected both in `split_layout` itself and
+/// in what actually gets rendered onto the buffer. Uses the tip commit's
+/// subject line (`commit_line`, deliberately unwrapped/unclipped-by-code —
+/// see its doc comment, ratatui clips it at the rect edge) as the "does more
+/// room show more text" probe: the subject is long enough to be clipped by a
+/// 40-wide sidebar but to fit whole inside a 72-wide one.
+#[test]
+fn sidebar_rect_and_render_scale_with_terminal_width_when_panel_focused() {
+    let subject = "feat: add sidebar proportional width layout support";
+    let cases: &[(u16, u16)] = &[(80, 40), (160, 48), (240, 72)];
+
+    for &(width, expected_sidebar) in cases {
+        // Pure layout: `split_layout` itself hands back the clamped width.
+        let area = Rect::new(0, 0, width, 30);
+        let (sidebar_rect, diff_rect) = split_layout(area, true);
+        let sidebar_rect = sidebar_rect.expect("sidebar shown when panel focused");
+        assert_eq!(
+            sidebar_rect.width, expected_sidebar,
+            "split_layout sidebar width at terminal width {width}"
+        );
+        assert_eq!(
+            diff_rect.width,
+            width - expected_sidebar,
+            "split_layout diff-pane width at terminal width {width}"
+        );
+
+        // Grounded in a real render: the git panel's branch title only ever
+        // appears at or past the sidebar's left edge, never inside the diff
+        // pane's columns, proving the sidebar actually renders at the width
+        // `split_layout` computed above (not just on paper).
+        let backend = TestBackend::new(width, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = panel_smoke_app();
+        app.last_commit = Some(crate::git::CommitSummary {
+            short_hash: "a1b2c3d".to_string(),
+            subject: subject.to_string(),
+        });
+        app.apply(Action::FocusGitPanel);
+        let keymap = Keymap::default_map();
+        terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let panel_start = width - expected_sidebar;
+        let mut diff_side = String::new();
+        let mut whole = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..width {
+                let symbol = buffer.cell((x, y)).map(|c| c.symbol()).unwrap_or(" ");
+                whole.push_str(symbol);
+                if x < panel_start {
+                    diff_side.push_str(symbol);
+                }
+            }
+        }
+        assert!(
+            !diff_side.contains("git: main"),
+            "diff pane columns should never show the sidebar's branch title at width {width}"
+        );
+        assert!(
+            whole.contains("git: main"),
+            "sidebar should render its branch title somewhere at width {width}"
+        );
+
+        // The un-truncated-at-wide/truncated-at-narrow probe: only asserted
+        // at the two ends of the sweep (40 clips, 72 fits whole); 48 sits in
+        // between and isn't a specified boundary.
+        if expected_sidebar == 72 {
+            assert!(
+                whole.contains(subject),
+                "a {expected_sidebar}-wide sidebar should show the full commit subject un-truncated"
+            );
+        } else if expected_sidebar == 40 {
+            assert!(
+                !whole.contains(subject),
+                "a {expected_sidebar}-wide sidebar should clip the long commit subject"
+            );
+        }
+    }
 }
 
 /// Drives real `KeyEvent`s through `dispatch_key` — the exact path the

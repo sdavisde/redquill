@@ -47,7 +47,7 @@ pub struct Config {
 #[serde(default)]
 pub struct SidebarConfig {
     pub side: SidebarSide,   // Left | Right, default Right
-    pub width: u16,          // default 32
+    pub width: u16,          // default 40 (today's computed floor)
 }
 ```
 
@@ -60,7 +60,8 @@ server degrades silently" precedent.
 
 `App` would hold the resolved `SidebarConfig` (or the values it needs)
 the same way it holds `Theme` today, and `split_layout` would take a
-width/side param instead of the hardcoded `Constraint::Length(32)` and
+width/side param instead of its current computed default (`sidebar_width`
+in `src/ui/mod.rs`: 30% of the containing area, clamped to `[40, 72]`) and
 fixed left/right order.
 
 ## Open questions for whoever implements this
