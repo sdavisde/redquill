@@ -41,6 +41,31 @@
 //!
 //! [question] where does keystore get rotated?
 //! ```
+//!
+//! ## The `(=)` marker (current file content, not a diff side)
+//!
+//! Annotations made in the read-only whole-file view (spec 06 Unit 3 — any
+//! file opened via the project search or fuzzy file finder, not just files
+//! with a diff) target [`crate::annotate::model::Target::WorktreeLine`] or
+//! [`crate::annotate::model::Target::WorktreeRange`] instead of
+//! [`crate::annotate::model::Target::Line`]/[`crate::annotate::model::Target::Range`],
+//! and serialize with a third marker, `(=)`, meaning "this line/range is the
+//! current worktree file content, not a diff side" — there is no `+`/`-` to
+//! report because the file view shows no diff at all:
+//!
+//! ```text
+//! ## docs/notes.md:44 (=)
+//!
+//! [question] should this doc mention the new flag?
+//! ```
+//!
+//! The file view always reads live worktree content (never a historical
+//! revision), so a `(=)` annotation always composes with the working-tree
+//! group above: it is emitted in the same always-first, metadata-line-free
+//! group as ordinary working-tree diff annotations, never its own
+//! `Reviewing:` group. A `Target::File` (whole-file) comment made from the
+//! file view is unaffected by this section — it already has no side marker
+//! at all, diffed or not.
 
 use super::model::{Annotation, Classification, Side, Source, Target};
 use super::store::AnnotationStore;
@@ -65,6 +90,8 @@ fn header(target: &Target) -> String {
             format!("## {path}:{start}-{end}{}", side_marker(Side::New))
         }
         Target::File { path } => format!("## {path}"),
+        Target::WorktreeLine { path, line } => format!("## {path}:{line} (=)"),
+        Target::WorktreeRange { path, start, end } => format!("## {path}:{start}-{end} (=)"),
     }
 }
 
@@ -485,6 +512,84 @@ mod tests {
             .unwrap();
         let expected = "## b.rs\n\n[nit] worktree note\n\n\
              Reviewing: abc1234\n\n## a.rs\n\n[issue] commit note\n";
+        assert_eq!(render_markdown(&store), expected);
+    }
+
+    // -- The `(=)` marker (task 4.2) -----------------------------------------
+
+    #[test]
+    fn worktree_line_target_header_uses_equals_marker() {
+        let mut store = AnnotationStore::new();
+        store
+            .add(
+                Target::worktree_line("docs/notes.md", 44),
+                Classification::Question,
+                "should this doc mention the new flag?",
+            )
+            .unwrap();
+        let expected =
+            "## docs/notes.md:44 (=)\n\n[question] should this doc mention the new flag?\n";
+        assert_eq!(render_markdown(&store), expected);
+    }
+
+    #[test]
+    fn worktree_range_target_header_uses_start_dash_end_and_equals_marker() {
+        let mut store = AnnotationStore::new();
+        store
+            .add(
+                Target::worktree_range("docs/notes.md", 10, 20).unwrap(),
+                Classification::Nit,
+                "this whole section is stale",
+            )
+            .unwrap();
+        let expected = "## docs/notes.md:10-20 (=)\n\n[nit] this whole section is stale\n";
+        assert_eq!(render_markdown(&store), expected);
+    }
+
+    #[test]
+    fn worktree_target_annotation_groups_with_working_tree_group_no_reviewing_line() {
+        // A `(=)` annotation always reads live worktree content, so it must
+        // land in the same metadata-line-free working-tree group as an
+        // ordinary working-tree diff annotation -- never its own
+        // `Reviewing:` group -- even though its own `add` call is
+        // indistinguishable in insertion order from the diff one.
+        let mut store = AnnotationStore::new();
+        store
+            .add(
+                Target::line("src/lib.rs", 10, Side::New),
+                Classification::Nit,
+                "diff-side note",
+            )
+            .unwrap();
+        store
+            .add(
+                Target::worktree_line("docs/notes.md", 3),
+                Classification::Question,
+                "worktree-side note",
+            )
+            .unwrap();
+        let expected = "## src/lib.rs:10 (+)\n\n[nit] diff-side note\n\n\
+             ## docs/notes.md:3 (=)\n\n[question] worktree-side note\n";
+        assert_eq!(render_markdown(&store), expected);
+        assert!(!render_markdown(&store).contains("Reviewing:"));
+    }
+
+    #[test]
+    fn worktree_target_still_groups_with_working_tree_when_source_explicit() {
+        // Same composition guarantee, but going through `add_with_source`
+        // explicitly with `Source::WorkingTree` (what
+        // `App::annotation_source` actually records for a file-view
+        // annotation) rather than relying on `add`'s default.
+        let mut store = AnnotationStore::new();
+        store
+            .add_with_source(
+                Target::worktree_range("docs/notes.md", 1, 2).unwrap(),
+                Classification::Issue,
+                "note",
+                Source::WorkingTree,
+            )
+            .unwrap();
+        let expected = "## docs/notes.md:1-2 (=)\n\n[issue] note\n";
         assert_eq!(render_markdown(&store), expected);
     }
 

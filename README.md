@@ -95,6 +95,21 @@ annotations, each group preceded by exactly one metadata line:
 so a script or agent consuming the output always knows which revision a
 group's line numbers resolve against.
 
+Annotations made in the read-only whole-file view (any file opened via
+Project Search or the fuzzy file finder, not just files with a diff) use a
+third marker, `(=)`, meaning "current file content, not a diff side" — there
+is no `+`/`-` to report since the file view shows no diff at all:
+
+```text
+## docs/notes.md:44 (=)
+
+[question] should this doc mention the new flag?
+```
+
+A `(=)` annotation always reads live worktree content, so it groups with the
+working-tree annotations above (no `Reviewing:` line of its own), never as
+its own group.
+
 ### Diff targets
 
 Any diff shown in the multibuffer — working tree (default), staged, an
