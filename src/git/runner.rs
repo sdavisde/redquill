@@ -8,6 +8,7 @@ use super::commit::{COMMIT_SUMMARY_FORMAT, CommitSummary, parse_commit_summary};
 use super::diff::{DiffTarget, RawFilePatch, split_patches};
 use super::error::{GitError, command_error, map_spawn_err};
 use super::log::{COMMIT_LOG_FORMAT, CommitLogEntry, parse_commit_log};
+use super::ls_files::parse_ls_files_z;
 use super::stash::{STASH_LIST_FORMAT, StashEntry, parse_stash_list};
 use super::status::{FileStatus, StatusSnapshot, parse_porcelain_v2, parse_porcelain_v2_full};
 use super::worktree::{WorktreeEntry, parse_worktree_list};
@@ -132,6 +133,14 @@ impl GitRunner {
                 args.push(base);
                 args.push(rev.clone());
             }
+            DiffTarget::File(_) => {
+                // Not a comparison at all: the read-only file view
+                // synthesizes its whole-file body directly from worktree
+                // content (see `ui::file_view`), so this never shells out to
+                // `git diff`. Kept as a real (non-panicking) match arm per
+                // the repo's error-handling rules rather than `unreachable!`.
+                return Ok(Vec::new());
+            }
         }
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let out = self.run_utf8(&arg_refs)?;
@@ -236,5 +245,24 @@ impl GitRunner {
     pub fn show_file(&self, spec: &str) -> Option<String> {
         let bytes = self.run_raw(&["show", spec]).ok()?;
         String::from_utf8(bytes).ok()
+    }
+
+    /// Returns every tracked file path, repo-relative, via `git ls-files -z`
+    /// (NUL-delimited, parsed by [`parse_ls_files_z`]). Half of the fuzzy
+    /// file finder's candidate source (spec 06 Unit 1); combined with
+    /// [`GitRunner::ls_files_untracked`] for the full set. Chosen over the
+    /// `ignore` crate's walker for exact fidelity to git's own tracked set
+    /// (see the spec's Technical Considerations).
+    pub fn ls_files(&self) -> Result<Vec<String>, GitError> {
+        let out = self.run_utf8(&["ls-files", "-z"])?;
+        Ok(parse_ls_files_z(&out))
+    }
+
+    /// Returns every untracked-but-not-ignored file path, repo-relative, via
+    /// `git ls-files -z --others --exclude-standard`. The other half of the
+    /// fuzzy file finder's candidate source (spec 06 Unit 1).
+    pub fn ls_files_untracked(&self) -> Result<Vec<String>, GitError> {
+        let out = self.run_utf8(&["ls-files", "-z", "--others", "--exclude-standard"])?;
+        Ok(parse_ls_files_z(&out))
     }
 }

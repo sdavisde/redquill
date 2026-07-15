@@ -30,12 +30,17 @@
 //!   `--force` — the write/network ceiling.
 //! - [`stage`] adds index staging: file-level (`stage_file`/`unstage_file`)
 //!   and hunk/line-level via synthetic patches applied with `--cached`.
+//! - [`ls_files`] parses `git ls-files -z` (tracked) and `git ls-files -z
+//!   --others --exclude-standard` (untracked-but-unignored) into
+//!   repo-relative path lists — the fuzzy file finder's candidate source
+//!   (spec 06 Unit 1); [`crate::search::files`] merges the two lists.
 
 mod branch;
 mod commit;
 mod diff;
 mod error;
 mod log;
+mod ls_files;
 mod remote;
 mod runner;
 mod stage;
@@ -52,6 +57,7 @@ pub use commit::{
 pub use diff::{DiffTarget, RawFilePatch, StagingMode, split_patches};
 pub use error::GitError;
 pub use log::{COMMIT_LOG_FORMAT, CommitLogEntry, parse_commit_log};
+pub use ls_files::parse_ls_files_z;
 pub use remote::{RemoteOp, remote_command};
 pub use runner::GitRunner;
 pub use stage::{build_hunk_patch, build_line_patch};
