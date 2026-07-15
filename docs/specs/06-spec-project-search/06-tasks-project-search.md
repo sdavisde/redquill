@@ -121,7 +121,7 @@ Ships spec Unit 3: annotation keys in the file view; public stdout format extend
 - [x] 4.4 Update README "Annotation output format" (the `(=)` marker, its meaning, one example) in the same commit as 4.2.
 - [x] 4.5 Gates green; produce the stdout capture + consumer round-trip evidence in `proofs/task-4-output.md`.
 
-### [ ] 5.0 User-acceptance evidence and gate sweep
+### [~] 5.0 User-acceptance evidence and gate sweep
 
 Repo-standard closing task (spec 05 precedent): UX outcomes verified by the user, evidence persisted, merge candidate fully green.
 
@@ -133,7 +133,7 @@ Repo-standard closing task (spec 05 precedent): UX outcomes verified by the user
 
 #### 5.0 Tasks
 
-- [ ] 5.1 Assemble the merge candidate on the worktree branch: sync with current `main`, resolve, full gate sweep; capture the sweep output.
-- [ ] 5.2 User-in-the-loop acceptance: the user runs the Success Metric 1 and 2 journeys on a real review in this repo; record observations, timings, and any friction verbatim in `proofs/task-5-acceptance.md` (follow-ups filed as notes, not silently fixed).
-- [ ] 5.3 Regression check: compare `cargo test` totals against pre-branch baseline; assert no pre-existing test was deleted or loosened (move-only refactors keep identical counts).
-- [ ] 5.4 Confirm every spec proof artifact exists under `proofs/`; hand off to Phase 4 validation.
+- [x] 5.1 Assemble the merge candidate on the worktree branch: sync with current `main`, resolve, full gate sweep; capture the sweep output. (Branch is a strict descendant of `main` @ `4506fc8` — sync was a verified no-op; sweep captured in `proofs/final-gate-sweep.txt`.)
+- [~] 5.2 User-in-the-loop acceptance: the user runs the Success Metric 1 and 2 journeys on a real review in this repo; record observations, timings, and any friction verbatim in `proofs/task-5-acceptance.md` (follow-ups filed as notes, not silently fixed). (OPERATOR-DEFERRED — journeys pre-declared in `proofs/task-5-acceptance.md`; no TTY in the implementation environment.)
+- [x] 5.3 Regression check: compare `cargo test` totals against pre-branch baseline; assert no pre-existing test was deleted or loosened (move-only refactors keep identical counts). (959 → 1,101; every pre-existing suite count-identical; table in `proofs/task-5-acceptance.md`.)
+- [x] 5.4 Confirm every spec proof artifact exists under `proofs/`; hand off to Phase 4 validation. (Inventory in `proofs/task-5-acceptance.md`.)
