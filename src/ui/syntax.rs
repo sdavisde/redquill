@@ -74,6 +74,16 @@ pub(super) fn content_source(
                 _ => ContentSource::Worktree(path.to_string()),
             },
             DiffTarget::Commit(rev) => ContentSource::Show(format!("{rev}:{path}")),
+            // The read-only file view's whole-file body is always
+            // synthesized with a `None` patch entry (see `ui::file_view`),
+            // which routes `rebuild_rows`'s `synthetic` flag to
+            // `populate_cache`'s worktree-read branch directly — this arm
+            // is therefore never reached in practice. Kept as a real,
+            // non-panicking fallback (never `unreachable!()`) rather than a
+            // wildcard, so a future caller that *does* invoke this on a
+            // `File` target gets a sensible answer instead of a dropped
+            // match.
+            DiffTarget::File(p) => ContentSource::Worktree(p.clone()),
         },
         Side::Old => {
             let src = old_path.unwrap_or(path);
@@ -85,6 +95,11 @@ pub(super) fn content_source(
                     None => ContentSource::Show(format!("{r}:{src}")),
                 },
                 DiffTarget::Commit(rev) => ContentSource::Show(format!("{rev}^:{src}")),
+                // A whole-file view has no old side at all (see the New-side
+                // arm's doc above) — never reached, since the synthesized
+                // file has zero `Removed` lines, so `side_in_use` never asks
+                // for this side to begin with.
+                DiffTarget::File(_) => ContentSource::Worktree(src.to_string()),
             }
         }
     }

@@ -804,6 +804,13 @@ impl App {
                     .unwrap_or_else(|| sha.clone());
                 Source::Commit(short_sha)
             }
+            // A placeholder pending spec 06 Unit 3, which introduces a
+            // dedicated `(=)` "current file content, not a diff side"
+            // marker; Unit 1 doesn't require annotation composing to be
+            // fully wired for the file view (it isn't blocked either), so
+            // `WorkingTree` — the only source with no `Reviewing:` metadata
+            // line — is the least-wrong placeholder until Unit 3 lands.
+            DiffTarget::File(_) => Source::WorkingTree,
         }
     }
 

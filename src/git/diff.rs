@@ -32,6 +32,14 @@ pub enum DiffTarget {
     /// empty tree for a root commit. The payload is any revision spec git
     /// accepts (full/short SHA, `HEAD`, etc.).
     Commit(String),
+    /// A single worktree file opened as a read-only whole-file view (spec 06
+    /// Unit 1: the fuzzy file finder / project search's shared target). Not
+    /// a comparison at all — [`GitRunner::diff`] never shells out for it;
+    /// the view is synthesized directly from the file's on-disk content (see
+    /// `ui::file_view`). The payload is the file's repo-relative path.
+    /// Staging, commit, and code-intelligence are all unavailable against
+    /// it (see the capability methods below).
+    File(String),
 }
 
 /// Which staging action (if any) a diff target supports — the direction
@@ -63,6 +71,13 @@ impl DiffTarget {
             DiffTarget::Staged => false,
             DiffTarget::Range(_) => false,
             DiffTarget::Commit(_) => false,
+            // A point-in-time snapshot the finder/search opened, not a
+            // continuously-tracked review target: `false` keeps it out of
+            // the periodic working-tree auto-refresh poll (see
+            // `ui::refresh::App::maybe_auto_refresh`), which would otherwise
+            // try to `build_review` against a target that isn't a
+            // comparison at all.
+            DiffTarget::File(_) => false,
         }
     }
 
@@ -74,6 +89,7 @@ impl DiffTarget {
             DiffTarget::Staged => StagingMode::Unstage,
             DiffTarget::Range(_) => StagingMode::ReadOnly,
             DiffTarget::Commit(_) => StagingMode::ReadOnly,
+            DiffTarget::File(_) => StagingMode::ReadOnly,
         }
     }
 
@@ -87,6 +103,7 @@ impl DiffTarget {
             DiffTarget::Staged => false,
             DiffTarget::Range(_) => false,
             DiffTarget::Commit(_) => false,
+            DiffTarget::File(_) => false,
         }
     }
 }
@@ -248,6 +265,14 @@ mod tests {
     #[test]
     fn commit_capability_triple() {
         let target = DiffTarget::Commit("HEAD".to_string());
+        assert!(!target.is_live());
+        assert_eq!(target.staging_mode(), StagingMode::ReadOnly);
+        assert!(!target.supports_code_intel());
+    }
+
+    #[test]
+    fn file_capability_triple() {
+        let target = DiffTarget::File("src/main.rs".to_string());
         assert!(!target.is_live());
         assert_eq!(target.staging_mode(), StagingMode::ReadOnly);
         assert!(!target.supports_code_intel());

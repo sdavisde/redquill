@@ -46,6 +46,11 @@ pub(super) fn situation(target: &DiffTarget, active_commit: Option<&CommitLogEnt
                 .unwrap_or(rev.as_str());
             format!("Empty commit diff for {short}")
         }
+        // The read-only file view always populates exactly one file on a
+        // successful open (see `ui::file_view::App::open_file_view`), so
+        // this welcome copy is never actually shown in practice — kept as a
+        // real, sensible fallback rather than `unreachable!()`.
+        DiffTarget::File(path) => format!("{path} is empty"),
     }
 }
 
