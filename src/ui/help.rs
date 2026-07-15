@@ -64,7 +64,7 @@ fn group_of(action: Action) -> &'static str {
         ToggleStage | StageFile | ToggleStagingPanel => "Stage",
         Search | SearchNext | SearchPrev | SearchWordForward | SearchWordBackward => "Search",
         ToggleList | ToggleHelp | FocusGitPanel | ToggleCommandLog | Refresh | OpenFileFinder
-        | OpenProjectSearch => "Panels",
+        | OpenProjectSearch | OpenEditor => "Panels",
         GotoDefinition | GotoReferences | Hover => "Code intelligence",
         PanelCursorDown | PanelCursorUp | PanelSelect | TogglePanelTab | RemoteFetch
         | RemotePull | RemotePush | CommitStaged | OpenSwitcher => "Git panel",

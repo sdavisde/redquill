@@ -26,6 +26,7 @@ mod compose;
 mod compose_modal;
 mod diff_view;
 mod diff_view_state;
+mod editor;
 mod file_finder;
 mod file_finder_modal;
 mod file_view;
@@ -66,6 +67,8 @@ pub use stage_ops::{ReviewError, ReviewSnapshot, StageOps, StagedFile, build_rev
 pub use theme::Theme;
 
 use std::io::{self, Stderr};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -182,6 +185,11 @@ enum Flow {
     Continue,
     /// End the session with this outcome (`q`/`Q`/Ctrl-C).
     Quit(QuitOutcome),
+    /// Suspend the TUI and open the configured editor on `path` (repo-
+    /// relative) at `line` (1-based), then resume (`g<Space>`). `path`/`line`
+    /// have already been resolved and guard-checked by
+    /// [`resolve_editor_target`] by the time this variant is produced.
+    OpenEditor { path: PathBuf, line: u32 },
 }
 
 /// The largest numeric prefix [`dispatch_key`]'s digit interception will
@@ -349,6 +357,12 @@ fn dispatch_key(
             match action {
                 Action::Quit => return Flow::Quit(QuitOutcome::Emit),
                 Action::QuitDiscard => return Flow::Quit(QuitOutcome::Discard),
+                Action::OpenEditor => {
+                    return match resolve_editor_target(app) {
+                        Some((path, line)) => Flow::OpenEditor { path, line },
+                        None => Flow::Continue,
+                    };
+                }
                 other => {
                     for _ in 0..repeat_count(other, count) {
                         app.apply(other);
@@ -358,6 +372,59 @@ fn dispatch_key(
         }
     }
     Flow::Continue
+}
+
+/// Resolves `g<Space>`'s cursor target into a repo-relative path and
+/// 1-based line to hand to [`launch_editor`], applying the same-shaped
+/// guard chain [`code_intel::request`] uses for `gd`/`gr`/`K` (no repo root,
+/// missing row/target, file absent from the working tree) plus its own:
+/// [`Row::Binary`] is a distinct guard (a binary file has no meaningful line
+/// to jump to at all, unlike a header row, which at least opens the file).
+/// Every guard failure sets a footer status message via
+/// [`App::set_status_message`] and returns `None`, telling the caller not to
+/// launch.
+fn resolve_editor_target(app: &mut App) -> Option<(PathBuf, u32)> {
+    let Some(root) = app.repo_root.clone() else {
+        app.set_status_message("no repo root — can't open editor");
+        return None;
+    };
+    let Some(file) = app.view.files.get(app.view.file_of_cursor()) else {
+        app.set_status_message("no file under cursor");
+        return None;
+    };
+    if matches!(app.view.rows.get(app.view.cursor), Some(Row::Binary)) {
+        app.set_status_message("can't open binary file in editor");
+        return None;
+    }
+    let Some((path, line)) =
+        targeting::editor_target_for_cursor(file, &app.view.rows, app.view.cursor)
+    else {
+        app.set_status_message("no target under cursor");
+        return None;
+    };
+    if !root.join(&path).is_file() {
+        app.set_status_message("file not found in working tree");
+        return None;
+    }
+    Some((PathBuf::from(path), line))
+}
+
+/// Spawns `editor` (see [`editor::build_editor_command`]) on `rel_path`
+/// (repo-relative) at `line`, with the repo root as the child's working
+/// directory so the editor opens exactly the path the user sees, and
+/// inherited stdio so it takes over the terminal directly. Blocks
+/// synchronously on `.status()` — the sanctioned exception to "never block
+/// the render loop": the caller has already suspended the TUI
+/// (`restore_terminal`) by the time this runs, so there is no render loop to
+/// block. Never goes through the background git-op runner; this isn't a git
+/// operation and must not be single-flighted or generation-guarded like one.
+fn launch_editor(editor: &str, repo_root: &Path, rel_path: &Path, line: u32) -> io::Result<()> {
+    let (program, args) = editor::build_editor_command(editor, rel_path, line);
+    Command::new(program)
+        .args(args)
+        .current_dir(repo_root)
+        .status()?;
+    Ok(())
 }
 
 /// Handles one key while the help overlay is open.
@@ -654,6 +721,31 @@ fn event_loop(
                     match dispatch_key(app, keymap, &mut pending_prefix, &mut pending_count, key) {
                         Flow::Quit(outcome) => return Ok(outcome),
                         Flow::Continue => {}
+                        Flow::OpenEditor { path, line } => {
+                            // Suspend the TUI, run the editor to completion,
+                            // then resume exactly where the user was: `app`'s
+                            // cursor/scroll/mode are untouched throughout, so
+                            // nothing here needs to restore them.
+                            restore_terminal();
+                            let launch_result = match app.repo_root.clone() {
+                                Some(root) => launch_editor(&app.editor, &root, &path, line),
+                                None => Err(io::Error::other("no repo root — can't open editor")),
+                            };
+                            *terminal = init_terminal()?;
+                            terminal.clear()?;
+                            // A completed sequence, not a mode change — same
+                            // reset the overlay-active branch above performs.
+                            pending_prefix = None;
+                            pending_count = None;
+                            match launch_result {
+                                // Re-read the working tree immediately so
+                                // edits made in the editor show up now,
+                                // rather than waiting for the next
+                                // `AUTO_REFRESH_INTERVAL` tick.
+                                Ok(()) => app.refresh(),
+                                Err(e) => app.set_status_message(format!("editor failed: {e}")),
+                            }
+                        }
                     }
                 }
                 Event::Resize(_, _) => {

@@ -18,6 +18,16 @@ Right now all three are hardcoded at their single construction/call site.
   (colors, key sequences) and should be a separate follow-up once the
   loading/discovery plumbing below exists and is proven out.
 
+## Already shipped, ahead of this file (flag/env resolution, not this layer)
+
+`g<Space>`'s editor (`App::editor`, `src/ui/app.rs`) is resolved at startup
+without waiting for this config layer: `--editor` CLI flag > `$VISUAL` >
+`$EDITOR` > `"nvim"` (`resolve_editor` in `src/main.rs`). No config file is
+consulted — this is CLI-flag/env-var resolution only, the same tier this
+doc's "Non-goals" section says config is *not* meant to replace. If/when
+this layer is built, an `editor` key would slot in as a fourth precedence
+tier below the flag and above the `"nvim"` default, alongside sidebar.
+
 ## Non-goals
 
 - No hot-reload — read once at startup.

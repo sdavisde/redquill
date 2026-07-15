@@ -254,6 +254,7 @@ fn fallback_pending_label(action: Action) -> &'static str {
         Action::ScrollCursorBottom => "cursor to bottom",
         Action::OpenFileFinder => "find file",
         Action::OpenProjectSearch => "search",
+        Action::OpenEditor => "open editor",
         _ => "",
     }
 }

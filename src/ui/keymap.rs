@@ -137,6 +137,12 @@ pub enum Action {
     /// Open the full-screen Project Search view (`g/`, diff scope, spec 06
     /// Unit 2).
     OpenProjectSearch,
+    /// Suspend the TUI and open the configured editor on the file under the
+    /// cursor at the cursor's line (`g<Space>`, diff scope). Intercepted in
+    /// [`super::dispatch_key`] like `Quit`/`QuitDiscard` — the actual
+    /// suspend/spawn/resume dance lives in the event loop, not
+    /// [`super::app::App::apply`].
+    OpenEditor,
     /// Toggle the command-log pane (bound in both scopes).
     ToggleCommandLog,
     /// Re-read the working tree and rebuild the diff, picking up edits made
@@ -513,6 +519,11 @@ impl Keymap {
                     KeySeq::two(Char('g'), none, Char('/'), none),
                     OpenProjectSearch,
                     "Open project search",
+                ),
+                d(
+                    KeySeq::two(Char('g'), none, Char(' '), none),
+                    OpenEditor,
+                    "Open file at cursor in editor",
                 ),
                 d(KeySeq::one(Char('K'), none), Hover, "Hover docs"),
                 d(
@@ -1069,6 +1080,16 @@ mod tests {
     }
 
     #[test]
+    fn g_space_resolves_to_open_editor_via_lookup_double() {
+        let km = Keymap::default_map();
+        let g = key(KeyCode::Char('g'), KeyModifiers::NONE);
+        assert_eq!(
+            km.lookup_double(g, key(KeyCode::Char(' '), KeyModifiers::NONE)),
+            Some(Action::OpenEditor)
+        );
+    }
+
+    #[test]
     fn unknown_second_key_after_prefix_is_none() {
         let km = Keymap::default_map();
         let g = key(KeyCode::Char('g'), KeyModifiers::NONE);
@@ -1087,6 +1108,7 @@ mod tests {
         assert!(labels.contains(&"gg".to_string()));
         assert!(labels.contains(&"gp".to_string()));
         assert!(labels.contains(&"g/".to_string()));
+        assert!(labels.contains(&"gSpace".to_string()));
     }
 
     #[test]
@@ -1492,6 +1514,7 @@ mod tests {
                 Action::GotoDefinition,
                 Action::GotoReferences,
                 Action::JumpToTop,
+                Action::OpenEditor,
                 Action::OpenFileFinder,
                 Action::OpenProjectSearch,
             ]

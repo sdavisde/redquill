@@ -1576,6 +1576,7 @@ fn quit_family_quits_from_focused_panel() {
         match dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, ev) {
             Flow::Quit(outcome) => assert_eq!(outcome, want, "wrong quit outcome for {ev:?}"),
             Flow::Continue => panic!("{ev:?} should quit from the focused panel"),
+            Flow::OpenEditor { .. } => panic!("{ev:?} should quit, not open an editor"),
         }
     }
 }
@@ -1688,6 +1689,7 @@ fn q_is_inert_inside_switcher() {
     ) {
         Flow::Quit(_) => panic!("q must not quit from inside the switcher modal"),
         Flow::Continue => {}
+        Flow::OpenEditor { .. } => panic!("q must not open an editor from inside the switcher"),
     }
     assert_eq!(
         app.mode,

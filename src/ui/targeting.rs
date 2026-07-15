@@ -100,6 +100,37 @@ fn line_target(path: &str, line: &LineRow) -> Option<Target> {
     }
 }
 
+/// The `(repo-relative path, 1-based line)` `g<Space>` opens in the
+/// configured editor, for the cursor's current row. Unlike
+/// [`target_for_cursor`]'s line targets — which use side-native numbering
+/// (old-side numbers for `Removed` lines) and feed annotation storage — this
+/// always resolves to a line number in the file **as it exists on disk**,
+/// the only numbering an editor understands. A `Removed` line has no
+/// corresponding line in that file, so it falls back to line 1 rather than
+/// emitting a nonsensical `+0`; header rows ([`Row::FileHeader`]/
+/// [`Row::HunkHeader`]) also open at line 1, since there is no more specific
+/// line to jump to. `None` on [`Row::Binary`] (the caller special-cases this
+/// with its own footer message rather than launching), on the
+/// cursor-never-addresses-these display rows ([`Row::Annotation`]/
+/// [`Row::AnnotationBorder`]), or when `cursor` is out of bounds.
+pub(super) fn editor_target_for_cursor(
+    file: &FileDiff,
+    rows: &[Row],
+    cursor: usize,
+) -> Option<(String, u32)> {
+    match rows.get(cursor)? {
+        Row::Line(line) => {
+            let ln = match line.origin {
+                LineOrigin::Removed => 1,
+                LineOrigin::Added | LineOrigin::Context => line.new_line.unwrap_or(1),
+            };
+            Some((file.path.clone(), ln))
+        }
+        Row::FileHeader { .. } | Row::HunkHeader { .. } => Some((file.path.clone(), 1)),
+        Row::Binary | Row::Annotation { .. } | Row::AnnotationBorder { .. } => None,
+    }
+}
+
 /// Converts a target derived by [`target_for_cursor`]/[`target_for_visual`]
 /// against the read-only file view's synthesized all-context body (spec 06
 /// Unit 3) into the "current worktree file content, not a diff side" target
@@ -311,6 +342,73 @@ index 1..2 100644
         let rows = rows_for(&file);
         // rows 0..=1 are FileHeader and HunkHeader — no line rows.
         assert_eq!(target_for_visual(&file, &rows, 0, 1), None);
+    }
+
+    // -- editor_target_for_cursor (g<Space>) ---------------------------------
+
+    #[test]
+    fn editor_target_on_file_header_is_line_one() {
+        let file = file_diff(sample(), "f.rs");
+        let rows = rows_for(&file);
+        assert!(matches!(rows[0], Row::FileHeader { .. }));
+        assert_eq!(
+            editor_target_for_cursor(&file, &rows, 0),
+            Some(("f.rs".to_string(), 1))
+        );
+    }
+
+    #[test]
+    fn editor_target_on_hunk_header_is_line_one() {
+        let file = file_diff(sample(), "f.rs");
+        let rows = rows_for(&file);
+        assert!(matches!(rows[1], Row::HunkHeader { .. }));
+        assert_eq!(
+            editor_target_for_cursor(&file, &rows, 1),
+            Some(("f.rs".to_string(), 1))
+        );
+    }
+
+    #[test]
+    fn editor_target_on_context_line_uses_new_line() {
+        let file = file_diff(sample(), "f.rs");
+        let rows = rows_for(&file);
+        // rows: FileHeader(0) HunkHeader(1) ctx1(2, new 1) old2(3) new2(4) ctx3(5)
+        assert_eq!(
+            editor_target_for_cursor(&file, &rows, 2),
+            Some(("f.rs".to_string(), 1))
+        );
+    }
+
+    #[test]
+    fn editor_target_on_added_line_uses_new_line() {
+        let file = file_diff(sample(), "f.rs");
+        let rows = rows_for(&file);
+        // new2(4) is the Added row, new_line 2.
+        assert_eq!(
+            editor_target_for_cursor(&file, &rows, 4),
+            Some(("f.rs".to_string(), 2))
+        );
+    }
+
+    #[test]
+    fn editor_target_on_removed_line_falls_back_to_line_one() {
+        let file = file_diff(sample(), "f.rs");
+        let rows = rows_for(&file);
+        let Row::Line(old2) = &rows[3] else {
+            panic!("expected removed line row");
+        };
+        assert_eq!(old2.origin, LineOrigin::Removed);
+        assert_eq!(
+            editor_target_for_cursor(&file, &rows, 3),
+            Some(("f.rs".to_string(), 1))
+        );
+    }
+
+    #[test]
+    fn editor_target_out_of_bounds_yields_none() {
+        let file = file_diff(sample(), "f.rs");
+        let rows = rows_for(&file);
+        assert_eq!(editor_target_for_cursor(&file, &rows, rows.len()), None);
     }
 
     // -- as_worktree_target (task 4.3) ---------------------------------------

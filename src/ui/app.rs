@@ -189,6 +189,13 @@ pub struct App {
     pub(super) stage_ops: Option<Box<dyn StageOps>>,
     /// The color palette every renderer routes through.
     pub theme: Theme,
+    /// The editor `g<Space>` suspends the TUI to open, e.g. `"nvim"` or
+    /// `"code --wait"`. Resolved once in `main` via `resolve_editor`'s
+    /// precedence (the `--editor` flag, then `$VISUAL`, then `$EDITOR`, then
+    /// `"nvim"`) and set via [`App::set_editor`]; defaults to `"nvim"` here
+    /// so pure-navigation unit tests that build an `App` directly (bypassing
+    /// `main`'s resolution) still have a usable default.
+    pub editor: String,
     /// The tree-sitter highlighting engine. Owned here so its per-language
     /// config cache persists across selections. `pub(super)` for the
     /// code-intelligence module's peek-preview highlighting.
@@ -427,6 +434,7 @@ impl App {
             status_message: None,
             stage_ops: None,
             theme: Theme::default(),
+            editor: "nvim".into(),
             highlighter: Highlighter::new(),
             highlight_cache: HighlightCache::default(),
             search: SearchState::default(),
@@ -531,6 +539,13 @@ impl App {
         self.repo_root = Some(root);
     }
 
+    /// Sets the editor `g<Space>` opens (resolved by `main` per
+    /// `resolve_editor`'s precedence: the `--editor` flag, then `$VISUAL`,
+    /// then `$EDITOR`, then `"nvim"`).
+    pub fn set_editor(&mut self, editor: String) {
+        self.editor = editor;
+    }
+
     /// Whether a keyboard-capturing overlay is currently up: the help overlay
     /// (`help_open`), the Compose modal, the LSP peek overlay, the
     /// branch/worktree switcher modal, or the commit-message modal. While
@@ -599,8 +614,9 @@ impl App {
 
     /// Applies one [`Action`] as a state transition.
     ///
-    /// `Quit` and `QuitDiscard` are no-ops here — the event loop intercepts
-    /// them before they reach `apply` and ends the session instead. In
+    /// `Quit`, `QuitDiscard`, and `OpenEditor` are no-ops here — the event
+    /// loop intercepts them before they reach `apply` (ending the session, or
+    /// suspending the TUI to spawn the configured editor, respectively). In
     /// [`Mode::Visual`], every action other than the ones
     /// [`visual_mode_allows`] passes through is a no-op (`]`/`[`/Tab/etc.
     /// stay disabled while selecting a range).
@@ -664,7 +680,11 @@ impl App {
             Action::OpenProjectSearch => self.open_project_search(),
             Action::ToggleCommandLog => self.toggle_command_log(),
             Action::Refresh => self.manual_refresh(),
-            Action::Quit | Action::QuitDiscard => {}
+            // `Quit`/`QuitDiscard` end the session; `OpenEditor` suspends the
+            // TUI to spawn the configured editor. Both are intercepted by
+            // `super::dispatch_key` before reaching here (see `Action::Quit`'s
+            // doc comment), so this is a no-op the same way theirs is.
+            Action::Quit | Action::QuitDiscard | Action::OpenEditor => {}
         }
     }
 
