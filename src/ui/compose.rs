@@ -177,6 +177,170 @@ impl TextBuffer {
             self.cursor_col = self.cursor_col.min(self.current_line_len());
         }
     }
+
+    /// Moves the cursor left by one word. Within a line, lands on the start of
+    /// the current or previous word (skipping any whitespace immediately to the
+    /// left first, then the same-class run before it). At the start of a line
+    /// (after the first) it wraps to the end of the previous line, mirroring
+    /// [`move_left`](Self::move_left)'s boundary behavior.
+    pub fn move_word_left(&mut self) {
+        if self.cursor_col == 0 {
+            if self.cursor_row > 0 {
+                self.cursor_row -= 1;
+                self.cursor_col = self.current_line_len();
+            }
+            return;
+        }
+        let chars: Vec<char> = self.lines[self.cursor_row].chars().collect();
+        self.cursor_col = word_left_index(&chars, self.cursor_col);
+    }
+
+    /// Moves the cursor right by one word. Within a line, skips the same-class
+    /// run under the cursor then any trailing whitespace, landing on the next
+    /// word's start (or the line end). At the end of a line it wraps to the
+    /// start of the next line, mirroring [`move_right`](Self::move_right).
+    pub fn move_word_right(&mut self) {
+        let len = self.current_line_len();
+        if self.cursor_col >= len {
+            if self.cursor_row + 1 < self.lines.len() {
+                self.cursor_row += 1;
+                self.cursor_col = 0;
+            }
+            return;
+        }
+        let chars: Vec<char> = self.lines[self.cursor_row].chars().collect();
+        self.cursor_col = word_right_index(&chars, self.cursor_col);
+    }
+
+    /// Moves the cursor to the start of the current line.
+    pub fn move_line_start(&mut self) {
+        self.cursor_col = 0;
+    }
+
+    /// Moves the cursor to the end of the current line.
+    pub fn move_line_end(&mut self) {
+        self.cursor_col = self.current_line_len();
+    }
+
+    /// Moves the cursor to the very start of the buffer (first line, column 0).
+    pub fn move_doc_start(&mut self) {
+        self.cursor_row = 0;
+        self.cursor_col = 0;
+    }
+
+    /// Moves the cursor to the very end of the buffer (last line, past its last
+    /// char).
+    pub fn move_doc_end(&mut self) {
+        self.cursor_row = self.lines.len() - 1;
+        self.cursor_col = self.current_line_len();
+    }
+
+    /// Deletes the character *at* the cursor, or — at the end of a line before
+    /// the last — merges the next line into this one. The mirror image of
+    /// [`backspace`](Self::backspace); the cursor never moves.
+    pub fn delete_forward(&mut self) {
+        let len = self.current_line_len();
+        if self.cursor_col < len {
+            let byte_idx = char_byte_index(&self.lines[self.cursor_row], self.cursor_col);
+            self.lines[self.cursor_row].remove(byte_idx);
+        } else if self.cursor_row + 1 < self.lines.len() {
+            let next = self.lines.remove(self.cursor_row + 1);
+            self.lines[self.cursor_row].push_str(&next);
+        }
+    }
+
+    /// Deletes from the previous word boundary up to the cursor. At the start
+    /// of a line this degrades to a [`backspace`](Self::backspace) (merging
+    /// into the previous line).
+    pub fn delete_word_back(&mut self) {
+        if self.cursor_col == 0 {
+            self.backspace();
+            return;
+        }
+        let chars: Vec<char> = self.lines[self.cursor_row].chars().collect();
+        let target = word_left_index(&chars, self.cursor_col);
+        let start_byte = char_byte_index(&self.lines[self.cursor_row], target);
+        let end_byte = char_byte_index(&self.lines[self.cursor_row], self.cursor_col);
+        self.lines[self.cursor_row].replace_range(start_byte..end_byte, "");
+        self.cursor_col = target;
+    }
+
+    /// Deletes from the cursor up to the next word boundary. At the end of a
+    /// line this merges the next line into this one (mirror of
+    /// [`delete_word_back`](Self::delete_word_back) at a line start). The cursor
+    /// never moves.
+    pub fn delete_word_forward(&mut self) {
+        let len = self.current_line_len();
+        if self.cursor_col >= len {
+            if self.cursor_row + 1 < self.lines.len() {
+                let next = self.lines.remove(self.cursor_row + 1);
+                self.lines[self.cursor_row].push_str(&next);
+            }
+            return;
+        }
+        let chars: Vec<char> = self.lines[self.cursor_row].chars().collect();
+        let target = word_right_index(&chars, self.cursor_col);
+        let start_byte = char_byte_index(&self.lines[self.cursor_row], self.cursor_col);
+        let end_byte = char_byte_index(&self.lines[self.cursor_row], target);
+        self.lines[self.cursor_row].replace_range(start_byte..end_byte, "");
+    }
+}
+
+/// The three character classes the word-motion boundary model recognizes:
+/// runs of the same class are one "word" for the purposes of `Ctrl`/`Alt`
+/// word motions and word-wise deletion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CharClass {
+    Whitespace,
+    /// Identifier-ish: `char::is_alphanumeric` plus `_`.
+    Word,
+    /// Anything else printable (punctuation, symbols).
+    Punct,
+}
+
+fn char_class(c: char) -> CharClass {
+    if c.is_whitespace() {
+        CharClass::Whitespace
+    } else if c.is_alphanumeric() || c == '_' {
+        CharClass::Word
+    } else {
+        CharClass::Punct
+    }
+}
+
+/// Char index of the next word boundary at or after `col` within `chars`:
+/// skips the same-class run under the cursor, then any trailing whitespace, so
+/// the result sits on the *start* of the following word (or `chars.len()`).
+fn word_right_index(chars: &[char], col: usize) -> usize {
+    let mut i = col;
+    if i >= chars.len() {
+        return chars.len();
+    }
+    let start = char_class(chars[i]);
+    while i < chars.len() && char_class(chars[i]) == start {
+        i += 1;
+    }
+    while i < chars.len() && char_class(chars[i]) == CharClass::Whitespace {
+        i += 1;
+    }
+    i
+}
+
+/// Char index of the previous word boundary before `col` within `chars`:
+/// skips whitespace immediately to the left, then the same-class run before it,
+/// so the result sits on the *start* of the current/previous word (or `0`).
+fn word_left_index(chars: &[char], col: usize) -> usize {
+    let mut i = col.min(chars.len());
+    while i > 0 && char_class(chars[i - 1]) == CharClass::Whitespace {
+        i -= 1;
+    }
+    if i > 0 {
+        let cls = char_class(chars[i - 1]);
+        while i > 0 && char_class(chars[i - 1]) == cls {
+            i -= 1;
+        }
+    }
+    i
 }
 
 /// The byte index in `s` of char index `char_idx` (or `s.len()` if
@@ -362,6 +526,195 @@ mod tests {
         buf.cursor_col = 2; // after "hé"
         buf.insert_char('!');
         assert_eq!(buf.lines[0], "hé!llo");
+    }
+
+    // -- Word / line / document motions ------------------------------------
+
+    #[test]
+    fn move_word_right_lands_on_next_word_start() {
+        let mut buf = TextBuffer::from_str("foo bar baz");
+        buf.cursor_col = 0;
+        buf.move_word_right();
+        assert_eq!(buf.cursor_col, 4); // start of "bar"
+        buf.move_word_right();
+        assert_eq!(buf.cursor_col, 8); // start of "baz"
+        buf.move_word_right();
+        assert_eq!(buf.cursor_col, 11); // end of line (no trailing word)
+    }
+
+    #[test]
+    fn move_word_right_from_mid_word_skips_rest_of_word_then_whitespace() {
+        let mut buf = TextBuffer::from_str("foo bar");
+        buf.cursor_col = 1; // inside "foo"
+        buf.move_word_right();
+        assert_eq!(buf.cursor_col, 4); // start of "bar"
+    }
+
+    #[test]
+    fn move_word_right_treats_punctuation_as_its_own_class() {
+        let mut buf = TextBuffer::from_str("a.b c");
+        buf.cursor_col = 0; // on "a"
+        buf.move_word_right();
+        assert_eq!(buf.cursor_col, 1); // on "."
+        buf.move_word_right();
+        assert_eq!(buf.cursor_col, 2); // on "b"
+        buf.move_word_right();
+        assert_eq!(buf.cursor_col, 4); // start of "c"
+    }
+
+    #[test]
+    fn move_word_right_at_line_end_wraps_to_next_line_start() {
+        let mut buf = TextBuffer::from_str("ab\ncd");
+        buf.cursor_row = 0;
+        buf.cursor_col = 2;
+        buf.move_word_right();
+        assert_eq!(buf.cursor_row, 1);
+        assert_eq!(buf.cursor_col, 0);
+    }
+
+    #[test]
+    fn move_word_left_lands_on_current_or_previous_word_start() {
+        let mut buf = TextBuffer::from_str("foo bar baz");
+        buf.cursor_col = 11; // end of line
+        buf.move_word_left();
+        assert_eq!(buf.cursor_col, 8); // start of "baz"
+        buf.move_word_left();
+        assert_eq!(buf.cursor_col, 4); // start of "bar"
+        buf.move_word_left();
+        assert_eq!(buf.cursor_col, 0); // start of "foo"
+    }
+
+    #[test]
+    fn move_word_left_from_mid_word_lands_on_that_words_start() {
+        let mut buf = TextBuffer::from_str("foo bar");
+        buf.cursor_col = 6; // inside "bar"
+        buf.move_word_left();
+        assert_eq!(buf.cursor_col, 4); // start of "bar"
+    }
+
+    #[test]
+    fn move_word_left_at_line_start_wraps_to_previous_line_end() {
+        let mut buf = TextBuffer::from_str("ab\ncd");
+        buf.cursor_row = 1;
+        buf.cursor_col = 0;
+        buf.move_word_left();
+        assert_eq!(buf.cursor_row, 0);
+        assert_eq!(buf.cursor_col, 2);
+    }
+
+    #[test]
+    fn word_motions_are_char_index_safe_with_multibyte_content() {
+        // "héllo wörld" — accents keep the columns as char indices, not bytes.
+        let mut buf = TextBuffer::from_str("héllo wörld");
+        buf.cursor_col = 0;
+        buf.move_word_right();
+        assert_eq!(buf.cursor_col, 6); // start of "wörld" (after "héllo ")
+        buf.move_word_left();
+        assert_eq!(buf.cursor_col, 0); // back to start of "héllo"
+    }
+
+    #[test]
+    fn delete_word_back_multibyte_removes_the_word_not_bytes() {
+        let mut buf = TextBuffer::from_str("héllo wörld");
+        buf.cursor_col = 11; // end of line
+        buf.delete_word_back();
+        assert_eq!(buf.lines[0], "héllo ");
+        assert_eq!(buf.cursor_col, 6);
+    }
+
+    #[test]
+    fn move_line_start_and_end() {
+        let mut buf = TextBuffer::from_str("hello");
+        buf.cursor_col = 3;
+        buf.move_line_start();
+        assert_eq!(buf.cursor_col, 0);
+        buf.move_line_end();
+        assert_eq!(buf.cursor_col, 5);
+    }
+
+    #[test]
+    fn move_doc_start_and_end() {
+        let mut buf = TextBuffer::from_str("one\ntwo\nthree");
+        buf.cursor_row = 1;
+        buf.cursor_col = 2;
+        buf.move_doc_start();
+        assert_eq!((buf.cursor_row, buf.cursor_col), (0, 0));
+        buf.move_doc_end();
+        assert_eq!((buf.cursor_row, buf.cursor_col), (2, 5)); // end of "three"
+    }
+
+    #[test]
+    fn delete_forward_removes_char_at_cursor() {
+        let mut buf = TextBuffer::from_str("abc");
+        buf.cursor_col = 1;
+        buf.delete_forward();
+        assert_eq!(buf.lines[0], "ac");
+        assert_eq!(buf.cursor_col, 1); // cursor doesn't move
+    }
+
+    #[test]
+    fn delete_forward_at_line_end_merges_next_line() {
+        let mut buf = TextBuffer::from_str("foo\nbar");
+        buf.cursor_row = 0;
+        buf.cursor_col = 3; // end of "foo"
+        buf.delete_forward();
+        assert_eq!(buf.lines, vec!["foobar".to_string()]);
+        assert_eq!((buf.cursor_row, buf.cursor_col), (0, 3));
+    }
+
+    #[test]
+    fn delete_forward_at_buffer_end_is_a_no_op() {
+        let mut buf = TextBuffer::from_str("ab");
+        buf.cursor_col = 2;
+        buf.delete_forward();
+        assert_eq!(buf.lines, vec!["ab".to_string()]);
+    }
+
+    #[test]
+    fn delete_word_back_removes_previous_word() {
+        let mut buf = TextBuffer::from_str("foo bar");
+        buf.cursor_col = 7; // end
+        buf.delete_word_back();
+        assert_eq!(buf.lines[0], "foo ");
+        assert_eq!(buf.cursor_col, 4);
+    }
+
+    #[test]
+    fn delete_word_back_at_line_start_merges_like_backspace() {
+        let mut buf = TextBuffer::from_str("foo\nbar");
+        buf.cursor_row = 1;
+        buf.cursor_col = 0;
+        buf.delete_word_back();
+        assert_eq!(buf.lines, vec!["foobar".to_string()]);
+        assert_eq!((buf.cursor_row, buf.cursor_col), (0, 3));
+    }
+
+    #[test]
+    fn delete_word_forward_removes_next_word() {
+        let mut buf = TextBuffer::from_str("foo bar");
+        buf.cursor_col = 0;
+        buf.delete_word_forward();
+        assert_eq!(buf.lines[0], "bar"); // "foo " removed
+        assert_eq!(buf.cursor_col, 0);
+    }
+
+    #[test]
+    fn delete_word_forward_at_line_end_merges_next_line() {
+        let mut buf = TextBuffer::from_str("foo\nbar");
+        buf.cursor_row = 0;
+        buf.cursor_col = 3;
+        buf.delete_word_forward();
+        assert_eq!(buf.lines, vec!["foobar".to_string()]);
+        assert_eq!((buf.cursor_row, buf.cursor_col), (0, 3));
+    }
+
+    #[test]
+    fn word_index_helpers_handle_empty_and_boundaries() {
+        assert_eq!(word_right_index(&[], 0), 0);
+        assert_eq!(word_left_index(&[], 0), 0);
+        let chars: Vec<char> = "ab".chars().collect();
+        assert_eq!(word_right_index(&chars, 2), 2); // already at end
+        assert_eq!(word_left_index(&chars, 0), 0); // already at start
     }
 
     #[test]

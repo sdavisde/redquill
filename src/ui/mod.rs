@@ -54,6 +54,7 @@ mod switcher;
 mod switcher_modal;
 mod syntax;
 mod targeting;
+mod textwrap;
 mod theme;
 mod time_format;
 mod welcome;
@@ -69,12 +70,17 @@ pub use theme::Theme;
 use std::io::{self, Stderr};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    supports_keyboard_enhancement,
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -633,16 +639,52 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     }
 }
 
+/// Whether the kitty keyboard-enhancement flags were successfully pushed by
+/// [`init_terminal`] and therefore need popping by [`restore_terminal`]. A
+/// process-global (rather than a field) because the panic hook restores
+/// through the argument-less [`restore_terminal`] and must know whether a pop
+/// is owed. Set at most once per session; [`restore_terminal`] swaps it back
+/// to `false` so a second restore (panic + normal exit) can't double-pop.
+static KEYBOARD_ENHANCED: AtomicBool = AtomicBool::new(false);
+
 /// Puts the terminal into raw mode + alternate screen, on stderr.
+///
+/// When the terminal advertises keyboard-enhancement support (kitty keyboard
+/// protocol), this also pushes [`KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES`]
+/// so modified keys the legacy encoding can't distinguish — most importantly
+/// `Shift+Enter` (newline in the modals) vs. plain `Enter` (submit) — arrive
+/// as separate events. This is an **optional enhancement that degrades
+/// silently**: if support is absent or the push fails, the session runs on the
+/// legacy encoding (where `Shift+Enter` is indistinguishable from `Enter` and
+/// therefore submits — `Ctrl-j` remains the universal newline fallback). The
+/// push is on the same stream the TUI renders to (stderr) and is paired with a
+/// pop in [`restore_terminal`], performed before leaving the alternate screen.
 fn init_terminal() -> io::Result<Terminal<CrosstermBackend<Stderr>>> {
     enable_raw_mode()?;
     execute!(io::stderr(), EnterAlternateScreen)?;
+    // Optional enhancement; any failure leaves the session on the legacy
+    // encoding (see the doc comment above). Never surfaced to the user.
+    if matches!(supports_keyboard_enhancement(), Ok(true))
+        && execute!(
+            io::stderr(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )
+        .is_ok()
+    {
+        KEYBOARD_ENHANCED.store(true, Ordering::SeqCst);
+    }
     Terminal::new(CrosstermBackend::new(io::stderr()))
 }
 
 /// Restores the terminal to its normal state. Safe to call more than once
 /// and safe to call from a panic hook.
 fn restore_terminal() {
+    // Pop the keyboard-enhancement flags before leaving the alternate screen,
+    // and only if we actually pushed them. `swap` makes this idempotent: a
+    // second restore (e.g. panic hook then normal exit) sees `false` and skips.
+    if KEYBOARD_ENHANCED.swap(false, Ordering::SeqCst) {
+        let _ = execute!(io::stderr(), PopKeyboardEnhancementFlags);
+    }
     let _ = disable_raw_mode();
     let _ = execute!(io::stderr(), LeaveAlternateScreen);
 }

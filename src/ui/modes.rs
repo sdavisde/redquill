@@ -14,109 +14,116 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use super::App;
 use super::modal_keys::{self, ListAction, PeekAction, StagingAction, SwitcherAction};
 
-/// Handles one key event while [`super::Mode::Compose`] is active: printable
-/// chars insert, Backspace deletes, arrow keys move within the text, `Ctrl-j`
-/// inserts a newline, `Ctrl-t` cycles the classification, `Enter` submits,
-/// `Esc` cancels. Bypasses the [`super::Keymap`] table entirely.
+/// Applies one editing/motion key to a modal text `buffer`, returning whether
+/// it consumed the key. Shared verbatim by the Compose and commit-message
+/// handlers so the two modals' text-editing keymap can never drift apart; the
+/// keys it accepts are documented in [`modal_keys::COMPOSE_HINTS`] /
+/// [`modal_keys::COMMIT_MESSAGE_HINTS`] and pinned by the bidirectional drift
+/// tests there.
+///
+/// It does *not* handle the lifecycle keys — `Esc` (cancel), a plain `Enter`
+/// (submit), and Compose's `Ctrl-t` (cycle classification) — which differ per
+/// modal and stay in each handler. The `ctrl`/`alt`/`shift` flags are the
+/// decoded modifiers of `key`.
+///
+/// The key set (desktop-editor conventions, several encodings per action so
+/// macOS terminals that eat `Ctrl+arrow`/`Ctrl+Backspace` still have a path):
+/// - Newline: `Shift+Enter` (kitty-only; see [`super::init_terminal`]), `Ctrl-j`.
+/// - Word left: `Ctrl+←`, `Alt+←`, `Alt+b`. Word right: `Ctrl+→`, `Alt+→`, `Alt+f`.
+/// - Line start: `Home`, `Ctrl-a`. Line end: `End`, `Ctrl-e`.
+/// - Document start: `Ctrl+Home`. Document end: `Ctrl+End`.
+/// - Delete char: `Backspace` (back), `Delete` (forward).
+/// - Delete word back: `Ctrl+Backspace`, `Alt+Backspace`, `Ctrl-w`, `Ctrl-h`
+///   (the encoding many terminals send for `Ctrl+Backspace`).
+/// - Delete word forward: `Ctrl+Delete`, `Alt+d`.
+fn apply_buffer_key(
+    buffer: &mut super::compose::TextBuffer,
+    key: KeyEvent,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+) -> bool {
+    match key.code {
+        // Shift+Enter (kitty protocol) inserts a newline; plain Enter is a
+        // lifecycle key handled by the caller. Ctrl-j is the universal
+        // newline fallback (see the `Char('j')` arm below).
+        KeyCode::Enter if shift => buffer.newline(),
+        KeyCode::Backspace if ctrl || alt => buffer.delete_word_back(),
+        KeyCode::Backspace => buffer.backspace(),
+        KeyCode::Delete if ctrl || alt => buffer.delete_word_forward(),
+        KeyCode::Delete => buffer.delete_forward(),
+        KeyCode::Left if ctrl || alt => buffer.move_word_left(),
+        KeyCode::Left => buffer.move_left(),
+        KeyCode::Right if ctrl || alt => buffer.move_word_right(),
+        KeyCode::Right => buffer.move_right(),
+        KeyCode::Up => buffer.move_up(),
+        KeyCode::Down => buffer.move_down(),
+        KeyCode::Home if ctrl => buffer.move_doc_start(),
+        KeyCode::Home => buffer.move_line_start(),
+        KeyCode::End if ctrl => buffer.move_doc_end(),
+        KeyCode::End => buffer.move_line_end(),
+        KeyCode::Char('j') if ctrl && !alt => buffer.newline(),
+        KeyCode::Char('a') if ctrl && !alt => buffer.move_line_start(),
+        KeyCode::Char('e') if ctrl && !alt => buffer.move_line_end(),
+        KeyCode::Char('h') if ctrl && !alt => buffer.delete_word_back(),
+        KeyCode::Char('w') if ctrl && !alt => buffer.delete_word_back(),
+        KeyCode::Char('b') if alt && !ctrl => buffer.move_word_left(),
+        KeyCode::Char('f') if alt && !ctrl => buffer.move_word_right(),
+        KeyCode::Char('d') if alt && !ctrl => buffer.delete_word_forward(),
+        KeyCode::Char(c) if !ctrl && !alt => buffer.insert_char(c),
+        _ => return false,
+    }
+    true
+}
+
+/// Handles one key event while [`super::Mode::Compose`] is active. `Esc`
+/// cancels, a plain `Enter` submits, `Ctrl-t` cycles the classification, and
+/// every other editing/motion key is delegated to [`apply_buffer_key`] (see
+/// its doc for the full keymap). `Shift+Enter` inserts a newline (via the
+/// delegate) rather than submitting. Bypasses the [`super::Keymap`] table
+/// entirely; documented in [`modal_keys::COMPOSE_HINTS`], drift-tested both
+/// directions.
 pub(super) fn handle_compose_key(app: &mut App, key: KeyEvent) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     match key.code {
         KeyCode::Esc => app.cancel_compose(),
-        KeyCode::Enter => app.submit_compose(),
-        KeyCode::Char('j') if ctrl => {
-            if let Some(compose) = app.compose.as_mut() {
-                compose.buffer.newline();
-            }
-        }
-        KeyCode::Char('t') if ctrl => {
+        KeyCode::Enter if !shift => app.submit_compose(),
+        KeyCode::Char('t') if ctrl && !alt => {
             if let Some(compose) = app.compose.as_mut() {
                 compose.classification = compose.classification.cycle();
             }
         }
-        KeyCode::Backspace => {
+        _ => {
             if let Some(compose) = app.compose.as_mut() {
-                compose.buffer.backspace();
+                apply_buffer_key(&mut compose.buffer, key, ctrl, alt, shift);
             }
         }
-        KeyCode::Left => {
-            if let Some(compose) = app.compose.as_mut() {
-                compose.buffer.move_left();
-            }
-        }
-        KeyCode::Right => {
-            if let Some(compose) = app.compose.as_mut() {
-                compose.buffer.move_right();
-            }
-        }
-        KeyCode::Up => {
-            if let Some(compose) = app.compose.as_mut() {
-                compose.buffer.move_up();
-            }
-        }
-        KeyCode::Down => {
-            if let Some(compose) = app.compose.as_mut() {
-                compose.buffer.move_down();
-            }
-        }
-        KeyCode::Char(c) if !ctrl => {
-            if let Some(compose) = app.compose.as_mut() {
-                compose.buffer.insert_char(c);
-            }
-        }
-        _ => {}
     }
 }
 
 /// Handles one key event while [`super::Mode::CommitMessage`] is active
-/// (spec 04): printable chars insert, Backspace deletes, arrow keys move
-/// within the text, `Ctrl-j` inserts a newline (message body), `Enter`
-/// submits the commit, `Esc` cancels back to the git panel. Mirrors
-/// [`handle_compose_key`] minus the classification cycling — the buffer is a
-/// plain commit message. `q` isn't a control key here, so it types a `q`
-/// rather than quitting (an open overlay never quits the app). Bypasses the
-/// [`super::Keymap`] table entirely; the documented keys live in
-/// [`modal_keys::COMMIT_MESSAGE_HINTS`], drift-tested in both directions.
+/// (spec 04): `Esc` cancels back to the git panel, a plain `Enter` submits the
+/// commit, and every other editing/motion key is delegated to
+/// [`apply_buffer_key`] — the identical text-editing keymap Compose uses,
+/// minus the classification cycling (the buffer is a plain commit message).
+/// `Shift+Enter` adds a body line rather than committing. `q` isn't a control
+/// key here, so it types a `q` rather than quitting (an open overlay never
+/// quits the app). Documented in [`modal_keys::COMMIT_MESSAGE_HINTS`],
+/// drift-tested in both directions.
 pub(super) fn handle_commit_message_key(app: &mut App, key: KeyEvent) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     match key.code {
         KeyCode::Esc => app.close_commit_message(),
-        KeyCode::Enter => app.submit_commit_message(),
-        KeyCode::Char('j') if ctrl => {
+        KeyCode::Enter if !shift => app.submit_commit_message(),
+        _ => {
             if let Some(state) = app.commit_message.as_mut() {
-                state.buffer.newline();
+                apply_buffer_key(&mut state.buffer, key, ctrl, alt, shift);
             }
         }
-        KeyCode::Backspace => {
-            if let Some(state) = app.commit_message.as_mut() {
-                state.buffer.backspace();
-            }
-        }
-        KeyCode::Left => {
-            if let Some(state) = app.commit_message.as_mut() {
-                state.buffer.move_left();
-            }
-        }
-        KeyCode::Right => {
-            if let Some(state) = app.commit_message.as_mut() {
-                state.buffer.move_right();
-            }
-        }
-        KeyCode::Up => {
-            if let Some(state) = app.commit_message.as_mut() {
-                state.buffer.move_up();
-            }
-        }
-        KeyCode::Down => {
-            if let Some(state) = app.commit_message.as_mut() {
-                state.buffer.move_down();
-            }
-        }
-        KeyCode::Char(c) if !ctrl => {
-            if let Some(state) = app.commit_message.as_mut() {
-                state.buffer.insert_char(c);
-            }
-        }
-        _ => {}
     }
 }
 

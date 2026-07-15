@@ -55,11 +55,22 @@ impl ModalKey {
     }
 
     /// A key pressed with Alt held (Project Search's `Alt-c`/`Alt-w`/`Alt-r`
-    /// toggles, spec 06 Unit 2).
+    /// toggles, spec 06 Unit 2; the modals' `Alt-b`/`Alt-f`/`Alt-d` word
+    /// motions and `Alt+arrow`/`Alt+Backspace` variants).
     const fn alt(code: KeyCode) -> ModalKey {
         ModalKey {
             code,
             mods: KeyModifiers::ALT,
+        }
+    }
+
+    /// A key pressed with Shift held (the modals' `Shift+Enter` newline, which
+    /// only reaches the app on kitty-enhancement-capable terminals — see
+    /// [`super::init_terminal`]).
+    const fn shift(code: KeyCode) -> ModalKey {
+        ModalKey {
+            code,
+            mods: KeyModifiers::SHIFT,
         }
     }
 
@@ -791,9 +802,12 @@ pub(super) const COMPOSE_HINTS: &[ModalBinding<()>] = &[
         }),
     },
     ModalBinding {
-        label: "Ctrl-j",
-        description: "Insert newline",
-        keys: &[ModalKey::ctrl(KeyCode::Char('j'))],
+        label: "Shift-Enter / Ctrl-j",
+        description: "Insert newline (Shift-Enter needs a kitty-capable terminal)",
+        keys: &[
+            ModalKey::shift(KeyCode::Enter),
+            ModalKey::ctrl(KeyCode::Char('j')),
+        ],
         action: (),
         footer: None,
     },
@@ -805,20 +819,105 @@ pub(super) const COMPOSE_HINTS: &[ModalBinding<()>] = &[
         footer: None,
     },
     ModalBinding {
-        label: "Backspace",
-        description: "Delete character",
-        keys: &[ModalKey::plain(KeyCode::Backspace)],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Left/Right/Up/Down",
-        description: "Move within text",
+        label: "←/→/↑/↓",
+        description: "Move cursor",
         keys: &[
             ModalKey::plain(KeyCode::Left),
             ModalKey::plain(KeyCode::Right),
             ModalKey::plain(KeyCode::Up),
             ModalKey::plain(KeyCode::Down),
+        ],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Ctrl/Alt-← · Alt-b",
+        description: "Move word left",
+        keys: &[
+            ModalKey::ctrl(KeyCode::Left),
+            ModalKey::alt(KeyCode::Left),
+            ModalKey::alt(KeyCode::Char('b')),
+        ],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Ctrl/Alt-→ · Alt-f",
+        description: "Move word right",
+        keys: &[
+            ModalKey::ctrl(KeyCode::Right),
+            ModalKey::alt(KeyCode::Right),
+            ModalKey::alt(KeyCode::Char('f')),
+        ],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Home / Ctrl-a",
+        description: "Move to line start",
+        keys: &[
+            ModalKey::plain(KeyCode::Home),
+            ModalKey::ctrl(KeyCode::Char('a')),
+        ],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "End / Ctrl-e",
+        description: "Move to line end",
+        keys: &[
+            ModalKey::plain(KeyCode::End),
+            ModalKey::ctrl(KeyCode::Char('e')),
+        ],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Ctrl-Home",
+        description: "Move to document start",
+        keys: &[ModalKey::ctrl(KeyCode::Home)],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Ctrl-End",
+        description: "Move to document end",
+        keys: &[ModalKey::ctrl(KeyCode::End)],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Backspace",
+        description: "Delete character before the cursor",
+        keys: &[ModalKey::plain(KeyCode::Backspace)],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Delete",
+        description: "Delete character at the cursor",
+        keys: &[ModalKey::plain(KeyCode::Delete)],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Ctrl/Alt-Backspace · Ctrl-w · Ctrl-h",
+        description: "Delete word before the cursor",
+        keys: &[
+            ModalKey::ctrl(KeyCode::Backspace),
+            ModalKey::alt(KeyCode::Backspace),
+            ModalKey::ctrl(KeyCode::Char('w')),
+            ModalKey::ctrl(KeyCode::Char('h')),
+        ],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Ctrl-Delete · Alt-d",
+        description: "Delete word at the cursor",
+        keys: &[
+            ModalKey::ctrl(KeyCode::Delete),
+            ModalKey::alt(KeyCode::Char('d')),
         ],
         action: (),
         footer: None,
@@ -854,27 +953,115 @@ pub(super) const COMMIT_MESSAGE_HINTS: &[ModalBinding<()>] = &[
         }),
     },
     ModalBinding {
-        label: "Ctrl-j",
-        description: "Insert newline (message body)",
-        keys: &[ModalKey::ctrl(KeyCode::Char('j'))],
+        label: "Shift-Enter / Ctrl-j",
+        description: "Insert newline / body line (Shift-Enter needs a kitty-capable terminal)",
+        keys: &[
+            ModalKey::shift(KeyCode::Enter),
+            ModalKey::ctrl(KeyCode::Char('j')),
+        ],
         action: (),
         footer: None,
     },
     ModalBinding {
-        label: "Backspace",
-        description: "Delete character",
-        keys: &[ModalKey::plain(KeyCode::Backspace)],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Left/Right/Up/Down",
-        description: "Move within text",
+        label: "←/→/↑/↓",
+        description: "Move cursor",
         keys: &[
             ModalKey::plain(KeyCode::Left),
             ModalKey::plain(KeyCode::Right),
             ModalKey::plain(KeyCode::Up),
             ModalKey::plain(KeyCode::Down),
+        ],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Ctrl/Alt-← · Alt-b",
+        description: "Move word left",
+        keys: &[
+            ModalKey::ctrl(KeyCode::Left),
+            ModalKey::alt(KeyCode::Left),
+            ModalKey::alt(KeyCode::Char('b')),
+        ],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Ctrl/Alt-→ · Alt-f",
+        description: "Move word right",
+        keys: &[
+            ModalKey::ctrl(KeyCode::Right),
+            ModalKey::alt(KeyCode::Right),
+            ModalKey::alt(KeyCode::Char('f')),
+        ],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Home / Ctrl-a",
+        description: "Move to line start",
+        keys: &[
+            ModalKey::plain(KeyCode::Home),
+            ModalKey::ctrl(KeyCode::Char('a')),
+        ],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "End / Ctrl-e",
+        description: "Move to line end",
+        keys: &[
+            ModalKey::plain(KeyCode::End),
+            ModalKey::ctrl(KeyCode::Char('e')),
+        ],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Ctrl-Home",
+        description: "Move to document start",
+        keys: &[ModalKey::ctrl(KeyCode::Home)],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Ctrl-End",
+        description: "Move to document end",
+        keys: &[ModalKey::ctrl(KeyCode::End)],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Backspace",
+        description: "Delete character before the cursor",
+        keys: &[ModalKey::plain(KeyCode::Backspace)],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Delete",
+        description: "Delete character at the cursor",
+        keys: &[ModalKey::plain(KeyCode::Delete)],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Ctrl/Alt-Backspace · Ctrl-w · Ctrl-h",
+        description: "Delete word before the cursor",
+        keys: &[
+            ModalKey::ctrl(KeyCode::Backspace),
+            ModalKey::alt(KeyCode::Backspace),
+            ModalKey::ctrl(KeyCode::Char('w')),
+            ModalKey::ctrl(KeyCode::Char('h')),
+        ],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Ctrl-Delete · Alt-d",
+        description: "Delete word at the cursor",
+        keys: &[
+            ModalKey::ctrl(KeyCode::Delete),
+            ModalKey::alt(KeyCode::Char('d')),
         ],
         action: (),
         footer: None,
@@ -1377,14 +1564,14 @@ index 111..222 100644
     /// table row fails here. Printable chars are exempt (free-text input).
     #[test]
     fn compose_handler_ignores_control_keys_absent_from_its_table() {
+        // Home/End/Delete are no longer here: they're now meaningful editing
+        // keys documented in COMPOSE_HINTS (line start/end, delete forward),
+        // so they belong to the consumed-key test above, not this reverse one.
         let mut universe: Vec<KeyEvent> = [
-            KeyCode::Home,
-            KeyCode::End,
             KeyCode::PageUp,
             KeyCode::PageDown,
             KeyCode::Tab,
             KeyCode::BackTab,
-            KeyCode::Delete,
             KeyCode::Insert,
             KeyCode::F(1),
         ]
@@ -1470,14 +1657,14 @@ index 111..222 100644
     #[test]
     fn commit_message_handler_ignores_control_keys_absent_from_its_table() {
         use crate::ui::modes::handle_commit_message_key;
+        // Home/End/Delete are no longer here: they're now meaningful editing
+        // keys documented in COMMIT_MESSAGE_HINTS, covered by the consumed-key
+        // test above rather than this reverse one.
         let mut universe: Vec<KeyEvent> = [
-            KeyCode::Home,
-            KeyCode::End,
             KeyCode::PageUp,
             KeyCode::PageDown,
             KeyCode::Tab,
             KeyCode::BackTab,
-            KeyCode::Delete,
             KeyCode::Insert,
             KeyCode::F(1),
         ]
