@@ -7,9 +7,16 @@ use super::branch::{BRANCH_LIST_FORMAT, LocalBranch, parse_branch_list};
 use super::commit::{COMMIT_SUMMARY_FORMAT, CommitSummary, parse_commit_summary};
 use super::diff::{DiffTarget, RawFilePatch, split_patches};
 use super::error::{GitError, command_error, map_spawn_err};
+use super::log::{COMMIT_LOG_FORMAT, CommitLogEntry, parse_commit_log};
 use super::stash::{STASH_LIST_FORMAT, StashEntry, parse_stash_list};
 use super::status::{FileStatus, StatusSnapshot, parse_porcelain_v2, parse_porcelain_v2_full};
 use super::worktree::{WorktreeEntry, parse_worktree_list};
+
+/// Git's well-known empty-tree object id — the tree with no entries, present
+/// in every repository. Used as the base of a root commit's diff (a root
+/// commit has no parent to diff against), so [`GitRunner::diff`] can show
+/// every file in that commit as added.
+const EMPTY_TREE_OID: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 /// Runs `git` commands against a single repository working tree.
 ///
@@ -98,16 +105,79 @@ impl GitRunner {
     /// Returns raw per-file patches for the given diff target.
     ///
     /// Rename detection (`-M`) is enabled and color/external-diff drivers are
-    /// disabled so the output shape is stable regardless of user config.
+    /// disabled so the output shape is stable regardless of user config. For
+    /// [`DiffTarget::Commit`], the revision and its base are passed as
+    /// discrete argv elements (never interpolated into a shell string); the
+    /// base is `<rev>^` (the commit's first parent), or git's well-known
+    /// empty-tree object when `<rev>^` doesn't resolve (a root commit has no
+    /// parent), so a root commit's diff shows every file as added.
     pub fn diff(&self, target: &DiffTarget) -> Result<Vec<RawFilePatch>, GitError> {
-        let mut args = vec!["diff", "--no-color", "--no-ext-diff", "-M"];
+        let mut args = vec![
+            "diff".to_string(),
+            "--no-color".to_string(),
+            "--no-ext-diff".to_string(),
+            "-M".to_string(),
+        ];
         match target {
             DiffTarget::WorkingTree => {}
-            DiffTarget::Staged => args.push("--staged"),
-            DiffTarget::Range(range) => args.push(range.as_str()),
+            DiffTarget::Staged => args.push("--staged".to_string()),
+            DiffTarget::Range(range) => args.push(range.clone()),
+            DiffTarget::Commit(rev) => {
+                let parent = format!("{rev}^");
+                let base = if self.rev_exists(&parent) {
+                    parent
+                } else {
+                    EMPTY_TREE_OID.to_string()
+                };
+                args.push(base);
+                args.push(rev.clone());
+            }
         }
-        let out = self.run_utf8(&args)?;
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = self.run_utf8(&arg_refs)?;
         Ok(split_patches(&out))
+    }
+
+    /// Whether `rev` resolves to an object (`git rev-parse --verify <rev>`).
+    /// Used to detect a root commit's missing parent without treating that
+    /// as an error worth surfacing — a non-zero exit here is an expected
+    /// "doesn't exist" answer, not a failure.
+    fn rev_exists(&self, rev: &str) -> bool {
+        Command::new("git")
+            .current_dir(&self.root)
+            .args(["rev-parse", "--verify", rev])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// Returns a page of the commit log for the current branch (or `HEAD`
+    /// when detached), newest first: up to `count` commits, skipping the
+    /// first `skip` (page 2 of size 100 -> `count = 100, skip = 100`).
+    /// Parsed from a NUL-delimited `git log --format=<COMMIT_LOG_FORMAT>`
+    /// payload. An empty repository (no commits yet) yields an empty list
+    /// rather than an error, since `git log` exits non-zero there — the same
+    /// "expected, not an error" treatment as [`GitRunner::last_commit`]. Sets
+    /// `GIT_TERMINAL_PROMPT=0`, matching every other git invocation this
+    /// runner makes.
+    pub fn commit_log(&self, count: u32, skip: u32) -> Result<Vec<CommitLogEntry>, GitError> {
+        let count_arg = format!("--max-count={count}");
+        let skip_arg = format!("--skip={skip}");
+        let format_arg = format!("--format={COMMIT_LOG_FORMAT}");
+        let output = Command::new("git")
+            .current_dir(&self.root)
+            .args(["log", &count_arg, &skip_arg, &format_arg])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(map_spawn_err)?;
+
+        if !output.status.success() {
+            // No commits yet: `git log` exits non-zero on an empty
+            // repository — expected, not an error.
+            return Ok(Vec::new());
+        }
+        let text = String::from_utf8(output.stdout).map_err(GitError::Utf8)?;
+        parse_commit_log(&text)
     }
 
     /// Returns the parsed stash list, newest first. An empty list (no

@@ -63,6 +63,47 @@ Quit with `q` and annotations print to stdout — pipe them anywhere:
 redquill | claude -p "address this review feedback"
 ```
 
+### Annotation output format (public API)
+
+Each annotation renders as a header naming its target, a blank line, then a
+`[classification] body` line (subsequent body lines follow unindented):
+
+```text
+## src/auth/session.rs:44 (+)
+
+[question] where does keystore get rotated?
+```
+
+Headers vary by target granularity — `path:line`, `path:start-end`, or just
+`path` for a whole-file comment — with a trailing `(+)`/`(-)` marking which
+side of the diff a line/range/hunk refers to (a hunk comment always shows
+`(+)`, since a hunk is anchored to its new-side span; a whole-file comment
+has no side marker at all). Multiple annotations are separated by
+exactly one blank line; the whole document ends with a single trailing
+newline.
+
+A session that never leaves the working-tree view renders exactly as above,
+byte-for-byte, with no extra lines — this is unchanged and will stay
+unchanged. Annotations made against any other diff target (a commit, an
+explicit range, or the staged index) are grouped after the working-tree
+annotations, each group preceded by exactly one metadata line:
+
+- a commit: `Reviewing: <short-sha>`
+- a range: `Reviewing: <range-as-typed>` (e.g. `Reviewing: main..feature`)
+- the staged index: `Reviewing: staged`
+
+so a script or agent consuming the output always knows which revision a
+group's line numbers resolve against.
+
+### Diff targets
+
+Any diff shown in the multibuffer — working tree (default), staged, an
+explicit range/ref, or a single commit opened from the git panel's History
+tab — can be annotated. Staging and code-intelligence keys are only ever
+shown and active for the working tree/staged targets they apply to; a
+read-only or historical target simply omits those keys from the footer and
+the `?` overlay rather than showing an inert one.
+
 ## Prior art
 
 Standing on the shoulders of: **lazygit** (staging ergonomics), **revdiff** and **tuicr** (the annotate-to-agent loop and its output conventions), **Zed** (diff-viewer quality bar), **Helix** (LSP configuration model). redquill exists because no one tool combines staging, annotation, and code navigation in a single review surface.

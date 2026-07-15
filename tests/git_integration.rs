@@ -345,3 +345,108 @@ fn range_diff_between_commits() {
     assert_eq!(patches[0].path, "base.txt");
     assert!(patches[0].raw.contains("+second commit"));
 }
+
+// -- DiffTarget::Commit: the three commit-shape cases -----------------------
+
+#[test]
+fn commit_target_normal_commit_shows_only_that_commits_own_changes() {
+    let tmp = init_repo();
+    let dir = tmp.path();
+    // A first commit already exists (init_repo's "initial"). Add a second
+    // commit that changes base.txt and adds a new file; a third, unrelated
+    // commit follows so history has depth beyond the target commit.
+    write(dir, "base.txt", b"line one\nsecond commit\n");
+    write(dir, "added.txt", b"brand new in second commit\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "second"]);
+    let second_sha = git_out(dir, &["rev-parse", "HEAD"]);
+    write(dir, "base.txt", b"line one\nthird commit\n");
+    git(dir, &["commit", "-aqm", "third"]);
+
+    let runner = runner_for(&tmp);
+    let patches = runner.diff(&DiffTarget::Commit(second_sha)).unwrap();
+
+    // Only what "second" introduced: base.txt's change and added.txt's
+    // creation — not "initial"'s content and not "third"'s later edit.
+    assert_eq!(patches.len(), 2);
+    let base = patches.iter().find(|p| p.path == "base.txt").unwrap();
+    assert!(base.raw.contains("+second commit"));
+    assert!(!base.raw.contains("third commit"));
+    let added = patches.iter().find(|p| p.path == "added.txt").unwrap();
+    assert!(added.raw.contains("new file mode"));
+    assert!(added.raw.contains("+brand new in second commit"));
+}
+
+#[test]
+fn commit_target_merge_commit_diffs_against_first_parent() {
+    let tmp = init_repo();
+    let dir = tmp.path();
+    git(dir, &["branch", "-M", "main"]);
+
+    // A commit on main after the branch point, so the merge has real
+    // first-parent history to exclude.
+    write(dir, "base.txt", b"line one\nmainline change\n");
+    git(dir, &["commit", "-aqm", "mainline commit"]);
+
+    // A feature branch off "initial" with its own, non-conflicting change.
+    git(dir, &["branch", "feature", "HEAD~1"]);
+    git(dir, &["checkout", "-q", "feature"]);
+    write(dir, "feature.txt", b"feature content\n");
+    git(dir, &["add", "feature.txt"]);
+    git(dir, &["commit", "-qm", "feature commit"]);
+
+    // Merge feature into main with an explicit merge commit (no
+    // fast-forward), so HEAD has two parents.
+    git(dir, &["checkout", "-q", "main"]);
+    git(
+        dir,
+        &["merge", "-q", "--no-ff", "-m", "merge feature", "feature"],
+    );
+    let merge_sha = git_out(dir, &["rev-parse", "HEAD"]);
+
+    let runner = runner_for(&tmp);
+    let patches = runner.diff(&DiffTarget::Commit(merge_sha)).unwrap();
+
+    // First-parent diff (<merge>^ == mainline commit, not the pre-branch
+    // "initial"): only feature.txt's arrival shows up, since mainline's own
+    // change is already reflected in the first parent and cancels out.
+    assert_eq!(patches.len(), 1);
+    assert_eq!(patches[0].path, "feature.txt");
+    assert!(patches[0].raw.contains("+feature content"));
+}
+
+#[test]
+fn commit_target_root_commit_is_an_all_added_diff_against_the_empty_tree() {
+    // A repo whose only commit has no parent at all.
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    git(dir, &["init", "-q"]);
+    git(dir, &["config", "user.name", "redquill test"]);
+    git(dir, &["config", "user.email", "test@redquill.invalid"]);
+    write(dir, "one.txt", b"first file\n");
+    write(dir, "two.txt", b"second file\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "root commit"]);
+    let root_sha = git_out(dir, &["rev-parse", "HEAD"]);
+
+    // No parent to resolve: `<sha>^` must fail `rev-parse --verify`.
+    let verify = Command::new("git")
+        .current_dir(dir)
+        .args(["rev-parse", "--verify", &format!("{root_sha}^")])
+        .output()
+        .expect("failed to spawn git");
+    assert!(!verify.status.success());
+
+    let runner = runner_for(&tmp);
+    let patches = runner.diff(&DiffTarget::Commit(root_sha)).unwrap();
+
+    assert_eq!(patches.len(), 2);
+    for patch in &patches {
+        assert!(patch.raw.contains("new file mode"), "{:?}", patch.raw);
+        assert_eq!(patch.old_path, None);
+    }
+    let one = patches.iter().find(|p| p.path == "one.txt").unwrap();
+    assert!(one.raw.contains("+first file"));
+    let two = patches.iter().find(|p| p.path == "two.txt").unwrap();
+    assert!(two.raw.contains("+second file"));
+}

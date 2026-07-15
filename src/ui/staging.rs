@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::diff::LineOrigin;
-use crate::git::{DiffTarget, build_hunk_patch, build_line_patch};
+use crate::git::{StagingMode, build_hunk_patch, build_line_patch};
 
 use super::App;
 use super::Mode;
@@ -38,7 +38,7 @@ pub(super) fn toggle_stage(app: &mut App) {
     if !matches!(app.mode, Mode::Normal | Mode::Visual { .. }) {
         return;
     }
-    if matches!(app.target, DiffTarget::Range(_)) {
+    if app.target.staging_mode() == StagingMode::ReadOnly {
         app.set_status_message("read-only diff target");
         return;
     }
@@ -50,7 +50,7 @@ pub(super) fn toggle_stage(app: &mut App) {
         return;
     };
     let path = file.path.clone();
-    let staging = matches!(app.target, DiffTarget::WorkingTree);
+    let staging = app.target.staging_mode() == StagingMode::Stage;
     let verb = if staging { "staged" } else { "unstaged" };
 
     let synthetic = app

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use super::*;
 use crate::annotate::{Classification, Target};
 use crate::diff::FileDiff;
-use crate::git::RawFilePatch;
+use crate::git::{DiffTarget, RawFilePatch};
 use crate::highlight::TokenKind;
 use crate::lsp::SourceLocation;
 use crossterm::event::KeyModifiers;
@@ -196,20 +196,123 @@ fn partial_file_section_header_shows_partial_marker() {
     assert!(content.contains("\u{00b1}")); // ± partial-staged marker
 }
 
+// -- Empty-diff welcome state (spec 05 Unit 5) -------------------------------
+
+/// Renders `app` and returns the frame's content as one flattened string, the
+/// way every render test in this module inspects a `TestBackend` buffer.
+fn rendered_content(app: &App, keymap: &Keymap) -> String {
+    let backend = TestBackend::new(80, 20);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| draw(frame, app, keymap, None))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    buffer.content().iter().map(|cell| cell.symbol()).collect()
+}
+
+/// An empty working-tree target (the "agent already committed" dead end this
+/// spec targets) shows the welcome state: the situation line plus its keyed
+/// hints, sourced from the shared keymap table — not the old bare
+/// "no changes" placeholder.
 #[test]
-fn empty_diff_shows_no_changes_message() {
+fn empty_working_tree_target_shows_welcome_state() {
+    let app = App::new(vec![]);
+    let keymap = Keymap::default_map();
+    let content = rendered_content(&app, &keymap);
+
+    assert!(content.contains("No uncommitted changes"));
+    // Hints come from the table: FocusGitPanel is bound to `` ` `` and
+    // ToggleHelp to `?` in Scope::Diff by default (see `keymap.rs`).
+    assert!(content.contains("open the git panel"));
+    assert!(content.contains("switch to the History tab"));
+    assert!(content.contains("open help"));
+    assert!(
+        !content.contains("no changes"),
+        "old placeholder must be gone"
+    );
+}
+
+/// Every non-working-tree target gets its own situational wording, not the
+/// working-tree phrase reused verbatim.
+#[test]
+fn welcome_state_uses_target_appropriate_wording_per_target() {
+    let keymap = Keymap::default_map();
+
+    let mut staged_app = App::new(vec![]);
+    staged_app.target = DiffTarget::Staged;
+    assert!(rendered_content(&staged_app, &keymap).contains("Nothing staged"));
+
+    let mut range_app = App::new(vec![]);
+    range_app.target = DiffTarget::Range("main..HEAD".to_string());
+    assert!(
+        rendered_content(&range_app, &keymap).contains("Empty diff for main..HEAD"),
+        "range wording must name the range as typed"
+    );
+}
+
+/// The welcome state disappears the moment content arrives — here via the
+/// same `apply_snapshot` path auto-refresh uses to fold a fresh
+/// `ReviewSnapshot` back into the view (see `refresh.rs`).
+#[test]
+fn welcome_state_clears_once_a_snapshot_delivers_content() {
+    let mut app = App::new(vec![]);
+    let keymap = Keymap::default_map();
+    assert!(rendered_content(&app, &keymap).contains("No uncommitted changes"));
+
+    app.apply_snapshot(ReviewSnapshot {
+        files: vec![sample_file()],
+        patches: vec![None],
+        staged: Vec::new(),
+        staged_states: std::collections::HashMap::new(),
+    });
+
+    let content = rendered_content(&app, &keymap);
+    assert!(
+        !content.contains("No uncommitted changes"),
+        "welcome text must clear once the target has content"
+    );
+    assert!(
+        content.contains("src/main.rs"),
+        "the delivered file must render"
+    );
+}
+
+/// Regenerates `05-proofs/05-task-05-welcome-buffer.txt`: a rendered-buffer
+/// text capture of the empty working-tree welcome block, standing in for the
+/// interactive screenshot proof this sandbox has no controlling TTY to take
+/// (see the task's proof artifact for the TTY-deferred manual steps).
+/// `cargo test capture_task_05_welcome_buffer -- --ignored`.
+#[test]
+#[ignore = "writes the task-05 welcome-buffer proof artifact; run explicitly"]
+fn capture_task_05_welcome_buffer() {
     let backend = TestBackend::new(80, 20);
     let mut terminal = Terminal::new(backend).unwrap();
     let app = App::new(vec![]);
     let keymap = Keymap::default_map();
-
     terminal
         .draw(|frame| draw(frame, &app, &keymap, None))
         .unwrap();
 
     let buffer = terminal.backend().buffer().clone();
-    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
-    assert!(content.contains("no changes"));
+    let mut out = String::new();
+    out.push_str(
+        "Task 5.0 proof — empty working-tree welcome state, TestBackend(80x20)\n\
+         Rendered via the real `draw()` the blocking event loop calls; the\n\
+         only difference from a live terminal is the backend (no controlling\n\
+         TTY in this sandbox — see 05-task-05-proofs.md's TTY-deferred section).\n\n",
+    );
+    for y in 0..buffer.area().height {
+        let row: String = (0..buffer.area().width)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect();
+        out.push_str(row.trim_end());
+        out.push('\n');
+    }
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("docs/specs/05-spec-diff-sources/05-proofs/05-task-05-welcome-buffer.txt");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, out).unwrap();
 }
 
 /// The multibuffer renders for a ref-range target exactly as for the

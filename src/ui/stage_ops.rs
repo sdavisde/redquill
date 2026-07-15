@@ -13,8 +13,8 @@ use thiserror::Error;
 
 use crate::diff::{DiffParseError, FileChangeKind, FileDiff};
 use crate::git::{
-    BranchStatus, ChangeKind, CommitSummary, DiffTarget, FileStatus, GitError, GitRunner,
-    LocalBranch, RawFilePatch, StashEntry, StatusCode, WorktreeEntry,
+    BranchStatus, ChangeKind, CommitLogEntry, CommitSummary, DiffTarget, FileStatus, GitError,
+    GitRunner, LocalBranch, RawFilePatch, StashEntry, StatusCode, WorktreeEntry,
 };
 
 /// Errors produced while building a [`ReviewSnapshot`].
@@ -36,6 +36,14 @@ pub enum ReviewError {
 /// synchronous refresh path.
 pub type AsyncReviewBuilder =
     Box<dyn Fn(&DiffTarget) -> Result<ReviewSnapshot, ReviewError> + Send>;
+
+/// A `Send` closure fetching one page of the commit-log read model
+/// (`count` commits starting `skip` back from the tip) off the render
+/// thread, for the git panel's History tab (spec 05 Unit 3). The same
+/// indirection as [`AsyncReviewBuilder`] and for the same reason: `App`
+/// itself is not `Send`, but a cloned [`GitRunner`] handle is.
+pub type AsyncCommitLogFetcher =
+    Box<dyn Fn(u32, u32) -> Result<Vec<CommitLogEntry>, GitError> + Send>;
 
 /// The git operations the TUI needs for staging and refresh, kept behind a
 /// trait so [`super::App`]'s staging logic is unit-testable without a real
@@ -120,6 +128,23 @@ pub trait StageOps {
         let _ = message;
         None
     }
+    /// Reads one page of the commit-log read model (see
+    /// [`GitRunner::commit_log`]), synchronously — the fallback the History
+    /// tab's fetch takes when [`StageOps::async_commit_log_fetcher`] returns
+    /// `None`. The default errors, mirroring [`StageOps::branch_list`], so
+    /// backend-less or navigation-only fakes need not implement it.
+    fn commit_log(&self, count: u32, skip: u32) -> Result<Vec<CommitLogEntry>, GitError> {
+        let _ = (count, skip);
+        Err(GitError::Parse("commit log unavailable".into()))
+    }
+    /// A `Send` closure fetching a commit-log page off the render thread
+    /// (see [`AsyncCommitLogFetcher`]). The default returns `None`, keeping
+    /// non-`Send` fakes (and git-less contexts) on the synchronous
+    /// [`StageOps::commit_log`] path; [`GitRunner`] overrides it the same way
+    /// it overrides [`StageOps::async_review_builder`].
+    fn async_commit_log_fetcher(&self) -> Option<AsyncCommitLogFetcher> {
+        None
+    }
 }
 
 impl StageOps for GitRunner {
@@ -189,6 +214,16 @@ impl StageOps for GitRunner {
         // background thread without touching `App`'s non-`Send` state.
         let runner = self.clone();
         Some(Box::new(move |target| build_review(&runner, target)))
+    }
+
+    fn commit_log(&self, count: u32, skip: u32) -> Result<Vec<CommitLogEntry>, GitError> {
+        GitRunner::commit_log(self, count, skip)
+    }
+
+    fn async_commit_log_fetcher(&self) -> Option<AsyncCommitLogFetcher> {
+        // Same cloned-handle trick as `async_review_builder`.
+        let runner = self.clone();
+        Some(Box::new(move |count, skip| runner.commit_log(count, skip)))
     }
 }
 
@@ -314,7 +349,7 @@ pub fn build_review(
         patches.push(Some(patch));
     }
 
-    if matches!(target, DiffTarget::WorkingTree) {
+    if target.is_live() {
         // Fully-staged files have no working-tree diff at all, so their
         // real content only exists in the staged (`--staged`) diff. Fetch
         // it once, indexed by path, so the synthesis loop below can give

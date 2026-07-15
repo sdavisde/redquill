@@ -1,2 +1,6 @@
 /target
 .claude/worktrees/
+
+# SDD proof artifacts (generated evidence, kept local)
+docs/specs/*/*-proofs/
+docs/specs/*/proofs/

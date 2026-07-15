@@ -1169,7 +1169,10 @@ index 111..222 100644
             path: "src/main.rs".to_string(),
             letter: 'M',
         }];
-        app.mode = Mode::Panel { cursor: 0 };
+        app.mode = Mode::Panel {
+            cursor: 0,
+            tab: crate::ui::app::PanelTab::Changes,
+        };
         app.apply(crate::ui::Action::CommitStaged);
         assert_eq!(app.mode, Mode::CommitMessage, "fixture must open the modal");
         let state: &mut CommitMessageState = app.commit_message.as_mut().unwrap();

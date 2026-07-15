@@ -4,6 +4,35 @@
 //! stays thin; these functions take the view's cursor position as input and
 //! drive the LSP client (via [`super::lsp_ops::LspClient`]) and the peek
 //! state, never blocking the render loop.
+//!
+//! ## Degradation contract: code-intel is silently absent off the live working tree
+//!
+//! An LSP server only ever sees the file *as it sits on disk right now* — it
+//! has no notion of "the version this diff's new side shows," so a request
+//! is only meaningful when that new side *is* the on-disk working tree.
+//! [`request`] and [`refresh_peek_preview`] both gate on
+//! [`crate::git::DiffTarget::supports_code_intel`] and, when it's `false`
+//! (every target but [`crate::git::DiffTarget::WorkingTree`] today — a
+//! staged diff shows the index's content, a range diff shows two historical
+//! revisions, neither backed by the file at that path on disk), degrade
+//! silently: `gd`/`gr`/`K` set the same `"no code intelligence here"` footer
+//! message as any other request that can't start (no repo root, missing
+//! file, unsupported language), rather than an error. The alternative —
+//! resolving the request against on-disk content that doesn't match what's
+//! displayed — would silently jump to the wrong line or definition, which is
+//! strictly worse than the feature being unavailable (this was the actual
+//! bug on range views before this gate existed).
+//!
+//! The same predicate drives which of `gd`/`gr`/`K` even *appear* in the `?`
+//! help overlay and footer strip (see [`super::help::binding_hidden`],
+//! consumed by [`super::footer`]) — mirroring how the staging keys already
+//! hide on a read-only target — so the degradation is structurally invisible
+//! rather than a key that's listed but silently does nothing.
+//!
+//! Per the repository's error-handling rules, this degrade-silently choice is
+//! deliberate and scoped to *this* subsystem only: it does not license
+//! swallowing errors elsewhere (a real LSP failure still surfaces via
+//! `"lsp: failed"`, see [`handle_event`]).
 
 use crate::diff::LineOrigin;
 use crate::highlight::Lang;
@@ -39,10 +68,15 @@ fn code_intel_position(view: &DiffViewState) -> Option<(String, u32, u32)> {
 /// LSP client against `repo_root` on first use, and records the request as
 /// pending. Sets a footer message either way — `"lsp: resolving…"` while
 /// awaiting a response, or `"no code intelligence here"` for any case that
-/// can't even start a request (invalid row, no repo root, missing file, or
-/// no server available for this language). A new request always supersedes
-/// interest in whatever was previously pending.
+/// can't even start a request (invalid row, no repo root, missing file, no
+/// server available for this language, or the diff target's new side isn't
+/// the live working tree — see the module doc). A new request always
+/// supersedes interest in whatever was previously pending.
 pub(super) fn request(app: &mut App, kind: PeekKind) {
+    if !app.target.supports_code_intel() {
+        app.set_status_message("no code intelligence here");
+        return;
+    }
     let Some((path, line, character)) = code_intel_position(&app.view) else {
         app.set_status_message("no code intelligence here");
         return;
@@ -140,8 +174,14 @@ fn open_peek_locations(app: &mut App, kind: PeekKind, locations: Vec<SourceLocat
 /// isn't already cached: reads the file from disk and highlights it
 /// (best-effort — an unreadable file or unsupported language leaves it
 /// uncached, and the overlay shows "(preview unavailable)"). A no-op for
-/// Hover (no location list) or once a path is already cached.
+/// Hover (no location list), once a path is already cached, or whenever the
+/// diff target's new side isn't the live working tree — see the module doc
+/// — since [`request`] never opens the overlay in that state, but this stays
+/// defensive against a target change landing mid-flight.
 fn refresh_peek_preview(app: &mut App) {
+    if !app.target.supports_code_intel() {
+        return;
+    }
     let Some(peek) = app.peek.as_ref() else {
         return;
     };
@@ -289,7 +329,7 @@ mod tests {
 
     use super::*;
     use crate::diff::FileDiff;
-    use crate::git::RawFilePatch;
+    use crate::git::{DiffTarget, RawFilePatch};
     use crate::lsp::RequestId;
     use crate::ui::Action;
     use crate::ui::LspClient;
@@ -553,6 +593,63 @@ index 1..2 100644
         assert_eq!(
             app.status_message.as_deref(),
             Some("lsp: resolving\u{2026}")
+        );
+    }
+
+    // -- Capability gate: no code-intel off the live working tree ----------
+
+    #[test]
+    fn gd_on_a_staged_target_sets_no_code_intelligence_message_without_dispatching() {
+        let (mut app, _tmp, calls, _poll) = lsp_test_app();
+        app.target = DiffTarget::Staged;
+        move_to_added_line(&mut app);
+        app.apply(Action::GotoDefinition);
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "a Staged target must never reach the LSP client"
+        );
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("no code intelligence here")
+        );
+    }
+
+    #[test]
+    fn gr_and_k_are_also_gated_on_a_range_target() {
+        let (mut app, _tmp, calls, _poll) = lsp_test_app();
+        app.target = DiffTarget::Range("main..HEAD".to_string());
+        move_to_added_line(&mut app);
+        app.apply(Action::GotoReferences);
+        app.apply(Action::Hover);
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "a Range target must never reach the LSP client for gr or K either"
+        );
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("no code intelligence here")
+        );
+    }
+
+    #[test]
+    fn peek_preview_refresh_is_a_noop_on_a_non_worktree_target() {
+        // Defense in depth: even if a peek overlay were already open (e.g. a
+        // target change landed mid-flight), refresh_peek_preview must not
+        // read from disk on a target `request` would have refused.
+        let mut app = App::new(vec![file_with_raw("src/main.rs", lsp_fixture_raw())]);
+        app.target = DiffTarget::Staged;
+        app.peek = Some(PeekState::locations(
+            PeekKind::Definition,
+            vec![SourceLocation {
+                path: PathBuf::from("/does/not/matter.rs"),
+                line: 0,
+                character: 0,
+            }],
+        ));
+        refresh_peek_preview(&mut app);
+        assert!(
+            app.peek.as_ref().unwrap().preview_cache.is_empty(),
+            "must not populate the preview cache on a non-worktree target"
         );
     }
 
