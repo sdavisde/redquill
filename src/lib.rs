@@ -9,4 +9,5 @@ pub mod diff;
 pub mod git;
 pub mod highlight;
 pub mod lsp;
+pub mod search;
 pub mod ui;
