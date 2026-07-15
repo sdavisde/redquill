@@ -896,6 +896,7 @@ dependencies = [
  "cargo-husky",
  "clap",
  "crossterm",
+ "grep-matcher",
  "grep-regex",
  "grep-searcher",
  "ignore",

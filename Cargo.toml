@@ -7,6 +7,7 @@ edition = "2024"
 anyhow = "1"
 clap = { version = "4.6.1", features = ["derive"] }
 crossterm = "0.29.0"
+grep-matcher = "0.1.8"
 grep-regex = "0.1.14"
 grep-searcher = { version = "0.1.16", default-features = false }
 ignore = { version = "0.4.28", default-features = false }
