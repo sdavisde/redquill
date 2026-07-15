@@ -64,7 +64,7 @@ Ships spec Unit 1: the `gp` overlay (git-ls-files candidates, `nucleo-matcher` r
 - [x] 1.8 Keymap: `gp` sequence + actions in `src/ui/keymap.rs`; finder and file-view key tables in `src/ui/modal_keys.rs`; extend the bidirectional drift tests; `?` overlay and footers show the new modes.
 - [x] 1.9 Gates green; record the acceptance journey (open finder on this repo, open an un-diffed file, unwind) with observations in `proofs/task-1-file-finder.md`.
 
-### [ ] 2.0 In-process search engine core (`src/search/engine.rs`)
+### [x] 2.0 In-process search engine core (`src/search/engine.rs`)
 
 The embedded ripgrep engine behind Project Search — pure module, no TUI types, fully contract-tested before any UI consumes it.
 
@@ -76,12 +76,12 @@ The embedded ripgrep engine behind Project Search — pure module, no TUI types,
 
 #### 2.0 Tasks
 
-- [ ] 2.1 Record baseline (`cargo tree -e normal | wc -l`, release binary size), then add `grep-searcher`, `grep-regex`, `ignore` (`default-features = false` where features permit); justification in the commit message; record the after-numbers in `proofs/task-2-engine.md`.
-- [ ] 2.2 TDD query model: `SearchQuery { pattern, case: CaseMode, whole_word: bool, literal: bool }` → `grep-regex` matcher construction (smartcase = case-insensitive unless pattern has an uppercase letter; literal via fixed-string escaping/builder option); typed error for invalid regex (no panics).
-- [ ] 2.3 TDD engine scan: parallel `ignore` walk rooted at the repo worktree (respects `.gitignore`, includes untracked-unignored, skips `.git/`), `grep-searcher` per file with binary detection and a large-file skip threshold; sink emits `SearchHit { path, line_number, line_text, match_spans }` into a bounded channel in small batches; skip counters reported in a scan summary.
-- [ ] 2.4 TDD cancellation + limits: `AtomicBool` abort checked in the sink (assert prompt stop mid-scan); results tagged with a caller-supplied generation; global cap (default 10,000 hits) with an explicit `capped` flag in the summary.
-- [ ] 2.5 Perf tripwire: generate a several-thousand-file corpus in a tempdir, measure query→first-batch and full-scan in debug, budget 10–20× measured, loop-amortize; add alongside the existing tripwires in `src/ui/perf_tests.rs` (or `src/search/` if a purer seam fits — keep the established style).
-- [ ] 2.6 Gates green; finish `proofs/task-2-engine.md` (dependency cost + test run summary).
+- [x] 2.1 Record baseline (`cargo tree -e normal | wc -l`, release binary size), then add `grep-searcher`, `grep-regex`, `ignore` (`default-features = false` where features permit); justification in the commit message; record the after-numbers in `proofs/task-2-engine.md`.
+- [x] 2.2 TDD query model: `SearchQuery { pattern, case: CaseMode, whole_word: bool, literal: bool }` → `grep-regex` matcher construction (smartcase = case-insensitive unless pattern has an uppercase letter; literal via fixed-string escaping/builder option); typed error for invalid regex (no panics).
+- [x] 2.3 TDD engine scan: parallel `ignore` walk rooted at the repo worktree (respects `.gitignore`, includes untracked-unignored, skips `.git/`), `grep-searcher` per file with binary detection and a large-file skip threshold; sink emits `SearchHit { path, line_number, line_text, match_spans }` into a bounded channel in small batches; skip counters reported in a scan summary.
+- [x] 2.4 TDD cancellation + limits: `AtomicBool` abort checked in the sink (assert prompt stop mid-scan); results tagged with a caller-supplied generation; global cap (default 10,000 hits) with an explicit `capped` flag in the summary.
+- [x] 2.5 Perf tripwire: generate a several-thousand-file corpus in a tempdir, measure query→first-batch and full-scan in debug, budget 10–20× measured, loop-amortize; add alongside the existing tripwires in `src/ui/perf_tests.rs` (or `src/search/` if a purer seam fits — keep the established style).
+- [x] 2.6 Gates green; finish `proofs/task-2-engine.md` (dependency cost + test run summary).
 
 ### [ ] 3.0 Project Search view (`g/`): live query, toggles, result navigation
 
