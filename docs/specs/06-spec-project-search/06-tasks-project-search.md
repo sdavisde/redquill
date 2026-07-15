@@ -102,7 +102,7 @@ Ships spec Unit 2's UI on top of task 2.0's engine.
 - [x] 3.5 Keymap: `g/` sequence + action in `src/ui/keymap.rs`; search-mode table in `src/ui/modal_keys.rs` including `Alt-c` (case), `Alt-w` (word), `Alt-r` (regex↔literal); drift tests both directions; footer + `?` updated.
 - [x] 3.6 Gates green; record the primary journey with timing notes in `proofs/task-3-project-search.md`.
 
-### [ ] 4.0 Annotations on non-diff lines: `(=)` marker + output contract
+### [x] 4.0 Annotations on non-diff lines: `(=)` marker + output contract
 
 Ships spec Unit 3: annotation keys in the file view; public stdout format extended byte-exactly.
 
@@ -115,11 +115,11 @@ Ships spec Unit 3: annotation keys in the file view; public stdout format extend
 
 #### 4.0 Tasks
 
-- [ ] 4.1 TDD model: represent the "current file content" side in `src/annotate/model.rs` (e.g. a third side/target form) without disturbing existing variants; decide and document how it composes with the `Reviewing:` grouping (file-view annotations group with the working-tree group).
-- [ ] 4.2 TDD serialization: `(=)` marker for line and range headers in `src/annotate/markdown.rs`, byte-exact tests; run the full existing suite and assert zero assertion edits; update the module-doc format contract.
-- [ ] 4.3 File view annotation flow: annotation keys active in the file-view key table (drift tests extended); TDD the `src/ui/targeting.rs` mapping from file-view cursor/selection → the new target form; annotation list panel shows these entries and navigates back to the file-view location (app-state test for the navigate-back path).
-- [ ] 4.4 Update README "Annotation output format" (the `(=)` marker, its meaning, one example) in the same commit as 4.2.
-- [ ] 4.5 Gates green; produce the stdout capture + consumer round-trip evidence in `proofs/task-4-output.md`.
+- [x] 4.1 TDD model: represent the "current file content" side in `src/annotate/model.rs` (e.g. a third side/target form) without disturbing existing variants; decide and document how it composes with the `Reviewing:` grouping (file-view annotations group with the working-tree group).
+- [x] 4.2 TDD serialization: `(=)` marker for line and range headers in `src/annotate/markdown.rs`, byte-exact tests; run the full existing suite and assert zero assertion edits; update the module-doc format contract.
+- [x] 4.3 File view annotation flow: annotation keys active in the file-view key table (drift tests extended); TDD the `src/ui/targeting.rs` mapping from file-view cursor/selection → the new target form; annotation list panel shows these entries and navigates back to the file-view location (app-state test for the navigate-back path).
+- [x] 4.4 Update README "Annotation output format" (the `(=)` marker, its meaning, one example) in the same commit as 4.2.
+- [x] 4.5 Gates green; produce the stdout capture + consumer round-trip evidence in `proofs/task-4-output.md`.
 
 ### [ ] 5.0 User-acceptance evidence and gate sweep
 
