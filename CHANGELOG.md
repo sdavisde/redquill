@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/sdavisde/redquill/compare/v0.7.0...v0.8.0) (2026-07-15)
+
+
+### Features
+
+* **ui:** two-focus model for Project Search (Esc/Tab/`/`) ([e4990ca](https://github.com/sdavisde/redquill/commit/e4990ca660844557cfa14087cb7861efbeb12ba5))
+
 ## [0.7.0](https://github.com/sdavisde/redquill/compare/v0.6.0...v0.7.0) (2026-07-15)
 
 
