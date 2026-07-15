@@ -34,6 +34,8 @@ fn target_summary(target: &Target) -> String {
             format!("{path}:{start}-{end} {}", side_marker(Side::New))
         }
         Target::File { path } => path.clone(),
+        Target::WorktreeLine { path, line } => format!("{path}:{line} (=)"),
+        Target::WorktreeRange { path, start, end } => format!("{path}:{start}-{end} (=)"),
     }
 }
 

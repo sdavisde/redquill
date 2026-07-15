@@ -755,17 +755,38 @@ impl App {
     /// the file header/binary placeholder. `None` on rows that carry no
     /// derivable target (currently only [`Row::Annotation`], which the
     /// cursor never addresses).
+    ///
+    /// When the active [`DiffTarget`] is [`DiffTarget::File`] (the read-only
+    /// file view, spec 06 Unit 3), the derived target is routed through
+    /// [`targeting::as_worktree_target`] so it lands on the `(=)`
+    /// "current worktree file content" forms rather than a diff-shaped
+    /// `Line`/`Range`/`Hunk` target.
     pub fn target_for_cursor(&self) -> Option<Target> {
         let file = self.view.files.get(self.view.file_of_cursor())?;
-        targeting::target_for_cursor(file, &self.view.rows, self.view.cursor)
+        let target = targeting::target_for_cursor(file, &self.view.rows, self.view.cursor)?;
+        Some(self.maybe_as_worktree_target(target))
     }
 
     /// The annotation target for a [`Mode::Visual`] selection between
     /// `anchor` and the cursor. Gathers the selected file and cursor and
-    /// delegates to [`targeting::target_for_visual`].
+    /// delegates to [`targeting::target_for_visual`]; see
+    /// [`App::target_for_cursor`]'s doc for the file-view `(=)` conversion
+    /// this also applies.
     pub fn target_for_visual(&self, anchor: usize) -> Option<Target> {
         let file = self.view.files.get(self.view.file_of_cursor())?;
-        targeting::target_for_visual(file, &self.view.rows, self.view.cursor, anchor)
+        let target = targeting::target_for_visual(file, &self.view.rows, self.view.cursor, anchor)?;
+        Some(self.maybe_as_worktree_target(target))
+    }
+
+    /// Routes `target` through [`targeting::as_worktree_target`] iff the
+    /// active target is [`DiffTarget::File`] (the read-only file view);
+    /// returns it unchanged for every diff-backed target.
+    fn maybe_as_worktree_target(&self, target: Target) -> Target {
+        if matches!(self.target, DiffTarget::File(_)) {
+            targeting::as_worktree_target(target)
+        } else {
+            target
+        }
     }
 
     // -- Compose ---------------------------------------------------------
@@ -867,12 +888,18 @@ impl App {
                     .unwrap_or_else(|| sha.clone());
                 Source::Commit(short_sha)
             }
-            // A placeholder pending spec 06 Unit 3, which introduces a
-            // dedicated `(=)` "current file content, not a diff side"
-            // marker; Unit 1 doesn't require annotation composing to be
-            // fully wired for the file view (it isn't blocked either), so
-            // `WorkingTree` — the only source with no `Reviewing:` metadata
-            // line — is the least-wrong placeholder until Unit 3 lands.
+            // The read-only file view (spec 06 Unit 3) always synthesizes
+            // its body from the live worktree, never a historical revision
+            // (see `App::open_file_view`), so its annotations are always
+            // authored against the working-tree source too — this is the
+            // final answer, not a placeholder: `Target::WorktreeLine`/
+            // `Target::WorktreeRange` (the `(=)` marker) is what
+            // distinguishes a file-view annotation from an ordinary
+            // working-tree diff one, not `Source`. Grouping them under
+            // `WorkingTree` is exactly what puts `(=)` annotations in the
+            // same metadata-line-free, always-first group as ordinary
+            // working-tree diff annotations — see the `markdown` module
+            // doc's "`(=)` marker" section.
             DiffTarget::File(_) => Source::WorkingTree,
         }
     }

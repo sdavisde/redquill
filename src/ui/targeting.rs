@@ -100,6 +100,51 @@ fn line_target(path: &str, line: &LineRow) -> Option<Target> {
     }
 }
 
+/// Converts a target derived by [`target_for_cursor`]/[`target_for_visual`]
+/// against the read-only file view's synthesized all-context body (spec 06
+/// Unit 3) into the "current worktree file content, not a diff side" target
+/// forms: `Line` -> [`Target::WorktreeLine`], `Range` ->
+/// [`Target::WorktreeRange`]. A `Hunk` target -- reachable if the cursor
+/// lands on the file view's single synthetic hunk header, which spans the
+/// whole file -- redirects to a `WorktreeRange` over the same span, since
+/// "hunk" is a diff concept the file view has no other use for and a
+/// same-shaped `(=)` range is the least-surprising equivalent. `File`
+/// targets pass through unchanged: a whole-file comment already carries no
+/// side marker at all, diffed or not, so there is nothing to convert.
+///
+/// Callers (`App::target_for_cursor`/`App::target_for_visual`) apply this
+/// only when the active `DiffTarget` is `DiffTarget::File`, so an ordinary
+/// diff-view target is never routed through here.
+pub(super) fn as_worktree_target(target: Target) -> Target {
+    match target {
+        Target::Line { path, line, .. } => Target::worktree_line(path, line),
+        Target::Range {
+            path, start, end, ..
+        } => {
+            // `start <= end` was already validated when this `Range` was
+            // first built, so re-validating here can only ever succeed --
+            // but going through the fallible constructor (rather than
+            // building the variant literal) keeps this one call site, not
+            // two, aware of `Target::WorktreeRange`'s invariant.
+            Target::worktree_range(&path, start, end).unwrap_or(Target::Range {
+                path,
+                start,
+                end,
+                side: Side::New,
+            })
+        }
+        Target::Hunk { path, start, end } => {
+            Target::worktree_range(&path, start, end).unwrap_or(Target::Hunk { path, start, end })
+        }
+        file @ Target::File { .. } => file,
+        // Already a worktree target (should not happen -- callers only
+        // route diff-view-shaped targets through this function -- but a
+        // defensive identity fallback costs one line and keeps this
+        // function total without a panic path).
+        worktree @ (Target::WorktreeLine { .. } | Target::WorktreeRange { .. }) => worktree,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,5 +311,58 @@ index 1..2 100644
         let rows = rows_for(&file);
         // rows 0..=1 are FileHeader and HunkHeader — no line rows.
         assert_eq!(target_for_visual(&file, &rows, 0, 1), None);
+    }
+
+    // -- as_worktree_target (task 4.3) ---------------------------------------
+
+    #[test]
+    fn as_worktree_target_converts_line_to_worktree_line() {
+        assert_eq!(
+            as_worktree_target(Target::line("docs/notes.md", 44, Side::New)),
+            Target::worktree_line("docs/notes.md", 44)
+        );
+        // The side is irrelevant to the conversion -- a file view line is
+        // never anchored to the old side, but the function stays total
+        // rather than assuming its input's shape.
+        assert_eq!(
+            as_worktree_target(Target::line("docs/notes.md", 44, Side::Old)),
+            Target::worktree_line("docs/notes.md", 44)
+        );
+    }
+
+    #[test]
+    fn as_worktree_target_converts_range_to_worktree_range() {
+        assert_eq!(
+            as_worktree_target(Target::range("docs/notes.md", 10, 20, Side::New).unwrap()),
+            Target::worktree_range("docs/notes.md", 10, 20).unwrap()
+        );
+    }
+
+    #[test]
+    fn as_worktree_target_converts_hunk_to_worktree_range_over_the_same_span() {
+        assert_eq!(
+            as_worktree_target(Target::hunk("docs/notes.md", 1, 5).unwrap()),
+            Target::worktree_range("docs/notes.md", 1, 5).unwrap()
+        );
+    }
+
+    #[test]
+    fn as_worktree_target_leaves_file_target_unchanged() {
+        assert_eq!(
+            as_worktree_target(Target::file("docs/notes.md")),
+            Target::file("docs/notes.md")
+        );
+    }
+
+    #[test]
+    fn as_worktree_target_is_idempotent_on_worktree_targets() {
+        assert_eq!(
+            as_worktree_target(Target::worktree_line("docs/notes.md", 3)),
+            Target::worktree_line("docs/notes.md", 3)
+        );
+        assert_eq!(
+            as_worktree_target(Target::worktree_range("docs/notes.md", 3, 4).unwrap()),
+            Target::worktree_range("docs/notes.md", 3, 4).unwrap()
+        );
     }
 }

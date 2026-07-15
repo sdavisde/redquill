@@ -81,6 +81,25 @@ impl App {
                 .unwrap_or_else(|| self.view.header_row_of_file[index]);
             self.view.scroll = 0;
             self.view.ensure_visible();
+            self.mode = Mode::Normal;
+            return;
+        }
+        // Not in the currently-loaded buffer (the common case for a `(=)`
+        // annotation: the file view that made it is rarely still open) --
+        // if it's a worktree-file-content target (spec 06 Unit 3),
+        // `open_file_view` re-opens (or replaces, if a file view is already
+        // showing a different file) that file at its anchor line, exactly
+        // the "navigate back to its file-view location" behavior the
+        // annotation list panel owes these entries. `open_file_view` sets
+        // `Mode::Normal` itself. Every other target shape whose path isn't
+        // loaded (e.g. a commit-authored annotation while a different diff
+        // target is active) has no reliable file-view equivalent -- opening
+        // the *live* worktree file for a historical target's line numbers
+        // would show misleading content -- so it degrades to the existing
+        // no-op-but-close-the-list behavior.
+        if let Some(line) = target.worktree_anchor_line() {
+            self.open_file_view(path, Some(line));
+            return;
         }
         self.mode = Mode::Normal;
     }

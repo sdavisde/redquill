@@ -304,3 +304,72 @@ fn file_view_annotations_are_fully_functional() {
     assert_eq!(app.mode, Mode::Normal);
     assert_eq!(app.annotations.len(), 1, "the annotation must be recorded");
 }
+
+// -- File-view annotations serialize with `(=)` and navigate back from the
+// annotation list panel (spec 06 Unit 3) -------------------------------------
+
+#[test]
+fn file_view_annotation_serializes_with_equals_marker_and_navigates_back_from_the_list() {
+    let tmp = repo_with_a_diff_and_an_undiffed_file();
+    let mut app = app_for(tmp.path());
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('g'));
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('p'));
+    wait_for_finder_load(&mut app);
+    type_str(&mut app, &keymap, &mut pending, "notes");
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter);
+
+    // Land on the file's first line row (row 2: header, hunk header, then
+    // line rows) and annotate it.
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('j'));
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('j'));
+    let Row::Line(line) = &app.view.rows[app.view.cursor] else {
+        panic!("expected a line row");
+    };
+    assert_eq!(line.new_line, Some(1));
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('c'));
+    type_str(&mut app, &keymap, &mut pending, "worth a second look");
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter);
+    assert_eq!(app.annotations.len(), 1);
+
+    let annotation = app.annotations.iter().next().unwrap();
+    assert_eq!(
+        annotation.target,
+        crate::annotate::Target::worktree_line("docs/notes.md", 1),
+        "a file-view annotation must target the (=) worktree-line form"
+    );
+    assert_eq!(
+        annotation.source,
+        crate::annotate::Source::WorkingTree,
+        "a file-view annotation groups with the working-tree Reviewing: group"
+    );
+    let rendered = crate::annotate::render_markdown(&app.annotations);
+    assert_eq!(
+        rendered,
+        "## docs/notes.md:1 (=)\n\n[issue] worth a second look\n"
+    );
+
+    // Esc back to the diff, open the annotation list panel, and jump to the
+    // `(=)` entry: it must reopen the file view at the annotated line rather
+    // than silently no-op (the path isn't in the diff view's loaded files).
+    press(&mut app, &keymap, &mut pending, KeyCode::Esc);
+    assert!(!app.viewing_file(), "back in the diff view");
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('a'));
+    assert_eq!(app.mode, Mode::List);
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter);
+
+    assert_eq!(app.mode, Mode::Normal);
+    assert!(
+        app.viewing_file(),
+        "jumping to a (=) annotation must reopen the file view"
+    );
+    assert_eq!(app.target, DiffTarget::File("docs/notes.md".to_string()));
+    let Row::Line(line) = &app.view.rows[app.view.cursor] else {
+        panic!("expected cursor on a line row after the jump");
+    };
+    assert_eq!(line.new_line, Some(1));
+}

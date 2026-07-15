@@ -482,6 +482,25 @@ fn append_file_rows(
                         splice_after.entry(last).or_default().push(a);
                     }
                 }
+                Target::WorktreeLine { line, .. } => {
+                    if let Some(idx) = hunk.lines.iter().position(|l| l.new_line == Some(*line)) {
+                        dotted.insert(idx);
+                        splice_after.entry(idx).or_default().push(a);
+                    }
+                }
+                Target::WorktreeRange { start, end, .. } => {
+                    let covered: Vec<usize> = hunk
+                        .lines
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, l)| l.new_line.is_some_and(|n| n >= *start && n <= *end))
+                        .map(|(i, _)| i)
+                        .collect();
+                    if let Some(&last) = covered.iter().max() {
+                        dotted.extend(&covered);
+                        splice_after.entry(last).or_default().push(a);
+                    }
+                }
                 _ => {}
             }
         }
@@ -538,6 +557,14 @@ pub(crate) fn anchor_row_index(file: &FileDiff, rows: &[Row], target: &Target) -
             start, end, side, ..
         } => rows.iter().position(|r| match r {
             Row::Line(l) => line_row_number(l, *side).is_some_and(|n| n >= *start && n <= *end),
+            _ => false,
+        }),
+        Target::WorktreeLine { line, .. } => rows.iter().position(|r| match r {
+            Row::Line(l) => l.new_line == Some(*line),
+            _ => false,
+        }),
+        Target::WorktreeRange { start, end, .. } => rows.iter().position(|r| match r {
+            Row::Line(l) => l.new_line.is_some_and(|n| n >= *start && n <= *end),
             _ => false,
         }),
     }
