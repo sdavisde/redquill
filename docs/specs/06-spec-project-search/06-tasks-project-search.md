@@ -41,7 +41,7 @@ Implementation happens on a dedicated worktree branch (repo convention for concu
 
 ## Tasks
 
-### [ ] 1.0 Fuzzy file finder (`gp`) opening a read-only whole-file view
+### [~] 1.0 Fuzzy file finder (`gp`) opening a read-only whole-file view
 
 Ships spec Unit 1: the `gp` overlay (git-ls-files candidates, `nucleo-matcher` ranking) and the shared read-only file view — whole-file, syntax-highlighted, capability-gated, lossless `Esc` unwind. Foundation for tasks 3.0 and 4.0.
 
@@ -54,14 +54,14 @@ Ships spec Unit 1: the `gp` overlay (git-ls-files candidates, `nucleo-matcher` r
 
 #### 1.0 Tasks
 
-- [ ] 1.1 Add `nucleo-matcher` to `Cargo.toml` (`default-features = false` if features permit); commit message carries the dependency justification (benchmarked <1ms at 2.3k paths, fzf-consistent ranking, 3 transitive deps, MPL-2.0 noted).
-- [ ] 1.2 TDD in `src/git/`: `ls_files` (tracked) and `ls_files_untracked` (`--others --exclude-standard`) — fixed-argv runners + NUL-split parser tested on fixture bytes first, then a tempdir-repo integration test (canonicalized paths).
-- [ ] 1.3 TDD `src/search/files.rs`: `FileCandidate` model; merge tracked + untracked lists (dedupe, stable order).
-- [ ] 1.4 TDD `src/search/fuzzy.rs`: `rank(candidates, query) -> ranked matches with positions` using `nucleo-matcher` path config; smartcase behavior consistent with `src/ui/search.rs` conventions; deterministic tie-breaking.
-- [ ] 1.5 Read-only file target: extend `DiffTarget`/capability model in `src/git/diff.rs` with a worktree-file variant — staging, commit, and code-intel capabilities all report unavailable; TDD the capability predicates alongside the existing target tests.
-- [ ] 1.6 `src/ui/file_view.rs`: open a worktree file as a synthesized all-context body (via the `read_worktree_file` seam), syntax highlighted, existing scroll/jump motions working, open-at-line support; suspend/restore the prior view via the existing suspended-view mechanism (app-state test: open → `Esc` restores the prior mode, cursor, and scroll); footer/help omit gated keys (assertion test).
-- [ ] 1.7 Finder mode: `Mode` variant + state in `src/ui/app.rs`/`src/ui/file_finder.rs` (input buffer, cursor, ranked list); candidates loaded through `BackgroundTasks` on open (single-flight); re-rank per keystroke; render in `src/ui/file_finder_modal.rs` (switcher modal pattern + input line + match-position highlighting); `Enter` opens the file view; `Esc` closes losslessly.
-- [ ] 1.8 Keymap: `gp` sequence + actions in `src/ui/keymap.rs`; finder and file-view key tables in `src/ui/modal_keys.rs`; extend the bidirectional drift tests; `?` overlay and footers show the new modes.
+- [x] 1.1 Add `nucleo-matcher` to `Cargo.toml` (`default-features = false` if features permit); commit message carries the dependency justification (benchmarked <1ms at 2.3k paths, fzf-consistent ranking, 3 transitive deps, MPL-2.0 noted).
+- [x] 1.2 TDD in `src/git/`: `ls_files` (tracked) and `ls_files_untracked` (`--others --exclude-standard`) — fixed-argv runners + NUL-split parser tested on fixture bytes first, then a tempdir-repo integration test (canonicalized paths).
+- [x] 1.3 TDD `src/search/files.rs`: `FileCandidate` model; merge tracked + untracked lists (dedupe, stable order).
+- [x] 1.4 TDD `src/search/fuzzy.rs`: `rank(candidates, query) -> ranked matches with positions` using `nucleo-matcher` path config; smartcase behavior consistent with `src/ui/search.rs` conventions; deterministic tie-breaking.
+- [x] 1.5 Read-only file target: extend `DiffTarget`/capability model in `src/git/diff.rs` with a worktree-file variant — staging, commit, and code-intel capabilities all report unavailable; TDD the capability predicates alongside the existing target tests.
+- [x] 1.6 `src/ui/file_view.rs`: open a worktree file as a synthesized all-context body (via the `read_worktree_file` seam), syntax highlighted, existing scroll/jump motions working, open-at-line support; suspend/restore the prior view via the existing suspended-view mechanism (app-state test: open → `Esc` restores the prior mode, cursor, and scroll); footer/help omit gated keys (assertion test).
+- [x] 1.7 Finder mode: `Mode` variant + state in `src/ui/app.rs`/`src/ui/file_finder.rs` (input buffer, cursor, ranked list); candidates loaded through `BackgroundTasks` on open (single-flight); re-rank per keystroke; render in `src/ui/file_finder_modal.rs` (switcher modal pattern + input line + match-position highlighting); `Enter` opens the file view; `Esc` closes losslessly.
+- [x] 1.8 Keymap: `gp` sequence + actions in `src/ui/keymap.rs`; finder and file-view key tables in `src/ui/modal_keys.rs`; extend the bidirectional drift tests; `?` overlay and footers show the new modes.
 - [ ] 1.9 Gates green; record the acceptance journey (open finder on this repo, open an un-diffed file, unwind) with observations in `proofs/task-1-file-finder.md`.
 
 ### [ ] 2.0 In-process search engine core (`src/search/engine.rs`)

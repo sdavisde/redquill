@@ -223,6 +223,27 @@ pub(super) fn handle_peek_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// Handles one key event while [`super::Mode::Finder`] is active (the fuzzy
+/// file finder overlay, spec 06 Unit 1): printable chars extend the query
+/// (re-ranking on every keystroke), Backspace shortens it, `Up`/`Down` move
+/// the selection, `Enter` opens the selected file, `Esc` closes losslessly.
+/// Bypasses the [`super::Keymap`] table entirely, like Compose/Search — free
+/// text and navigation together aren't expressible as one fixed
+/// [`super::Action`] per key. Documented in [`modal_keys::FINDER_HINTS`]
+/// (control keys only; free-text chars are the exemption every other
+/// free-text mode's hint table carries).
+pub(super) fn handle_finder_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => app.close_finder(),
+        KeyCode::Enter => app.finder_confirm(),
+        KeyCode::Up => app.finder_move_up(),
+        KeyCode::Down => app.finder_move_down(),
+        KeyCode::Backspace => app.finder_backspace(),
+        KeyCode::Char(c) => app.finder_input_char(c),
+        _ => {}
+    }
+}
+
 /// Handles one key event while [`super::Mode::Switcher`] is active (the
 /// branch/worktree switcher modal is open): `Tab`/`BackTab`/`h`/`l`/arrow
 /// keys switch between the Branches and Worktrees tabs, `j`/`k` move the

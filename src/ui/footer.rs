@@ -31,8 +31,8 @@ use crossterm::event::KeyEvent;
 use super::app::{App, Mode};
 use super::keymap::{Action, FooterHint, Keymap, Scope};
 use super::modal_keys::{
-    COMMIT_MESSAGE_HINTS, COMPOSE_HINTS, HELP_KEYS, LIST_KEYS, ModalBinding, PEEK_KEYS,
-    STAGING_KEYS, SWITCHER_KEYS,
+    COMMIT_MESSAGE_HINTS, COMPOSE_HINTS, FINDER_HINTS, HELP_KEYS, LIST_KEYS, ModalBinding,
+    PEEK_KEYS, STAGING_KEYS, SWITCHER_KEYS,
 };
 use super::theme::Theme;
 
@@ -250,6 +250,7 @@ fn fallback_pending_label(action: Action) -> &'static str {
         Action::RecenterCursor => "center",
         Action::ScrollCursorTop => "cursor to top",
         Action::ScrollCursorBottom => "cursor to bottom",
+        Action::OpenFileFinder => "find file",
         _ => "",
     }
 }
@@ -348,6 +349,7 @@ pub(super) fn build_hints(
         Mode::Switcher => modal_hints(SWITCHER_KEYS),
         Mode::Compose => modal_hints(COMPOSE_HINTS),
         Mode::CommitMessage => modal_hints(COMMIT_MESSAGE_HINTS),
+        Mode::Finder => modal_hints(FINDER_HINTS),
         // The search input occupies the footer itself; no hint strip.
         Mode::Search => Vec::new(),
     }

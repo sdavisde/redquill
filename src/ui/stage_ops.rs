@@ -16,6 +16,7 @@ use crate::git::{
     BranchStatus, ChangeKind, CommitLogEntry, CommitSummary, DiffTarget, FileStatus, GitError,
     GitRunner, LocalBranch, RawFilePatch, StashEntry, StatusCode, WorktreeEntry,
 };
+use crate::search::{FileCandidate, merge_candidates};
 
 /// Errors produced while building a [`ReviewSnapshot`].
 #[derive(Debug, Error)]
@@ -44,6 +45,12 @@ pub type AsyncReviewBuilder =
 /// itself is not `Send`, but a cloned [`GitRunner`] handle is.
 pub type AsyncCommitLogFetcher =
     Box<dyn Fn(u32, u32) -> Result<Vec<CommitLogEntry>, GitError> + Send>;
+
+/// A `Send` closure fetching the fuzzy file finder's candidate list (spec 06
+/// Unit 1) off the render thread, for the finder's single-flight background
+/// load. Same indirection as [`AsyncReviewBuilder`]/[`AsyncCommitLogFetcher`]
+/// and for the same reason.
+pub type AsyncFileCandidatesFetcher = Box<dyn Fn() -> Result<Vec<FileCandidate>, GitError> + Send>;
 
 /// The git operations the TUI needs for staging and refresh, kept behind a
 /// trait so [`super::App`]'s staging logic is unit-testable without a real
@@ -145,6 +152,23 @@ pub trait StageOps {
     fn async_commit_log_fetcher(&self) -> Option<AsyncCommitLogFetcher> {
         None
     }
+    /// Reads the fuzzy file finder's candidate list (spec 06 Unit 1):
+    /// tracked (`git ls-files`) plus untracked-but-unignored files, merged
+    /// via [`crate::search::merge_candidates`]. The default errors,
+    /// mirroring [`StageOps::branch_list`], so backend-less or
+    /// navigation-only fakes need not implement it — the finder treats this
+    /// as unavailable rather than crashing.
+    fn list_files(&self) -> Result<Vec<FileCandidate>, GitError> {
+        Err(GitError::Parse("file list unavailable".into()))
+    }
+    /// A `Send` closure fetching the file-candidate list off the render
+    /// thread (see [`AsyncFileCandidatesFetcher`]). The default returns
+    /// `None`, keeping non-`Send` fakes (and git-less contexts) on the
+    /// synchronous [`StageOps::list_files`] path; [`GitRunner`] overrides it
+    /// the same way it overrides [`StageOps::async_review_builder`].
+    fn async_file_candidates_fetcher(&self) -> Option<AsyncFileCandidatesFetcher> {
+        None
+    }
 }
 
 impl StageOps for GitRunner {
@@ -224,6 +248,22 @@ impl StageOps for GitRunner {
         // Same cloned-handle trick as `async_review_builder`.
         let runner = self.clone();
         Some(Box::new(move |count, skip| runner.commit_log(count, skip)))
+    }
+
+    fn list_files(&self) -> Result<Vec<FileCandidate>, GitError> {
+        let tracked = GitRunner::ls_files(self)?;
+        let untracked = GitRunner::ls_files_untracked(self)?;
+        Ok(merge_candidates(tracked, untracked))
+    }
+
+    fn async_file_candidates_fetcher(&self) -> Option<AsyncFileCandidatesFetcher> {
+        // Same cloned-handle trick as `async_review_builder`.
+        let runner = self.clone();
+        Some(Box::new(move || {
+            let tracked = runner.ls_files()?;
+            let untracked = runner.ls_files_untracked()?;
+            Ok(merge_candidates(tracked, untracked))
+        }))
     }
 }
 

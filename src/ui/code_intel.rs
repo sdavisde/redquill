@@ -309,8 +309,10 @@ fn utf16_offset(content: &str, char_index: usize) -> u32 {
 
 /// The row in `rows` whose `new_line` is closest to `target_line` (ties
 /// broken toward the earlier row). `None` if `rows` has no `Line` row with
-/// a `new_line` at all.
-fn closest_row_for_new_line(rows: &[Row], target_line: u32) -> Option<usize> {
+/// a `new_line` at all. `pub(super)` so [`super::file_view`] can reuse it for
+/// the read-only file view's open-at-line support (spec 06 Unit 1) — the
+/// same "land on the nearest line" need `peek_enter` has.
+pub(super) fn closest_row_for_new_line(rows: &[Row], target_line: u32) -> Option<usize> {
     rows.iter()
         .enumerate()
         .filter_map(|(i, r)| match r {

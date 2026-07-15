@@ -289,18 +289,21 @@ fn pending_z_shows_za_zb_zt_and_zz_sorted_by_key() {
 fn pending_g_shows_every_g_completion_sorted_by_key() {
     let km = Keymap::default_map();
     let entries = pending_hints(&km, key(KeyCode::Char('g')), true);
-    assert_eq!(keys(&entries), vec!["gd", "gg", "gr"]);
-    assert_eq!(labels(&entries), vec!["definition", "top", "references"]);
+    assert_eq!(keys(&entries), vec!["gd", "gg", "gp", "gr"]);
+    assert_eq!(
+        labels(&entries),
+        vec!["definition", "top", "find file", "references"]
+    );
 }
 
 #[test]
 fn pending_g_drops_gd_and_gr_when_code_intel_is_disallowed() {
     let km = Keymap::default_map();
     let entries = pending_hints(&km, key(KeyCode::Char('g')), false);
-    // `gg` (JumpToTop) isn't a code-intel action, so it survives; `gd`/`gr`
-    // don't.
-    assert_eq!(keys(&entries), vec!["gg"]);
-    assert_eq!(labels(&entries), vec!["top"]);
+    // `gg` (JumpToTop) and `gp` (OpenFileFinder) aren't code-intel actions,
+    // so they survive; `gd`/`gr` don't.
+    assert_eq!(keys(&entries), vec!["gg", "gp"]);
+    assert_eq!(labels(&entries), vec!["top", "find file"]);
 }
 
 #[test]
@@ -319,7 +322,7 @@ fn pending_prefix_replaces_the_mode_strip_in_normal_and_visual() {
         g,
         &km,
     );
-    assert_eq!(keys(&normal), vec!["gd", "gg", "gr"]);
+    assert_eq!(keys(&normal), vec!["gd", "gg", "gp", "gr"]);
     let visual = build_hints(
         Mode::Visual { anchor: 0 },
         FooterFlags {
@@ -332,7 +335,7 @@ fn pending_prefix_replaces_the_mode_strip_in_normal_and_visual() {
         g,
         &km,
     );
-    assert_eq!(keys(&visual), vec!["gd", "gg", "gr"]);
+    assert_eq!(keys(&visual), vec!["gd", "gg", "gp", "gr"]);
 }
 
 #[test]
@@ -351,7 +354,7 @@ fn build_hints_drops_gd_and_gr_from_the_pending_strip_when_code_intel_is_disallo
         g,
         &km,
     );
-    assert_eq!(keys(&normal), vec!["gg"]);
+    assert_eq!(keys(&normal), vec!["gg", "gp"]);
 }
 
 /// A pending prefix is meaningless outside Normal/Visual (the event loop
@@ -418,6 +421,7 @@ fn every_mode_produces_a_nonempty_strip_except_search() {
         Mode::Peek,
         Mode::Switcher,
         Mode::Compose,
+        Mode::Finder,
     ] {
         let entries = build_hints(
             mode,

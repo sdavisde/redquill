@@ -25,6 +25,7 @@ use super::command_log::{CommandLog, CommandLogEntry};
 use super::commit_message::CommitMessageState;
 use super::compose::ComposeState;
 use super::diff_view_state::DiffViewState;
+use super::file_finder::{FinderState, InFlightFinderLoad};
 use super::history::InFlightHistory;
 use super::keymap::Action;
 use super::lsp_ops::LspClient;
@@ -37,6 +38,7 @@ use super::switcher::SwitcherState;
 use super::syntax::HighlightCache;
 use super::targeting;
 use super::theme::Theme;
+use crate::search::FileCandidate;
 
 /// The git panel's two tabs (spec 05 Unit 3): Changes is the existing
 /// CHANGES/UNTRACKED/STASHES panel content; History lists the branch's commit
@@ -86,6 +88,11 @@ pub enum Mode {
     Switcher,
     /// The commit-message modal (`c`, panel scope, spec 04) is open.
     CommitMessage,
+    /// The fuzzy file finder overlay (`gp`, spec 06 Unit 1) is open. The
+    /// read-only file view it opens into is *not* a separate mode — it's
+    /// [`Mode::Normal`] over a [`crate::git::DiffTarget::File`] target (see
+    /// [`super::file_view`]).
+    Finder,
 }
 
 /// The TUI's full state: the per-view diff state (files, selection, rows,
@@ -278,6 +285,26 @@ pub struct App {
     /// view (the same "must survive mode exit" exception `last_panel_tab`
     /// documents). `Some` only while a commit view is open.
     pub(super) suspended_view: Option<SuspendedView>,
+    /// The fuzzy file finder overlay's state (spec 06 Unit 1), `Some` only
+    /// while [`Mode::Finder`] is active (see [`App::open_finder`] /
+    /// [`App::close_finder`]).
+    pub(super) finder: Option<FinderState>,
+    /// The background-task poller the finder's candidate-list load runs
+    /// through, separate from the other pollers so its results are drained
+    /// independently (see [`App::poll_finder`]).
+    pub(super) finder_tasks: BackgroundTasks<Option<Vec<FileCandidate>>>,
+    /// The single background candidate-list load currently in flight, if
+    /// any (single-flight, mirroring [`InFlightHistory`]).
+    pub(super) finder_in_flight: Option<InFlightFinderLoad>,
+    /// Bumped every time the finder opens, so a straggling load spawned by a
+    /// previous open (closed and reopened quickly) is dropped on arrival
+    /// rather than applied to the new session (mirrors `refresh_generation`).
+    pub(super) finder_generation: u64,
+    /// The suspended prior view, set when the read-only file view (spec 06
+    /// Unit 1) is opened and restored on return (`Esc`). Independent of
+    /// `suspended_view` (commit views): the two nest one layer at a time
+    /// rather than sharing a slot — see `ui::file_view`'s module doc.
+    pub(super) suspended_file_view: Option<SuspendedView>,
 }
 
 /// The prior view state suspended while a commit view (opened from the git
@@ -397,6 +424,11 @@ impl App {
             last_panel_tab: PanelTab::default(),
             active_commit: None,
             suspended_view: None,
+            finder: None,
+            finder_tasks: BackgroundTasks::new(),
+            finder_in_flight: None,
+            finder_generation: 0,
+            suspended_file_view: None,
         };
         app.rebuild_rows();
         app
@@ -599,6 +631,7 @@ impl App {
             Action::RemotePush => self.request_remote_op(self.remote_push_op()),
             Action::CommitStaged => self.open_commit_message(),
             Action::OpenSwitcher => self.open_switcher(),
+            Action::OpenFileFinder => self.open_finder(),
             Action::ToggleCommandLog => self.toggle_command_log(),
             Action::Refresh => self.manual_refresh(),
             Action::Quit | Action::QuitDiscard => {}

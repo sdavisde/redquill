@@ -131,6 +131,64 @@ impl FileDiff {
             hunks,
         }
     }
+
+    /// Builds a synthetic [`FileDiff`] for the read-only whole-file view
+    /// (spec 06 Unit 1): every line is [`LineOrigin::Context`], with both the
+    /// old and new line numbers set to the same 1-based line. Unlike
+    /// [`FileDiff::synthetic_added`], this isn't a diff at all — it's the
+    /// file's current content framed as one all-context hunk, so it renders
+    /// through the same multibuffer/highlighting pipeline as a real diff.
+    ///
+    /// `content` is the file's full text; a missing trailing newline on the
+    /// last line is reflected via [`DiffLine::no_newline`], matching
+    /// [`FileDiff::synthetic_added`]. `kind` is [`FileChangeKind::Modified`]
+    /// as a neutral placeholder — no `FileChangeKind` variant means "not a
+    /// diff", and the read-only file view doesn't display this letter
+    /// meaningfully today.
+    pub fn synthetic_context(path: String, content: &str) -> FileDiff {
+        let has_trailing_newline = content.is_empty() || content.ends_with('\n');
+        let body = content.strip_suffix('\n').unwrap_or(content);
+        let raw_lines: Vec<&str> = if content.is_empty() {
+            Vec::new()
+        } else {
+            body.split('\n').collect()
+        };
+
+        let last_index = raw_lines.len().saturating_sub(1);
+        let lines: Vec<DiffLine> = raw_lines
+            .into_iter()
+            .enumerate()
+            .map(|(i, text)| DiffLine {
+                origin: LineOrigin::Context,
+                old_line: Some(i as u32 + 1),
+                new_line: Some(i as u32 + 1),
+                content: text.to_string(),
+                no_newline: !has_trailing_newline && i == last_index,
+            })
+            .collect();
+
+        let count = lines.len() as u32;
+        let hunks = if lines.is_empty() {
+            Vec::new()
+        } else {
+            vec![Hunk {
+                old_start: 1,
+                old_count: count,
+                new_start: 1,
+                new_count: count,
+                section: None,
+                lines,
+            }]
+        };
+
+        FileDiff {
+            path,
+            old_path: None,
+            kind: FileChangeKind::Modified,
+            is_binary: false,
+            hunks,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -312,6 +370,45 @@ Binary files a/img.png and b/img.png differ
         let diff = FileDiff::synthetic_added("empty.rs".to_string(), "");
         assert!(diff.hunks.is_empty());
         assert_eq!(diff.kind, FileChangeKind::Added);
+    }
+
+    // -- FileDiff::synthetic_context (spec 06 Unit 1: read-only file view) --
+
+    #[test]
+    fn synthetic_context_marks_every_line_as_context_on_both_sides() {
+        let diff = FileDiff::synthetic_context("f.rs".to_string(), "a\nb\nc\n");
+        assert_eq!(diff.path, "f.rs");
+        assert_eq!(diff.old_path, None);
+        assert!(!diff.is_binary);
+        assert_eq!(diff.hunks.len(), 1);
+        let hunk = &diff.hunks[0];
+        assert_eq!(hunk.old_start, 1);
+        assert_eq!(hunk.old_count, 3);
+        assert_eq!(hunk.new_start, 1);
+        assert_eq!(hunk.new_count, 3);
+        assert_eq!(hunk.lines.len(), 3);
+        for (i, line) in hunk.lines.iter().enumerate() {
+            assert_eq!(line.origin, LineOrigin::Context);
+            assert_eq!(line.old_line, Some(i as u32 + 1));
+            assert_eq!(line.new_line, Some(i as u32 + 1));
+        }
+        assert_eq!(hunk.lines[0].content, "a");
+        assert_eq!(hunk.lines[2].content, "c");
+    }
+
+    #[test]
+    fn synthetic_context_without_trailing_newline_marks_last_line() {
+        let diff = FileDiff::synthetic_context("f.rs".to_string(), "a\nb");
+        let hunk = &diff.hunks[0];
+        assert_eq!(hunk.lines.len(), 2);
+        assert!(!hunk.lines[0].no_newline);
+        assert!(hunk.lines[1].no_newline);
+    }
+
+    #[test]
+    fn synthetic_context_empty_content_has_no_hunks() {
+        let diff = FileDiff::synthetic_context("empty.rs".to_string(), "");
+        assert!(diff.hunks.is_empty());
     }
 
     #[test]

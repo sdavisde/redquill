@@ -131,6 +131,9 @@ pub enum Action {
     CommitStaged,
     /// Open the branch/worktree switcher modal (panel scope).
     OpenSwitcher,
+    /// Open the fuzzy file finder overlay (`gp`, diff scope, spec 06 Unit
+    /// 1).
+    OpenFileFinder,
     /// Toggle the command-log pane (bound in both scopes).
     ToggleCommandLog,
     /// Re-read the working tree and rebuild the diff, picking up edits made
@@ -497,6 +500,11 @@ impl Keymap {
                     KeySeq::two(Char('g'), none, Char('r'), none),
                     GotoReferences,
                     "Find references",
+                ),
+                d(
+                    KeySeq::two(Char('g'), none, Char('p'), none),
+                    OpenFileFinder,
+                    "Open fuzzy file finder",
                 ),
                 d(KeySeq::one(Char('K'), none), Hover, "Hover docs"),
                 d(
@@ -1033,6 +1041,16 @@ mod tests {
     }
 
     #[test]
+    fn gp_resolves_to_open_file_finder_via_lookup_double() {
+        let km = Keymap::default_map();
+        let g = key(KeyCode::Char('g'), KeyModifiers::NONE);
+        assert_eq!(
+            km.lookup_double(g, key(KeyCode::Char('p'), KeyModifiers::NONE)),
+            Some(Action::OpenFileFinder)
+        );
+    }
+
+    #[test]
     fn unknown_second_key_after_prefix_is_none() {
         let km = Keymap::default_map();
         let g = key(KeyCode::Char('g'), KeyModifiers::NONE);
@@ -1049,6 +1067,7 @@ mod tests {
         assert!(labels.contains(&"gd".to_string()));
         assert!(labels.contains(&"gr".to_string()));
         assert!(labels.contains(&"gg".to_string()));
+        assert!(labels.contains(&"gp".to_string()));
     }
 
     #[test]
@@ -1453,7 +1472,8 @@ mod tests {
             vec![
                 Action::GotoDefinition,
                 Action::GotoReferences,
-                Action::JumpToTop
+                Action::JumpToTop,
+                Action::OpenFileFinder,
             ]
         );
     }

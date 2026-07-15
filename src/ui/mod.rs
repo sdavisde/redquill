@@ -26,6 +26,9 @@ mod compose;
 mod compose_modal;
 mod diff_view;
 mod diff_view_state;
+mod file_finder;
+mod file_finder_modal;
+mod file_view;
 mod footer;
 mod git_panel;
 mod help;
@@ -257,6 +260,7 @@ fn dispatch_key(
         Mode::Peek => modes::handle_peek_key(app, key),
         Mode::Switcher => modes::handle_switcher_key(app, key),
         Mode::CommitMessage => modes::handle_commit_message_key(app, key),
+        Mode::Finder => modes::handle_finder_key(app, key),
         Mode::Normal | Mode::Visual { .. } => {
             // While an overlay is open it captures keys — here that overlay
             // can only be the help overlay, since Compose and Peek have their
@@ -315,6 +319,12 @@ fn dispatch_key(
                     app.help_open = false;
                 } else if matches!(app.mode, Mode::Visual { .. }) {
                     app.apply(Action::EnterVisual);
+                } else if app.viewing_file() {
+                    // Checked before `viewing_commit()`: a file view opened
+                    // from within a commit view suspends the commit view,
+                    // not the true original state (see `ui::file_view`'s
+                    // module doc), so `Esc` unwinds one layer at a time.
+                    app.return_from_file_view();
                 } else if app.viewing_commit() {
                     app.return_from_commit_view();
                 }
@@ -539,6 +549,9 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     if matches!(app.mode, Mode::CommitMessage) {
         commit_modal::render(frame, area, app);
     }
+    if matches!(app.mode, Mode::Finder) {
+        file_finder_modal::render(frame, area, app);
+    }
 }
 
 /// Puts the terminal into raw mode + alternate screen, on stderr.
@@ -647,6 +660,9 @@ fn event_loop(
         // Drain any completed History-tab commit-log page fetch (spec 05
         // Unit 3), same cadence as the other pollers.
         app.poll_history();
+        // Drain any completed fuzzy-finder candidate-list load (spec 06
+        // Unit 1), same cadence as the other pollers.
+        app.poll_finder();
 
         // Spawn a working-tree read on a fixed cadence (independent of
         // keypresses) so external edits appear without the user asking. The
@@ -674,3 +690,7 @@ mod commit_integration_tests;
 #[cfg(test)]
 #[path = "history_integration_tests.rs"]
 mod history_integration_tests;
+
+#[cfg(test)]
+#[path = "file_finder_integration_tests.rs"]
+mod file_finder_integration_tests;

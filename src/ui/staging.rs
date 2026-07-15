@@ -235,7 +235,8 @@ impl App {
             | Mode::Search
             | Mode::Peek
             | Mode::Switcher
-            | Mode::CommitMessage => {}
+            | Mode::CommitMessage
+            | Mode::Finder => {}
             Mode::Normal | Mode::Visual { .. } => {
                 self.refresh_staged_list();
                 self.staging_cursor = self.staging_cursor.min(self.staged.len().saturating_sub(1));

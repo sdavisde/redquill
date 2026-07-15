@@ -371,6 +371,56 @@ pub(super) const SWITCHER_KEYS: &[ModalBinding<SwitcherAction>] = &[
     },
 ];
 
+// -- Fuzzy file finder (hint-only) -----------------------------------------
+
+/// Fuzzy file finder control keys (spec 06 Unit 1), for the help overlay and
+/// footer strip. Like Compose/Search, the finder is free-text input
+/// (printable chars extend the query) *plus* result navigation, so
+/// [`super::modes::handle_finder_key`] keeps a hand-written match; this table
+/// documents the non-text control keys and the drift cross-check drives them
+/// through that handler. `Up`/`Down` (not `j`/`k`) navigate results — `j`/`k`
+/// must stay typeable into the query, unlike the switcher modal (which has
+/// no free-text input to protect).
+pub(super) const FINDER_HINTS: &[ModalBinding<()>] = &[
+    ModalBinding {
+        label: "Up/Down",
+        description: "Move selection",
+        keys: &[ModalKey::plain(KeyCode::Up), ModalKey::plain(KeyCode::Down)],
+        action: (),
+        footer: Some(FooterHint {
+            rank: 1,
+            label: "move",
+        }),
+    },
+    ModalBinding {
+        label: "Enter",
+        description: "Open the selected file (read-only whole-file view)",
+        keys: &[ModalKey::plain(KeyCode::Enter)],
+        action: (),
+        footer: Some(FooterHint {
+            rank: 2,
+            label: "open",
+        }),
+    },
+    ModalBinding {
+        label: "Esc",
+        description: "Close (returns to the prior view unchanged)",
+        keys: &[ModalKey::plain(KeyCode::Esc)],
+        action: (),
+        footer: Some(FooterHint {
+            rank: 3,
+            label: "close",
+        }),
+    },
+    ModalBinding {
+        label: "Backspace",
+        description: "Delete character",
+        keys: &[ModalKey::plain(KeyCode::Backspace)],
+        action: (),
+        footer: None,
+    },
+];
+
 // -- Help overlay ----------------------------------------------------------
 
 /// What a key does while the help overlay is open (it scrolls, since the
@@ -1318,6 +1368,123 @@ index 111..222 100644
         }
     }
 
+    /// An `App` mid-Finder with a non-empty query, three candidates/matches,
+    /// and the cursor on the middle match — so `Up`/`Down` (each moving away
+    /// from the middle in opposite directions) both produce an observable
+    /// change, alongside `Enter`/`Esc`/`Backspace`.
+    fn finder_app() -> App {
+        use crate::search::{FileCandidate, FuzzyMatch};
+        let mut app = app();
+        app.mode = Mode::Finder;
+        app.finder = Some(crate::ui::file_finder::FinderState {
+            query: "ab".to_string(),
+            candidates: vec![
+                FileCandidate {
+                    path: "ab1.rs".to_string(),
+                },
+                FileCandidate {
+                    path: "ab2.rs".to_string(),
+                },
+                FileCandidate {
+                    path: "ab3.rs".to_string(),
+                },
+            ],
+            matches: vec![
+                FuzzyMatch {
+                    index: 0,
+                    score: 10,
+                    positions: vec![0, 1],
+                },
+                FuzzyMatch {
+                    index: 1,
+                    score: 9,
+                    positions: vec![0, 1],
+                },
+                FuzzyMatch {
+                    index: 2,
+                    score: 8,
+                    positions: vec![0, 1],
+                },
+            ],
+            cursor: 1,
+            return_mode: Mode::Normal,
+        });
+        app
+    }
+
+    /// Everything a Finder control key could observably change: the mode
+    /// (`Enter`/`Esc` both close the overlay one way or another), whether the
+    /// finder is still open, the query buffer, and the selection cursor.
+    fn finder_snapshot(app: &App) -> (Mode, bool, String, usize) {
+        (
+            app.mode,
+            app.finder.is_some(),
+            app.finder
+                .as_ref()
+                .map(|f| f.query.clone())
+                .unwrap_or_default(),
+            app.finder.as_ref().map(|f| f.cursor).unwrap_or(0),
+        )
+    }
+
+    #[test]
+    fn every_finder_hint_key_is_consumed_by_the_handler() {
+        use crate::ui::modes::handle_finder_key;
+        for binding in FINDER_HINTS {
+            for key in binding.keys {
+                let mut app = finder_app();
+                let before = finder_snapshot(&app);
+                handle_finder_key(&mut app, key.event());
+                assert_ne!(
+                    before,
+                    finder_snapshot(&app),
+                    "Finder {}: documented key must be consumed by handle_finder_key",
+                    binding.label
+                );
+            }
+        }
+    }
+
+    /// Reverse drift check for Finder: non-text keys outside the hint table
+    /// must do nothing. Chars are exempt — every printable char extends the
+    /// query by design (and `j`/`k` in particular must stay typeable, not
+    /// hijacked as navigation the way the switcher modal uses them).
+    #[test]
+    fn finder_handler_ignores_control_keys_absent_from_its_table() {
+        use crate::ui::modes::handle_finder_key;
+        let universe: Vec<KeyEvent> = [
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Home,
+            KeyCode::End,
+            KeyCode::PageUp,
+            KeyCode::PageDown,
+            KeyCode::Tab,
+            KeyCode::BackTab,
+            KeyCode::Delete,
+            KeyCode::Insert,
+            KeyCode::F(1),
+        ]
+        .into_iter()
+        .map(|code| KeyEvent::new(code, KeyModifiers::NONE))
+        .collect();
+        for ev in universe {
+            if resolve(FINDER_HINTS, ev).is_some() {
+                continue; // documented (Up/Down); covered above
+            }
+            let mut app = finder_app();
+            let before = finder_snapshot(&app);
+            handle_finder_key(&mut app, ev);
+            assert_eq!(
+                before,
+                finder_snapshot(&app),
+                "handle_finder_key consumed {ev:?}, which the Finder hint table doesn't document"
+            );
+        }
+    }
+
     /// A key no table documents resolves to nothing in every table, so the
     /// table-driven handlers ignore it by construction.
     #[test]
@@ -1332,5 +1499,6 @@ index 111..222 100644
         assert!(resolve(SWITCHER_KEYS, ev).is_none());
         assert!(resolve(HELP_SEARCH_HINTS, ev).is_none());
         assert!(resolve(COMMIT_MESSAGE_HINTS, ev).is_none());
+        assert!(resolve(FINDER_HINTS, ev).is_none());
     }
 }
