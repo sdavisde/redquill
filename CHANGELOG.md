@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.7.0](https://github.com/sdavisde/redquill/compare/v0.6.0...v0.7.0) (2026-07-15)
+
+
+### Features
+
+* **annotate:** group annotation output by diff source with a Reviewing: line ([55fa2b9](https://github.com/sdavisde/redquill/commit/55fa2b98f130fc5222ea02afbca12da804dc907e))
+* **git:** add DiffTarget capability triple (is_live/staging_mode/supports_code_intel) ([611ee3b](https://github.com/sdavisde/redquill/commit/611ee3bb10083f68e599f9891f436a770ad7cca5))
+* **git:** add DiffTarget::Commit and the commit-log read model ([7ac9a91](https://github.com/sdavisde/redquill/commit/7ac9a91f28f01396deaa0de1202c1a57a426522f))
+* **ui:** add git panel History tab and commit view ([d0eed59](https://github.com/sdavisde/redquill/commit/d0eed59c23bcfa8cfaec48f9df7aa0c3556a70d0))
+* **ui:** expand vim motions for faster diff navigation ([11eb279](https://github.com/sdavisde/redquill/commit/11eb2794e3af82fc22c657908ba31e12d4febe71))
+* **ui:** publish unpublished branches with P instead of failing a plain push ([532b1e2](https://github.com/sdavisde/redquill/commit/532b1e213617c3ae7b7b464993d4e0e30904c3ea))
+* **ui:** show a keyed welcome state instead of a blank empty diff ([82e4b08](https://github.com/sdavisde/redquill/commit/82e4b08cc5329e3825b0f23acf06804c1161713e))
+
+
+### Bug Fixes
+
+* clamp git panel size ([c938956](https://github.com/sdavisde/redquill/commit/c938956fa2320da410c4d39cdbaf30cb80e70e83))
+* **ui:** gate LSP code-intel on DiffTarget::supports_code_intel ([b7284fc](https://github.com/sdavisde/redquill/commit/b7284fc29bebf3608afc8453d236c7ab8982932f))
+
 ## [0.6.0](https://github.com/sdavisde/redquill/compare/v0.5.0...v0.6.0) (2026-07-13)
 
 
