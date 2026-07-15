@@ -470,7 +470,8 @@ fn help_overlay_lists_remote_and_command_log_bindings() {
 /// On a terminal too short for the whole binding list, the help overlay
 /// caps its height and scrolls: the top frame shows the first sections
 /// only, and driving it to the bottom (End, through the real key path)
-/// reveals the last section while scrolling the first off-screen.
+/// reveals the last section (Project search, spec 06 Unit 2 — the last
+/// entry in `help::modal_sections`) while scrolling the first off-screen.
 #[test]
 fn help_overlay_scrolls_to_reveal_lower_sections() {
     let backend = TestBackend::new(100, 22);
@@ -480,7 +481,8 @@ fn help_overlay_scrolls_to_reveal_lower_sections() {
     let keymap = Keymap::default_map();
 
     // First frame renders the top of the list (and records the viewport
-    // height the pager needs). The last section (Help filter) is far below.
+    // height the pager needs). The last section (Project search) is far
+    // below.
     terminal
         .draw(|frame| draw(frame, &app, &keymap, None))
         .unwrap();
@@ -493,7 +495,7 @@ fn help_overlay_scrolls_to_reveal_lower_sections() {
         .map(|c| c.symbol())
         .collect();
     assert!(top.contains("Move cursor down"));
-    assert!(!top.contains("Clear the filter"));
+    assert!(!top.contains("Toggle regex / literal matching"));
 
     // Jump to the bottom through the real dispatch path, then redraw.
     let mut pending = None;
@@ -511,7 +513,7 @@ fn help_overlay_scrolls_to_reveal_lower_sections() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(bottom.contains("Clear the filter"));
+    assert!(bottom.contains("Toggle regex / literal matching"));
     assert!(!bottom.contains("Move cursor down"));
 }
 

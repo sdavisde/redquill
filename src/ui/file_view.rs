@@ -28,6 +28,9 @@ use super::diff_view_state::DiffViewState;
 impl App {
     /// Opens `path` (repo-relative) as a read-only whole-file view, cursor
     /// landing on `line` (1-based) if given, else the top of the file.
+    /// `Esc` from the view restores `Mode::Normal` — see
+    /// [`App::open_file_view_with_return_mode`] for opening with a different
+    /// restore mode (Project Search's confirm gesture, spec 06 Unit 2).
     ///
     /// Suspends the prior view the first time a file view is opened while
     /// none is already showing; a nested open (a file view opened from
@@ -41,6 +44,23 @@ impl App {
     /// no git backend attached, an unreadable path, or non-UTF-8 (binary)
     /// content — the file view has no rendering for binary content today.
     pub(super) fn open_file_view(&mut self, path: String, line: Option<u32>) {
+        self.open_file_view_with_return_mode(path, line, Mode::Normal);
+    }
+
+    /// [`App::open_file_view`], but `Esc` restores `return_mode` instead of
+    /// always `Mode::Normal` — used by Project Search's confirm gesture
+    /// (spec 06 Unit 2) so opening a hit while in `Mode::ProjectSearch`
+    /// lands back there (query/toggles/results/selection intact) rather than
+    /// falling through to the diff. `return_mode` is captured only on the
+    /// first-level open (mirrors `suspended_file_view`'s own nested-open
+    /// rule below): a second file opened without returning must not
+    /// overwrite the true restore target.
+    pub(super) fn open_file_view_with_return_mode(
+        &mut self,
+        path: String,
+        line: Option<u32>,
+        return_mode: Mode,
+    ) {
         let Some(ops) = self.stage_ops.as_deref() else {
             self.set_status_message("file view unavailable (no git backend)");
             return;
@@ -60,6 +80,7 @@ impl App {
         let target = DiffTarget::File(path);
 
         if self.suspended_file_view.is_none() {
+            self.file_view_return_mode = return_mode;
             let new_view = DiffViewState::new(vec![file]);
             let old_view = std::mem::replace(&mut self.view, new_view);
             self.suspended_file_view = Some(SuspendedView {
@@ -101,8 +122,11 @@ impl App {
     /// Restores the view suspended by [`App::open_file_view`] (`Esc` from the
     /// file view): the prior target, diff-view state (files, rows, cursor,
     /// scroll, collapse map), patches, and staged state all come back
-    /// verbatim, and focus returns to [`Mode::Normal`]. A no-op if no file
-    /// view is open.
+    /// verbatim, and focus returns to whatever mode was captured on open —
+    /// `Mode::Normal` for every opener except Project Search's confirm
+    /// gesture, which lands back in `Mode::ProjectSearch` (see
+    /// [`App::open_file_view_with_return_mode`]). A no-op if no file view is
+    /// open.
     pub(super) fn return_from_file_view(&mut self) {
         let Some(suspended) = self.suspended_file_view.take() else {
             return;
@@ -114,7 +138,8 @@ impl App {
         self.staged_states = suspended.staged_states;
         self.highlight_cache.clear();
         self.rebuild_rows();
-        self.mode = Mode::Normal;
+        self.mode = self.file_view_return_mode;
+        self.file_view_return_mode = Mode::Normal;
     }
 }
 

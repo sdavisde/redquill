@@ -40,6 +40,8 @@ mod modal_keys;
 mod modes;
 mod peek;
 mod peek_overlay;
+mod project_search;
+mod project_search_view;
 mod refresh;
 mod render_glue;
 mod rows;
@@ -261,6 +263,7 @@ fn dispatch_key(
         Mode::Switcher => modes::handle_switcher_key(app, key),
         Mode::CommitMessage => modes::handle_commit_message_key(app, key),
         Mode::Finder => modes::handle_finder_key(app, key),
+        Mode::ProjectSearch => modes::handle_project_search_key(app, key),
         Mode::Normal | Mode::Visual { .. } => {
             // While an overlay is open it captures keys — here that overlay
             // can only be the help overlay, since Compose and Peek have their
@@ -454,7 +457,15 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     if let Some(sidebar_area) = sidebar_area {
         git_panel::render(frame, sidebar_area, app);
     }
-    diff_view::render(frame, diff_area, app, keymap);
+    // Project Search is a full-screen view (Zed-like), replacing the diff
+    // pane's content rather than overlaying it — sidebar/bottom-panel areas
+    // are already `None` here in this mode (`git_panel_focused()`/
+    // `bottom_open()` are both false for `Mode::ProjectSearch`).
+    if matches!(app.mode, Mode::ProjectSearch) {
+        project_search_view::render(frame, diff_area, app);
+    } else {
+        diff_view::render(frame, diff_area, app, keymap);
+    }
     if let Some(panel_area) = panel_area {
         // The command log, when open, owns the slot regardless of mode; else
         // the mode's own bottom panel renders.
@@ -663,6 +674,12 @@ fn event_loop(
         // Drain any completed fuzzy-finder candidate-list load (spec 06
         // Unit 1), same cadence as the other pollers.
         app.poll_finder();
+        // Drain Project Search's streaming scan results and fire a fresh
+        // scan once its debounce elapses (spec 06 Unit 2). Runs regardless
+        // of mode — kept alive while a hit's file view is showing on top
+        // (see `project_search`'s module doc) — so results keep streaming
+        // in behind it.
+        app.poll_project_search();
 
         // Spawn a working-tree read on a fixed cadence (independent of
         // keypresses) so external edits appear without the user asking. The
@@ -694,3 +711,7 @@ mod history_integration_tests;
 #[cfg(test)]
 #[path = "file_finder_integration_tests.rs"]
 mod file_finder_integration_tests;
+
+#[cfg(test)]
+#[path = "project_search_integration_tests.rs"]
+mod project_search_integration_tests;

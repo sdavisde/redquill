@@ -30,6 +30,7 @@ use super::history::InFlightHistory;
 use super::keymap::Action;
 use super::lsp_ops::LspClient;
 use super::peek::{PeekKind, PeekState};
+use super::project_search::ProjectSearchState;
 use super::refresh::InFlightRefresh;
 use super::rows::Row;
 use super::search::SearchState;
@@ -93,6 +94,17 @@ pub enum Mode {
     /// [`Mode::Normal`] over a [`crate::git::DiffTarget::File`] target (see
     /// [`super::file_view`]).
     Finder,
+    /// The full-screen Project Search view (`g/`, spec 06 Unit 2) is open.
+    /// Unlike the commit view / file view, opening it never touches `view`/
+    /// `target` (it has its own dedicated state — see
+    /// [`super::project_search::ProjectSearchState`]), so `Esc` back to the
+    /// diff needs no suspend/restore beyond flipping the mode back to
+    /// whatever it was captured as on open. The read-only file view a hit's
+    /// `Enter` opens into *is* a nested suspension (same mechanism as
+    /// [`Mode::Finder`]), landing back here — not `Mode::Normal` — so the
+    /// query/toggles/results/selection survive the round trip (see
+    /// [`App::file_view_return_mode`]).
+    ProjectSearch,
 }
 
 /// The TUI's full state: the per-view diff state (files, selection, rows,
@@ -305,6 +317,21 @@ pub struct App {
     /// `suspended_view` (commit views): the two nest one layer at a time
     /// rather than sharing a slot — see `ui::file_view`'s module doc.
     pub(super) suspended_file_view: Option<SuspendedView>,
+    /// The mode `Esc` restores when the read-only file view (spec 06 Unit 1)
+    /// closes (see [`App::return_from_file_view`]): `Mode::Normal` for every
+    /// opener except Project Search's confirm gesture (spec 06 Unit 2),
+    /// which opens a hit while already in `Mode::ProjectSearch` and wants
+    /// its query/toggles/results/selection to survive the round trip.
+    /// Captured only on the first-level open, mirroring
+    /// `suspended_file_view`'s own nested-open rule (a second file opened
+    /// without returning must not overwrite the true restore target);
+    /// meaningless while `suspended_file_view` is `None`.
+    pub(super) file_view_return_mode: Mode,
+    /// The Project Search full-screen view's state (spec 06 Unit 2), `Some`
+    /// from [`App::open_project_search`] until [`App::close_project_search`]
+    /// — kept alive (and untouched) while a hit's file view is showing on
+    /// top, so `Esc` from that file view resumes with everything intact.
+    pub(super) project_search: Option<ProjectSearchState>,
 }
 
 /// The prior view state suspended while a commit view (opened from the git
@@ -429,6 +456,8 @@ impl App {
             finder_in_flight: None,
             finder_generation: 0,
             suspended_file_view: None,
+            file_view_return_mode: Mode::Normal,
+            project_search: None,
         };
         app.rebuild_rows();
         app
@@ -632,6 +661,7 @@ impl App {
             Action::CommitStaged => self.open_commit_message(),
             Action::OpenSwitcher => self.open_switcher(),
             Action::OpenFileFinder => self.open_finder(),
+            Action::OpenProjectSearch => self.open_project_search(),
             Action::ToggleCommandLog => self.toggle_command_log(),
             Action::Refresh => self.manual_refresh(),
             Action::Quit | Action::QuitDiscard => {}

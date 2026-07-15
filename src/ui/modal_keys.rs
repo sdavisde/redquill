@@ -54,6 +54,15 @@ impl ModalKey {
         }
     }
 
+    /// A key pressed with Alt held (Project Search's `Alt-c`/`Alt-w`/`Alt-r`
+    /// toggles, spec 06 Unit 2).
+    const fn alt(code: KeyCode) -> ModalKey {
+        ModalKey {
+            code,
+            mods: KeyModifiers::ALT,
+        }
+    }
+
     /// Whether an incoming event is this key. Compares the key *code* only —
     /// the modal handlers never distinguished by modifier (they matched on
     /// `key.code`), so this keeps the table-driven dispatch behavior-identical.
@@ -418,6 +427,87 @@ pub(super) const FINDER_HINTS: &[ModalBinding<()>] = &[
         keys: &[ModalKey::plain(KeyCode::Backspace)],
         action: (),
         footer: None,
+    },
+];
+
+// -- Project Search (hint-only) ---------------------------------------------
+
+/// Project Search control keys (spec 06 Unit 2), for the help overlay and
+/// footer strip. Like the finder, this is free-text input (printable chars
+/// extend the query) *plus* result navigation and Alt-chord toggles, so
+/// [`super::modes::handle_project_search_key`] keeps a hand-written match;
+/// this table documents the non-text control keys and the drift cross-check
+/// drives them through that handler. `Up`/`Down` (not `j`/`k`) navigate
+/// results for the same reason the finder's do — `j`/`k`/`c`/`w`/`r` must
+/// stay typeable into the query, so only the `Alt`-chorded forms of the
+/// toggle letters are bound.
+pub(super) const PROJECT_SEARCH_HINTS: &[ModalBinding<()>] = &[
+    ModalBinding {
+        label: "Up/Down",
+        description: "Move result selection",
+        keys: &[ModalKey::plain(KeyCode::Up), ModalKey::plain(KeyCode::Down)],
+        action: (),
+        footer: Some(FooterHint {
+            rank: 1,
+            label: "move",
+        }),
+    },
+    ModalBinding {
+        label: "Enter",
+        description: "Open the selected result (read-only whole-file view, cursor on the hit)",
+        keys: &[ModalKey::plain(KeyCode::Enter)],
+        action: (),
+        footer: Some(FooterHint {
+            rank: 2,
+            label: "open",
+        }),
+    },
+    ModalBinding {
+        label: "Esc",
+        description: "Close (returns to the exact prior diff position)",
+        keys: &[ModalKey::plain(KeyCode::Esc)],
+        action: (),
+        footer: Some(FooterHint {
+            rank: 3,
+            label: "close",
+        }),
+    },
+    ModalBinding {
+        label: "Backspace",
+        description: "Delete character",
+        keys: &[ModalKey::plain(KeyCode::Backspace)],
+        action: (),
+        footer: None,
+    },
+    ModalBinding {
+        label: "Alt-c",
+        description: "Cycle case sensitivity (smart / sensitive / insensitive)",
+        keys: &[ModalKey::alt(KeyCode::Char('c'))],
+        action: (),
+        footer: Some(FooterHint {
+            rank: 4,
+            label: "case",
+        }),
+    },
+    ModalBinding {
+        label: "Alt-w",
+        description: "Toggle whole-word matching",
+        keys: &[ModalKey::alt(KeyCode::Char('w'))],
+        action: (),
+        footer: Some(FooterHint {
+            rank: 5,
+            label: "word",
+        }),
+    },
+    ModalBinding {
+        label: "Alt-r",
+        description: "Toggle regex / literal matching",
+        keys: &[ModalKey::alt(KeyCode::Char('r'))],
+        action: (),
+        footer: Some(FooterHint {
+            rank: 6,
+            label: "regex",
+        }),
     },
 ];
 
@@ -1500,5 +1590,157 @@ index 111..222 100644
         assert!(resolve(HELP_SEARCH_HINTS, ev).is_none());
         assert!(resolve(COMMIT_MESSAGE_HINTS, ev).is_none());
         assert!(resolve(FINDER_HINTS, ev).is_none());
+        assert!(resolve(PROJECT_SEARCH_HINTS, ev).is_none());
+    }
+
+    // -- Project Search mode (spec 06 Unit 2) -----------------------------
+
+    /// An `App` mid-Project-Search with a non-empty query, three hits across
+    /// two files, and the cursor on the middle hit — so `Up`/`Down` (each
+    /// moving away from the middle) both produce an observable change,
+    /// alongside `Enter`/`Esc`/`Backspace`/the three `Alt`-chord toggles.
+    /// A minimal `StageOps` fake serving `a.rs`/`b.rs` content, so `Enter`
+    /// (opening the selected hit's file view) has an observable effect.
+    struct ProjectSearchFakeOps;
+
+    impl crate::ui::stage_ops::StageOps for ProjectSearchFakeOps {
+        fn diff(
+            &self,
+            _target: &crate::git::DiffTarget,
+        ) -> Result<Vec<crate::git::RawFilePatch>, crate::git::GitError> {
+            Ok(Vec::new())
+        }
+        fn status(&self) -> Result<Vec<crate::git::FileStatus>, crate::git::GitError> {
+            Ok(Vec::new())
+        }
+        fn stage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn unstage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn apply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn unapply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn read_worktree_file(&self, path: &str) -> Option<Vec<u8>> {
+            Some(format!("one\ntwo\n{path}\n").into_bytes())
+        }
+        fn show_file(&self, _spec: &str) -> Option<String> {
+            None
+        }
+    }
+
+    fn project_search_app() -> App {
+        use crate::search::SearchHit;
+        use crate::ui::project_search::{ProjectSearchState, ResultGroup};
+        let mut app = app();
+        app.stage_ops = Some(Box::new(ProjectSearchFakeOps));
+        app.mode = Mode::ProjectSearch;
+        #[allow(clippy::single_range_in_vec_init)]
+        let hit = |path: &str, line: u64| SearchHit {
+            path: path.to_string(),
+            line_number: line,
+            line_text: "needle".to_string(),
+            match_spans: vec![0..6],
+            generation: 0,
+        };
+        let mut state = ProjectSearchState::new(Mode::Normal);
+        state.query = "ab".to_string();
+        state.groups = vec![
+            ResultGroup {
+                path: "a.rs".to_string(),
+                hits: vec![hit("a.rs", 1), hit("a.rs", 2)],
+            },
+            ResultGroup {
+                path: "b.rs".to_string(),
+                hits: vec![hit("b.rs", 1)],
+            },
+        ];
+        state.cursor = 1;
+        app.project_search = Some(state);
+        app
+    }
+
+    /// Everything a Project Search control key could observably change: the
+    /// mode (`Enter`/`Esc` both leave the view one way or another), whether
+    /// the view is still open, the query buffer, the selection cursor, and
+    /// the three toggle states.
+    fn project_search_snapshot(app: &App) -> (Mode, bool, String, usize, bool, bool, bool) {
+        let state = app.project_search.as_ref();
+        (
+            app.mode,
+            state.is_some(),
+            state.map(|s| s.query.clone()).unwrap_or_default(),
+            state.map(|s| s.cursor).unwrap_or(0),
+            state
+                .map(|s| s.case != crate::search::CaseMode::Smart)
+                .unwrap_or(false),
+            state.map(|s| s.whole_word).unwrap_or(false),
+            state.map(|s| s.literal).unwrap_or(false),
+        )
+    }
+
+    #[test]
+    fn every_project_search_hint_key_is_consumed_by_the_handler() {
+        use crate::ui::modes::handle_project_search_key;
+        for binding in PROJECT_SEARCH_HINTS {
+            for key in binding.keys {
+                let mut app = project_search_app();
+                let before = project_search_snapshot(&app);
+                handle_project_search_key(&mut app, key.event());
+                assert_ne!(
+                    before,
+                    project_search_snapshot(&app),
+                    "Project Search {}: documented key must be consumed by handle_project_search_key",
+                    binding.label
+                );
+            }
+        }
+    }
+
+    /// Reverse drift check for Project Search: control keys outside its
+    /// table must do nothing, including `Alt`-chords on letters other than
+    /// `c`/`w`/`r`. Printable chars (including bare `c`/`w`/`r` with no Alt)
+    /// are exempt — they must stay typeable into the query.
+    #[test]
+    fn project_search_handler_ignores_control_keys_absent_from_its_table() {
+        use crate::ui::modes::handle_project_search_key;
+        let mut universe: Vec<KeyEvent> = [
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Home,
+            KeyCode::End,
+            KeyCode::PageUp,
+            KeyCode::PageDown,
+            KeyCode::Tab,
+            KeyCode::BackTab,
+            KeyCode::Delete,
+            KeyCode::Insert,
+            KeyCode::F(1),
+        ]
+        .into_iter()
+        .map(|code| KeyEvent::new(code, KeyModifiers::NONE))
+        .collect();
+        for c in 'a'..='z' {
+            universe.push(KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT));
+        }
+        for ev in universe {
+            if resolve(PROJECT_SEARCH_HINTS, ev).is_some() {
+                continue; // documented (Up/Down/Alt-c/Alt-w/Alt-r); covered above
+            }
+            let mut app = project_search_app();
+            let before = project_search_snapshot(&app);
+            handle_project_search_key(&mut app, ev);
+            assert_eq!(
+                before,
+                project_search_snapshot(&app),
+                "handle_project_search_key consumed {ev:?}, which the Project Search hint table doesn't document"
+            );
+        }
     }
 }

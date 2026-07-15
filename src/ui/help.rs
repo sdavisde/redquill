@@ -32,7 +32,7 @@ use ratatui::widgets::{
 use super::keymap::{Action, Binding, Keymap, Scope};
 use super::modal_keys::{
     COMMIT_MESSAGE_HINTS, COMPOSE_HINTS, FINDER_HINTS, HELP_SEARCH_HINTS, LIST_KEYS, ModalBinding,
-    PEEK_KEYS, SEARCH_HINTS, STAGING_KEYS, SWITCHER_KEYS,
+    PEEK_KEYS, PROJECT_SEARCH_HINTS, SEARCH_HINTS, STAGING_KEYS, SWITCHER_KEYS,
 };
 use super::search;
 use super::theme::Theme;
@@ -62,9 +62,8 @@ fn group_of(action: Action) -> &'static str {
         EnterVisual | Compose => "Annotate",
         ToggleStage | StageFile | ToggleStagingPanel => "Stage",
         Search | SearchNext | SearchPrev | SearchWordForward | SearchWordBackward => "Search",
-        ToggleList | ToggleHelp | FocusGitPanel | ToggleCommandLog | Refresh | OpenFileFinder => {
-            "Panels"
-        }
+        ToggleList | ToggleHelp | FocusGitPanel | ToggleCommandLog | Refresh | OpenFileFinder
+        | OpenProjectSearch => "Panels",
         GotoDefinition | GotoReferences | Hover => "Code intelligence",
         PanelCursorDown | PanelCursorUp | PanelSelect | TogglePanelTab | RemoteFetch
         | RemotePull | RemotePush | CommitStaged | OpenSwitcher => "Git panel",
@@ -149,7 +148,7 @@ fn modal_hints<A>(table: &'static [ModalBinding<A>]) -> Vec<(&'static str, &'sta
 /// free-text input like Compose/Search) gets a section here for the same
 /// reason those do; `HELP_KEYS` doesn't, since it's the enum-dispatch table
 /// for the overlay's own scroll/close keys, already documented on the footer.
-fn modal_sections() -> [(&'static str, Vec<(&'static str, &'static str)>); 9] {
+fn modal_sections() -> [(&'static str, Vec<(&'static str, &'static str)>); 10] {
     [
         ("Compose mode", modal_hints(COMPOSE_HINTS)),
         ("List mode", modal_hints(LIST_KEYS)),
@@ -163,6 +162,7 @@ fn modal_sections() -> [(&'static str, Vec<(&'static str, &'static str)>); 9] {
         ),
         ("Help filter (/)", modal_hints(HELP_SEARCH_HINTS)),
         ("Fuzzy file finder (gp)", modal_hints(FINDER_HINTS)),
+        ("Project search (g/)", modal_hints(PROJECT_SEARCH_HINTS)),
     ]
 }
 

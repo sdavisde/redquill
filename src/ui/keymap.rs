@@ -134,6 +134,9 @@ pub enum Action {
     /// Open the fuzzy file finder overlay (`gp`, diff scope, spec 06 Unit
     /// 1).
     OpenFileFinder,
+    /// Open the full-screen Project Search view (`g/`, diff scope, spec 06
+    /// Unit 2).
+    OpenProjectSearch,
     /// Toggle the command-log pane (bound in both scopes).
     ToggleCommandLog,
     /// Re-read the working tree and rebuild the diff, picking up edits made
@@ -505,6 +508,11 @@ impl Keymap {
                     KeySeq::two(Char('g'), none, Char('p'), none),
                     OpenFileFinder,
                     "Open fuzzy file finder",
+                ),
+                d(
+                    KeySeq::two(Char('g'), none, Char('/'), none),
+                    OpenProjectSearch,
+                    "Open project search",
                 ),
                 d(KeySeq::one(Char('K'), none), Hover, "Hover docs"),
                 d(
@@ -1051,6 +1059,16 @@ mod tests {
     }
 
     #[test]
+    fn g_slash_resolves_to_open_project_search_via_lookup_double() {
+        let km = Keymap::default_map();
+        let g = key(KeyCode::Char('g'), KeyModifiers::NONE);
+        assert_eq!(
+            km.lookup_double(g, key(KeyCode::Char('/'), KeyModifiers::NONE)),
+            Some(Action::OpenProjectSearch)
+        );
+    }
+
+    #[test]
     fn unknown_second_key_after_prefix_is_none() {
         let km = Keymap::default_map();
         let g = key(KeyCode::Char('g'), KeyModifiers::NONE);
@@ -1068,6 +1086,7 @@ mod tests {
         assert!(labels.contains(&"gr".to_string()));
         assert!(labels.contains(&"gg".to_string()));
         assert!(labels.contains(&"gp".to_string()));
+        assert!(labels.contains(&"g/".to_string()));
     }
 
     #[test]
@@ -1458,7 +1477,7 @@ mod tests {
     }
 
     #[test]
-    fn completions_for_g_is_gg_gd_and_gr() {
+    fn completions_for_g_is_gg_gd_gr_gp_and_g_slash() {
         let km = Keymap::default_map();
         let g = key(KeyCode::Char('g'), KeyModifiers::NONE);
         let mut actions: Vec<Action> = km
@@ -1474,6 +1493,7 @@ mod tests {
                 Action::GotoReferences,
                 Action::JumpToTop,
                 Action::OpenFileFinder,
+                Action::OpenProjectSearch,
             ]
         );
     }
