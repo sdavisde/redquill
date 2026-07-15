@@ -41,7 +41,7 @@ Implementation happens on a dedicated worktree branch (repo convention for concu
 
 ## Tasks
 
-### [~] 1.0 Fuzzy file finder (`gp`) opening a read-only whole-file view
+### [x] 1.0 Fuzzy file finder (`gp`) opening a read-only whole-file view
 
 Ships spec Unit 1: the `gp` overlay (git-ls-files candidates, `nucleo-matcher` ranking) and the shared read-only file view — whole-file, syntax-highlighted, capability-gated, lossless `Esc` unwind. Foundation for tasks 3.0 and 4.0.
 
@@ -62,7 +62,7 @@ Ships spec Unit 1: the `gp` overlay (git-ls-files candidates, `nucleo-matcher` r
 - [x] 1.6 `src/ui/file_view.rs`: open a worktree file as a synthesized all-context body (via the `read_worktree_file` seam), syntax highlighted, existing scroll/jump motions working, open-at-line support; suspend/restore the prior view via the existing suspended-view mechanism (app-state test: open → `Esc` restores the prior mode, cursor, and scroll); footer/help omit gated keys (assertion test).
 - [x] 1.7 Finder mode: `Mode` variant + state in `src/ui/app.rs`/`src/ui/file_finder.rs` (input buffer, cursor, ranked list); candidates loaded through `BackgroundTasks` on open (single-flight); re-rank per keystroke; render in `src/ui/file_finder_modal.rs` (switcher modal pattern + input line + match-position highlighting); `Enter` opens the file view; `Esc` closes losslessly.
 - [x] 1.8 Keymap: `gp` sequence + actions in `src/ui/keymap.rs`; finder and file-view key tables in `src/ui/modal_keys.rs`; extend the bidirectional drift tests; `?` overlay and footers show the new modes.
-- [ ] 1.9 Gates green; record the acceptance journey (open finder on this repo, open an un-diffed file, unwind) with observations in `proofs/task-1-file-finder.md`.
+- [x] 1.9 Gates green; record the acceptance journey (open finder on this repo, open an un-diffed file, unwind) with observations in `proofs/task-1-file-finder.md`.
 
 ### [ ] 2.0 In-process search engine core (`src/search/engine.rs`)
 
