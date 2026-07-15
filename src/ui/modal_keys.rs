@@ -432,16 +432,18 @@ pub(super) const FINDER_HINTS: &[ModalBinding<()>] = &[
 
 // -- Project Search (hint-only) ---------------------------------------------
 
-/// Project Search control keys (spec 06 Unit 2), for the help overlay and
-/// footer strip. Like the finder, this is free-text input (printable chars
-/// extend the query) *plus* result navigation and Alt-chord toggles, so
+/// Project Search control keys while [`super::project_search::SearchFocus::Input`]
+/// has focus (spec 06 Unit 2, round-1 UX fix), for the help overlay and
+/// footer strip. Free-text input (printable chars extend the query) *plus*
+/// result navigation, focus switching, and Alt-chord toggles, so
 /// [`super::modes::handle_project_search_key`] keeps a hand-written match;
 /// this table documents the non-text control keys and the drift cross-check
 /// drives them through that handler. `Up`/`Down` (not `j`/`k`) navigate
-/// results for the same reason the finder's do — `j`/`k`/`c`/`w`/`r` must
-/// stay typeable into the query, so only the `Alt`-chorded forms of the
-/// toggle letters are bound.
-pub(super) const PROJECT_SEARCH_HINTS: &[ModalBinding<()>] = &[
+/// results here for the same reason the finder's do — `j`/`k`/`c`/`w`/`r`
+/// must stay typeable into the query, so only the `Alt`-chorded forms of the
+/// toggle letters are bound. See [`PROJECT_SEARCH_RESULTS_HINTS`] for the
+/// other focus's table.
+pub(super) const PROJECT_SEARCH_INPUT_HINTS: &[ModalBinding<()>] = &[
     ModalBinding {
         label: "Up/Down",
         description: "Move result selection",
@@ -464,12 +466,22 @@ pub(super) const PROJECT_SEARCH_HINTS: &[ModalBinding<()>] = &[
     },
     ModalBinding {
         label: "Esc",
-        description: "Close (returns to the exact prior diff position)",
+        description: "Move focus to the results list (view stays open)",
         keys: &[ModalKey::plain(KeyCode::Esc)],
         action: (),
         footer: Some(FooterHint {
             rank: 3,
-            label: "close",
+            label: "results",
+        }),
+    },
+    ModalBinding {
+        label: "Tab",
+        description: "Toggle focus between input and results",
+        keys: &[ModalKey::plain(KeyCode::Tab)],
+        action: (),
+        footer: Some(FooterHint {
+            rank: 4,
+            label: "focus",
         }),
     },
     ModalBinding {
@@ -485,7 +497,7 @@ pub(super) const PROJECT_SEARCH_HINTS: &[ModalBinding<()>] = &[
         keys: &[ModalKey::alt(KeyCode::Char('c'))],
         action: (),
         footer: Some(FooterHint {
-            rank: 4,
+            rank: 5,
             label: "case",
         }),
     },
@@ -495,7 +507,7 @@ pub(super) const PROJECT_SEARCH_HINTS: &[ModalBinding<()>] = &[
         keys: &[ModalKey::alt(KeyCode::Char('w'))],
         action: (),
         footer: Some(FooterHint {
-            rank: 5,
+            rank: 6,
             label: "word",
         }),
     },
@@ -505,7 +517,106 @@ pub(super) const PROJECT_SEARCH_HINTS: &[ModalBinding<()>] = &[
         keys: &[ModalKey::alt(KeyCode::Char('r'))],
         action: (),
         footer: Some(FooterHint {
+            rank: 7,
+            label: "regex",
+        }),
+    },
+];
+
+/// Project Search control keys while
+/// [`super::project_search::SearchFocus::Results`] has focus (spec 06 Unit
+/// 2, round-1 UX fix), for the help overlay and footer strip. Nothing types
+/// into the query from here — `j`/`k` are free to navigate results, matching
+/// the plain-letter convention every other list surface
+/// ([`LIST_KEYS`]/[`STAGING_KEYS`]/[`PEEK_KEYS`]) already uses — and `/`
+/// returns to Input focus (query preserved). [`super::modes::handle_project_search_key`]
+/// still keeps one hand-written match shared with [`PROJECT_SEARCH_INPUT_HINTS`]'s
+/// table (dispatch is focus-gated inline, not two separate functions), so the
+/// drift cross-check runs this table against that same handler with the app
+/// forced into Results focus.
+pub(super) const PROJECT_SEARCH_RESULTS_HINTS: &[ModalBinding<()>] = &[
+    ModalBinding {
+        label: "/",
+        description: "Edit query (focus input; query preserved)",
+        keys: &[ModalKey::plain(KeyCode::Char('/'))],
+        action: (),
+        footer: Some(FooterHint {
+            rank: 1,
+            label: "edit query",
+        }),
+    },
+    ModalBinding {
+        label: "Esc",
+        description: "Close (returns to the exact prior diff position)",
+        keys: &[ModalKey::plain(KeyCode::Esc)],
+        action: (),
+        footer: Some(FooterHint {
+            rank: 2,
+            label: "back",
+        }),
+    },
+    ModalBinding {
+        label: "j / k / Up / Down",
+        description: "Move result selection",
+        keys: &[
+            ModalKey::plain(KeyCode::Char('j')),
+            ModalKey::plain(KeyCode::Char('k')),
+            ModalKey::plain(KeyCode::Up),
+            ModalKey::plain(KeyCode::Down),
+        ],
+        action: (),
+        footer: Some(FooterHint {
+            rank: 3,
+            label: "move",
+        }),
+    },
+    ModalBinding {
+        label: "Enter",
+        description: "Open the selected result (read-only whole-file view, cursor on the hit)",
+        keys: &[ModalKey::plain(KeyCode::Enter)],
+        action: (),
+        footer: Some(FooterHint {
+            rank: 4,
+            label: "open",
+        }),
+    },
+    ModalBinding {
+        label: "Tab",
+        description: "Toggle focus between input and results",
+        keys: &[ModalKey::plain(KeyCode::Tab)],
+        action: (),
+        footer: Some(FooterHint {
+            rank: 5,
+            label: "focus",
+        }),
+    },
+    ModalBinding {
+        label: "Alt-c",
+        description: "Cycle case sensitivity (smart / sensitive / insensitive)",
+        keys: &[ModalKey::alt(KeyCode::Char('c'))],
+        action: (),
+        footer: Some(FooterHint {
             rank: 6,
+            label: "case",
+        }),
+    },
+    ModalBinding {
+        label: "Alt-w",
+        description: "Toggle whole-word matching",
+        keys: &[ModalKey::alt(KeyCode::Char('w'))],
+        action: (),
+        footer: Some(FooterHint {
+            rank: 7,
+            label: "word",
+        }),
+    },
+    ModalBinding {
+        label: "Alt-r",
+        description: "Toggle regex / literal matching",
+        keys: &[ModalKey::alt(KeyCode::Char('r'))],
+        action: (),
+        footer: Some(FooterHint {
+            rank: 8,
             label: "regex",
         }),
     },
@@ -809,6 +920,7 @@ mod tests {
     use crate::ui::modes::{
         handle_compose_key, handle_list_key, handle_peek_key, handle_search_key, handle_staging_key,
     };
+    use crate::ui::project_search::SearchFocus;
     use crate::ui::{App, Mode, StagedFile, compose, handle_help_key, peek};
     use std::path::PathBuf;
 
@@ -1590,7 +1702,8 @@ index 111..222 100644
         assert!(resolve(HELP_SEARCH_HINTS, ev).is_none());
         assert!(resolve(COMMIT_MESSAGE_HINTS, ev).is_none());
         assert!(resolve(FINDER_HINTS, ev).is_none());
-        assert!(resolve(PROJECT_SEARCH_HINTS, ev).is_none());
+        assert!(resolve(PROJECT_SEARCH_INPUT_HINTS, ev).is_none());
+        assert!(resolve(PROJECT_SEARCH_RESULTS_HINTS, ev).is_none());
     }
 
     // -- Project Search mode (spec 06 Unit 2) -----------------------------
@@ -1633,7 +1746,11 @@ index 111..222 100644
         }
     }
 
-    fn project_search_app() -> App {
+    /// Builds the fixture app in `focus` (spec 06 round-1 UX fix: the
+    /// two-focus model — see [`SearchFocus`]). Cursor starts on the middle
+    /// hit of three across two files, so `Up`/`Down`/`j`/`k` (each moving
+    /// away from the middle) all produce an observable change.
+    fn project_search_app_with_focus(focus: SearchFocus) -> App {
         use crate::search::SearchHit;
         use crate::ui::project_search::{ProjectSearchState, ResultGroup};
         let mut app = app();
@@ -1660,15 +1777,18 @@ index 111..222 100644
             },
         ];
         state.cursor = 1;
+        state.focus = focus;
         app.project_search = Some(state);
         app
     }
 
     /// Everything a Project Search control key could observably change: the
     /// mode (`Enter`/`Esc` both leave the view one way or another), whether
-    /// the view is still open, the query buffer, the selection cursor, and
-    /// the three toggle states.
-    fn project_search_snapshot(app: &App) -> (Mode, bool, String, usize, bool, bool, bool) {
+    /// the view is still open, the query buffer, the selection cursor, the
+    /// three toggle states, and which half has focus (`Esc`/`Tab`/`/`).
+    fn project_search_snapshot(
+        app: &App,
+    ) -> (Mode, bool, String, usize, bool, bool, bool, SearchFocus) {
         let state = app.project_search.as_ref();
         (
             app.mode,
@@ -1680,34 +1800,53 @@ index 111..222 100644
                 .unwrap_or(false),
             state.map(|s| s.whole_word).unwrap_or(false),
             state.map(|s| s.literal).unwrap_or(false),
+            state.map(|s| s.focus).unwrap_or_default(),
         )
     }
 
     #[test]
-    fn every_project_search_hint_key_is_consumed_by_the_handler() {
+    fn every_project_search_input_hint_key_is_consumed_by_the_handler() {
         use crate::ui::modes::handle_project_search_key;
-        for binding in PROJECT_SEARCH_HINTS {
+        for binding in PROJECT_SEARCH_INPUT_HINTS {
             for key in binding.keys {
-                let mut app = project_search_app();
+                let mut app = project_search_app_with_focus(SearchFocus::Input);
                 let before = project_search_snapshot(&app);
                 handle_project_search_key(&mut app, key.event());
                 assert_ne!(
                     before,
                     project_search_snapshot(&app),
-                    "Project Search {}: documented key must be consumed by handle_project_search_key",
+                    "Project Search (Input focus) {}: documented key must be consumed by handle_project_search_key",
                     binding.label
                 );
             }
         }
     }
 
-    /// Reverse drift check for Project Search: control keys outside its
-    /// table must do nothing, including `Alt`-chords on letters other than
-    /// `c`/`w`/`r`. Printable chars (including bare `c`/`w`/`r` with no Alt)
-    /// are exempt — they must stay typeable into the query.
     #[test]
-    fn project_search_handler_ignores_control_keys_absent_from_its_table() {
+    fn every_project_search_results_hint_key_is_consumed_by_the_handler() {
         use crate::ui::modes::handle_project_search_key;
+        for binding in PROJECT_SEARCH_RESULTS_HINTS {
+            for key in binding.keys {
+                let mut app = project_search_app_with_focus(SearchFocus::Results);
+                let before = project_search_snapshot(&app);
+                handle_project_search_key(&mut app, key.event());
+                assert_ne!(
+                    before,
+                    project_search_snapshot(&app),
+                    "Project Search (Results focus) {}: documented key must be consumed by handle_project_search_key",
+                    binding.label
+                );
+            }
+        }
+    }
+
+    /// The reverse-drift universe shared by both focuses: control keys no
+    /// table documents, plus every `Alt`-chorded letter other than
+    /// `c`/`w`/`r`. Bare printable letters (including `j`/`k`/`c`/`w`/`r`/`/`
+    /// with no Alt) are deliberately excluded — which of those are "typing"
+    /// vs. "navigation" flips with focus, and that distinction is exactly
+    /// what the per-focus consumed-key tests above already pin.
+    fn project_search_control_key_universe() -> Vec<KeyEvent> {
         let mut universe: Vec<KeyEvent> = [
             KeyCode::Left,
             KeyCode::Right,
@@ -1729,18 +1868,94 @@ index 111..222 100644
         for c in 'a'..='z' {
             universe.push(KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT));
         }
-        for ev in universe {
-            if resolve(PROJECT_SEARCH_HINTS, ev).is_some() {
-                continue; // documented (Up/Down/Alt-c/Alt-w/Alt-r); covered above
+        universe
+    }
+
+    /// Reverse drift check for Project Search's Input focus: control keys
+    /// outside its table must do nothing, including `Alt`-chords on letters
+    /// other than `c`/`w`/`r`. Printable chars (including bare `c`/`w`/`r`
+    /// with no Alt) are exempt — they must stay typeable into the query.
+    #[test]
+    fn project_search_input_focus_ignores_control_keys_absent_from_its_table() {
+        use crate::ui::modes::handle_project_search_key;
+        for ev in project_search_control_key_universe() {
+            if resolve(PROJECT_SEARCH_INPUT_HINTS, ev).is_some() {
+                continue; // documented; covered by the consumed-key test above
             }
-            let mut app = project_search_app();
+            let mut app = project_search_app_with_focus(SearchFocus::Input);
             let before = project_search_snapshot(&app);
             handle_project_search_key(&mut app, ev);
             assert_eq!(
                 before,
                 project_search_snapshot(&app),
-                "handle_project_search_key consumed {ev:?}, which the Project Search hint table doesn't document"
+                "handle_project_search_key (Input focus) consumed {ev:?}, which the table doesn't document"
             );
         }
+    }
+
+    /// Reverse drift check for Project Search's Results focus: same universe,
+    /// checked against [`PROJECT_SEARCH_RESULTS_HINTS`] instead — `j`/`k`/`/`
+    /// are documented there (they navigate/switch focus, not type), so they
+    /// aren't in this bare-letter-exempt universe to begin with, but `Up`/
+    /// `Down`/`Tab` land here as bindings the table check skips correctly.
+    #[test]
+    fn project_search_results_focus_ignores_control_keys_absent_from_its_table() {
+        use crate::ui::modes::handle_project_search_key;
+        for ev in project_search_control_key_universe() {
+            if resolve(PROJECT_SEARCH_RESULTS_HINTS, ev).is_some() {
+                continue; // documented; covered by the consumed-key test above
+            }
+            let mut app = project_search_app_with_focus(SearchFocus::Results);
+            let before = project_search_snapshot(&app);
+            handle_project_search_key(&mut app, ev);
+            assert_eq!(
+                before,
+                project_search_snapshot(&app),
+                "handle_project_search_key (Results focus) consumed {ev:?}, which the table doesn't document"
+            );
+        }
+    }
+
+    /// Behavioral pin for the round-1 UX fix's core complaint ("vim motions
+    /// don't work in the grep view"): bare `j`/`k` type into the query while
+    /// Input-focused, but navigate results once Results-focused — the same
+    /// letters, different meaning, purely a function of focus.
+    #[test]
+    fn bare_j_and_k_type_into_the_query_only_while_input_focused() {
+        use crate::ui::modes::handle_project_search_key;
+
+        let mut input_app = project_search_app_with_focus(SearchFocus::Input);
+        let cursor_before = input_app.project_search.as_ref().unwrap().cursor;
+        handle_project_search_key(
+            &mut input_app,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        );
+        assert_eq!(
+            input_app.project_search.as_ref().unwrap().query,
+            "abj",
+            "j must type into the query while Input-focused"
+        );
+        assert_eq!(
+            input_app.project_search.as_ref().unwrap().cursor,
+            cursor_before,
+            "typing must not move the result selection"
+        );
+
+        let mut results_app = project_search_app_with_focus(SearchFocus::Results);
+        let query_before = results_app.project_search.as_ref().unwrap().query.clone();
+        handle_project_search_key(
+            &mut results_app,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        );
+        assert_eq!(
+            results_app.project_search.as_ref().unwrap().query,
+            query_before,
+            "j must not type into the query while Results-focused"
+        );
+        assert_ne!(
+            results_app.project_search.as_ref().unwrap().cursor,
+            1,
+            "j must move the result selection while Results-focused"
+        );
     }
 }

@@ -4,17 +4,25 @@
 //! (match span emphasized) — replacing the diff pane's content for the
 //! frame (see `super::mod`'s `draw`), the way the History tab replaces the
 //! sidebar's content rather than overlaying a modal on top of it.
+//!
+//! **Focus model** (spec 06 round-1 UX fix — see
+//! [`super::project_search::SearchFocus`]): the input line's prompt color and
+//! text cursor, and the results list's selection style, both track
+//! `state.focus` so which half is "listening" is visually unambiguous —
+//! [`input_prompt_style`]/[`should_show_input_cursor`]/[`selection_style`]
+//! are the three pure decision points, each independently unit-tested below
+//! without needing a terminal.
 
 use std::ops::Range;
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState};
 
 use super::app::App;
-use super::project_search::{MIN_QUERY_LEN, ProjectSearchState};
+use super::project_search::{MIN_QUERY_LEN, ProjectSearchState, SearchFocus};
 use super::theme::Theme;
 
 /// The toggle-indicator string shown at the end of the input line, e.g.
@@ -33,18 +41,45 @@ fn toggle_indicators(state: &ProjectSearchState) -> String {
     format!("[{kind}] [case:{case}] [{word}]")
 }
 
-/// Renders the input line: `/query` prompt plus the toggle indicators.
-fn render_input_line(frame: &mut Frame, area: Rect, state: &ProjectSearchState, theme: &Theme) {
+/// The `/query` prompt's foreground: [`Theme::search_prompt`] (bright) while
+/// [`SearchFocus::Input`] has focus, matching the blinking text cursor
+/// alongside it; the same dim [`Theme::footer_text`] the toggle indicators
+/// already use while [`SearchFocus::Results`] has focus, so the input line
+/// visibly recedes the moment it stops receiving keystrokes.
+fn input_prompt_style(focus: SearchFocus, theme: &Theme) -> Style {
+    match focus {
+        SearchFocus::Input => Style::default().fg(theme.search_prompt),
+        SearchFocus::Results => Style::default().fg(theme.footer_text),
+    }
+}
+
+/// Whether the input line should carry the blinking terminal text cursor —
+/// only while [`SearchFocus::Input`] has focus, so it never sits blinking
+/// over an input the user has explicitly stepped away from into the results
+/// list (spec 06 round-1 UX fix).
+fn should_show_input_cursor(focus: SearchFocus) -> bool {
+    matches!(focus, SearchFocus::Input)
+}
+
+/// Builds the input line's content: `/query` prompt (styled per
+/// [`input_prompt_style`]) plus the toggle indicators. Split out from
+/// [`render_input_line`] so the prompt's focus-dependent style is directly
+/// unit-testable without a terminal.
+fn input_line(state: &ProjectSearchState, theme: &Theme) -> Line<'static> {
     let prompt = format!("/{}", state.query);
-    let line = Line::from(vec![
-        Span::styled(prompt, Style::default().fg(theme.search_prompt)),
+    Line::from(vec![
+        Span::styled(prompt, input_prompt_style(state.focus, theme)),
         Span::raw("  "),
         Span::styled(
             toggle_indicators(state),
             Style::default().fg(theme.footer_text),
         ),
-    ]);
-    frame.render_widget(line, area);
+    ])
+}
+
+/// Renders the input line: `/query` prompt plus the toggle indicators.
+fn render_input_line(frame: &mut Frame, area: Rect, state: &ProjectSearchState, theme: &Theme) {
+    frame.render_widget(input_line(state, theme), area);
 }
 
 /// Renders the summary/error line beneath the input: the regex-compile error
@@ -133,13 +168,29 @@ fn highlighted_line_spans(
     spans
 }
 
+/// The results list's selection highlight, by focus (spec 06 round-1 UX
+/// fix): a full `REVERSED` block while [`SearchFocus::Results`] has focus —
+/// matching every other list surface's selection convention
+/// ([`super::list_panel`]/[`super::staging_panel`]/[`super::peek_overlay`]/
+/// [`super::switcher_modal`]/[`super::file_finder_modal`]) — versus a plain
+/// `UNDERLINED` marker while [`SearchFocus::Input`] has focus: still shows
+/// where `Enter` would jump, without reading as "drive me with j/k" when
+/// keystrokes are actually going to the query.
+fn selection_style(focus: SearchFocus) -> Style {
+    match focus {
+        SearchFocus::Input => Style::default().add_modifier(Modifier::UNDERLINED),
+        SearchFocus::Results => Style::default().add_modifier(Modifier::REVERSED),
+    }
+}
+
 /// Renders the grouped results list: one bold file-heading row per group,
 /// followed by each hit's `path:line` + matched line text (match span
 /// emphasized via [`highlighted_line_spans`]). The selection highlight
 /// (`cursor`, a flat index across groups) lands on the corresponding hit row,
-/// never a heading — headings aren't selectable. Shows a placeholder line
-/// instead of the list when there's nothing to show yet (below the minimum
-/// query length, still scanning with no hits so far, or no matches at all).
+/// never a heading — headings aren't selectable, and its style tracks
+/// `state.focus` (see [`selection_style`]). Shows a placeholder line instead
+/// of the list when there's nothing to show yet (below the minimum query
+/// length, still scanning with no hits so far, or no matches at all).
 fn render_results(frame: &mut Frame, area: Rect, state: &ProjectSearchState, theme: &Theme) {
     if state.groups.is_empty() {
         let placeholder = if state.query.chars().count() < MIN_QUERY_LEN || state.error.is_some() {
@@ -189,7 +240,7 @@ fn render_results(frame: &mut Frame, area: Rect, state: &ProjectSearchState, the
         }
     }
 
-    let list = List::new(items).highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+    let list = List::new(items).highlight_style(selection_style(state.focus));
     let mut list_state = ListState::default();
     list_state.select(selected_row);
     frame.render_stateful_widget(list, area, &mut list_state);
@@ -212,6 +263,19 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     render_input_line(frame, input_area, state, &app.theme);
     render_summary_line(frame, summary_area, state, &app.theme);
     render_results(frame, results_area, state, &app.theme);
+
+    if should_show_input_cursor(state.focus) {
+        // Mirrors `Mode::Search`'s own footer-input cursor math in
+        // `super::mod`'s `draw` — `/` prompt plus the query's char count,
+        // clamped inside the input line so a long query never walks the
+        // cursor off the right edge.
+        let prompt_len = 1 + state.query.chars().count() as u16;
+        let cursor_x = input_area
+            .x
+            .saturating_add(prompt_len)
+            .min(input_area.x + input_area.width.saturating_sub(1));
+        frame.set_cursor_position(Position::new(cursor_x, input_area.y));
+    }
 }
 
 #[cfg(test)]
@@ -386,5 +450,77 @@ index 111..222 100644
 
         let content = render_view(&app);
         assert!(content.contains("no matches"));
+    }
+
+    // -- Focus model (round-1 UX fix) -------------------------------------
+
+    #[test]
+    fn input_prompt_style_is_bright_in_input_focus_and_dim_in_results_focus() {
+        let theme = Theme::default();
+        assert_eq!(
+            input_prompt_style(SearchFocus::Input, &theme).fg,
+            Some(theme.search_prompt)
+        );
+        assert_eq!(
+            input_prompt_style(SearchFocus::Results, &theme).fg,
+            Some(theme.footer_text),
+            "the input line must visibly recede once it stops receiving keystrokes"
+        );
+    }
+
+    #[test]
+    fn input_cursor_shows_only_in_input_focus() {
+        assert!(should_show_input_cursor(SearchFocus::Input));
+        assert!(!should_show_input_cursor(SearchFocus::Results));
+    }
+
+    #[test]
+    fn selection_style_is_reversed_in_results_focus_and_underlined_in_input_focus() {
+        assert!(
+            selection_style(SearchFocus::Results)
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
+        assert!(
+            !selection_style(SearchFocus::Input)
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
+        assert!(
+            selection_style(SearchFocus::Input)
+                .add_modifier
+                .contains(Modifier::UNDERLINED),
+            "Input focus still marks the selected row, just not as strongly as Results focus"
+        );
+    }
+
+    #[test]
+    fn render_sets_the_terminal_cursor_only_while_input_focused() {
+        let mut app = App::new(vec![sample_file()]);
+        let mut state = ProjectSearchState::new(Mode::Normal);
+        state.query = "needle".to_string();
+        state.focus = SearchFocus::Input;
+        app.project_search = Some(state);
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let area = Rect::new(0, 0, 80, 24);
+        terminal.draw(|frame| render(frame, area, &app)).unwrap();
+        assert!(
+            terminal.backend().cursor_visible(),
+            "Input focus must show the terminal cursor"
+        );
+
+        // Ratatui hides the cursor on any frame whose draw closure doesn't
+        // call `Frame::set_cursor_position` (see ratatui-core's
+        // `draw_hides_cursor_when_frame_cursor_is_not_set`), so a Results-
+        // focused frame — which `render` deliberately skips the call on —
+        // leaves it hidden.
+        app.project_search.as_mut().unwrap().focus = SearchFocus::Results;
+        terminal.draw(|frame| render(frame, area, &app)).unwrap();
+        assert!(
+            !terminal.backend().cursor_visible(),
+            "Results focus must not show the input's text cursor"
+        );
     }
 }

@@ -32,8 +32,10 @@ use super::app::{App, Mode};
 use super::keymap::{Action, FooterHint, Keymap, Scope};
 use super::modal_keys::{
     COMMIT_MESSAGE_HINTS, COMPOSE_HINTS, FINDER_HINTS, HELP_KEYS, LIST_KEYS, ModalBinding,
-    PEEK_KEYS, PROJECT_SEARCH_HINTS, STAGING_KEYS, SWITCHER_KEYS,
+    PEEK_KEYS, PROJECT_SEARCH_INPUT_HINTS, PROJECT_SEARCH_RESULTS_HINTS, STAGING_KEYS,
+    SWITCHER_KEYS,
 };
+use super::project_search::SearchFocus;
 use super::theme::Theme;
 
 /// One hint in the footer strip: a key label plus a short action label,
@@ -310,6 +312,11 @@ pub(super) struct FooterFlags {
     /// `true` while the help overlay is open, short-circuiting to
     /// [`help_open_hints`] regardless of `mode`.
     pub(super) help_open: bool,
+    /// Which half of the Project Search view has focus (see
+    /// [`SearchFocus`]); only consulted in [`Mode::ProjectSearch`], picking
+    /// between [`PROJECT_SEARCH_INPUT_HINTS`] and
+    /// [`PROJECT_SEARCH_RESULTS_HINTS`] (spec 06 round-1 UX fix).
+    pub(super) project_search_focus: SearchFocus,
 }
 
 /// Builds the footer strip's hints for the current app state — the pure core
@@ -331,6 +338,7 @@ pub(super) fn build_hints(
         push_publishes,
         viewing_commit,
         help_open,
+        project_search_focus,
     } = flags;
     if help_open {
         return help_open_hints();
@@ -351,7 +359,10 @@ pub(super) fn build_hints(
         Mode::Compose => modal_hints(COMPOSE_HINTS),
         Mode::CommitMessage => modal_hints(COMMIT_MESSAGE_HINTS),
         Mode::Finder => modal_hints(FINDER_HINTS),
-        Mode::ProjectSearch => modal_hints(PROJECT_SEARCH_HINTS),
+        Mode::ProjectSearch => match project_search_focus {
+            SearchFocus::Input => modal_hints(PROJECT_SEARCH_INPUT_HINTS),
+            SearchFocus::Results => modal_hints(PROJECT_SEARCH_RESULTS_HINTS),
+        },
         // The search input occupies the footer itself; no hint strip.
         Mode::Search => Vec::new(),
     }
@@ -447,6 +458,7 @@ pub(super) fn footer_height(
             push_publishes: app.push_publishes(),
             viewing_commit: app.viewing_commit(),
             help_open: app.help_open,
+            project_search_focus: app.project_search_focus(),
         },
         pending,
         keymap,

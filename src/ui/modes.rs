@@ -244,30 +244,51 @@ pub(super) fn handle_finder_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-/// Handles one key event while [`super::Mode::ProjectSearch`] is active
-/// (the full-screen Project Search view, spec 06 Unit 2): printable chars
-/// extend the query (debounced re-scan), Backspace shortens it, `Up`/`Down`
-/// move the result selection, `Enter` opens the selected hit, `Esc` closes
-/// back to the exact prior diff position, and the three `Alt`-chord toggles
-/// (`Alt-c` case, `Alt-w` whole-word, `Alt-r` regex/literal) cycle their
-/// state. Bypasses the [`super::Keymap`] table entirely, like
-/// [`handle_finder_key`] — free text and navigation together aren't
-/// expressible as one fixed [`super::Action`] per key. Documented in
-/// [`modal_keys::PROJECT_SEARCH_HINTS`] (control keys and the Alt-chords
-/// only; free-text chars — including bare `c`/`w`/`r` with no Alt — are the
-/// exemption every other free-text mode's hint table carries).
+/// Handles one key event while [`super::Mode::ProjectSearch`] is active (the
+/// full-screen Project Search view, spec 06 Unit 2, plus the round-1 UX
+/// fix's two-focus model — see [`super::project_search::SearchFocus`]):
+///
+/// - **Input focus**: printable chars extend the query (debounced re-scan),
+///   Backspace shortens it, `Up`/`Down` move the result selection, `Enter`
+///   opens the selected hit, `Esc` moves to Results focus (view stays open).
+/// - **Results focus**: `j`/`k`/`Up`/`Down` move the result selection
+///   (letters no longer type into the query — there's nothing to type into
+///   while browsing), `Enter` opens the selected hit, `/` returns to Input
+///   focus (query preserved), `Esc` is the final "leave the feature" gesture
+///   — closes back to the exact prior diff position.
+/// - **Both focuses**: `Tab` toggles focus either direction; the three
+///   `Alt`-chord toggles (`Alt-c` case, `Alt-w` whole-word, `Alt-r`
+///   regex/literal) cycle their state regardless of which half has focus.
+///
+/// Bypasses the [`super::Keymap`] table entirely, like [`handle_finder_key`]
+/// — free text and navigation together aren't expressible as one fixed
+/// [`super::Action`] per key. Documented in
+/// [`modal_keys::PROJECT_SEARCH_INPUT_HINTS`]/
+/// [`modal_keys::PROJECT_SEARCH_RESULTS_HINTS`] (control keys and the
+/// Alt-chords only; free-text chars — including bare `c`/`w`/`r`/`j`/`k`/`/`
+/// with no Alt while Input-focused — are the exemption every other
+/// free-text mode's hint table carries).
 pub(super) fn handle_project_search_key(app: &mut App, key: KeyEvent) {
+    use super::project_search::SearchFocus;
     let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let results_focused = app
+        .project_search
+        .as_ref()
+        .is_some_and(|state| state.focus == SearchFocus::Results);
     match key.code {
-        KeyCode::Esc => app.close_project_search(),
+        KeyCode::Esc => app.project_search_esc(),
+        KeyCode::Tab => app.project_search_toggle_focus(),
         KeyCode::Enter => app.project_search_confirm(),
         KeyCode::Up => app.project_search_move_up(),
         KeyCode::Down => app.project_search_move_down(),
-        KeyCode::Backspace => app.project_search_backspace(),
         KeyCode::Char('c') if alt => app.project_search_toggle_case(),
         KeyCode::Char('w') if alt => app.project_search_toggle_whole_word(),
         KeyCode::Char('r') if alt => app.project_search_toggle_literal(),
-        KeyCode::Char(c) if !alt => app.project_search_input_char(c),
+        KeyCode::Char('/') if results_focused => app.project_search_focus_input(),
+        KeyCode::Char('j') if results_focused => app.project_search_move_down(),
+        KeyCode::Char('k') if results_focused => app.project_search_move_up(),
+        KeyCode::Backspace if !results_focused => app.project_search_backspace(),
+        KeyCode::Char(c) if !alt && !results_focused => app.project_search_input_char(c),
         _ => {}
     }
 }

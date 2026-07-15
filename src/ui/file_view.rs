@@ -361,6 +361,7 @@ mod tests {
                 push_publishes: false,
                 viewing_commit: false,
                 help_open: false,
+                project_search_focus: app.project_search_focus(),
             },
             None,
             &keymap,

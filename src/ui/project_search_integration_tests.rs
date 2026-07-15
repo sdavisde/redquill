@@ -10,9 +10,12 @@
 //! controlling TTY), so a live terminal recording isn't possible — but every
 //! step of the primary journey (`g/` an identifier seen in a diff, watch
 //! results stream, refine + toggle whole-word, open a hit in a file the diff
-//! doesn't touch, `Esc` `Esc` back to the exact diff position) is exercised
-//! here through the *real* `dispatch_key`/background-poll pipeline against a
-//! *real* git repository.
+//! doesn't touch, `Esc` back to Project Search, `Esc` `Esc` back to the exact
+//! diff position — the round-1 UX fix's two-focus model means the view's own
+//! `Esc` only moves Input focus to Results the first time, so leaving the
+//! feature from Input focus now takes one more `Esc` than it used to; see
+//! [`SearchFocus`]) is exercised here through the *real*
+//! `dispatch_key`/background-poll pipeline against a *real* git repository.
 
 use std::path::Path;
 use std::process::Command;
@@ -20,6 +23,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use super::project_search::SearchFocus;
 use super::stage_ops::build_review;
 use super::*;
 use crate::git::{DiffTarget, GitRunner};
@@ -158,7 +162,7 @@ fn g_slash_opens_project_search_and_streams_real_scan_results() {
 // -- Primary journey: diff -> g/ -> refine + toggle -> open a hit -> Esc Esc back
 
 #[test]
-fn primary_journey_diff_search_refine_toggle_open_hit_esc_esc_back_to_position() {
+fn primary_journey_diff_search_refine_toggle_open_hit_esc_esc_esc_back_to_position() {
     let tmp = repo_with_a_diff_and_an_undiffed_match();
     let mut app = app_for(tmp.path());
     let keymap = Keymap::default_map();
@@ -222,7 +226,9 @@ fn primary_journey_diff_search_refine_toggle_open_hit_esc_esc_back_to_position()
         "cursor must land on the matched line"
     );
 
-    // First Esc: back to Project Search, state fully intact.
+    // First Esc: back to Project Search, state fully intact. This Esc is the
+    // file view's own (unrelated to Project Search's focus model), landing
+    // back in Input focus (untouched since it was never toggled).
     press(&mut app, &keymap, &mut pending, KeyCode::Esc);
     assert_eq!(
         app.mode,
@@ -233,8 +239,27 @@ fn primary_journey_diff_search_refine_toggle_open_hit_esc_esc_back_to_position()
     assert_eq!(app.project_search.as_ref().unwrap().query, "needle_fn");
     assert!(app.project_search.as_ref().unwrap().whole_word);
     assert_eq!(app.project_search.as_ref().unwrap().groups.len(), 2);
+    assert_eq!(
+        app.project_search.as_ref().unwrap().focus,
+        SearchFocus::Input
+    );
 
-    // Second Esc: back to the exact prior diff position.
+    // Second Esc: Project Search's own Esc, from Input focus — round-1 UX
+    // fix, moves to Results focus rather than exiting (so vim motions become
+    // live over the results without an extra keystroke to enter them).
+    press(&mut app, &keymap, &mut pending, KeyCode::Esc);
+    assert_eq!(
+        app.mode,
+        Mode::ProjectSearch,
+        "Esc from Input focus stays open"
+    );
+    assert_eq!(
+        app.project_search.as_ref().unwrap().focus,
+        SearchFocus::Results
+    );
+
+    // Third Esc: now from Results focus, the final "leave the feature"
+    // gesture — back to the exact prior diff position.
     press(&mut app, &keymap, &mut pending, KeyCode::Esc);
     assert_eq!(app.mode, Mode::Normal);
     assert!(app.project_search.is_none());
@@ -251,7 +276,7 @@ fn primary_journey_diff_search_refine_toggle_open_hit_esc_esc_back_to_position()
 // -- Esc from Project Search without ever opening a hit ----------------------
 
 #[test]
-fn esc_from_project_search_without_opening_a_hit_returns_to_the_exact_prior_position() {
+fn esc_esc_from_project_search_without_opening_a_hit_returns_to_the_exact_prior_position() {
     let tmp = repo_with_a_diff_and_an_undiffed_match();
     let mut app = app_for(tmp.path());
     let keymap = Keymap::default_map();
@@ -266,6 +291,16 @@ fn esc_from_project_search_without_opening_a_hit_returns_to_the_exact_prior_posi
     type_str(&mut app, &keymap, &mut pending, "needle_fn");
     wait_for_project_search_summary(&mut app);
 
+    // First Esc (round-1 UX fix): from Input focus, only moves to Results
+    // focus — the view stays open.
+    press(&mut app, &keymap, &mut pending, KeyCode::Esc);
+    assert_eq!(app.mode, Mode::ProjectSearch, "the view must stay open");
+    assert_eq!(
+        app.project_search.as_ref().unwrap().focus,
+        SearchFocus::Results
+    );
+
+    // Second Esc: from Results focus, the final "leave the feature" gesture.
     press(&mut app, &keymap, &mut pending, KeyCode::Esc);
 
     assert_eq!(app.mode, Mode::Normal);

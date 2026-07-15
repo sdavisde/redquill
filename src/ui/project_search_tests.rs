@@ -143,6 +143,93 @@ fn close_project_search_without_opening_is_a_no_op() {
     assert_eq!(app.mode, Mode::Normal);
 }
 
+// -- focus model (round-1 UX fix: Esc/Tab/`/` two-focus split) --------------
+
+#[test]
+fn open_project_search_starts_in_input_focus() {
+    let mut app = App::new(vec![sample_file()]);
+    app.open_project_search();
+    assert_eq!(
+        app.project_search.as_ref().unwrap().focus,
+        SearchFocus::Input
+    );
+}
+
+#[test]
+fn esc_in_input_focus_moves_to_results_without_closing_the_view() {
+    let mut app = App::new(vec![sample_file()]);
+    app.open_project_search();
+    assert_eq!(
+        app.project_search.as_ref().unwrap().focus,
+        SearchFocus::Input
+    );
+
+    app.project_search_esc();
+
+    assert_eq!(app.mode, Mode::ProjectSearch, "the view must stay open");
+    assert_eq!(
+        app.project_search.as_ref().unwrap().focus,
+        SearchFocus::Results
+    );
+}
+
+#[test]
+fn esc_in_results_focus_closes_the_view() {
+    let mut app = App::new(vec![sample_file()]);
+    app.open_project_search();
+    app.project_search.as_mut().unwrap().focus = SearchFocus::Results;
+
+    app.project_search_esc();
+
+    assert_eq!(app.mode, Mode::Normal);
+    assert!(app.project_search.is_none());
+}
+
+#[test]
+fn esc_without_opening_is_a_no_op() {
+    let mut app = App::new(vec![sample_file()]);
+    app.project_search_esc();
+    assert_eq!(app.mode, Mode::Normal);
+    assert!(app.project_search.is_none());
+}
+
+#[test]
+fn focus_input_switches_back_from_results_and_preserves_the_query() {
+    let mut app = App::new(vec![sample_file()]);
+    app.open_project_search();
+    let state = app.project_search.as_mut().unwrap();
+    state.focus = SearchFocus::Results;
+    state.query = "needle".to_string();
+
+    app.project_search_focus_input();
+
+    let state = app.project_search.as_ref().unwrap();
+    assert_eq!(state.focus, SearchFocus::Input);
+    assert_eq!(state.query, "needle", "query must survive the focus switch");
+}
+
+#[test]
+fn toggle_focus_flips_both_directions() {
+    let mut app = App::new(vec![sample_file()]);
+    app.open_project_search();
+    assert_eq!(
+        app.project_search.as_ref().unwrap().focus,
+        SearchFocus::Input
+    );
+
+    app.project_search_toggle_focus();
+    assert_eq!(
+        app.project_search.as_ref().unwrap().focus,
+        SearchFocus::Results
+    );
+
+    app.project_search_toggle_focus();
+    assert_eq!(
+        app.project_search.as_ref().unwrap().focus,
+        SearchFocus::Input
+    );
+}
+
 // -- generation/debounce contract --------------------------------------------
 
 #[test]

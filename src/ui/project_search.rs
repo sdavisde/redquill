@@ -59,6 +59,27 @@ pub(super) const DEBOUNCE: Duration = Duration::from_millis(140);
 /// no results and no error — not "invalid", just "too short to search yet".
 pub(super) const MIN_QUERY_LEN: usize = 2;
 
+/// Which half of the Project Search view is receiving keystrokes (spec 06
+/// round-1 UX fix: "vim motions don't work" in the results list because
+/// every key fell through to the query buffer). `Input` types into the query
+/// buffer and live-searches as before; `Results` routes `j`/`k`/`Up`/`Down`
+/// to result navigation instead, freeing those letters up (the same reason
+/// the finder/search tables only bind `Up`/`Down`, not `j`/`k`, still
+/// applies while `Input` is active). `Esc` moves `Input` -> `Results`
+/// (without closing the view) and `Results` -> closes the view; `/` and
+/// `Tab` move `Results` -> `Input` (`Tab` toggles either direction). See
+/// [`super::modes::handle_project_search_key`] for the exact dispatch.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(super) enum SearchFocus {
+    /// Typing edits the query; Up/Down still navigate results (unaffected by
+    /// the focus split, since they were never in the query's own alphabet).
+    #[default]
+    Input,
+    /// `j`/`k`/Up/Down navigate results; letters no longer type into the
+    /// query; `/` returns to `Input` with the query preserved.
+    Results,
+}
+
 /// One background scan currently streaming results, tagged with the
 /// generation it was spawned under so a consumer can recognize its own
 /// staleness (see the module doc's generation discussion).
@@ -116,6 +137,10 @@ pub(super) struct ProjectSearchState {
     /// The mode to restore on the final `Esc` (the mode this view was
     /// opened from) — mirrors [`super::file_finder::FinderState::return_mode`].
     pub(super) return_mode: Mode,
+    /// Which half of the view keystrokes route to (see [`SearchFocus`]).
+    /// Always starts `Input` on open (`g/`), matching the pre-focus-split
+    /// behavior of typing immediately.
+    pub(super) focus: SearchFocus,
 }
 
 impl ProjectSearchState {
@@ -133,6 +158,7 @@ impl ProjectSearchState {
             summary: None,
             error: None,
             return_mode,
+            focus: SearchFocus::Input,
         }
     }
 
@@ -206,6 +232,57 @@ impl App {
             scan.abort.store(true, Ordering::Relaxed);
         }
         self.mode = state.return_mode;
+    }
+
+    /// The Project Search view's `Esc` gesture (spec 06 round-1 UX fix): a
+    /// two-step unwind rather than an immediate exit. From [`SearchFocus::Input`]
+    /// it only moves focus to [`SearchFocus::Results`] (the view stays open,
+    /// vim motions become live) — from [`SearchFocus::Results`] it's the
+    /// final "leave the feature" gesture, delegating to
+    /// [`App::close_project_search`] for the existing lossless unwind. A
+    /// no-op if the view isn't open.
+    pub(super) fn project_search_esc(&mut self) {
+        let Some(state) = self.project_search.as_mut() else {
+            return;
+        };
+        match state.focus {
+            SearchFocus::Input => state.focus = SearchFocus::Results,
+            SearchFocus::Results => self.close_project_search(),
+        }
+    }
+
+    /// Switches focus back to the query input (`/`, from
+    /// [`SearchFocus::Results`]): the query buffer and cursor position are
+    /// untouched — there's no separate text-cursor offset to restore, since
+    /// typing/backspace always act at the end of the buffer, so "cursor at
+    /// end" falls out for free. A no-op if the view isn't open.
+    pub(super) fn project_search_focus_input(&mut self) {
+        if let Some(state) = self.project_search.as_mut() {
+            state.focus = SearchFocus::Input;
+        }
+    }
+
+    /// Toggles focus between the query input and the results list (`Tab`,
+    /// either direction). A no-op if the view isn't open.
+    pub(super) fn project_search_toggle_focus(&mut self) {
+        if let Some(state) = self.project_search.as_mut() {
+            state.focus = match state.focus {
+                SearchFocus::Input => SearchFocus::Results,
+                SearchFocus::Results => SearchFocus::Input,
+            };
+        }
+    }
+
+    /// The view's current focus (see [`SearchFocus`]), or
+    /// [`SearchFocus::Input`] if the view isn't open — a single named helper
+    /// so "which hint table applies" is answered consistently everywhere it's
+    /// asked (`super::footer`'s strip, `super::help`'s overlay), per the
+    /// repo's convention for predicates asked in more than one place.
+    pub(super) fn project_search_focus(&self) -> SearchFocus {
+        self.project_search
+            .as_ref()
+            .map(|state| state.focus)
+            .unwrap_or_default()
     }
 
     /// Appends `c` to the query buffer and notes the change (see

@@ -519,6 +519,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
                 push_publishes: app.push_publishes(),
                 viewing_commit: app.viewing_commit(),
                 help_open: app.help_open,
+                project_search_focus: app.project_search_focus(),
             },
             pending,
             keymap,
