@@ -26,6 +26,7 @@ use super::command_log::{CommandLog, CommandLogEntry};
 use super::commit_message::CommitMessageState;
 use super::compose::ComposeState;
 use super::diff_view_state::DiffViewState;
+use super::editor::EditorLaunch;
 use super::file_finder::{FinderState, InFlightFinderLoad};
 use super::history::InFlightHistory;
 use super::keymap::Action;
@@ -203,13 +204,16 @@ pub struct App {
     pub(super) stage_ops: Option<Box<dyn StageOps>>,
     /// The color palette every renderer routes through.
     pub theme: Theme,
-    /// The editor `g<Space>` suspends the TUI to open, e.g. `"nvim"` or
-    /// `"code --wait"`. Resolved once in `main` via `resolve_editor`'s
-    /// precedence (the `--editor` flag, then `$VISUAL`, then `$EDITOR`, then
-    /// `"nvim"`) and set via [`App::set_editor`]; defaults to `"nvim"` here
-    /// so pure-navigation unit tests that build an `App` directly (bypassing
-    /// `main`'s resolution) still have a usable default.
-    pub editor: String,
+    /// The editor `g<Space>` suspends the TUI to open: either a
+    /// `[editor]`-config template (`EditorLaunch::Template`, e.g. from
+    /// `preset = "zed"`) or a plain command (`EditorLaunch::Command`, e.g.
+    /// `"nvim"` or `"code --wait"`). Resolved once in `main` via
+    /// `resolve_editor`'s five-tier precedence (`--editor` flag > `[editor]`
+    /// config > `$VISUAL` > `$EDITOR` > `"nvim"`) and set via
+    /// [`App::set_editor`]; defaults to [`EditorLaunch::default`] (today's
+    /// `"nvim"` fallback) so pure-navigation unit tests that build an `App`
+    /// directly (bypassing `main`'s resolution) still have a usable default.
+    pub editor: EditorLaunch,
     /// The tree-sitter highlighting engine. Owned here so its per-language
     /// config cache persists across selections. `pub(super)` for the
     /// code-intelligence module's peek-preview highlighting.
@@ -451,7 +455,7 @@ impl App {
             config_warning_dismissed: false,
             stage_ops: None,
             theme: Theme::default(),
-            editor: "nvim".into(),
+            editor: EditorLaunch::default(),
             highlighter: Highlighter::new(),
             highlight_cache: HighlightCache::default(),
             search: SearchState::default(),
@@ -557,9 +561,9 @@ impl App {
     }
 
     /// Sets the editor `g<Space>` opens (resolved by `main` per
-    /// `resolve_editor`'s precedence: the `--editor` flag, then `$VISUAL`,
-    /// then `$EDITOR`, then `"nvim"`).
-    pub fn set_editor(&mut self, editor: String) {
+    /// `resolve_editor`'s five-tier precedence: the `--editor` flag,
+    /// `[editor]` config, then `$VISUAL`, then `$EDITOR`, then `"nvim"`).
+    pub fn set_editor(&mut self, editor: EditorLaunch) {
         self.editor = editor;
     }
 

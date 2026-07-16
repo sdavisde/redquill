@@ -61,6 +61,7 @@ mod welcome;
 
 pub use app::{App, Mode};
 pub use diff_view_state::DiffViewState;
+pub use editor::{EditorConfigTier, EditorLaunch, resolve_editor_config_tier};
 pub use keymap::{Action, Binding, Keymap};
 pub use lsp_ops::LspClient;
 pub use rows::{Row, build_rows};
@@ -439,17 +440,36 @@ fn resolve_editor_target(app: &mut App) -> Option<(PathBuf, u32)> {
     Some((PathBuf::from(path), line))
 }
 
-/// Spawns `editor` (see [`editor::build_editor_command`]) on `rel_path`
-/// (repo-relative) at `line`, with the repo root as the child's working
-/// directory so the editor opens exactly the path the user sees, and
-/// inherited stdio so it takes over the terminal directly. Blocks
-/// synchronously on `.status()` — the sanctioned exception to "never block
-/// the render loop": the caller has already suspended the TUI
-/// (`restore_terminal`) by the time this runs, so there is no render loop to
-/// block. Never goes through the background git-op runner; this isn't a git
-/// operation and must not be single-flighted or generation-guarded like one.
-fn launch_editor(editor: &str, repo_root: &Path, rel_path: &Path, line: u32) -> io::Result<()> {
-    let (program, args) = editor::build_editor_command(editor, rel_path, line);
+/// Spawns the resolved `editor` (see [`editor::build_editor_command`] /
+/// [`editor::build_from_template`]) on `rel_path` (repo-relative) at `line`,
+/// with the repo root as the child's working directory so the editor opens
+/// exactly the path the user sees, and inherited stdio so it takes over the
+/// terminal directly. Blocks synchronously on `.status()` — the sanctioned
+/// exception to "never block the render loop": the caller has already
+/// suspended the TUI (`restore_terminal`) by the time this runs, so there is
+/// no render loop to block. Never goes through the background git-op
+/// runner; this isn't a git operation and must not be single-flighted or
+/// generation-guarded like one.
+fn launch_editor(
+    editor: &EditorLaunch,
+    repo_root: &Path,
+    rel_path: &Path,
+    line: u32,
+) -> io::Result<()> {
+    let (program, args) = match editor {
+        // A config template was already validated to contain `{{filename}}`
+        // (by `crate::config::EditorConfig::from_value` for `edit_at_line`,
+        // or by construction for a built-in preset), so `None` here would
+        // mean a defensive-fallback bug rather than a user config error —
+        // still reported as an error, never a panic.
+        EditorLaunch::Template(template) => editor::build_from_template(template, rel_path, line)
+            .ok_or_else(|| {
+            io::Error::other(format!(
+                "editor template {template:?} has no {{{{filename}}}} placeholder"
+            ))
+        })?,
+        EditorLaunch::Command(command) => editor::build_editor_command(command, rel_path, line),
+    };
     Command::new(program)
         .args(args)
         .current_dir(repo_root)

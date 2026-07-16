@@ -217,6 +217,116 @@ fn case_mode_parses_all_three_values() {
 }
 
 #[test]
+fn editor_section_partial_override_preset_only() {
+    let (config, warnings) = Config::from_table(table(
+        r#"
+        [editor]
+        preset = "zed"
+        "#,
+    ));
+    assert_eq!(config.editor.preset.as_deref(), Some("zed"));
+    assert_eq!(config.editor.edit_at_line, None);
+    assert!(warnings.is_empty());
+}
+
+#[test]
+fn editor_section_edit_at_line_with_filename_placeholder_applies() {
+    let (config, warnings) = Config::from_table(table(
+        r#"
+        [editor]
+        edit_at_line = "zed {{filename}}:{{line}}"
+        "#,
+    ));
+    assert_eq!(
+        config.editor.edit_at_line.as_deref(),
+        Some("zed {{filename}}:{{line}}")
+    );
+    assert!(warnings.is_empty());
+}
+
+#[test]
+fn editor_section_both_fields_set_deserialize_independently() {
+    // `EditorConfig` itself never picks a winner between `preset` and
+    // `edit_at_line` — both fields simply hold whatever was configured; the
+    // "explicit template wins" precedence is resolved (and tested) in
+    // `crate::ui::editor::resolve_editor_config_tier`.
+    let (config, warnings) = Config::from_table(table(
+        r#"
+        [editor]
+        preset = "vim"
+        edit_at_line = "zed {{filename}}:{{line}}"
+        "#,
+    ));
+    assert_eq!(config.editor.preset.as_deref(), Some("vim"));
+    assert_eq!(
+        config.editor.edit_at_line.as_deref(),
+        Some("zed {{filename}}:{{line}}")
+    );
+    assert!(warnings.is_empty());
+}
+
+#[test]
+fn editor_edit_at_line_missing_filename_placeholder_is_an_invalid_value() {
+    let (config, warnings) = Config::from_table(table(
+        r#"
+        [editor]
+        edit_at_line = "zed {{line}}"
+        "#,
+    ));
+    assert_eq!(config.editor.edit_at_line, None);
+    assert_eq!(warnings.len(), 1);
+    assert!(matches!(
+        &warnings[0],
+        ConfigWarning::InvalidValue { section, key, .. }
+            if section == "editor" && key == "edit_at_line"
+    ));
+}
+
+#[test]
+fn editor_preset_wrong_type_is_an_invalid_value() {
+    let (config, warnings) = Config::from_table(table("[editor]\npreset = 5\n"));
+    assert_eq!(config.editor.preset, None);
+    assert_eq!(warnings.len(), 1);
+    assert!(matches!(
+        &warnings[0],
+        ConfigWarning::InvalidValue { section, key, .. }
+            if section == "editor" && key == "preset"
+    ));
+}
+
+#[test]
+fn editor_edit_at_line_wrong_type_is_an_invalid_value() {
+    let (config, warnings) = Config::from_table(table("[editor]\nedit_at_line = true\n"));
+    assert_eq!(config.editor.edit_at_line, None);
+    assert_eq!(warnings.len(), 1);
+}
+
+#[test]
+fn editor_unknown_key_within_the_section_is_collected_not_fatal() {
+    let (config, warnings) = Config::from_table(table(
+        r#"
+        [editor]
+        preset = "vim"
+        bogus = true
+        "#,
+    ));
+    assert_eq!(config.editor.preset.as_deref(), Some("vim"));
+    assert_eq!(warnings.len(), 1);
+    assert!(matches!(
+        &warnings[0],
+        ConfigWarning::UnknownKey { section, key }
+            if section == "editor" && key == "bogus"
+    ));
+}
+
+#[test]
+fn editor_non_table_section_value_is_an_invalid_value() {
+    let (config, warnings) = Config::from_table(table("editor = 5\n"));
+    assert_eq!(config.editor, EditorConfig::default());
+    assert_eq!(warnings.len(), 1);
+}
+
+#[test]
 fn config_warning_display_names_path_section_and_key() {
     let syntax = ConfigWarning::SyntaxError {
         path: "/tmp/config.toml".to_string(),

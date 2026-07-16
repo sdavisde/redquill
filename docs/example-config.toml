@@ -76,3 +76,46 @@ whole_word = false
 # rather than a regex. In-session toggle: `Alt-r`.
 # Default: false
 literal = false
+
+# -----------------------------------------------------------------------
+# [editor] — the editor `g<Space>` opens, at the cursor line
+# -----------------------------------------------------------------------
+[editor]
+
+# Two ways to tell redquill how to open your editor at a specific line;
+# both are optional and both default to unset (see the five-tier
+# precedence note below). Set at most one — if both are set,
+# `edit_at_line` always wins and `preset` is ignored.
+
+# `preset`: the name of a built-in template. Allowed values:
+#   "vim", "nvim", "helix", "vscode", "vscodium", "zed", "emacs", "nano",
+#   "micro", "sublime", "kakoune"
+# An unrecognized name is an invalid value: a warning is shown and
+# redquill falls through to the next precedence tier ($VISUAL/$EDITOR/
+# "nvim") exactly as if `preset` had been left unset.
+# Default: unset
+#
+# preset = "zed"
+
+# `edit_at_line`: a command template, for any editor not covered by
+# `preset` (or to override a preset's built-in template). Two
+# placeholders are substituted: `{{filename}}` (required — a template
+# without it is an invalid value, warning + fallthrough) and `{{line}}`
+# (optional — a template that never mentions it just doesn't get a line
+# number). The template is split into whitespace-separated tokens first,
+# then each placeholder is substituted *within* its token — never through
+# a shell — so a single token can mix literal text with one or both
+# placeholders (e.g. `{{filename}}:{{line}}`), and a filename containing
+# spaces still survives as one argv element.
+# Default: unset
+#
+# edit_at_line = "myeditor --goto {{filename}}:{{line}}"
+
+# Resolution precedence (highest wins): the `--editor` CLI flag, then this
+# `[editor]` section (`edit_at_line`, or `preset` expanded via the table
+# above), then `$VISUAL`, then `$EDITOR`, then the built-in default
+# "nvim". Every tier below this section still uses redquill's original
+# two-family heuristic for a plain command string (VS Code/VSCodium get
+# `--goto file:line`; everything else gets `+line file`) — that heuristic
+# never applies to a `[editor]`-resolved template, which is used exactly
+# as written.

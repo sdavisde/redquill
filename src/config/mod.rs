@@ -92,13 +92,49 @@ pub struct SearchConfig {
     pub literal: bool,
 }
 
+/// `[editor]` (Unit 2): the editor `g<Space>` opens, either as an explicit
+/// [`edit_at_line`](EditorConfig::edit_at_line) template or a named
+/// [`preset`](EditorConfig::preset) — `edit_at_line` wins when both are set.
+/// `None`/`None` (the default) means this config tier is absent entirely;
+/// `main`'s five-tier precedence (`--editor` flag > config > `$VISUAL` >
+/// `$EDITOR` > `"nvim"`) falls through to `$VISUAL`.
+///
+/// This struct never picks the `edit_at_line`-over-`preset` winner itself —
+/// it's plain partial-override data like every other section. That
+/// resolution (and the "explicit template wins" test) lives in
+/// `crate::ui::editor::resolve_editor_config_tier`, alongside the preset
+/// table, for a layering reason: validating that a `preset` *name* is one
+/// of the eleven built-ins requires that table, and this module must never
+/// import `crate::ui` (see the module doc) — the table belongs beside the
+/// template/spawn machinery it feeds, not here. An unrecognized preset name
+/// is still reported through this same [`ConfigWarning`] collection; it's
+/// just added by `main::run_tui` at editor-resolution time instead of by
+/// [`EditorConfig::from_value`] at parse time.
+///
+/// What *does* validate here, at parse time like every other section:
+/// `preset` must be a string, and `edit_at_line` must be a string
+/// containing the required `{{filename}}` placeholder — both pure
+/// syntactic checks with no preset-table dependency.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EditorConfig {
+    pub preset: Option<String>,
+    pub edit_at_line: Option<String>,
+}
+
 /// The full, partial-override config: one field per `[section]`, each
 /// defaulting to today's shipped behavior. See the module doc's
 /// extensibility note for how a future section is added.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// Not `Copy` (unlike its sections): [`EditorConfig`] owns `String`s, so the
+/// whole struct is `Clone`-only from here on — every prior `Config`-by-value
+/// read site still compiles unchanged, since Rust field access
+/// (`app.config.search`, `app.config.layout.sidebar_side`) copies the
+/// *field's* type, not the parent struct's.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Config {
     pub layout: LayoutConfig,
     pub search: SearchConfig,
+    pub editor: EditorConfig,
 }
 
 /// One problem [`load`] encountered, in a form ready for the UI's warning
@@ -159,6 +195,9 @@ impl Config {
         }
         if let Some(value) = raw.remove("search") {
             config.search = SearchConfig::from_value(value, &mut warnings);
+        }
+        if let Some(value) = raw.remove("editor") {
+            config.editor = EditorConfig::from_value(value, &mut warnings);
         }
         for key in raw.keys() {
             warnings.push(ConfigWarning::unknown("top-level", key));
@@ -242,6 +281,45 @@ impl SearchConfig {
                     }
                 },
                 other => warnings.push(ConfigWarning::unknown("search", other)),
+            }
+        }
+        cfg
+    }
+}
+
+impl EditorConfig {
+    fn from_value(value: toml::Value, warnings: &mut Vec<ConfigWarning>) -> EditorConfig {
+        let mut cfg = EditorConfig::default();
+        let Some(table) = value.as_table() else {
+            warnings.push(ConfigWarning::invalid(
+                "editor",
+                "editor",
+                "expected a table",
+            ));
+            return cfg;
+        };
+        for (key, val) in table {
+            match key.as_str() {
+                "preset" => match val.as_str() {
+                    Some(name) => cfg.preset = Some(name.to_string()),
+                    None => {
+                        warnings.push(ConfigWarning::invalid("editor", key, "expected a string"))
+                    }
+                },
+                "edit_at_line" => match val.as_str() {
+                    Some(template) if template.contains("{{filename}}") => {
+                        cfg.edit_at_line = Some(template.to_string());
+                    }
+                    Some(_) => warnings.push(ConfigWarning::invalid(
+                        "editor",
+                        key,
+                        "template must contain {{filename}}",
+                    )),
+                    None => {
+                        warnings.push(ConfigWarning::invalid("editor", key, "expected a string"))
+                    }
+                },
+                other => warnings.push(ConfigWarning::unknown("editor", other)),
             }
         }
         cfg

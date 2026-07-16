@@ -77,12 +77,12 @@ Add `[editor]` config: `edit_at_line` template with `{{filename}}`/`{{line}}` pl
 
 #### 2.0 Tasks
 
-- [ ] 2.1 TDD: template engine in `src/ui/editor.rs` — split template into whitespace tokens, substitute `{{filename}}`/`{{line}}` per-token (a token may mix literal + placeholder, e.g. `{{filename}}:{{line}}`); filenames with spaces survive because substitution happens after tokenization, never through a shell. Validation: template without `{{filename}}` is an invalid value (warning + tier fallthrough). Failing tests first: spaces, no-`{{line}}` template, mixed tokens, missing-`{{filename}}` rejection.
-- [ ] 2.2 TDD: preset table as `const` data mapping the eleven names → known-correct `edit_at_line` templates; one test per preset asserting the exact argv for a sample file/line; unknown preset name → invalid value (warning + fallthrough).
-- [ ] 2.3 Add `EditorConfig` (`preset`, `edit_at_line`; explicit `edit_at_line` wins when both set — tested) to `Config`; invalid entries flow through the 1.x warning contract.
-- [ ] 2.4 Wire the five-tier precedence in `src/main.rs`/`resolve_editor`: `--editor` flag > config template-or-preset > `$VISUAL` > `$EDITOR` > `nvim`; non-config tiers keep the existing family heuristic (VS Code family `--goto file:line`, else `+line`). Unit-test the full chain including empty/whitespace env vars (existing behavior preserved).
-- [ ] 2.5 Add the annotated `[editor]` section (template syntax, placeholder rules, full preset list) to `docs/example-config.toml`.
-- [ ] 2.6 Run the User demo with a logging wrapper named `zed` on PATH; capture `proofs/2-zed-preset.txt`; gates; commit.
+- [x] 2.1 TDD: template engine in `src/ui/editor.rs` — split template into whitespace tokens, substitute `{{filename}}`/`{{line}}` per-token (a token may mix literal + placeholder, e.g. `{{filename}}:{{line}}`); filenames with spaces survive because substitution happens after tokenization, never through a shell. Validation: template without `{{filename}}` is an invalid value (warning + tier fallthrough). Failing tests first: spaces, no-`{{line}}` template, mixed tokens, missing-`{{filename}}` rejection.
+- [x] 2.2 TDD: preset table as `const` data mapping the eleven names → known-correct `edit_at_line` templates; one test per preset asserting the exact argv for a sample file/line; unknown preset name → invalid value (warning + fallthrough).
+- [x] 2.3 Add `EditorConfig` (`preset`, `edit_at_line`; explicit `edit_at_line` wins when both set — tested) to `Config`; invalid entries flow through the 1.x warning contract.
+- [x] 2.4 Wire the five-tier precedence in `src/main.rs`/`resolve_editor`: `--editor` flag > config template-or-preset > `$VISUAL` > `$EDITOR` > `nvim`; non-config tiers keep the existing family heuristic (VS Code family `--goto file:line`, else `+line`). Unit-test the full chain including empty/whitespace env vars (existing behavior preserved).
+- [x] 2.5 Add the annotated `[editor]` section (template syntax, placeholder rules, full preset list) to `docs/example-config.toml`.
+- [x] 2.6 Run the User demo with a logging wrapper named `zed` on PATH; capture `proofs/2-zed-preset.txt`; gates; commit.
 
 ### [ ] 3.0 Config file controls code intelligence (`[lsp]` overrides)
 
