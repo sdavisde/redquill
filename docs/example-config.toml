@@ -119,3 +119,55 @@ literal = false
 # `--goto file:line`; everything else gets `+line file`) — that heuristic
 # never applies to a `[editor]`-resolved template, which is used exactly
 # as written.
+
+# -----------------------------------------------------------------------
+# [lsp] — language server overrides for `gd`/`gr`/`K` code intelligence
+# -----------------------------------------------------------------------
+#
+# One sub-table per language redquill knows how to spawn a server for:
+# `[lsp.rust]`, `[lsp.typescript]`, `[lsp.python]`, `[lsp.go]`. Adding a
+# fifth language is a code change, not a config key (this section only
+# overrides the four built-in ones). Every sub-table is independently
+# optional — set only the languages you want to change; the rest keep
+# redquill's built-in defaults:
+#
+#   rust:       rust-analyzer
+#   typescript: typescript-language-server --stdio
+#   python:     pyright-langserver --stdio
+#   go:         gopls
+#
+# Each sub-table accepts three keys, all optional:
+#
+#   command = "<string>"       — replaces the language's default binary.
+#   args    = ["<string>", ...] — replaces the language's default argv.
+#   enabled = <bool>            — default true.
+#
+# `command` and `args` apply independently: setting only `args` keeps the
+# default `command` and uses your args instead (e.g. adding a flag to the
+# stock server); setting only `command` keeps the default `args` (the
+# common case when `command` points at a wrapper script that just execs
+# the real server and forwards whatever argv it was given). Set both to
+# fully replace the invocation.
+#
+# `enabled = false` removes that language from the effective server table
+# entirely — `gd`/`gr`/`K` degrade for that language exactly as they do
+# today for any language with no configured server at all: silently, with
+# the same "no code intelligence here" footer message, never an error.
+# This is also what happens if a *configured* command is missing or fails
+# to start — config errors here (wrong type, e.g. `args` not a list of
+# strings) are the only thing that produces a warning; a bad binary path
+# degrades silently like any other missing server.
+#
+# Example: point Rust at a logging wrapper that execs the real
+# rust-analyzer, and turn Go's server off entirely.
+#
+# [lsp.rust]
+# command = "/home/me/bin/rust-analyzer-wrapper"
+#
+# [lsp.go]
+# enabled = false
+#
+# Every other key inside an `[lsp.<lang>]` table beyond `command`/`args`/
+# `enabled`, and every language name beyond the four above, is an unknown
+# key/section — collected as a warning, ignored, and every other valid
+# setting in the file still applies.

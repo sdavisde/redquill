@@ -121,6 +121,49 @@ pub struct EditorConfig {
     pub edit_at_line: Option<String>,
 }
 
+/// One language's `[lsp.<lang>]` override (Unit 3): every field is a partial
+/// overlay onto that language's row in `crate::lsp::config::default_commands`
+/// — `command`/`args` are `None` when unset (that half of the invocation
+/// keeps its default independently of the other; see the merge function's
+/// doc for why `args` without `command` still applies), and `enabled`
+/// defaults to `true` (hence the hand-written [`Default`] impl below —
+/// `#[derive(Default)]` would give `false` for a plain `bool` field).
+///
+/// Deliberately plain data with no `ServerLang`/`LangServerCmd` knowledge:
+/// this module must never import `crate::lsp` (see the module doc's
+/// layering note), so the actual overlay onto `default_commands()` — and
+/// the `enabled = false` -> "absent from the map" translation — happens at
+/// the edge, in `crate::ui::lsp_config::effective_lsp_commands`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspServerOverride {
+    pub command: Option<String>,
+    pub args: Option<Vec<String>>,
+    pub enabled: bool,
+}
+
+impl Default for LspServerOverride {
+    fn default() -> Self {
+        LspServerOverride {
+            command: None,
+            args: None,
+            enabled: true,
+        }
+    }
+}
+
+/// `[lsp]` (Unit 3): per-language server overrides for the four languages
+/// redquill knows how to spawn a server for (`rust`, `typescript`, `python`,
+/// `go` — matching `crate::lsp::config::ServerLang`'s variants by name).
+/// Adding a fifth language remains a code change (spec Non-Goal 8), so this
+/// struct intentionally has exactly four fields rather than a map.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LspConfig {
+    pub rust: LspServerOverride,
+    pub typescript: LspServerOverride,
+    pub python: LspServerOverride,
+    pub go: LspServerOverride,
+}
+
 /// The full, partial-override config: one field per `[section]`, each
 /// defaulting to today's shipped behavior. See the module doc's
 /// extensibility note for how a future section is added.
@@ -135,6 +178,7 @@ pub struct Config {
     pub layout: LayoutConfig,
     pub search: SearchConfig,
     pub editor: EditorConfig,
+    pub lsp: LspConfig,
 }
 
 /// One problem [`load`] encountered, in a form ready for the UI's warning
@@ -198,6 +242,9 @@ impl Config {
         }
         if let Some(value) = raw.remove("editor") {
             config.editor = EditorConfig::from_value(value, &mut warnings);
+        }
+        if let Some(value) = raw.remove("lsp") {
+            config.lsp = LspConfig::from_value(value, &mut warnings);
         }
         for key in raw.keys() {
             warnings.push(ConfigWarning::unknown("top-level", key));
@@ -320,6 +367,94 @@ impl EditorConfig {
                     }
                 },
                 other => warnings.push(ConfigWarning::unknown("editor", other)),
+            }
+        }
+        cfg
+    }
+}
+
+impl LspConfig {
+    fn from_value(value: toml::Value, warnings: &mut Vec<ConfigWarning>) -> LspConfig {
+        let mut cfg = LspConfig::default();
+        let Some(table) = value.as_table() else {
+            warnings.push(ConfigWarning::invalid("lsp", "lsp", "expected a table"));
+            return cfg;
+        };
+        for (key, val) in table {
+            match key.as_str() {
+                "rust" => {
+                    cfg.rust = LspServerOverride::from_value(val.clone(), "lsp.rust", warnings)
+                }
+                "typescript" => {
+                    cfg.typescript =
+                        LspServerOverride::from_value(val.clone(), "lsp.typescript", warnings)
+                }
+                "python" => {
+                    cfg.python = LspServerOverride::from_value(val.clone(), "lsp.python", warnings)
+                }
+                "go" => cfg.go = LspServerOverride::from_value(val.clone(), "lsp.go", warnings),
+                other => warnings.push(ConfigWarning::unknown("lsp", other)),
+            }
+        }
+        cfg
+    }
+}
+
+impl LspServerOverride {
+    fn from_value(
+        value: toml::Value,
+        section: &str,
+        warnings: &mut Vec<ConfigWarning>,
+    ) -> LspServerOverride {
+        let mut cfg = LspServerOverride::default();
+        let Some(table) = value.as_table() else {
+            warnings.push(ConfigWarning::invalid(section, section, "expected a table"));
+            return cfg;
+        };
+        for (key, val) in table {
+            match key.as_str() {
+                "command" => match val.as_str() {
+                    Some(s) => cfg.command = Some(s.to_string()),
+                    None => {
+                        warnings.push(ConfigWarning::invalid(section, key, "expected a string"))
+                    }
+                },
+                "args" => match val.as_array() {
+                    Some(items) => {
+                        let mut parsed = Vec::with_capacity(items.len());
+                        let mut all_strings = true;
+                        for item in items {
+                            match item.as_str() {
+                                Some(s) => parsed.push(s.to_string()),
+                                None => {
+                                    all_strings = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if all_strings {
+                            cfg.args = Some(parsed);
+                        } else {
+                            warnings.push(ConfigWarning::invalid(
+                                section,
+                                key,
+                                "expected an array of strings",
+                            ));
+                        }
+                    }
+                    None => warnings.push(ConfigWarning::invalid(
+                        section,
+                        key,
+                        "expected an array of strings",
+                    )),
+                },
+                "enabled" => match val.as_bool() {
+                    Some(b) => cfg.enabled = b,
+                    None => {
+                        warnings.push(ConfigWarning::invalid(section, key, "expected a boolean"))
+                    }
+                },
+                other => warnings.push(ConfigWarning::unknown(section, other)),
             }
         }
         cfg

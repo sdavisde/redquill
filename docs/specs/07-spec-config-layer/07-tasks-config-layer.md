@@ -21,7 +21,8 @@ Each task's **User demo** is the acceptance ritual between stages: run it as wri
 | `src/ui/modal_keys.rs` | `const` tables → runtime-built tables (refactor), then config overrides (behavior). |
 | `src/ui/help.rs` | Verify-only: help renders effective bindings (derived, should need no logic change) + test with overrides. |
 | `src/search/query.rs` | Search option types consumed by `[search]` startup defaults. |
-| `src/lsp/config.rs` | `[lsp]` overlay merged onto `default_commands()`; `enabled` handling; stays free of TUI/config types (receives plain data). |
+| `src/lsp/config.rs` | `default_commands()`/`ServerLang`/`LangServerCmd`; stays free of TUI/config types (receives plain data only). |
+| `src/ui/lsp_config.rs` (new) | `effective_lsp_commands`: the `[lsp]`-onto-`default_commands()` overlay, at the edge module (like `ui::editor`'s preset table) since it's the one place allowed to import both `crate::config` and `crate::lsp`. |
 | `docs/example-config.toml` (new) | Annotated example grown one section per slice; drift-tested in 6.0. |
 | `README.md` | Configuration section; remove stale "config layer planned" line. |
 | `docs/config-layer.md` | Retired (deleted or replaced with a pointer to spec 07). |
@@ -98,10 +99,10 @@ Add `[lsp.rust|typescript|python|go]` tables (`command`, `args`, `enabled`) over
 
 #### 3.0 Tasks
 
-- [ ] 3.1 TDD: `LspConfig` section — per-language tables (`rust`, `typescript`, `python`, `go`) each `{ command: Option<String>, args: Option<Vec<String>>, enabled: bool = true }`; a merge function overlaying it onto `default_commands()` producing the effective `HashMap<ServerLang, LangServerCmd>` minus disabled languages. Failing tests first: override one, disable one, others default; `args` without `command` overrides args only.
-- [ ] 3.2 Wire in `src/main.rs`/app setup: effective map (plain `LangServerCmd` data, no config types) handed to the LSP layer; `enabled = false` means the language is absent from the map → existing missing-server silent degradation. Verify `src/lsp/` gains no `config`/TUI imports (grep check noted in commit).
-- [ ] 3.3 Add the annotated `[lsp]` section to `docs/example-config.toml` (all four language tables, `enabled` semantics, degradation note).
-- [ ] 3.4 Run the User demo with a logging wrapper as `[lsp.rust] command`; capture `proofs/3-lsp-override.txt` including the wrapper log; gates; commit.
+- [x] 3.1 TDD: `LspConfig` section — per-language tables (`rust`, `typescript`, `python`, `go`) each `{ command: Option<String>, args: Option<Vec<String>>, enabled: bool = true }`; a merge function overlaying it onto `default_commands()` producing the effective `HashMap<ServerLang, LangServerCmd>` minus disabled languages. Failing tests first: override one, disable one, others default; `args` without `command` overrides args only.
+- [x] 3.2 Wire in `src/main.rs`/app setup: effective map (plain `LangServerCmd` data, no config types) handed to the LSP layer; `enabled = false` means the language is absent from the map → existing missing-server silent degradation. Verify `src/lsp/` gains no `config`/TUI imports (grep check noted in commit).
+- [x] 3.3 Add the annotated `[lsp]` section to `docs/example-config.toml` (all four language tables, `enabled` semantics, degradation note).
+- [x] 3.4 Run the User demo with a logging wrapper as `[lsp.rust] command`; capture `proofs/3-lsp-override.txt` including the wrapper log; gates; commit.
 
 ### [ ] 4.0 Config file remaps the main keymap (`[keys.diff]`, `[keys.panel]`)
 

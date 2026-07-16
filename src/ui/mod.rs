@@ -36,6 +36,7 @@ mod help;
 mod history;
 mod keymap;
 mod list_panel;
+mod lsp_config;
 mod lsp_ops;
 mod modal_keys;
 mod modes;

@@ -327,6 +327,180 @@ fn editor_non_table_section_value_is_an_invalid_value() {
 }
 
 #[test]
+fn lsp_section_empty_is_all_defaults() {
+    let (config, warnings) = Config::from_table(table("[lsp]\n"));
+    assert_eq!(config.lsp, LspConfig::default());
+    assert!(warnings.is_empty());
+}
+
+#[test]
+fn lsp_override_one_language_command_and_args_leaves_others_default() {
+    let (config, warnings) = Config::from_table(table(
+        r#"
+        [lsp.rust]
+        command = "my-rust-analyzer"
+        args = ["--wrapped"]
+        "#,
+    ));
+    assert_eq!(config.lsp.rust.command.as_deref(), Some("my-rust-analyzer"));
+    assert_eq!(config.lsp.rust.args, Some(vec!["--wrapped".to_string()]));
+    assert!(config.lsp.rust.enabled);
+    // Other languages are untouched.
+    assert_eq!(config.lsp.typescript, LspServerOverride::default());
+    assert_eq!(config.lsp.python, LspServerOverride::default());
+    assert_eq!(config.lsp.go, LspServerOverride::default());
+    assert!(warnings.is_empty());
+}
+
+#[test]
+fn lsp_disable_one_language() {
+    let (config, warnings) = Config::from_table(table(
+        r#"
+        [lsp.go]
+        enabled = false
+        "#,
+    ));
+    assert!(!config.lsp.go.enabled);
+    assert_eq!(config.lsp.go.command, None);
+    assert_eq!(config.lsp.go.args, None);
+    assert!(warnings.is_empty());
+}
+
+#[test]
+fn lsp_args_without_command_overrides_args_only() {
+    let (config, warnings) = Config::from_table(table(
+        r#"
+        [lsp.typescript]
+        args = ["--stdio", "--verbose"]
+        "#,
+    ));
+    assert_eq!(config.lsp.typescript.command, None);
+    assert_eq!(
+        config.lsp.typescript.args,
+        Some(vec!["--stdio".to_string(), "--verbose".to_string()])
+    );
+    assert!(warnings.is_empty());
+}
+
+#[test]
+fn lsp_command_without_args_overrides_command_only() {
+    let (config, warnings) = Config::from_table(table(
+        r#"
+        [lsp.python]
+        command = "my-pyright"
+        "#,
+    ));
+    assert_eq!(config.lsp.python.command.as_deref(), Some("my-pyright"));
+    assert_eq!(config.lsp.python.args, None);
+    assert!(warnings.is_empty());
+}
+
+#[test]
+fn lsp_unknown_language_table_is_collected_not_fatal() {
+    let (config, warnings) = Config::from_table(table(
+        r#"
+        [lsp.java]
+        command = "jdtls"
+        "#,
+    ));
+    assert_eq!(config.lsp, LspConfig::default());
+    assert_eq!(warnings.len(), 1);
+    assert!(matches!(
+        &warnings[0],
+        ConfigWarning::UnknownKey { section, key }
+            if section == "lsp" && key == "java"
+    ));
+}
+
+#[test]
+fn lsp_unknown_key_within_a_language_table_is_collected_not_fatal() {
+    let (config, warnings) = Config::from_table(table(
+        r#"
+        [lsp.rust]
+        command = "my-rust-analyzer"
+        bogus = true
+        "#,
+    ));
+    assert_eq!(config.lsp.rust.command.as_deref(), Some("my-rust-analyzer"));
+    assert_eq!(warnings.len(), 1);
+    assert!(matches!(
+        &warnings[0],
+        ConfigWarning::UnknownKey { section, key }
+            if section == "lsp.rust" && key == "bogus"
+    ));
+}
+
+#[test]
+fn lsp_command_wrong_type_is_an_invalid_value() {
+    let (config, warnings) = Config::from_table(table("[lsp.rust]\ncommand = 5\n"));
+    assert_eq!(config.lsp.rust.command, None);
+    assert_eq!(warnings.len(), 1);
+    assert!(matches!(
+        &warnings[0],
+        ConfigWarning::InvalidValue { section, key, .. }
+            if section == "lsp.rust" && key == "command"
+    ));
+}
+
+#[test]
+fn lsp_args_wrong_type_is_an_invalid_value() {
+    let (config, warnings) = Config::from_table(table("[lsp.rust]\nargs = \"nope\"\n"));
+    assert_eq!(config.lsp.rust.args, None);
+    assert_eq!(warnings.len(), 1);
+    assert!(matches!(
+        &warnings[0],
+        ConfigWarning::InvalidValue { section, key, .. }
+            if section == "lsp.rust" && key == "args"
+    ));
+}
+
+#[test]
+fn lsp_args_element_wrong_type_is_an_invalid_value() {
+    let (config, warnings) = Config::from_table(table("[lsp.rust]\nargs = [\"ok\", 5]\n"));
+    assert_eq!(config.lsp.rust.args, None);
+    assert_eq!(warnings.len(), 1);
+    assert!(matches!(
+        &warnings[0],
+        ConfigWarning::InvalidValue { section, key, .. }
+            if section == "lsp.rust" && key == "args"
+    ));
+}
+
+#[test]
+fn lsp_enabled_wrong_type_is_an_invalid_value() {
+    let (config, warnings) = Config::from_table(table("[lsp.rust]\nenabled = \"nope\"\n"));
+    assert!(config.lsp.rust.enabled);
+    assert_eq!(warnings.len(), 1);
+    assert!(matches!(
+        &warnings[0],
+        ConfigWarning::InvalidValue { section, key, .. }
+            if section == "lsp.rust" && key == "enabled"
+    ));
+}
+
+#[test]
+fn lsp_language_non_table_value_is_an_invalid_value() {
+    let (config, warnings) = Config::from_table(table("[lsp]\nrust = 5\n"));
+    assert_eq!(config.lsp.rust, LspServerOverride::default());
+    assert_eq!(warnings.len(), 1);
+}
+
+#[test]
+fn lsp_non_table_section_value_is_an_invalid_value() {
+    let (config, warnings) = Config::from_table(table("lsp = 5\n"));
+    assert_eq!(config.lsp, LspConfig::default());
+    assert_eq!(warnings.len(), 1);
+}
+
+#[test]
+fn lsp_server_override_default_is_enabled_with_no_overrides() {
+    let cfg = LspServerOverride::default();
+    assert!(cfg.enabled);
+    assert_eq!(cfg.command, None);
+    assert_eq!(cfg.args, None);
+}
+
+#[test]
 fn config_warning_display_names_path_section_and_key() {
     let syntax = ConfigWarning::SyntaxError {
         path: "/tmp/config.toml".to_string(),
