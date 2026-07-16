@@ -114,8 +114,15 @@ pub enum Mode {
     /// struct field ("must survive mode exit"), but since it only matters
     /// for *this* mode's lifetime, carrying it as the variant's own payload
     /// keeps it from going stale as a field while every other mode is
-    /// active.
-    EndReview { origin: EndReviewOrigin },
+    /// active. `cursor` is the `j`/`k`-highlighted option (0 = Pause, 1 =
+    /// Finish, 2 = Cancel — the modal's display order), reset to `0` on
+    /// open (spec 08 Unit 2 dogfood polish pass: lazygit-style menu
+    /// selection alongside the pre-existing `p`/`f`/`c` mnemonics, which
+    /// dispatch immediately regardless of `cursor`).
+    EndReview {
+        origin: EndReviewOrigin,
+        cursor: usize,
+    },
 }
 
 /// Where `q` was pressed from, carried by [`Mode::EndReview`] so its Cancel

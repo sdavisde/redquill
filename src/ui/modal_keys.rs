@@ -571,7 +571,12 @@ pub(super) static SWITCHER_KEYS: LazyLock<Vec<ModalBinding<SwitcherAction>>> =
 /// What a key does in the end-review modal (`q` in a review session): the
 /// three exits, each labeled with its consequence in [`END_REVIEW_KEYS`]'s
 /// `description` rather than just "pause"/"finish" (per the spec's design
-/// note that the modal must name what happens to the worktree).
+/// note that the modal must name what happens to the worktree) — plus,
+/// since the dogfood polish pass (spec 08, follow-up to Unit 2), a
+/// lazygit-style highlighted-selection pair (`MoveDown`/`MoveUp`) and
+/// `Confirm` (`Enter`, acting on whichever of the three exits is
+/// highlighted). The mnemonics (`p`/`f`/`c`/`Esc`) keep dispatching
+/// immediately regardless of the highlight, unchanged from before this pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum EndReviewAction {
     /// Emit annotations and quit; the worktree and review state are kept.
@@ -582,18 +587,49 @@ pub(super) enum EndReviewAction {
     Finish,
     /// Close the modal and keep reviewing; nothing happens.
     Cancel,
+    /// Move the highlighted option down (see [`super::app::App::end_review_move_down`]).
+    MoveDown,
+    /// Move the highlighted option up (see [`super::app::App::end_review_move_up`]).
+    MoveUp,
+    /// Act on whichever option is currently highlighted — resolved via
+    /// [`EndReviewAction::from_cursor`] and then dispatched exactly like the
+    /// matching mnemonic (see [`super::modes::handle_end_review_key`]).
+    Confirm,
 }
 
-/// End-review modal control keys (spec 08 Unit 2), for the help overlay,
-/// footer strip, [`super::modes::handle_end_review_key`]'s dispatch, and the
-/// modal's own body ([`super::end_review_modal`]). Registered on
-/// [`ModalKeymaps`] as the effective table like every other modal mode, but
-/// not (yet) exposed to `[keys.<mode>]` config remapping — it is absent from
-/// the `MODAL_MODE_NAMES` cross-checked lists, so it always renders its
-/// compiled-in defaults. Wiring `[keys.end-review]` remapping is a follow-up
-/// (spec 08 later units): it would add `end_review` to both name lists, an
-/// `end_review_action_name`/`_from_name` pair, and an `apply_modal_overrides`
-/// call in `super::modal_keys_config`, mirroring the sibling modes above.
+impl EndReviewAction {
+    /// The highest valid cursor value (Cancel, the last of the three
+    /// options in the modal's display order) — the clamp
+    /// [`super::app::App::end_review_move_down`] moves against.
+    pub(super) const LAST_CURSOR: usize = 2;
+
+    /// Maps a highlighted-option cursor (0/1/2, the modal's display order)
+    /// to the mnemonic action it stands in for, so `Confirm` (`Enter`) acts
+    /// on whichever option is highlighted. Any out-of-range cursor
+    /// (defensively, since nothing should ever produce one — see
+    /// [`super::app::App::end_review_move_down`]'s clamp) falls back to
+    /// `Cancel`, the least destructive option, rather than panicking.
+    pub(super) fn from_cursor(cursor: usize) -> EndReviewAction {
+        match cursor {
+            0 => EndReviewAction::Pause,
+            1 => EndReviewAction::Finish,
+            _ => EndReviewAction::Cancel,
+        }
+    }
+}
+
+/// End-review modal control keys (spec 08 Unit 2, extended by the dogfood
+/// polish pass with `j`/`k`/arrow selection and `Enter` confirm), for the
+/// help overlay, footer strip, [`super::modes::handle_end_review_key`]'s
+/// dispatch, and the modal's own body ([`super::end_review_modal`]).
+/// Registered on [`ModalKeymaps`] as the effective table like every other
+/// modal mode, but not (yet) exposed to `[keys.<mode>]` config remapping —
+/// it is absent from the `MODAL_MODE_NAMES` cross-checked lists, so it
+/// always renders its compiled-in defaults. Wiring `[keys.end-review]`
+/// remapping is a follow-up (spec 08 later units): it would add
+/// `end_review` to both name lists, an `end_review_action_name`/`_from_name`
+/// pair, and an `apply_modal_overrides` call in `super::modal_keys_config`,
+/// mirroring the sibling modes above.
 pub(super) static END_REVIEW_KEYS: LazyLock<Vec<ModalBinding<EndReviewAction>>> =
     LazyLock::new(|| {
         vec![
@@ -625,6 +661,40 @@ pub(super) static END_REVIEW_KEYS: LazyLock<Vec<ModalBinding<EndReviewAction>>> 
                 footer: Some(FooterHint {
                     rank: 3,
                     label: "cancel",
+                }),
+            },
+            ModalBinding {
+                description: "Move highlighted option down",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('j')),
+                    ModalKey::plain(KeyCode::Down),
+                ],
+                action: EndReviewAction::MoveDown,
+                footer: Some(FooterHint {
+                    rank: 4,
+                    label: "move",
+                }),
+            },
+            ModalBinding {
+                description: "Move highlighted option up",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('k')),
+                    ModalKey::plain(KeyCode::Up),
+                ],
+                action: EndReviewAction::MoveUp,
+                // Not also tagged: its label ("k / Up") is already a
+                // compound key display, so merging it with MoveDown's would
+                // double up the " / " separators — see the identical note
+                // on SWITCHER_KEYS's MoveUp row.
+                footer: None,
+            },
+            ModalBinding {
+                description: "Confirm the highlighted option",
+                keys: vec![ModalKey::plain(KeyCode::Enter)],
+                action: EndReviewAction::Confirm,
+                footer: Some(FooterHint {
+                    rank: 5,
+                    label: "confirm",
                 }),
             },
         ]
@@ -2306,6 +2376,36 @@ index 111..222 100644
                             app.mode,
                             Mode::Normal,
                             "End review {label}: cancel returns to the origin mode"
+                        );
+                    }
+                    EndReviewAction::MoveDown => {
+                        let _ = handle_end_review_key(&mut app, key.event());
+                        assert_eq!(
+                            app.end_review_cursor(),
+                            Some(1),
+                            "End review {label}: move-down highlights the next option"
+                        );
+                    }
+                    EndReviewAction::MoveUp => {
+                        // Start one row down so the up-motion has an
+                        // observable effect (the fixture opens at cursor 0,
+                        // already clamped).
+                        app.end_review_move_down();
+                        let _ = handle_end_review_key(&mut app, key.event());
+                        assert_eq!(
+                            app.end_review_cursor(),
+                            Some(0),
+                            "End review {label}: move-up highlights the prior option"
+                        );
+                    }
+                    EndReviewAction::Confirm => {
+                        // The fixture opens with Pause (cursor 0)
+                        // highlighted, so Enter must behave exactly like
+                        // the `p` mnemonic.
+                        let flow = handle_end_review_key(&mut app, key.event());
+                        assert!(
+                            matches!(flow, Flow::Quit(QuitOutcome::Emit)),
+                            "End review {label}: confirm on the highlighted Pause option must quit emitting annotations"
                         );
                     }
                 }

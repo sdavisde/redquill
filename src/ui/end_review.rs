@@ -12,6 +12,7 @@
 
 use super::QuitOutcome;
 use super::app::{App, EndReviewOrigin, Mode};
+use super::modal_keys::EndReviewAction;
 
 impl App {
     /// Opens the end-review modal (spec 08 Unit 2), capturing the mode `q`
@@ -24,7 +25,7 @@ impl App {
             Mode::Panel { cursor, tab } => EndReviewOrigin::Panel { cursor, tab },
             _ => EndReviewOrigin::Normal,
         };
-        self.mode = Mode::EndReview { origin };
+        self.mode = Mode::EndReview { origin, cursor: 0 };
     }
 
     /// Closes the end-review modal without ending the session, restoring the
@@ -34,13 +35,48 @@ impl App {
     /// `Mode::EndReview`.
     pub(super) fn cancel_end_review(&mut self) {
         self.mode = match self.mode {
-            Mode::EndReview { origin } => match origin {
+            Mode::EndReview { origin, .. } => match origin {
                 EndReviewOrigin::Normal => Mode::Normal,
                 EndReviewOrigin::Visual { anchor } => Mode::Visual { anchor },
                 EndReviewOrigin::Panel { cursor, tab } => Mode::Panel { cursor, tab },
             },
             other => other,
         };
+    }
+
+    /// The end-review modal's currently highlighted option (0 = Pause, 1 =
+    /// Finish, 2 = Cancel), if it's open — the one place
+    /// [`super::modes::handle_end_review_key`]'s `Enter`/`Confirm` dispatch
+    /// and [`super::end_review_modal::render`]'s highlight both read the
+    /// cursor from, per the "predicates asked in more than one place get one
+    /// named helper" rule.
+    pub(super) fn end_review_cursor(&self) -> Option<usize> {
+        match self.mode {
+            Mode::EndReview { cursor, .. } => Some(cursor),
+            _ => None,
+        }
+    }
+
+    /// Moves the end-review modal's highlighted option down one row, clamped
+    /// at the last (Cancel, index 2). A no-op outside `Mode::EndReview`.
+    pub(super) fn end_review_move_down(&mut self) {
+        if let Mode::EndReview { origin, cursor } = self.mode {
+            self.mode = Mode::EndReview {
+                origin,
+                cursor: (cursor + 1).min(EndReviewAction::LAST_CURSOR),
+            };
+        }
+    }
+
+    /// Moves the end-review modal's highlighted option up one row, clamped
+    /// at the first (Pause, index 0). A no-op outside `Mode::EndReview`.
+    pub(super) fn end_review_move_up(&mut self) {
+        if let Mode::EndReview { origin, cursor } = self.mode {
+            self.mode = Mode::EndReview {
+                origin,
+                cursor: cursor.saturating_sub(1),
+            };
+        }
     }
 
     /// The `f` (finish) gesture: removes the managed review worktree through
@@ -131,7 +167,8 @@ index 111..222 100644
         assert_eq!(
             app.mode,
             Mode::EndReview {
-                origin: EndReviewOrigin::Normal
+                origin: EndReviewOrigin::Normal,
+                cursor: 0,
             }
         );
         app.cancel_end_review();
@@ -146,7 +183,8 @@ index 111..222 100644
         assert_eq!(
             app.mode,
             Mode::EndReview {
-                origin: EndReviewOrigin::Visual { anchor: 3 }
+                origin: EndReviewOrigin::Visual { anchor: 3 },
+                cursor: 0,
             }
         );
         app.cancel_end_review();
@@ -167,7 +205,8 @@ index 111..222 100644
                 origin: EndReviewOrigin::Panel {
                     cursor: 2,
                     tab: PanelTab::History,
-                }
+                },
+                cursor: 0,
             }
         );
         app.cancel_end_review();

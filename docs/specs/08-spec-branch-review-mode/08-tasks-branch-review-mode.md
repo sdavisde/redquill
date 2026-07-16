@@ -80,6 +80,7 @@ Covers: spec Unit 2 — banner + theme fields + contrast guard, layout accountin
 - [x] 2.4 Runner methods `worktree_remove(path)` (fixed argv, never `--force`) and `worktree_prune()` (TDD in tempdirs, isolation helper from 1.5). Wire finish = emit annotations (existing `Reviewing: <range>` grouping, zero format changes) → remove worktree → prune → quit; on removal failure surface git's message and stay in the session. Pause = emit + quit, touching nothing.
 - [x] 2.5 Tempdir integration tests: pause leaves the worktree, finish removes it, `Q` emits nothing, dirty-worktree finish fails with the worktree and session intact.
 - [x] 2.6 Footer + `?` overlay entries for the review-mode `q` meaning via the shared tables; run gates; capture banner screenshot + lifecycle transcripts into `proofs/`; commit.
+- [x] 2.7 Polish pass from user dogfood feedback: banner padding/weight + right-aligned progress; end-review modal compacted to content, single-line options with accented keys, j/k/Enter selection (lazygit-style).
 
 ### [ ] 3.0 Accept / defer files while reviewing
 

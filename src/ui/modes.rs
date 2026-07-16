@@ -338,17 +338,50 @@ pub(super) fn handle_switcher_key(app: &mut App, key: KeyEvent) {
 /// untouched), `f` finishes (removes the worktree via
 /// [`super::App::finish_review`], quitting on success or surfacing the
 /// failure and staying open), `c`/`Esc` cancel back to the mode `q` was
-/// pressed from. Dispatch is driven by [`modal_keys::END_REVIEW_KEYS`] — the
-/// same table the help overlay renders. Unlike most modal handlers this one
-/// returns [`super::Flow`] (like [`handle_panel_key`]): pause/a successful
-/// finish end the session, so the event loop must see the quit rather than
-/// this function looping it internally.
+/// pressed from — plus, since the dogfood polish pass, `j`/`k`/arrows move a
+/// highlighted selection across the three options and `Enter` confirms
+/// whichever one is highlighted (acting exactly like its mnemonic; see
+/// [`EndReviewAction::from_cursor`]). Dispatch is driven by
+/// [`modal_keys::END_REVIEW_KEYS`] — the same table the help overlay
+/// renders. Unlike most modal handlers this one returns [`super::Flow`]
+/// (like [`handle_panel_key`]): pause/a successful finish end the session,
+/// so the event loop must see the quit rather than this function looping it
+/// internally.
 pub(super) fn handle_end_review_key(app: &mut App, key: KeyEvent) -> super::Flow {
-    use super::{Flow, QuitOutcome};
+    use super::Flow;
     let Some(action) = modal_keys::resolve(&app.modal_keys.end_review, key) else {
         return Flow::Continue;
     };
     match action {
+        EndReviewAction::Pause | EndReviewAction::Finish | EndReviewAction::Cancel => {
+            end_review_choice(app, action)
+        }
+        EndReviewAction::MoveDown => {
+            app.end_review_move_down();
+            Flow::Continue
+        }
+        EndReviewAction::MoveUp => {
+            app.end_review_move_up();
+            Flow::Continue
+        }
+        EndReviewAction::Confirm => {
+            let cursor = app.end_review_cursor().unwrap_or(0);
+            end_review_choice(app, EndReviewAction::from_cursor(cursor))
+        }
+    }
+}
+
+/// Runs one of the end-review modal's three exits — shared by the direct
+/// mnemonic keys (`p`/`f`/`c`/`Esc`) and by `Enter`'s confirm-the-highlighted-
+/// option path (via [`EndReviewAction::from_cursor`]), so the two paths can
+/// never drift apart on what pressing "Finish" actually does. `choice` is
+/// always `Pause`/`Finish`/`Cancel` in practice; `MoveDown`/`MoveUp`/
+/// `Confirm` fall back to a no-op continue rather than panicking (`from_cursor`
+/// never produces them, and [`handle_end_review_key`]'s own match never
+/// passes them here — this is a defensive fallback, not a reachable path).
+fn end_review_choice(app: &mut App, choice: EndReviewAction) -> super::Flow {
+    use super::{Flow, QuitOutcome};
+    match choice {
         EndReviewAction::Pause => Flow::Quit(QuitOutcome::Emit),
         EndReviewAction::Finish => match app.finish_review() {
             Some(outcome) => Flow::Quit(outcome),
@@ -356,6 +389,9 @@ pub(super) fn handle_end_review_key(app: &mut App, key: KeyEvent) -> super::Flow
         },
         EndReviewAction::Cancel => {
             app.cancel_end_review();
+            Flow::Continue
+        }
+        EndReviewAction::MoveDown | EndReviewAction::MoveUp | EndReviewAction::Confirm => {
             Flow::Continue
         }
     }
