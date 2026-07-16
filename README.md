@@ -1,8 +1,10 @@
-# <img src="redquill-logo.png" alt="redquill logo" width="40" height="40"> redquill (rq)
+<p align="center">
+  <img src="redquill-logo.png" alt="redquill logo" width="300" height="300">
+</p>
 
-**A Portable, Efficeint tool for reviewing agentic code**
-
-AI Agents still produce code that is hard to maintain, or I may not agree with. This tool was built as a way to streamline the local code review process while never having to leave the terminal.
+<p align="center">
+  A portable, efficeint tool for reviewing code
+</p>
 
 ## Vision
 
