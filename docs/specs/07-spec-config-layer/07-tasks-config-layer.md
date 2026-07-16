@@ -36,7 +36,7 @@ Each task's **User demo** is the acceptance ritual between stages: run it as wri
 
 ## Tasks
 
-### [~] 1.0 Config file moves the sidebar (loading infrastructure + layout + search defaults)
+### [x] 1.0 Config file moves the sidebar (loading infrastructure + layout + search defaults)
 
 Establish the end-to-end config pipeline — path discovery (`$XDG_CONFIG_HOME`/`~/.config/redquill/config.toml`, `~/.config` on macOS too), one-shot startup load, serde-default partial-override `Config` struct, the documented degradation contract (missing = silent; syntax error = defaults + visible warning; invalid key/value = partial apply + warning), the dismissible non-blocking warning surface — proven through its first visible consumers: `[layout]` (sidebar side/width) and `[search]` (case/whole-word/literal startup defaults). Starts the annotated `docs/example-config.toml` with the `[layout]` and `[search]` sections.
 
@@ -63,7 +63,7 @@ Establish the end-to-end config pipeline — path discovery (`$XDG_CONFIG_HOME`/
 - [x] 1.9 Create `docs/example-config.toml` with fully annotated `[layout]` and `[search]` sections (every key, allowed values, defaults stated).
 - [x] 1.10 Run the User demo; capture `proofs/1-sidebar-left.png`, `proofs/1-malformed-warning.png`, `proofs/1-no-config-identical.txt`; run all four gates; commit (deps commit may precede feature commit).
 
-### [ ] 2.0 Config file picks your editor (`[editor]` templating + presets)
+### [~] 2.0 Config file picks your editor (`[editor]` templating + presets)
 
 Add `[editor]` config: `edit_at_line` template with `{{filename}}`/`{{line}}` placeholders (argv-token substitution, never a shell) and `preset` with the built-in table (vim, nvim, helix, vscode, vscodium, zed, emacs, nano, micro, sublime, kakoune). Wire into the resolution precedence `--editor` > config > `$VISUAL` > `$EDITOR` > `nvim`, keeping the family heuristic for non-config tiers; replaces the hardcoded two-family special case in `src/ui/editor.rs` with data. Adds the `[editor]` section (with the full preset list) to `docs/example-config.toml`.
 
