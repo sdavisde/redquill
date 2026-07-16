@@ -198,6 +198,14 @@ pub struct App {
     /// session (`!`, [`Action::DismissConfigWarning`]). Config loads exactly
     /// once at startup, so this never needs to reset mid-session.
     pub config_warning_dismissed: bool,
+    /// Every modal mode's effective key table — [`super::modal_keys`]'s
+    /// compiled-in defaults with `[keys.<mode>]` config overrides already
+    /// applied (spec 07 Unit 4 task 5.3/5.4), built exactly once via
+    /// [`App::set_modal_keys`] alongside the main keymap in [`super::run`].
+    /// Defaults to [`super::modal_keys::ModalKeymaps::default`] (the
+    /// unmodified compiled-in tables) for every `App` built without that
+    /// call, matching `config`'s own default-to-shipped-behavior contract.
+    pub(super) modal_keys: super::modal_keys::ModalKeymaps,
     /// The git backend staging and refresh run through. `None` in
     /// git-less contexts (e.g. pure-navigation unit tests), where staging
     /// degrades to a footer message.
@@ -453,6 +461,7 @@ impl App {
             config: Config::default(),
             config_warnings: Vec::new(),
             config_warning_dismissed: false,
+            modal_keys: super::modal_keys::ModalKeymaps::default(),
             stage_ops: None,
             theme: Theme::default(),
             editor: EditorLaunch::default(),

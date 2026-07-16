@@ -267,6 +267,7 @@ fn commit_view_hides_and_disarms_staging_keys() {
         },
         None,
         &keymap,
+        &app.modal_keys,
     );
     assert!(
         !entries.iter().any(|e| e.label.contains("stage")),

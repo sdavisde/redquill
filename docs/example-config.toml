@@ -178,9 +178,11 @@ literal = false
 #
 # Every binding in the main keymap (the diff view's Normal/Visual-mode keys,
 # and the git panel's own keys once it holds focus) is remappable, one
-# table per scope: `[keys.diff]` and `[keys.panel]`. (Modal tables — the
-# staging panel, the branch/worktree switcher, the fuzzy finder, and so on —
-# are not covered by this section; see a future spec.)
+# table per scope: `[keys.diff]` and `[keys.panel]`. Every modal mode (the
+# staging panel, the branch/worktree switcher, the fuzzy finder, Compose,
+# and so on) has its own `[keys.<mode>]` table with the identical grammar
+# and merge semantics — see the "[keys.<mode>] — remap modal panels" section
+# further down for the complete list of modes and actions.
 #
 # Each entry is `action-name = "<key>"` or `action-name = ["<key>", ...]`.
 # Action names are the kebab-case names listed below — the complete set
@@ -283,3 +285,154 @@ literal = false
 # dismiss-config-warning = "!"        # Dismiss config warning notice
 # quit = "q"                          # Quit and emit annotations
 # quit-discard = ["Q", "ctrl-c"]      # Quit and discard annotations
+
+# -----------------------------------------------------------------------
+# [keys.<mode>] — remap modal panels (spec 07 Unit 4 task 5.0)
+# -----------------------------------------------------------------------
+#
+# Every modal mode — a mode that handles its own keys directly instead of
+# going through the main keymap (the annotation list, the staging panel,
+# the LSP peek overlay, the branch/worktree switcher, the help overlay's
+# scroll keys and its own `/` filter, Compose, the commit-message modal,
+# the diff-view `/` search input, the fuzzy file finder, and the two
+# Project Search focuses) — has its own `[keys.<mode>]` table, with the
+# identical grammar and merge semantics as `[keys.diff]`/`[keys.panel]`
+# above: `action-name = "<key>"` or `= ["<key>", ...]`, an override
+# replaces that action's default keys entirely, an unlisted action keeps
+# its defaults, `= []` unbinds it, and a same-table collision is won by
+# the override (with a warning).
+#
+# Free-text modes (Compose, the commit-message modal, Search, Finder, and
+# both Project Search focuses) type printable characters into a buffer or
+# query — that character insertion is never an action and can't be bound;
+# only the *control* keys listed below (Enter/Esc/arrows/Backspace/...)
+# are actions.
+#
+# The twelve mode names and their complete action lists, each showing its
+# default key(s):
+#
+# [keys.list]                          # Annotation list panel (`a`)
+# move-down = "j"                      # Move focus down
+# move-up = "k"                        # Move focus up
+# jump = "enter"                       # Jump to annotation
+# edit = "e"                           # Edit
+# delete = "d"                         # Delete
+# close = ["a", "esc"]                 # Close panel
+#
+# [keys.staging]                       # Staging panel (`s`)
+# move-down = "j"                      # Move focus down
+# move-up = "k"                        # Move focus up
+# unstage = ["space", "enter"]         # Unstage file
+# close = ["s", "esc"]                 # Close panel
+#
+# [keys.peek]                          # LSP peek overlay (`gd`/`gr`/`K`)
+# move-down = "j"                      # Move selection / scroll hover down
+# move-up = "k"                        # Move selection / scroll hover up
+# enter = "enter"                      # Jump to location (definition/references)
+# close = "esc"                        # Close
+#
+# [keys.switcher]                      # Branch/worktree switcher (`b`, panel scope)
+# toggle-tab = ["tab", "shift-tab", "h", "l", "left", "right"]  # Switch tab
+# move-down = ["j", "down"]             # Move selection down
+# move-up = ["k", "up"]                 # Move selection up
+# confirm = "enter"                    # Switch to the selected branch/worktree
+# close = "esc"                        # Close
+#
+# [keys.help]                          # Help overlay scroll/close/filter-open keys
+# close = ["esc", "enter", "?"]         # Close help
+# scroll-down = ["j", "down"]           # Scroll down
+# scroll-up = ["k", "up"]               # Scroll up
+# page-down = "pagedown"               # Page down
+# page-up = "pageup"                   # Page up
+# top = ["g", "home"]                   # Scroll to top
+# bottom = ["G", "end"]                 # Scroll to bottom
+# search = "/"                         # Filter keybinds
+#
+# [keys.help-search]                   # Help overlay's own `/` filter, while editing it
+# lock = "enter"                       # Lock in the filter (scroll keys resume)
+# clear = "esc"                        # Clear the filter
+# delete-char = "backspace"            # Delete character
+#
+# [keys.compose]                       # Comment modal (`c` / visual `c`)
+# submit = "enter"                     # Submit
+# cancel = "esc"                       # Cancel
+# newline = ["shift-enter", "ctrl-j"]   # Insert newline (Shift-Enter needs a kitty-capable terminal)
+# cycle-classification = "ctrl-t"      # Cycle classification
+# move-left = "left"                   # Move cursor left
+# move-right = "right"                 # Move cursor right
+# move-up = "up"                       # Move cursor up
+# move-down = "down"                   # Move cursor down
+# word-left = ["ctrl-left", "alt-left", "alt-b"]    # Move word left
+# word-right = ["ctrl-right", "alt-right", "alt-f"]  # Move word right
+# line-start = ["home", "ctrl-a"]       # Move to line start
+# line-end = ["end", "ctrl-e"]          # Move to line end
+# doc-start = "ctrl-home"              # Move to document start
+# doc-end = "ctrl-end"                 # Move to document end
+# delete-back = "backspace"            # Delete character before the cursor
+# delete-forward = "delete"            # Delete character at the cursor
+# delete-word-back = ["ctrl-backspace", "alt-backspace", "ctrl-w", "ctrl-h"]  # Delete word before the cursor
+# delete-word-forward = ["ctrl-delete", "alt-d"]     # Delete word at the cursor
+#
+# [keys.commit-message]                # Commit-message modal (`c`, git panel, spec 04)
+# submit = "enter"                     # Commit staged changes with this message
+# cancel = "esc"                       # Cancel back to the git panel
+# newline = ["shift-enter", "ctrl-j"]   # Insert newline / body line
+# move-left = "left"                   # Move cursor left
+# move-right = "right"                 # Move cursor right
+# move-up = "up"                       # Move cursor up
+# move-down = "down"                   # Move cursor down
+# word-left = ["ctrl-left", "alt-left", "alt-b"]    # Move word left
+# word-right = ["ctrl-right", "alt-right", "alt-f"]  # Move word right
+# line-start = ["home", "ctrl-a"]       # Move to line start
+# line-end = ["end", "ctrl-e"]          # Move to line end
+# doc-start = "ctrl-home"              # Move to document start
+# doc-end = "ctrl-end"                 # Move to document end
+# delete-back = "backspace"            # Delete character before the cursor
+# delete-forward = "delete"            # Delete character at the cursor
+# delete-word-back = ["ctrl-backspace", "alt-backspace", "ctrl-w", "ctrl-h"]  # Delete word before the cursor
+# delete-word-forward = ["ctrl-delete", "alt-d"]     # Delete word at the cursor
+#
+# [keys.search]                        # Diff-view `/` search input
+# confirm = "enter"                    # Confirm search
+# cancel = "esc"                       # Cancel (clears pattern if buffer empty)
+# delete-char = "backspace"            # Delete character
+#
+# [keys.finder]                        # Fuzzy file finder overlay (`gp`, spec 06 Unit 1)
+# move-up = "up"                       # Move selection up
+# move-down = "down"                   # Move selection down
+# open = "enter"                       # Open the selected file (read-only whole-file view)
+# close = "esc"                        # Close (returns to the prior view unchanged)
+# delete-char = "backspace"            # Delete character
+#
+# [keys.project-search-input]          # Project Search (`g/`, spec 06 Unit 2), input focused
+# move-up = "up"                       # Move result selection up
+# move-down = "down"                   # Move result selection down
+# open = "enter"                       # Open the selected result
+# focus-results = "esc"                # Move focus to the results list (view stays open)
+# toggle-focus = "tab"                 # Toggle focus between input and results
+# delete-char = "backspace"            # Delete character
+# toggle-case = "alt-c"                # Cycle case sensitivity (smart / sensitive / insensitive)
+# toggle-whole-word = "alt-w"          # Toggle whole-word matching
+# toggle-literal = "alt-r"             # Toggle regex / literal matching
+#
+# [keys.project-search-results]        # Project Search, results focused
+# edit-query = "/"                     # Edit query (focus input; query preserved)
+# close = "esc"                        # Close (returns to the exact prior diff position)
+# move-up = ["k", "up"]                 # Move result selection up
+# move-down = ["j", "down"]             # Move result selection down
+# open = "enter"                       # Open the selected result
+# toggle-focus = "tab"                 # Toggle focus between input and results
+# toggle-case = "alt-c"                # Cycle case sensitivity (smart / sensitive / insensitive)
+# toggle-whole-word = "alt-w"          # Toggle whole-word matching
+# toggle-literal = "alt-r"             # Toggle regex / literal matching
+#
+# Example: remap the staging panel's unstage key to `x` and the switcher's
+# confirm key to `l` (also still one of ToggleTab's defaults, so this would
+# collide in a real config — shown separately here for two independent,
+# non-colliding one-line examples):
+#
+# [keys.staging]
+# unstage = "x"
+#
+# [keys.switcher]
+# confirm = "y"

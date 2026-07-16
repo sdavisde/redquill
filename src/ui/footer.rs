@@ -30,11 +30,7 @@ use crossterm::event::KeyEvent;
 
 use super::app::{App, Mode};
 use super::keymap::{Action, FooterHint, Keymap, Scope};
-use super::modal_keys::{
-    COMMIT_MESSAGE_HINTS, COMPOSE_HINTS, FINDER_HINTS, HELP_KEYS, LIST_KEYS, ModalBinding,
-    PEEK_KEYS, PROJECT_SEARCH_INPUT_HINTS, PROJECT_SEARCH_RESULTS_HINTS, STAGING_KEYS,
-    SWITCHER_KEYS,
-};
+use super::modal_keys::{ModalBinding, ModalKeymaps};
 use super::project_search::SearchFocus;
 use super::theme::Theme;
 
@@ -95,17 +91,20 @@ fn keymap_hints(
 }
 
 /// Same grouping as [`keymap_hints`], for a modal-mode table
-/// ([`super::modal_keys`]) instead of the [`Keymap`].
-fn modal_hints<A: Copy>(table: &'static [ModalBinding<A>]) -> Vec<FooterEntry> {
+/// ([`super::modal_keys`]) instead of the [`Keymap`]. Takes the *effective*
+/// table (`app.modal_keys.*`, spec 07 Unit 4 task 5.4 — defaults plus any
+/// `[keys.<mode>]` overrides), not the compiled-in `'static` default, so the
+/// footer strip reflects a remap with no additional wiring.
+fn modal_hints<A: Copy + Clone>(table: &[ModalBinding<A>]) -> Vec<FooterEntry> {
     let mut grouped: Vec<(FooterHint, String)> = Vec::new();
     for b in table {
         let Some(hint) = b.footer else { continue };
         match grouped.iter_mut().find(|(h, _)| *h == hint) {
             Some((_, key)) => {
                 key.push('/');
-                key.push_str(b.label);
+                key.push_str(&b.key_label());
             }
-            None => grouped.push((hint, b.label.to_string())),
+            None => grouped.push((hint, b.key_label())),
         }
     }
     sort_for_display(
@@ -285,10 +284,11 @@ fn pending_hints(km: &Keymap, prefix: KeyEvent, code_intel_allowed: bool) -> Vec
 }
 
 /// The minimal strip shown while the help overlay is open: scroll, `/`
-/// filter, close — derived from [`HELP_KEYS`]' own [`FooterHint`] tags. No
-/// `? help` entry (the overlay is already open, so it would be redundant).
-fn help_open_hints() -> Vec<FooterEntry> {
-    modal_hints(&HELP_KEYS)
+/// filter, close — derived from `app.modal_keys.help`'s own [`FooterHint`]
+/// tags. No `? help` entry (the overlay is already open, so it would be
+/// redundant).
+fn help_open_hints(modal_keys: &ModalKeymaps) -> Vec<FooterEntry> {
+    modal_hints(&modal_keys.help)
 }
 
 /// The capability/state flags [`build_hints`] needs, bundled into one struct
@@ -315,8 +315,8 @@ pub(super) struct FooterFlags {
     pub(super) help_open: bool,
     /// Which half of the Project Search view has focus (see
     /// [`SearchFocus`]); only consulted in [`Mode::ProjectSearch`], picking
-    /// between [`PROJECT_SEARCH_INPUT_HINTS`] and
-    /// [`PROJECT_SEARCH_RESULTS_HINTS`] (spec 06 round-1 UX fix).
+    /// between `modal_keys.project_search_input` and
+    /// `modal_keys.project_search_results` (spec 06 round-1 UX fix).
     pub(super) project_search_focus: SearchFocus,
 }
 
@@ -325,13 +325,15 @@ pub(super) struct FooterFlags {
 /// explicit inputs rather than `&App` so it's unit-testable without
 /// constructing a whole app. `pending` is only consulted in
 /// [`Mode::Normal`]/[`Mode::Visual`] (the only modes that ever have a pending
-/// two-key prefix — see `super::event_loop`). See [`FooterFlags`] for the
-/// rest.
+/// two-key prefix — see `super::event_loop`). `modal_keys` is `app`'s
+/// effective (post-`[keys.<mode>]`-override) tables, spec 07 Unit 4 task 5.4.
+/// See [`FooterFlags`] for the rest.
 pub(super) fn build_hints(
     mode: Mode,
     flags: FooterFlags,
     pending: Option<KeyEvent>,
     km: &Keymap,
+    modal_keys: &ModalKeymaps,
 ) -> Vec<FooterEntry> {
     let FooterFlags {
         staging_allowed,
@@ -342,7 +344,7 @@ pub(super) fn build_hints(
         project_search_focus,
     } = flags;
     if help_open {
-        return help_open_hints();
+        return help_open_hints(modal_keys);
     }
     if let Some(prefix) = pending
         && matches!(mode, Mode::Normal | Mode::Visual { .. })
@@ -353,16 +355,16 @@ pub(super) fn build_hints(
         Mode::Normal => normal_hints(km, staging_allowed, code_intel_allowed, viewing_commit),
         Mode::Visual { .. } => visual_hints(km, staging_allowed),
         Mode::Panel { .. } => panel_hints(km, push_publishes),
-        Mode::List => modal_hints(&LIST_KEYS),
-        Mode::Staging => modal_hints(&STAGING_KEYS),
-        Mode::Peek => modal_hints(&PEEK_KEYS),
-        Mode::Switcher => modal_hints(&SWITCHER_KEYS),
-        Mode::Compose => modal_hints(&COMPOSE_HINTS),
-        Mode::CommitMessage => modal_hints(&COMMIT_MESSAGE_HINTS),
-        Mode::Finder => modal_hints(&FINDER_HINTS),
+        Mode::List => modal_hints(&modal_keys.list),
+        Mode::Staging => modal_hints(&modal_keys.staging),
+        Mode::Peek => modal_hints(&modal_keys.peek),
+        Mode::Switcher => modal_hints(&modal_keys.switcher),
+        Mode::Compose => modal_hints(&modal_keys.compose),
+        Mode::CommitMessage => modal_hints(&modal_keys.commit_message),
+        Mode::Finder => modal_hints(&modal_keys.finder),
         Mode::ProjectSearch => match project_search_focus {
-            SearchFocus::Input => modal_hints(&PROJECT_SEARCH_INPUT_HINTS),
-            SearchFocus::Results => modal_hints(&PROJECT_SEARCH_RESULTS_HINTS),
+            SearchFocus::Input => modal_hints(&modal_keys.project_search_input),
+            SearchFocus::Results => modal_hints(&modal_keys.project_search_results),
         },
         // The search input occupies the footer itself; no hint strip.
         Mode::Search => Vec::new(),
@@ -464,6 +466,7 @@ pub(super) fn footer_height(
         },
         pending,
         keymap,
+        &app.modal_keys,
     );
     if entries.is_empty() {
         return 1;

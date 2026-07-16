@@ -159,31 +159,68 @@ pub fn parse_key_string(s: &str) -> Result<KeySeqSpec, KeyGrammarError> {
     }
 }
 
-/// `[keys.diff]`/`[keys.panel]`: raw action-name -> key-string(s) overrides,
-/// already grammar-validated (an unparseable key string is dropped with a
-/// warning at parse time — see [`KeysConfig::from_value`]) but *not* yet
-/// resolved to a real `Action` — that needs the bijective name table in
-/// `crate::ui::keymap`, which this module must never import (see the module
-/// doc). An empty `Vec` for an action name means "unbind" (the config
-/// author wrote `= []`); an action name absent from either map keeps its
-/// defaults untouched.
+/// The `[keys.<mode>]` table names for every modal mode (spec 07 Unit 4 task
+/// 5.2), besides the main keymap's `diff`/`panel`. Plain string literals —
+/// this module must never import `crate::ui` (see the module doc) — so this
+/// list is the config-side half of the contract; `crate::ui::modal_keys`'s
+/// `MODAL_MODE_NAMES` is the ui-side half, and
+/// `crate::ui::modal_keys_config`'s tests cross-check the two agree (that
+/// module is allowed to import both).
+const MODAL_MODE_NAMES: &[&str] = &[
+    "list",
+    "staging",
+    "peek",
+    "switcher",
+    "help",
+    "help-search",
+    "compose",
+    "commit-message",
+    "search",
+    "finder",
+    "project-search-input",
+    "project-search-results",
+];
+
+/// `[keys.diff]`/`[keys.panel]`/`[keys.<mode>]`: raw action-name ->
+/// key-string(s) overrides, already grammar-validated (an unparseable key
+/// string is dropped with a warning at parse time — see
+/// [`KeysConfig::from_value`]) but *not* yet resolved to a real action —
+/// that needs the bijective name tables in `crate::ui::keymap`/
+/// `crate::ui::modal_keys`, which this module must never import (see the
+/// module doc). An empty `Vec` for an action name means "unbind" (the config
+/// author wrote `= []`); an action name absent from its map keeps its
+/// default untouched. `modal` holds every `[keys.<mode>]` table besides
+/// `diff`/`panel`, keyed by mode name (one of [`MODAL_MODE_NAMES`]) — a
+/// single map rather than one field per mode, since
+/// `crate::ui::modal_keys_config` (the edge module resolving these, spec 07
+/// Unit 4 task 5.3/5.4) already needs one generic merge function reusable
+/// across all twelve modes.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct KeysConfig {
     pub diff: BTreeMap<String, Vec<KeySeqSpec>>,
     pub panel: BTreeMap<String, Vec<KeySeqSpec>>,
+    pub modal: BTreeMap<String, BTreeMap<String, Vec<KeySeqSpec>>>,
 }
 
 impl KeysConfig {
-    pub(super) fn from_value(value: toml::Value, warnings: &mut Vec<ConfigWarning>) -> KeysConfig {
+    /// `pub(crate)` (not `pub(super)`) so `crate::ui::modal_keys_config`'s
+    /// tests can drive this directly to cross-check its hardcoded
+    /// [`MODAL_MODE_NAMES`] list against `crate::ui::modal_keys`'s — the same
+    /// visibility `crate::ui::keymap_config::effective_keymap` already uses
+    /// for the analogous main-keymap cross-check.
+    pub(crate) fn from_value(value: toml::Value, warnings: &mut Vec<ConfigWarning>) -> KeysConfig {
         let mut cfg = KeysConfig::default();
         let Some(table) = value.as_table() else {
             warnings.push(ConfigWarning::invalid("keys", "keys", "expected a table"));
             return cfg;
         };
         for (section_key, section_val) in table {
-            let target = match section_key.as_str() {
+            let target: &mut BTreeMap<String, Vec<KeySeqSpec>> = match section_key.as_str() {
                 "diff" => &mut cfg.diff,
                 "panel" => &mut cfg.panel,
+                other if MODAL_MODE_NAMES.contains(&other) => {
+                    cfg.modal.entry(other.to_string()).or_default()
+                }
                 other => {
                     warnings.push(ConfigWarning::unknown("keys", other));
                     continue;

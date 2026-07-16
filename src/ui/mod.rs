@@ -40,6 +40,7 @@ mod list_panel;
 mod lsp_config;
 mod lsp_ops;
 mod modal_keys;
+mod modal_keys_config;
 mod modes;
 mod peek;
 mod peek_overlay;
@@ -501,28 +502,35 @@ fn launch_editor(
 ///   filter (`None`) instead of closing — so a second `Esc` (now with no
 ///   filter) is what closes help.
 fn handle_help_key(app: &mut App, key: KeyEvent) {
-    use modal_keys::HelpAction;
+    use modal_keys::{HelpAction, HelpSearchAction};
 
     if let Some((mut query, editing)) = app.help_search.clone() {
         if editing {
-            match key.code {
-                KeyCode::Esc => app.help_search = None,
-                KeyCode::Enter => app.help_search = Some((query, false)),
-                KeyCode::Backspace => {
-                    query.pop();
-                    app.help_search = Some((query, true));
+            if let Some(action) = modal_keys::resolve(&app.modal_keys.help_search, key) {
+                match action {
+                    HelpSearchAction::Lock => app.help_search = Some((query, false)),
+                    HelpSearchAction::Clear => app.help_search = None,
+                    HelpSearchAction::DeleteChar => {
+                        query.pop();
+                        app.help_search = Some((query, true));
+                    }
                 }
-                KeyCode::Char(c) => {
-                    query.push(c);
-                    app.help_search = Some((query, true));
-                }
-                _ => {}
+                return;
+            }
+            // Bare, unmodified `Char` extends the filter query — never
+            // remappable, per the free-text-mode contract.
+            if let KeyCode::Char(c) = key.code {
+                query.push(c);
+                app.help_search = Some((query, true));
             }
             return;
         }
         // Locked filter: `/` resumes editing it, `Esc` clears it before it
         // can reach the `Close` action below — everything else (including
         // Enter/`?`) falls through to the ordinary scroll-key resolution.
+        // Not part of `HELP_SEARCH_HINTS` (that table documents only the
+        // editing sub-state's keys) — this micro-state stays fixed, like the
+        // help overlay's own `?`/`/` toggle chrome.
         match key.code {
             KeyCode::Char('/') => {
                 app.help_search = Some((query, true));
@@ -536,7 +544,7 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
         }
     }
 
-    let Some(action) = modal_keys::resolve(&modal_keys::HELP_KEYS, key) else {
+    let Some(action) = modal_keys::resolve(&app.modal_keys.help, key) else {
         return;
     };
     let page = app.help_viewport.get().max(1);
@@ -659,6 +667,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
             },
             pending,
             keymap,
+            &app.modal_keys,
         );
         let lines = footer::render_hint_strip(&entries, footer_area.width, &app.theme);
         frame.render_widget(ratatui::widgets::Paragraph::new(lines), footer_area);
@@ -678,7 +687,10 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
         help::render(
             frame,
             area,
-            keymap,
+            &help::HelpTables {
+                keymap,
+                modal_keys: &app.modal_keys,
+            },
             &app.theme,
             staging_allowed,
             code_intel_allowed,
@@ -778,6 +790,13 @@ pub fn run(app: &mut App) -> anyhow::Result<QuitOutcome> {
     // through the same dismissible status-line notice.
     let (keymap, keymap_warnings) = keymap_config::effective_keymap(&app.config.keys);
     app.config_warnings.extend(keymap_warnings);
+    // Same one-shot construction for every modal mode's table (spec 07 Unit
+    // 4 task 5.3/5.4): `modal_keys::ModalKeymaps::default()` (the compiled-in
+    // defaults) with each `[keys.<mode>]` override applied, stored on `app`
+    // so every modal handler and render call reads a plain owned table.
+    let (modal_keymaps, modal_warnings) = modal_keys_config::effective_modal_keys(&app.config.keys);
+    app.modal_keys = modal_keymaps;
+    app.config_warnings.extend(modal_warnings);
     let outcome = event_loop(&mut terminal, app, &keymap);
     restore_terminal();
     // Shut down any LSP servers spawned this session only after the

@@ -12,129 +12,88 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::App;
-use super::modal_keys::{self, ListAction, PeekAction, StagingAction, SwitcherAction};
+use super::modal_keys::{
+    self, CommitMessageAction, ComposeAction, FinderAction, ListAction, PeekAction,
+    ProjectSearchInputAction, ProjectSearchResultsAction, SearchAction, StagingAction,
+    SwitcherAction,
+};
 
-/// Applies one editing/motion key to a modal text `buffer`, returning whether
-/// it consumed the key. Shared verbatim by the Compose and commit-message
-/// handlers so the two modals' text-editing keymap can never drift apart; the
-/// keys it accepts are documented in [`modal_keys::COMPOSE_HINTS`] /
-/// [`modal_keys::COMMIT_MESSAGE_HINTS`] and pinned by the bidirectional drift
-/// tests there.
-///
-/// It does *not* handle the lifecycle keys — `Esc` (cancel), a plain `Enter`
-/// (submit), and Compose's `Ctrl-t` (cycle classification) — which differ per
-/// modal and stay in each handler. The `ctrl`/`alt`/`shift` flags are the
-/// decoded modifiers of `key`.
-///
-/// The key set (desktop-editor conventions, several encodings per action so
-/// macOS terminals that eat `Ctrl+arrow`/`Ctrl+Backspace` still have a path):
-/// - Newline: `Shift+Enter` (kitty-only; see [`super::init_terminal`]), `Ctrl-j`.
-/// - Word left: `Ctrl+←`, `Alt+←`, `Alt+b`. Word right: `Ctrl+→`, `Alt+→`, `Alt+f`.
-/// - Line start: `Home`, `Ctrl-a`. Line end: `End`, `Ctrl-e`.
-/// - Document start: `Ctrl+Home`. Document end: `Ctrl+End`.
-/// - Delete char: `Backspace` (back), `Delete` (forward).
-/// - Delete word back: `Ctrl+Backspace`, `Alt+Backspace`, `Ctrl-w`, `Ctrl-h`
-///   (the encoding many terminals send for `Ctrl+Backspace`).
-/// - Delete word forward: `Ctrl+Delete`, `Alt+d`.
-fn apply_buffer_key(
-    buffer: &mut super::compose::TextBuffer,
-    key: KeyEvent,
-    ctrl: bool,
-    alt: bool,
-    shift: bool,
-) -> bool {
-    match key.code {
-        // Shift+Enter (kitty protocol) inserts a newline; plain Enter is a
-        // lifecycle key handled by the caller. Ctrl-j is the universal
-        // newline fallback (see the `Char('j')` arm below).
-        KeyCode::Enter if shift => buffer.newline(),
-        KeyCode::Backspace if ctrl || alt => buffer.delete_word_back(),
-        KeyCode::Backspace => buffer.backspace(),
-        KeyCode::Delete if ctrl || alt => buffer.delete_word_forward(),
-        KeyCode::Delete => buffer.delete_forward(),
-        KeyCode::Left if ctrl || alt => buffer.move_word_left(),
-        KeyCode::Left => buffer.move_left(),
-        KeyCode::Right if ctrl || alt => buffer.move_word_right(),
-        KeyCode::Right => buffer.move_right(),
-        KeyCode::Up => buffer.move_up(),
-        KeyCode::Down => buffer.move_down(),
-        KeyCode::Home if ctrl => buffer.move_doc_start(),
-        KeyCode::Home => buffer.move_line_start(),
-        KeyCode::End if ctrl => buffer.move_doc_end(),
-        KeyCode::End => buffer.move_line_end(),
-        KeyCode::Char('j') if ctrl && !alt => buffer.newline(),
-        KeyCode::Char('a') if ctrl && !alt => buffer.move_line_start(),
-        KeyCode::Char('e') if ctrl && !alt => buffer.move_line_end(),
-        KeyCode::Char('h') if ctrl && !alt => buffer.delete_word_back(),
-        KeyCode::Char('w') if ctrl && !alt => buffer.delete_word_back(),
-        KeyCode::Char('b') if alt && !ctrl => buffer.move_word_left(),
-        KeyCode::Char('f') if alt && !ctrl => buffer.move_word_right(),
-        KeyCode::Char('d') if alt && !ctrl => buffer.delete_word_forward(),
-        KeyCode::Char(c) if !ctrl && !alt => buffer.insert_char(c),
-        _ => return false,
-    }
-    true
-}
-
-/// Handles one key event while [`super::Mode::Compose`] is active. `Esc`
-/// cancels, a plain `Enter` submits, `Ctrl-t` cycles the classification, and
-/// every other editing/motion key is delegated to [`apply_buffer_key`] (see
-/// its doc for the full keymap). `Shift+Enter` inserts a newline (via the
-/// delegate) rather than submitting. Bypasses the [`super::Keymap`] table
-/// entirely; documented in [`modal_keys::COMPOSE_HINTS`], drift-tested both
-/// directions.
+/// Handles one key event while [`super::Mode::Compose`] is active. Resolves
+/// against `app.modal_keys.compose` (spec 07 Unit 4 task 5.3/5.4: the
+/// effective, config-overridable table — see [`modal_keys::ComposeAction`])
+/// first; an unresolved, unmodified `Char` inserts as literal text (never
+/// remappable, per the free-text-mode contract). Bypasses the
+/// [`super::Keymap`] table entirely; documented in
+/// [`modal_keys::COMPOSE_HINTS`], drift-tested both directions.
 pub(super) fn handle_compose_key(app: &mut App, key: KeyEvent) {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let alt = key.modifiers.contains(KeyModifiers::ALT);
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    match key.code {
-        KeyCode::Esc => app.cancel_compose(),
-        KeyCode::Enter if !shift => app.submit_compose(),
-        KeyCode::Char('t') if ctrl && !alt => {
-            if let Some(compose) = app.compose.as_mut() {
-                compose.classification = compose.classification.cycle();
+    if let Some(action) = modal_keys::resolve(&app.modal_keys.compose, key) {
+        match action {
+            ComposeAction::Cancel => app.cancel_compose(),
+            ComposeAction::Submit => app.submit_compose(),
+            ComposeAction::CycleClassification => {
+                if let Some(compose) = app.compose.as_mut() {
+                    compose.classification = compose.classification.cycle();
+                }
+            }
+            ComposeAction::Edit(edit) => {
+                if let Some(compose) = app.compose.as_mut() {
+                    edit.apply(&mut compose.buffer);
+                }
             }
         }
-        _ => {
-            if let Some(compose) = app.compose.as_mut() {
-                apply_buffer_key(&mut compose.buffer, key, ctrl, alt, shift);
-            }
-        }
+        return;
     }
+    insert_if_plain_char(app.compose.as_mut().map(|c| &mut c.buffer), key);
 }
 
 /// Handles one key event while [`super::Mode::CommitMessage`] is active
-/// (spec 04): `Esc` cancels back to the git panel, a plain `Enter` submits the
-/// commit, and every other editing/motion key is delegated to
-/// [`apply_buffer_key`] — the identical text-editing keymap Compose uses,
-/// minus the classification cycling (the buffer is a plain commit message).
-/// `Shift+Enter` adds a body line rather than committing. `q` isn't a control
-/// key here, so it types a `q` rather than quitting (an open overlay never
-/// quits the app). Documented in [`modal_keys::COMMIT_MESSAGE_HINTS`],
-/// drift-tested in both directions.
+/// (spec 04). Resolves against `app.modal_keys.commit_message` first (same
+/// contract as [`handle_compose_key`], minus classification cycling — see
+/// [`modal_keys::CommitMessageAction`]); an unresolved, unmodified `Char`
+/// inserts as literal text, so `q` types a `q` rather than quitting (an open
+/// overlay never quits the app). Documented in
+/// [`modal_keys::COMMIT_MESSAGE_HINTS`], drift-tested in both directions.
 pub(super) fn handle_commit_message_key(app: &mut App, key: KeyEvent) {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let alt = key.modifiers.contains(KeyModifiers::ALT);
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    match key.code {
-        KeyCode::Esc => app.close_commit_message(),
-        KeyCode::Enter if !shift => app.submit_commit_message(),
-        _ => {
-            if let Some(state) = app.commit_message.as_mut() {
-                apply_buffer_key(&mut state.buffer, key, ctrl, alt, shift);
+    if let Some(action) = modal_keys::resolve(&app.modal_keys.commit_message, key) {
+        match action {
+            CommitMessageAction::Cancel => app.close_commit_message(),
+            CommitMessageAction::Submit => app.submit_commit_message(),
+            CommitMessageAction::Edit(edit) => {
+                if let Some(state) = app.commit_message.as_mut() {
+                    edit.apply(&mut state.buffer);
+                }
             }
         }
+        return;
+    }
+    insert_if_plain_char(app.commit_message.as_mut().map(|c| &mut c.buffer), key);
+}
+
+/// Inserts `key`'s character into `buffer` when it's a bare, unmodified
+/// `Char` — the one thing every free-text mode's resolve-first dispatch
+/// falls back to, and the one thing config can never remap (spec 07 Unit 4
+/// FR: "character insertion is not an action and cannot be bound"). A no-op
+/// for anything else (a `Char` chorded with Ctrl/Alt that the mode's table
+/// doesn't document, or a non-`Char` key already exhausted by `resolve`).
+fn insert_if_plain_char(buffer: Option<&mut super::compose::TextBuffer>, key: KeyEvent) {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    if let (KeyCode::Char(c), false, false) = (key.code, ctrl, alt)
+        && let Some(buffer) = buffer
+    {
+        buffer.insert_char(c);
     }
 }
 
 /// Handles one key event while [`super::Mode::List`] is active: `j`/`k` move
 /// focus, `Enter` jumps to the annotation and closes the panel, `e` edits
 /// it, `d` deletes it, `a`/`Esc` close the panel. Dispatch is driven by
-/// [`modal_keys::LIST_KEYS`] — the same table the help overlay renders — so
-/// the keys can't drift from their documentation. Bypasses the
-/// [`super::Keymap`] table entirely.
+/// `app.modal_keys.list` (spec 07 Unit 4 task 5.3/5.4: `modal_keys::LIST_KEYS`
+/// plus its `[keys.list]` config overrides) — the same table the help
+/// overlay renders — so the keys can't drift from their documentation.
+/// Bypasses the [`super::Keymap`] table entirely.
 pub(super) fn handle_list_key(app: &mut App, key: KeyEvent) {
-    let Some(action) = modal_keys::resolve(&modal_keys::LIST_KEYS, key) else {
+    let Some(action) = modal_keys::resolve(&app.modal_keys.list, key) else {
         return;
     };
     match action {
@@ -150,10 +109,10 @@ pub(super) fn handle_list_key(app: &mut App, key: KeyEvent) {
 /// Handles one key event while [`super::Mode::Staging`] is active: `j`/`k`
 /// move focus, `Space`/`Enter` unstage the focused file (the panel stays
 /// open), `s`/`Esc` close the panel. Dispatch is driven by
-/// [`modal_keys::STAGING_KEYS`] — the same table the help overlay renders.
+/// `app.modal_keys.staging` — the same table the help overlay renders.
 /// Bypasses the [`super::Keymap`] table entirely.
 pub(super) fn handle_staging_key(app: &mut App, key: KeyEvent) {
-    let Some(action) = modal_keys::resolve(&modal_keys::STAGING_KEYS, key) else {
+    let Some(action) = modal_keys::resolve(&app.modal_keys.staging, key) else {
         return;
     };
     match action {
@@ -165,19 +124,25 @@ pub(super) fn handle_staging_key(app: &mut App, key: KeyEvent) {
 }
 
 /// Handles one key event while [`super::Mode::Search`] is active: printable
-/// chars insert into the pattern buffer, Backspace deletes, `Enter` confirms
+/// chars insert into the pattern buffer (never remappable), `Enter` confirms
 /// (jumping to the first match at-or-after the cursor), `Esc` cancels
-/// (clearing the active pattern only if the buffer was left empty). Bypasses
-/// the [`super::Keymap`] table entirely.
+/// (clearing the active pattern only if the buffer was left empty), Backspace
+/// deletes. The three control keys resolve against `app.modal_keys.search`
+/// first (spec 07 Unit 4 task 5.3). Bypasses the [`super::Keymap`] table
+/// entirely.
 pub(super) fn handle_search_key(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Esc => app.cancel_search(),
-        KeyCode::Enter => app.confirm_search(),
-        KeyCode::Backspace => {
+    let Some(action) = modal_keys::resolve(&app.modal_keys.search, key) else {
+        if let KeyCode::Char(c) = key.code {
+            app.search_input.push(c);
+        }
+        return;
+    };
+    match action {
+        SearchAction::Cancel => app.cancel_search(),
+        SearchAction::Confirm => app.confirm_search(),
+        SearchAction::DeleteChar => {
             app.search_input.pop();
         }
-        KeyCode::Char(c) => app.search_input.push(c),
-        _ => {}
     }
 }
 
@@ -219,7 +184,7 @@ pub(super) fn handle_panel_key(
 /// help overlay renders. Bypasses the [`super::Keymap`] table entirely.
 pub(super) fn handle_peek_key(app: &mut App, key: KeyEvent) {
     use super::code_intel;
-    let Some(action) = modal_keys::resolve(&modal_keys::PEEK_KEYS, key) else {
+    let Some(action) = modal_keys::resolve(&app.modal_keys.peek, key) else {
         return;
     };
     match action {
@@ -232,22 +197,27 @@ pub(super) fn handle_peek_key(app: &mut App, key: KeyEvent) {
 
 /// Handles one key event while [`super::Mode::Finder`] is active (the fuzzy
 /// file finder overlay, spec 06 Unit 1): printable chars extend the query
-/// (re-ranking on every keystroke), Backspace shortens it, `Up`/`Down` move
-/// the selection, `Enter` opens the selected file, `Esc` closes losslessly.
-/// Bypasses the [`super::Keymap`] table entirely, like Compose/Search — free
-/// text and navigation together aren't expressible as one fixed
-/// [`super::Action`] per key. Documented in [`modal_keys::FINDER_HINTS`]
-/// (control keys only; free-text chars are the exemption every other
-/// free-text mode's hint table carries).
+/// (re-ranking on every keystroke, never remappable), and the control keys —
+/// Backspace, `Up`/`Down` move the selection, `Enter` opens the selected
+/// file, `Esc` closes losslessly — resolve against `app.modal_keys.finder`
+/// first (spec 07 Unit 4 task 5.3). Bypasses the [`super::Keymap`] table
+/// entirely, like Compose/Search — free text and navigation together aren't
+/// expressible as one fixed [`super::Action`] per key. Documented in
+/// [`modal_keys::FINDER_HINTS`] (control keys only; free-text chars are the
+/// exemption every other free-text mode's hint table carries).
 pub(super) fn handle_finder_key(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Esc => app.close_finder(),
-        KeyCode::Enter => app.finder_confirm(),
-        KeyCode::Up => app.finder_move_up(),
-        KeyCode::Down => app.finder_move_down(),
-        KeyCode::Backspace => app.finder_backspace(),
-        KeyCode::Char(c) => app.finder_input_char(c),
-        _ => {}
+    let Some(action) = modal_keys::resolve(&app.modal_keys.finder, key) else {
+        if let KeyCode::Char(c) = key.code {
+            app.finder_input_char(c);
+        }
+        return;
+    };
+    match action {
+        FinderAction::MoveUp => app.finder_move_up(),
+        FinderAction::MoveDown => app.finder_move_down(),
+        FinderAction::Open => app.finder_confirm(),
+        FinderAction::Close => app.close_finder(),
+        FinderAction::DeleteChar => app.finder_backspace(),
     }
 }
 
@@ -255,17 +225,26 @@ pub(super) fn handle_finder_key(app: &mut App, key: KeyEvent) {
 /// full-screen Project Search view, spec 06 Unit 2, plus the round-1 UX
 /// fix's two-focus model — see [`super::project_search::SearchFocus`]):
 ///
-/// - **Input focus**: printable chars extend the query (debounced re-scan),
+/// - **Input focus**: printable chars extend the query (debounced re-scan,
+///   never remappable), and the control keys resolve against
+///   `app.modal_keys.project_search_input` (spec 07 Unit 4 task 5.3) —
 ///   Backspace shortens it, `Up`/`Down` move the result selection, `Enter`
 ///   opens the selected hit, `Esc` moves to Results focus (view stays open).
-/// - **Results focus**: `j`/`k`/`Up`/`Down` move the result selection
-///   (letters no longer type into the query — there's nothing to type into
-///   while browsing), `Enter` opens the selected hit, `/` returns to Input
-///   focus (query preserved), `Esc` is the final "leave the feature" gesture
-///   — closes back to the exact prior diff position.
+/// - **Results focus**: control keys resolve against
+///   `app.modal_keys.project_search_results` instead — `j`/`k`/`Up`/`Down`
+///   move the result selection (letters no longer type into the query —
+///   there's nothing to type into while browsing), `Enter` opens the
+///   selected hit, `/` returns to Input focus (query preserved), `Esc` is
+///   the final "leave the feature" gesture — closes back to the exact prior
+///   diff position.
 /// - **Both focuses**: `Tab` toggles focus either direction; the three
 ///   `Alt`-chord toggles (`Alt-c` case, `Alt-w` whole-word, `Alt-r`
-///   regex/literal) cycle their state regardless of which half has focus.
+///   regex/literal) cycle their state regardless of which half has focus —
+///   `Esc`/`Tab`/`Open`/the three toggles route to the *same*
+///   `App` methods from either table (e.g. `project_search_esc` itself
+///   branches on focus internally to pick "move to Results" vs. "close the
+///   view"), so the two tables' shared action names stay behaviorally
+///   identical even though they're separate enums per focus.
 ///
 /// Bypasses the [`super::Keymap`] table entirely, like [`handle_finder_key`]
 /// — free text and navigation together aren't expressible as one fixed
@@ -277,26 +256,54 @@ pub(super) fn handle_finder_key(app: &mut App, key: KeyEvent) {
 /// free-text mode's hint table carries).
 pub(super) fn handle_project_search_key(app: &mut App, key: KeyEvent) {
     use super::project_search::SearchFocus;
-    let alt = key.modifiers.contains(KeyModifiers::ALT);
     let results_focused = app
         .project_search
         .as_ref()
         .is_some_and(|state| state.focus == SearchFocus::Results);
-    match key.code {
-        KeyCode::Esc => app.project_search_esc(),
-        KeyCode::Tab => app.project_search_toggle_focus(),
-        KeyCode::Enter => app.project_search_confirm(),
-        KeyCode::Up => app.project_search_move_up(),
-        KeyCode::Down => app.project_search_move_down(),
-        KeyCode::Char('c') if alt => app.project_search_toggle_case(),
-        KeyCode::Char('w') if alt => app.project_search_toggle_whole_word(),
-        KeyCode::Char('r') if alt => app.project_search_toggle_literal(),
-        KeyCode::Char('/') if results_focused => app.project_search_focus_input(),
-        KeyCode::Char('j') if results_focused => app.project_search_move_down(),
-        KeyCode::Char('k') if results_focused => app.project_search_move_up(),
-        KeyCode::Backspace if !results_focused => app.project_search_backspace(),
-        KeyCode::Char(c) if !alt && !results_focused => app.project_search_input_char(c),
-        _ => {}
+
+    if results_focused {
+        let Some(action) = modal_keys::resolve(&app.modal_keys.project_search_results, key) else {
+            // Results focus never types free text — an unresolved key is
+            // simply inert here.
+            return;
+        };
+        match action {
+            ProjectSearchResultsAction::EditQuery => app.project_search_focus_input(),
+            ProjectSearchResultsAction::Close => app.project_search_esc(),
+            ProjectSearchResultsAction::MoveUp => app.project_search_move_up(),
+            ProjectSearchResultsAction::MoveDown => app.project_search_move_down(),
+            ProjectSearchResultsAction::Open => app.project_search_confirm(),
+            ProjectSearchResultsAction::ToggleFocus => app.project_search_toggle_focus(),
+            ProjectSearchResultsAction::ToggleCase => app.project_search_toggle_case(),
+            ProjectSearchResultsAction::ToggleWholeWord => app.project_search_toggle_whole_word(),
+            ProjectSearchResultsAction::ToggleLiteral => app.project_search_toggle_literal(),
+        }
+        return;
+    }
+
+    if let Some(action) = modal_keys::resolve(&app.modal_keys.project_search_input, key) {
+        match action {
+            ProjectSearchInputAction::MoveUp => app.project_search_move_up(),
+            ProjectSearchInputAction::MoveDown => app.project_search_move_down(),
+            ProjectSearchInputAction::Open => app.project_search_confirm(),
+            ProjectSearchInputAction::FocusResults => app.project_search_esc(),
+            ProjectSearchInputAction::ToggleFocus => app.project_search_toggle_focus(),
+            ProjectSearchInputAction::DeleteChar => app.project_search_backspace(),
+            ProjectSearchInputAction::ToggleCase => app.project_search_toggle_case(),
+            ProjectSearchInputAction::ToggleWholeWord => app.project_search_toggle_whole_word(),
+            ProjectSearchInputAction::ToggleLiteral => app.project_search_toggle_literal(),
+        }
+        return;
+    }
+
+    // Free-text fallback (Input focus only, matching the original
+    // `!results_focused` guard): a bare, unmodified `Char` extends the
+    // query — never remappable, per the free-text-mode contract.
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    if let KeyCode::Char(c) = key.code
+        && !alt
+    {
+        app.project_search_input_char(c);
     }
 }
 
@@ -312,7 +319,7 @@ pub(super) fn handle_project_search_key(app: &mut App, key: KeyEvent) {
 /// inert here: an open overlay never quits the app. Bypasses the
 /// [`super::Keymap`] table entirely.
 pub(super) fn handle_switcher_key(app: &mut App, key: KeyEvent) {
-    let Some(action) = modal_keys::resolve(&modal_keys::SWITCHER_KEYS, key) else {
+    let Some(action) = modal_keys::resolve(&app.modal_keys.switcher, key) else {
         return;
     };
     match action {
