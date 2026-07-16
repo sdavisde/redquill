@@ -151,25 +151,25 @@ fn modal_hints<A>(table: &'static [ModalBinding<A>]) -> Vec<(&'static str, &'sta
 /// for the overlay's own scroll/close keys, already documented on the footer.
 fn modal_sections() -> [(&'static str, Vec<(&'static str, &'static str)>); 11] {
     [
-        ("Compose mode", modal_hints(COMPOSE_HINTS)),
-        ("List mode", modal_hints(LIST_KEYS)),
-        ("Staging panel", modal_hints(STAGING_KEYS)),
-        ("Search input", modal_hints(SEARCH_HINTS)),
-        ("Peek mode", modal_hints(PEEK_KEYS)),
-        ("Branch/worktree switcher", modal_hints(SWITCHER_KEYS)),
+        ("Compose mode", modal_hints(&COMPOSE_HINTS)),
+        ("List mode", modal_hints(&LIST_KEYS)),
+        ("Staging panel", modal_hints(&STAGING_KEYS)),
+        ("Search input", modal_hints(&SEARCH_HINTS)),
+        ("Peek mode", modal_hints(&PEEK_KEYS)),
+        ("Branch/worktree switcher", modal_hints(&SWITCHER_KEYS)),
         (
             "Commit message (c, git panel)",
-            modal_hints(COMMIT_MESSAGE_HINTS),
+            modal_hints(&COMMIT_MESSAGE_HINTS),
         ),
-        ("Help filter (/)", modal_hints(HELP_SEARCH_HINTS)),
-        ("Fuzzy file finder (gp)", modal_hints(FINDER_HINTS)),
+        ("Help filter (/)", modal_hints(&HELP_SEARCH_HINTS)),
+        ("Fuzzy file finder (gp)", modal_hints(&FINDER_HINTS)),
         (
             "Project search — input focus (g/)",
-            modal_hints(PROJECT_SEARCH_INPUT_HINTS),
+            modal_hints(&PROJECT_SEARCH_INPUT_HINTS),
         ),
         (
             "Project search — results focus",
-            modal_hints(PROJECT_SEARCH_RESULTS_HINTS),
+            modal_hints(&PROJECT_SEARCH_RESULTS_HINTS),
         ),
     ]
 }

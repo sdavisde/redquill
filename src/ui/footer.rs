@@ -288,7 +288,7 @@ fn pending_hints(km: &Keymap, prefix: KeyEvent, code_intel_allowed: bool) -> Vec
 /// filter, close — derived from [`HELP_KEYS`]' own [`FooterHint`] tags. No
 /// `? help` entry (the overlay is already open, so it would be redundant).
 fn help_open_hints() -> Vec<FooterEntry> {
-    modal_hints(HELP_KEYS)
+    modal_hints(&HELP_KEYS)
 }
 
 /// The capability/state flags [`build_hints`] needs, bundled into one struct
@@ -353,16 +353,16 @@ pub(super) fn build_hints(
         Mode::Normal => normal_hints(km, staging_allowed, code_intel_allowed, viewing_commit),
         Mode::Visual { .. } => visual_hints(km, staging_allowed),
         Mode::Panel { .. } => panel_hints(km, push_publishes),
-        Mode::List => modal_hints(LIST_KEYS),
-        Mode::Staging => modal_hints(STAGING_KEYS),
-        Mode::Peek => modal_hints(PEEK_KEYS),
-        Mode::Switcher => modal_hints(SWITCHER_KEYS),
-        Mode::Compose => modal_hints(COMPOSE_HINTS),
-        Mode::CommitMessage => modal_hints(COMMIT_MESSAGE_HINTS),
-        Mode::Finder => modal_hints(FINDER_HINTS),
+        Mode::List => modal_hints(&LIST_KEYS),
+        Mode::Staging => modal_hints(&STAGING_KEYS),
+        Mode::Peek => modal_hints(&PEEK_KEYS),
+        Mode::Switcher => modal_hints(&SWITCHER_KEYS),
+        Mode::Compose => modal_hints(&COMPOSE_HINTS),
+        Mode::CommitMessage => modal_hints(&COMMIT_MESSAGE_HINTS),
+        Mode::Finder => modal_hints(&FINDER_HINTS),
         Mode::ProjectSearch => match project_search_focus {
-            SearchFocus::Input => modal_hints(PROJECT_SEARCH_INPUT_HINTS),
-            SearchFocus::Results => modal_hints(PROJECT_SEARCH_RESULTS_HINTS),
+            SearchFocus::Input => modal_hints(&PROJECT_SEARCH_INPUT_HINTS),
+            SearchFocus::Results => modal_hints(&PROJECT_SEARCH_RESULTS_HINTS),
         },
         // The search input occupies the footer itself; no hint strip.
         Mode::Search => Vec::new(),

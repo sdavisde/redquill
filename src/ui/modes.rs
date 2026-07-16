@@ -134,7 +134,7 @@ pub(super) fn handle_commit_message_key(app: &mut App, key: KeyEvent) {
 /// the keys can't drift from their documentation. Bypasses the
 /// [`super::Keymap`] table entirely.
 pub(super) fn handle_list_key(app: &mut App, key: KeyEvent) {
-    let Some(action) = modal_keys::resolve(modal_keys::LIST_KEYS, key) else {
+    let Some(action) = modal_keys::resolve(&modal_keys::LIST_KEYS, key) else {
         return;
     };
     match action {
@@ -153,7 +153,7 @@ pub(super) fn handle_list_key(app: &mut App, key: KeyEvent) {
 /// [`modal_keys::STAGING_KEYS`] — the same table the help overlay renders.
 /// Bypasses the [`super::Keymap`] table entirely.
 pub(super) fn handle_staging_key(app: &mut App, key: KeyEvent) {
-    let Some(action) = modal_keys::resolve(modal_keys::STAGING_KEYS, key) else {
+    let Some(action) = modal_keys::resolve(&modal_keys::STAGING_KEYS, key) else {
         return;
     };
     match action {
@@ -219,7 +219,7 @@ pub(super) fn handle_panel_key(
 /// help overlay renders. Bypasses the [`super::Keymap`] table entirely.
 pub(super) fn handle_peek_key(app: &mut App, key: KeyEvent) {
     use super::code_intel;
-    let Some(action) = modal_keys::resolve(modal_keys::PEEK_KEYS, key) else {
+    let Some(action) = modal_keys::resolve(&modal_keys::PEEK_KEYS, key) else {
         return;
     };
     match action {
@@ -312,7 +312,7 @@ pub(super) fn handle_project_search_key(app: &mut App, key: KeyEvent) {
 /// inert here: an open overlay never quits the app. Bypasses the
 /// [`super::Keymap`] table entirely.
 pub(super) fn handle_switcher_key(app: &mut App, key: KeyEvent) {
-    let Some(action) = modal_keys::resolve(modal_keys::SWITCHER_KEYS, key) else {
+    let Some(action) = modal_keys::resolve(&modal_keys::SWITCHER_KEYS, key) else {
         return;
     };
     match action {

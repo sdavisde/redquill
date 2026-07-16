@@ -142,7 +142,7 @@ Two separately-committed halves per repo rules: (refactor) convert the `const` t
 
 #### 5.0 Tasks
 
-- [ ] 5.1 Refactor commit (no behavior change): convert each `const` table in `src/ui/modal_keys.rs` into a runtime-built default table (same rows, constructed once at startup or lazily); handlers and hint rendering consume the built tables. Invariant verified and stated in the commit message: identical test counts, zero assertion edits, all drift tests green before/after.
+- [x] 5.1 Refactor commit (no behavior change): convert each `const` table in `src/ui/modal_keys.rs` into a runtime-built default table (same rows, constructed once at startup or lazily); handlers and hint rendering consume the built tables. Invariant verified and stated in the commit message: identical test counts, zero assertion edits, all drift tests green before/after.
 - [ ] 5.2 Enumerate the shipped modal modes into their `[keys.<mode>]` table names (staging, switcher, finder, help, compose, search, plus any others present — e.g. peek, annotation list, project-search); extend action-naming (4.2's pattern, per-mode enums) with the same bijectivity drift tests; document the final name list.
 - [ ] 5.3 TDD: apply 4.4's merge semantics per modal table from `[keys.<mode>]` config; free-text modes expose only their documented control keys as actions — character insertion is not an action and cannot be bound; the reverse drift tests ("undocumented keys observably do nothing") still pass with overrides applied.
 - [ ] 5.4 Wire modal overrides into table construction; hint lines and `?` reflect effective keys (derived from the same tables — pin with one test per pattern, not per mode).
@@ -150,6 +150,8 @@ Two separately-committed halves per repo rules: (refactor) convert the `const` t
 - [ ] 5.6 Run the User demo; capture `proofs/5-modal-remap.png`; gates; behavior commit (separate from 5.1's refactor commit).
 
 ### [!] 6.0 A new user can adopt the whole system from the docs (README, retirement, acceptance journeys)
+
+> **SKIPPED — user decision, 2026-07-16.** The user descoped this entire parent task during implementation ("i don't think we need to do #6 at all"). Consequences accepted with the descope: the README keeps its stale "config layer planned" line, `docs/config-layer.md` is not retired, the `src/config/` extensibility walkthrough (spec success metric 5) is unwritten, and the spec's three acceptance journeys have no persisted evidence. A partial example-config drift test shipped early (task 1.0) and was kept green through tasks 2–5, so 6.1's core guard exists in reduced form.
 
 THIS TASK IS BLOCKED, DO NOT START WORK ON THIS TASK UNDER ANY CIRCUMSTANCES. I DO NOT KNOW WHETHER OR NOT WE ACTUALLY WANT TO DO THIS WORK. THERE IS ALSO CHANGES TO THE README IN MAIN THAT WE'D NEED TO WORK AGAINST, AND THESE CHANGES GO AGAINST MY INTENTIONS FOR THE README RIGHT NOW.
 

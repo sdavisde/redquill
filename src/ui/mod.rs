@@ -536,7 +536,7 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
         }
     }
 
-    let Some(action) = modal_keys::resolve(modal_keys::HELP_KEYS, key) else {
+    let Some(action) = modal_keys::resolve(&modal_keys::HELP_KEYS, key) else {
         return;
     };
     let page = app.help_viewport.get().max(1);

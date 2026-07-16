@@ -181,7 +181,7 @@ fn list_mode_hints_have_no_help_entry() {
     // so the footer must not claim it works — see footer.rs's module doc /
     // the implementation report for this deviation from a literal "every
     // modal mode gets `? help`" reading of the spec.
-    let entries = modal_hints(LIST_KEYS);
+    let entries = modal_hints(&LIST_KEYS);
     assert_eq!(
         labels(&entries),
         vec!["move", "open", "edit", "delete", "close"]
@@ -191,19 +191,19 @@ fn list_mode_hints_have_no_help_entry() {
 
 #[test]
 fn staging_mode_hints() {
-    let entries = modal_hints(STAGING_KEYS);
+    let entries = modal_hints(&STAGING_KEYS);
     assert_eq!(labels(&entries), vec!["move", "unstage", "close"]);
 }
 
 #[test]
 fn peek_mode_hints() {
-    let entries = modal_hints(PEEK_KEYS);
+    let entries = modal_hints(&PEEK_KEYS);
     assert_eq!(labels(&entries), vec!["move", "jump", "close"]);
 }
 
 #[test]
 fn switcher_mode_hints() {
-    let entries = modal_hints(SWITCHER_KEYS);
+    let entries = modal_hints(&SWITCHER_KEYS);
     assert_eq!(
         labels(&entries),
         vec!["switch tab", "move", "switch", "close"]
@@ -219,7 +219,7 @@ fn switcher_mode_hints() {
 
 #[test]
 fn compose_mode_hints_are_just_save_and_discard() {
-    let entries = modal_hints(COMPOSE_HINTS);
+    let entries = modal_hints(&COMPOSE_HINTS);
     assert_eq!(keys(&entries), vec!["Enter", "Esc"]);
     assert_eq!(labels(&entries), vec!["save", "discard"]);
 }

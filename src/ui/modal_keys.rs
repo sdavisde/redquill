@@ -4,10 +4,19 @@
 //!
 //! Normal/Visual/Panel dispatch runs through the data-driven [`super::Keymap`]
 //! table. The remaining modes are modal — while one is active every keystroke
-//! is handled directly, bypassing the keymap — so their keys can't live in the
-//! keymap yet (that waits on the future config layer). This module gives each
-//! of those modes one `const` table instead, so a handler and the help overlay
-//! can never document different keys: both read the same table.
+//! is handled directly, bypassing the keymap — so their keys can't live in
+//! that table. This module gives each of those modes one runtime-built
+//! default table instead, so a handler and the help overlay can never
+//! document different keys: both read the same table.
+//!
+//! Each table below is a `static` [`LazyLock<Vec<ModalBinding<A>>>`], built
+//! once (lazily, on first access) from the same row data the tables carried
+//! as `const` arrays before spec 07 Unit 4 task 5.1's move-only refactor —
+//! runtime construction is what lets `crate::config`'s `[keys.<mode>]`
+//! overrides (task 5.3/5.4) layer onto these defaults the same way
+//! `crate::ui::keymap_config::effective_keymap` layers `[keys.diff]`/
+//! `[keys.panel]` onto `Keymap::default_map()`. Every table is still built
+//! exactly once and threaded/read by reference — no per-keystroke parsing.
 //!
 //! - **List / Staging / Peek / Help** are one-action-per-key, so their tables
 //!   carry a small per-mode action enum and their handlers dispatch straight
@@ -18,6 +27,8 @@
 //!   hand-written `match`. Their tables ([`ModalBinding<()>`]) document only the
 //!   non-text *control* keys (Esc/Enter/…) for the overlay, and the drift
 //!   cross-check test feeds those keys back through the real handlers.
+
+use std::sync::LazyLock;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -98,8 +109,13 @@ pub(super) struct ModalBinding<A: 'static> {
     pub label: &'static str,
     /// What the help overlay prints next to the label.
     pub description: &'static str,
-    /// Every physical key that triggers this row.
-    pub keys: &'static [ModalKey],
+    /// Every physical key that triggers this row. Owned (rather than
+    /// `&'static [ModalKey]`) so a table's rows can be built inside a
+    /// [`LazyLock`] initializer (spec 07 Unit 4 task 5.1: the tables below
+    /// are runtime-built, not `const`) without fighting rvalue static
+    /// promotion, which only applies inside `const`/`static` item
+    /// initializers, not ordinary closure/function bodies.
+    pub keys: Vec<ModalKey>,
     /// The per-mode action this row dispatches to.
     pub action: A,
     /// `Some` promotes this row into [`super::footer`]'s context-sensitive
@@ -132,71 +148,73 @@ pub(super) enum ListAction {
     Close,
 }
 
-pub(super) const LIST_KEYS: &[ModalBinding<ListAction>] = &[
-    ModalBinding {
-        label: "j",
-        description: "Move focus down",
-        keys: &[ModalKey::plain(KeyCode::Char('j'))],
-        action: ListAction::MoveDown,
-        footer: Some(FooterHint {
-            rank: 1,
-            label: "move",
-        }),
-    },
-    ModalBinding {
-        label: "k",
-        description: "Move focus up",
-        keys: &[ModalKey::plain(KeyCode::Char('k'))],
-        action: ListAction::MoveUp,
-        footer: Some(FooterHint {
-            rank: 1,
-            label: "move",
-        }),
-    },
-    ModalBinding {
-        label: "Enter",
-        description: "Jump to annotation",
-        keys: &[ModalKey::plain(KeyCode::Enter)],
-        action: ListAction::Jump,
-        footer: Some(FooterHint {
-            rank: 2,
-            label: "open",
-        }),
-    },
-    ModalBinding {
-        label: "e",
-        description: "Edit",
-        keys: &[ModalKey::plain(KeyCode::Char('e'))],
-        action: ListAction::Edit,
-        footer: Some(FooterHint {
-            rank: 3,
-            label: "edit",
-        }),
-    },
-    ModalBinding {
-        label: "d",
-        description: "Delete",
-        keys: &[ModalKey::plain(KeyCode::Char('d'))],
-        action: ListAction::Delete,
-        footer: Some(FooterHint {
-            rank: 4,
-            label: "delete",
-        }),
-    },
-    ModalBinding {
-        label: "a / Esc",
-        description: "Close panel",
-        keys: &[
-            ModalKey::plain(KeyCode::Char('a')),
-            ModalKey::plain(KeyCode::Esc),
-        ],
-        action: ListAction::Close,
-        footer: Some(FooterHint {
-            rank: 5,
-            label: "close",
-        }),
-    },
-];
+pub(super) static LIST_KEYS: LazyLock<Vec<ModalBinding<ListAction>>> = LazyLock::new(|| {
+    vec![
+        ModalBinding {
+            label: "j",
+            description: "Move focus down",
+            keys: vec![ModalKey::plain(KeyCode::Char('j'))],
+            action: ListAction::MoveDown,
+            footer: Some(FooterHint {
+                rank: 1,
+                label: "move",
+            }),
+        },
+        ModalBinding {
+            label: "k",
+            description: "Move focus up",
+            keys: vec![ModalKey::plain(KeyCode::Char('k'))],
+            action: ListAction::MoveUp,
+            footer: Some(FooterHint {
+                rank: 1,
+                label: "move",
+            }),
+        },
+        ModalBinding {
+            label: "Enter",
+            description: "Jump to annotation",
+            keys: vec![ModalKey::plain(KeyCode::Enter)],
+            action: ListAction::Jump,
+            footer: Some(FooterHint {
+                rank: 2,
+                label: "open",
+            }),
+        },
+        ModalBinding {
+            label: "e",
+            description: "Edit",
+            keys: vec![ModalKey::plain(KeyCode::Char('e'))],
+            action: ListAction::Edit,
+            footer: Some(FooterHint {
+                rank: 3,
+                label: "edit",
+            }),
+        },
+        ModalBinding {
+            label: "d",
+            description: "Delete",
+            keys: vec![ModalKey::plain(KeyCode::Char('d'))],
+            action: ListAction::Delete,
+            footer: Some(FooterHint {
+                rank: 4,
+                label: "delete",
+            }),
+        },
+        ModalBinding {
+            label: "a / Esc",
+            description: "Close panel",
+            keys: vec![
+                ModalKey::plain(KeyCode::Char('a')),
+                ModalKey::plain(KeyCode::Esc),
+            ],
+            action: ListAction::Close,
+            footer: Some(FooterHint {
+                rank: 5,
+                label: "close",
+            }),
+        },
+    ]
+});
 
 // -- Staging panel ---------------------------------------------------------
 
@@ -209,54 +227,56 @@ pub(super) enum StagingAction {
     Close,
 }
 
-pub(super) const STAGING_KEYS: &[ModalBinding<StagingAction>] = &[
-    ModalBinding {
-        label: "j",
-        description: "Move focus down",
-        keys: &[ModalKey::plain(KeyCode::Char('j'))],
-        action: StagingAction::MoveDown,
-        footer: Some(FooterHint {
-            rank: 1,
-            label: "move",
-        }),
-    },
-    ModalBinding {
-        label: "k",
-        description: "Move focus up",
-        keys: &[ModalKey::plain(KeyCode::Char('k'))],
-        action: StagingAction::MoveUp,
-        footer: Some(FooterHint {
-            rank: 1,
-            label: "move",
-        }),
-    },
-    ModalBinding {
-        label: "Space / Enter",
-        description: "Unstage file",
-        keys: &[
-            ModalKey::plain(KeyCode::Char(' ')),
-            ModalKey::plain(KeyCode::Enter),
-        ],
-        action: StagingAction::Unstage,
-        footer: Some(FooterHint {
-            rank: 2,
-            label: "unstage",
-        }),
-    },
-    ModalBinding {
-        label: "s / Esc",
-        description: "Close panel",
-        keys: &[
-            ModalKey::plain(KeyCode::Char('s')),
-            ModalKey::plain(KeyCode::Esc),
-        ],
-        action: StagingAction::Close,
-        footer: Some(FooterHint {
-            rank: 3,
-            label: "close",
-        }),
-    },
-];
+pub(super) static STAGING_KEYS: LazyLock<Vec<ModalBinding<StagingAction>>> = LazyLock::new(|| {
+    vec![
+        ModalBinding {
+            label: "j",
+            description: "Move focus down",
+            keys: vec![ModalKey::plain(KeyCode::Char('j'))],
+            action: StagingAction::MoveDown,
+            footer: Some(FooterHint {
+                rank: 1,
+                label: "move",
+            }),
+        },
+        ModalBinding {
+            label: "k",
+            description: "Move focus up",
+            keys: vec![ModalKey::plain(KeyCode::Char('k'))],
+            action: StagingAction::MoveUp,
+            footer: Some(FooterHint {
+                rank: 1,
+                label: "move",
+            }),
+        },
+        ModalBinding {
+            label: "Space / Enter",
+            description: "Unstage file",
+            keys: vec![
+                ModalKey::plain(KeyCode::Char(' ')),
+                ModalKey::plain(KeyCode::Enter),
+            ],
+            action: StagingAction::Unstage,
+            footer: Some(FooterHint {
+                rank: 2,
+                label: "unstage",
+            }),
+        },
+        ModalBinding {
+            label: "s / Esc",
+            description: "Close panel",
+            keys: vec![
+                ModalKey::plain(KeyCode::Char('s')),
+                ModalKey::plain(KeyCode::Esc),
+            ],
+            action: StagingAction::Close,
+            footer: Some(FooterHint {
+                rank: 3,
+                label: "close",
+            }),
+        },
+    ]
+});
 
 // -- Peek overlay ----------------------------------------------------------
 
@@ -269,48 +289,50 @@ pub(super) enum PeekAction {
     Close,
 }
 
-pub(super) const PEEK_KEYS: &[ModalBinding<PeekAction>] = &[
-    ModalBinding {
-        label: "j",
-        description: "Move selection / scroll hover down",
-        keys: &[ModalKey::plain(KeyCode::Char('j'))],
-        action: PeekAction::MoveDown,
-        footer: Some(FooterHint {
-            rank: 1,
-            label: "move",
-        }),
-    },
-    ModalBinding {
-        label: "k",
-        description: "Move selection / scroll hover up",
-        keys: &[ModalKey::plain(KeyCode::Char('k'))],
-        action: PeekAction::MoveUp,
-        footer: Some(FooterHint {
-            rank: 1,
-            label: "move",
-        }),
-    },
-    ModalBinding {
-        label: "Enter",
-        description: "Jump to location (definition/references)",
-        keys: &[ModalKey::plain(KeyCode::Enter)],
-        action: PeekAction::Enter,
-        footer: Some(FooterHint {
-            rank: 2,
-            label: "jump",
-        }),
-    },
-    ModalBinding {
-        label: "Esc",
-        description: "Close",
-        keys: &[ModalKey::plain(KeyCode::Esc)],
-        action: PeekAction::Close,
-        footer: Some(FooterHint {
-            rank: 3,
-            label: "close",
-        }),
-    },
-];
+pub(super) static PEEK_KEYS: LazyLock<Vec<ModalBinding<PeekAction>>> = LazyLock::new(|| {
+    vec![
+        ModalBinding {
+            label: "j",
+            description: "Move selection / scroll hover down",
+            keys: vec![ModalKey::plain(KeyCode::Char('j'))],
+            action: PeekAction::MoveDown,
+            footer: Some(FooterHint {
+                rank: 1,
+                label: "move",
+            }),
+        },
+        ModalBinding {
+            label: "k",
+            description: "Move selection / scroll hover up",
+            keys: vec![ModalKey::plain(KeyCode::Char('k'))],
+            action: PeekAction::MoveUp,
+            footer: Some(FooterHint {
+                rank: 1,
+                label: "move",
+            }),
+        },
+        ModalBinding {
+            label: "Enter",
+            description: "Jump to location (definition/references)",
+            keys: vec![ModalKey::plain(KeyCode::Enter)],
+            action: PeekAction::Enter,
+            footer: Some(FooterHint {
+                rank: 2,
+                label: "jump",
+            }),
+        },
+        ModalBinding {
+            label: "Esc",
+            description: "Close",
+            keys: vec![ModalKey::plain(KeyCode::Esc)],
+            action: PeekAction::Close,
+            footer: Some(FooterHint {
+                rank: 3,
+                label: "close",
+            }),
+        },
+    ]
+});
 
 // -- Switcher modal ----------------------------------------------------------
 
@@ -324,72 +346,75 @@ pub(super) enum SwitcherAction {
     Close,
 }
 
-pub(super) const SWITCHER_KEYS: &[ModalBinding<SwitcherAction>] = &[
-    ModalBinding {
-        label: "Tab / h / l",
-        description: "Switch tab (Branches / Worktrees)",
-        keys: &[
-            ModalKey::plain(KeyCode::Tab),
-            ModalKey::plain(KeyCode::BackTab),
-            ModalKey::plain(KeyCode::Char('h')),
-            ModalKey::plain(KeyCode::Char('l')),
-            ModalKey::plain(KeyCode::Left),
-            ModalKey::plain(KeyCode::Right),
-        ],
-        action: SwitcherAction::ToggleTab,
-        footer: Some(FooterHint {
-            rank: 1,
-            label: "switch tab",
-        }),
-    },
-    ModalBinding {
-        label: "j / Down",
-        description: "Move selection down",
-        keys: &[
-            ModalKey::plain(KeyCode::Char('j')),
-            ModalKey::plain(KeyCode::Down),
-        ],
-        action: SwitcherAction::MoveDown,
-        footer: Some(FooterHint {
-            rank: 2,
-            label: "move",
-        }),
-    },
-    ModalBinding {
-        label: "k / Up",
-        description: "Move selection up",
-        keys: &[
-            ModalKey::plain(KeyCode::Char('k')),
-            ModalKey::plain(KeyCode::Up),
-        ],
-        action: SwitcherAction::MoveUp,
-        // Not also tagged: its label ("k / Up") is already a compound key
-        // display, so merging it with MoveDown's would double up the " / "
-        // separators (see the identical note on HELP_KEYS's ScrollUp). The
-        // MoveDown row's own label reads fine alone.
-        footer: None,
-    },
-    ModalBinding {
-        label: "Enter",
-        description: "Switch to the selected branch/worktree",
-        keys: &[ModalKey::plain(KeyCode::Enter)],
-        action: SwitcherAction::Confirm,
-        footer: Some(FooterHint {
-            rank: 3,
-            label: "switch",
-        }),
-    },
-    ModalBinding {
-        label: "Esc",
-        description: "Close",
-        keys: &[ModalKey::plain(KeyCode::Esc)],
-        action: SwitcherAction::Close,
-        footer: Some(FooterHint {
-            rank: 4,
-            label: "close",
-        }),
-    },
-];
+pub(super) static SWITCHER_KEYS: LazyLock<Vec<ModalBinding<SwitcherAction>>> =
+    LazyLock::new(|| {
+        vec![
+            ModalBinding {
+                label: "Tab / h / l",
+                description: "Switch tab (Branches / Worktrees)",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Tab),
+                    ModalKey::plain(KeyCode::BackTab),
+                    ModalKey::plain(KeyCode::Char('h')),
+                    ModalKey::plain(KeyCode::Char('l')),
+                    ModalKey::plain(KeyCode::Left),
+                    ModalKey::plain(KeyCode::Right),
+                ],
+                action: SwitcherAction::ToggleTab,
+                footer: Some(FooterHint {
+                    rank: 1,
+                    label: "switch tab",
+                }),
+            },
+            ModalBinding {
+                label: "j / Down",
+                description: "Move selection down",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('j')),
+                    ModalKey::plain(KeyCode::Down),
+                ],
+                action: SwitcherAction::MoveDown,
+                footer: Some(FooterHint {
+                    rank: 2,
+                    label: "move",
+                }),
+            },
+            ModalBinding {
+                label: "k / Up",
+                description: "Move selection up",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('k')),
+                    ModalKey::plain(KeyCode::Up),
+                ],
+                action: SwitcherAction::MoveUp,
+                // Not also tagged: its label ("k / Up") is already a compound key
+                // display, so merging it with MoveDown's would double up the " / "
+                // separators (see the identical note on HELP_KEYS's ScrollUp). The
+                // MoveDown row's own label reads fine alone.
+                footer: None,
+            },
+            ModalBinding {
+                label: "Enter",
+                description: "Switch to the selected branch/worktree",
+                keys: vec![ModalKey::plain(KeyCode::Enter)],
+                action: SwitcherAction::Confirm,
+                footer: Some(FooterHint {
+                    rank: 3,
+                    label: "switch",
+                }),
+            },
+            ModalBinding {
+                label: "Esc",
+                description: "Close",
+                keys: vec![ModalKey::plain(KeyCode::Esc)],
+                action: SwitcherAction::Close,
+                footer: Some(FooterHint {
+                    rank: 4,
+                    label: "close",
+                }),
+            },
+        ]
+    });
 
 // -- Fuzzy file finder (hint-only) -----------------------------------------
 
@@ -401,45 +426,47 @@ pub(super) const SWITCHER_KEYS: &[ModalBinding<SwitcherAction>] = &[
 /// through that handler. `Up`/`Down` (not `j`/`k`) navigate results — `j`/`k`
 /// must stay typeable into the query, unlike the switcher modal (which has
 /// no free-text input to protect).
-pub(super) const FINDER_HINTS: &[ModalBinding<()>] = &[
-    ModalBinding {
-        label: "Up/Down",
-        description: "Move selection",
-        keys: &[ModalKey::plain(KeyCode::Up), ModalKey::plain(KeyCode::Down)],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 1,
-            label: "move",
-        }),
-    },
-    ModalBinding {
-        label: "Enter",
-        description: "Open the selected file (read-only whole-file view)",
-        keys: &[ModalKey::plain(KeyCode::Enter)],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 2,
-            label: "open",
-        }),
-    },
-    ModalBinding {
-        label: "Esc",
-        description: "Close (returns to the prior view unchanged)",
-        keys: &[ModalKey::plain(KeyCode::Esc)],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 3,
-            label: "close",
-        }),
-    },
-    ModalBinding {
-        label: "Backspace",
-        description: "Delete character",
-        keys: &[ModalKey::plain(KeyCode::Backspace)],
-        action: (),
-        footer: None,
-    },
-];
+pub(super) static FINDER_HINTS: LazyLock<Vec<ModalBinding<()>>> = LazyLock::new(|| {
+    vec![
+        ModalBinding {
+            label: "Up/Down",
+            description: "Move selection",
+            keys: vec![ModalKey::plain(KeyCode::Up), ModalKey::plain(KeyCode::Down)],
+            action: (),
+            footer: Some(FooterHint {
+                rank: 1,
+                label: "move",
+            }),
+        },
+        ModalBinding {
+            label: "Enter",
+            description: "Open the selected file (read-only whole-file view)",
+            keys: vec![ModalKey::plain(KeyCode::Enter)],
+            action: (),
+            footer: Some(FooterHint {
+                rank: 2,
+                label: "open",
+            }),
+        },
+        ModalBinding {
+            label: "Esc",
+            description: "Close (returns to the prior view unchanged)",
+            keys: vec![ModalKey::plain(KeyCode::Esc)],
+            action: (),
+            footer: Some(FooterHint {
+                rank: 3,
+                label: "close",
+            }),
+        },
+        ModalBinding {
+            label: "Backspace",
+            description: "Delete character",
+            keys: vec![ModalKey::plain(KeyCode::Backspace)],
+            action: (),
+            footer: None,
+        },
+    ]
+});
 
 // -- Project Search (hint-only) ---------------------------------------------
 
@@ -454,85 +481,89 @@ pub(super) const FINDER_HINTS: &[ModalBinding<()>] = &[
 /// must stay typeable into the query, so only the `Alt`-chorded forms of the
 /// toggle letters are bound. See [`PROJECT_SEARCH_RESULTS_HINTS`] for the
 /// other focus's table.
-pub(super) const PROJECT_SEARCH_INPUT_HINTS: &[ModalBinding<()>] = &[
-    ModalBinding {
-        label: "Up/Down",
-        description: "Move result selection",
-        keys: &[ModalKey::plain(KeyCode::Up), ModalKey::plain(KeyCode::Down)],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 1,
-            label: "move",
-        }),
+pub(super) static PROJECT_SEARCH_INPUT_HINTS: LazyLock<Vec<ModalBinding<()>>> = LazyLock::new(
+    || {
+        vec![
+            ModalBinding {
+                label: "Up/Down",
+                description: "Move result selection",
+                keys: vec![ModalKey::plain(KeyCode::Up), ModalKey::plain(KeyCode::Down)],
+                action: (),
+                footer: Some(FooterHint {
+                    rank: 1,
+                    label: "move",
+                }),
+            },
+            ModalBinding {
+                label: "Enter",
+                description: "Open the selected result (read-only whole-file view, cursor on the hit)",
+                keys: vec![ModalKey::plain(KeyCode::Enter)],
+                action: (),
+                footer: Some(FooterHint {
+                    rank: 2,
+                    label: "open",
+                }),
+            },
+            ModalBinding {
+                label: "Esc",
+                description: "Move focus to the results list (view stays open)",
+                keys: vec![ModalKey::plain(KeyCode::Esc)],
+                action: (),
+                footer: Some(FooterHint {
+                    rank: 3,
+                    label: "results",
+                }),
+            },
+            ModalBinding {
+                label: "Tab",
+                description: "Toggle focus between input and results",
+                keys: vec![ModalKey::plain(KeyCode::Tab)],
+                action: (),
+                footer: Some(FooterHint {
+                    rank: 4,
+                    label: "focus",
+                }),
+            },
+            ModalBinding {
+                label: "Backspace",
+                description: "Delete character",
+                keys: vec![ModalKey::plain(KeyCode::Backspace)],
+                action: (),
+                footer: None,
+            },
+            ModalBinding {
+                label: "Alt-c",
+                description: "Cycle case sensitivity (smart / sensitive / insensitive)",
+                keys: vec![ModalKey::alt(KeyCode::Char('c'))],
+                action: (),
+                footer: Some(FooterHint {
+                    rank: 5,
+                    label: "case",
+                }),
+            },
+            ModalBinding {
+                label: "Alt-w",
+                description: "Toggle whole-word matching",
+                keys: vec![ModalKey::alt(KeyCode::Char('w'))],
+                action: (),
+                footer: Some(FooterHint {
+                    rank: 6,
+                    label: "word",
+                }),
+            },
+            ModalBinding {
+                label: "Alt-r",
+                description: "Toggle regex / literal matching",
+                keys: vec![ModalKey::alt(KeyCode::Char('r'))],
+                action: (),
+                footer: Some(FooterHint {
+                    rank: 7,
+                    label: "regex",
+                }),
+            },
+        ]
     },
-    ModalBinding {
-        label: "Enter",
-        description: "Open the selected result (read-only whole-file view, cursor on the hit)",
-        keys: &[ModalKey::plain(KeyCode::Enter)],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 2,
-            label: "open",
-        }),
-    },
-    ModalBinding {
-        label: "Esc",
-        description: "Move focus to the results list (view stays open)",
-        keys: &[ModalKey::plain(KeyCode::Esc)],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 3,
-            label: "results",
-        }),
-    },
-    ModalBinding {
-        label: "Tab",
-        description: "Toggle focus between input and results",
-        keys: &[ModalKey::plain(KeyCode::Tab)],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 4,
-            label: "focus",
-        }),
-    },
-    ModalBinding {
-        label: "Backspace",
-        description: "Delete character",
-        keys: &[ModalKey::plain(KeyCode::Backspace)],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Alt-c",
-        description: "Cycle case sensitivity (smart / sensitive / insensitive)",
-        keys: &[ModalKey::alt(KeyCode::Char('c'))],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 5,
-            label: "case",
-        }),
-    },
-    ModalBinding {
-        label: "Alt-w",
-        description: "Toggle whole-word matching",
-        keys: &[ModalKey::alt(KeyCode::Char('w'))],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 6,
-            label: "word",
-        }),
-    },
-    ModalBinding {
-        label: "Alt-r",
-        description: "Toggle regex / literal matching",
-        keys: &[ModalKey::alt(KeyCode::Char('r'))],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 7,
-            label: "regex",
-        }),
-    },
-];
+);
 
 /// Project Search control keys while
 /// [`super::project_search::SearchFocus::Results`] has focus (spec 06 Unit
@@ -545,93 +576,97 @@ pub(super) const PROJECT_SEARCH_INPUT_HINTS: &[ModalBinding<()>] = &[
 /// table (dispatch is focus-gated inline, not two separate functions), so the
 /// drift cross-check runs this table against that same handler with the app
 /// forced into Results focus.
-pub(super) const PROJECT_SEARCH_RESULTS_HINTS: &[ModalBinding<()>] = &[
-    ModalBinding {
-        label: "/",
-        description: "Edit query (focus input; query preserved)",
-        keys: &[ModalKey::plain(KeyCode::Char('/'))],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 1,
-            label: "edit query",
-        }),
+pub(super) static PROJECT_SEARCH_RESULTS_HINTS: LazyLock<Vec<ModalBinding<()>>> = LazyLock::new(
+    || {
+        vec![
+            ModalBinding {
+                label: "/",
+                description: "Edit query (focus input; query preserved)",
+                keys: vec![ModalKey::plain(KeyCode::Char('/'))],
+                action: (),
+                footer: Some(FooterHint {
+                    rank: 1,
+                    label: "edit query",
+                }),
+            },
+            ModalBinding {
+                label: "Esc",
+                description: "Close (returns to the exact prior diff position)",
+                keys: vec![ModalKey::plain(KeyCode::Esc)],
+                action: (),
+                footer: Some(FooterHint {
+                    rank: 2,
+                    label: "back",
+                }),
+            },
+            ModalBinding {
+                label: "j / k / Up / Down",
+                description: "Move result selection",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('j')),
+                    ModalKey::plain(KeyCode::Char('k')),
+                    ModalKey::plain(KeyCode::Up),
+                    ModalKey::plain(KeyCode::Down),
+                ],
+                action: (),
+                footer: Some(FooterHint {
+                    rank: 3,
+                    label: "move",
+                }),
+            },
+            ModalBinding {
+                label: "Enter",
+                description: "Open the selected result (read-only whole-file view, cursor on the hit)",
+                keys: vec![ModalKey::plain(KeyCode::Enter)],
+                action: (),
+                footer: Some(FooterHint {
+                    rank: 4,
+                    label: "open",
+                }),
+            },
+            ModalBinding {
+                label: "Tab",
+                description: "Toggle focus between input and results",
+                keys: vec![ModalKey::plain(KeyCode::Tab)],
+                action: (),
+                footer: Some(FooterHint {
+                    rank: 5,
+                    label: "focus",
+                }),
+            },
+            ModalBinding {
+                label: "Alt-c",
+                description: "Cycle case sensitivity (smart / sensitive / insensitive)",
+                keys: vec![ModalKey::alt(KeyCode::Char('c'))],
+                action: (),
+                footer: Some(FooterHint {
+                    rank: 6,
+                    label: "case",
+                }),
+            },
+            ModalBinding {
+                label: "Alt-w",
+                description: "Toggle whole-word matching",
+                keys: vec![ModalKey::alt(KeyCode::Char('w'))],
+                action: (),
+                footer: Some(FooterHint {
+                    rank: 7,
+                    label: "word",
+                }),
+            },
+            ModalBinding {
+                label: "Alt-r",
+                description: "Toggle regex / literal matching",
+                keys: vec![ModalKey::alt(KeyCode::Char('r'))],
+                action: (),
+                footer: Some(FooterHint {
+                    rank: 8,
+                    label: "regex",
+                }),
+            },
+        ]
     },
-    ModalBinding {
-        label: "Esc",
-        description: "Close (returns to the exact prior diff position)",
-        keys: &[ModalKey::plain(KeyCode::Esc)],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 2,
-            label: "back",
-        }),
-    },
-    ModalBinding {
-        label: "j / k / Up / Down",
-        description: "Move result selection",
-        keys: &[
-            ModalKey::plain(KeyCode::Char('j')),
-            ModalKey::plain(KeyCode::Char('k')),
-            ModalKey::plain(KeyCode::Up),
-            ModalKey::plain(KeyCode::Down),
-        ],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 3,
-            label: "move",
-        }),
-    },
-    ModalBinding {
-        label: "Enter",
-        description: "Open the selected result (read-only whole-file view, cursor on the hit)",
-        keys: &[ModalKey::plain(KeyCode::Enter)],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 4,
-            label: "open",
-        }),
-    },
-    ModalBinding {
-        label: "Tab",
-        description: "Toggle focus between input and results",
-        keys: &[ModalKey::plain(KeyCode::Tab)],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 5,
-            label: "focus",
-        }),
-    },
-    ModalBinding {
-        label: "Alt-c",
-        description: "Cycle case sensitivity (smart / sensitive / insensitive)",
-        keys: &[ModalKey::alt(KeyCode::Char('c'))],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 6,
-            label: "case",
-        }),
-    },
-    ModalBinding {
-        label: "Alt-w",
-        description: "Toggle whole-word matching",
-        keys: &[ModalKey::alt(KeyCode::Char('w'))],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 7,
-            label: "word",
-        }),
-    },
-    ModalBinding {
-        label: "Alt-r",
-        description: "Toggle regex / literal matching",
-        keys: &[ModalKey::alt(KeyCode::Char('r'))],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 8,
-            label: "regex",
-        }),
-    },
-];
+);
 
 // -- Help overlay ----------------------------------------------------------
 
@@ -653,93 +688,95 @@ pub(super) enum HelpAction {
     Search,
 }
 
-pub(super) const HELP_KEYS: &[ModalBinding<HelpAction>] = &[
-    ModalBinding {
-        label: "Esc / Enter / ?",
-        description: "Close help",
-        keys: &[
-            ModalKey::plain(KeyCode::Esc),
-            ModalKey::plain(KeyCode::Enter),
-            ModalKey::plain(KeyCode::Char('?')),
-        ],
-        action: HelpAction::Close,
-        footer: Some(FooterHint {
-            rank: 3,
-            label: "close",
-        }),
-    },
-    ModalBinding {
-        label: "j / Down",
-        description: "Scroll down",
-        keys: &[
-            ModalKey::plain(KeyCode::Char('j')),
-            ModalKey::plain(KeyCode::Down),
-        ],
-        action: HelpAction::ScrollDown,
-        // `ScrollUp` isn't also tagged: its label ("k / Up") is already a
-        // compound key display, so merging it in would double up the " / "
-        // separators (`super::footer`'s merge is for atomic key text like
-        // "j" + "k"). This row's own label already reads fine alone.
-        footer: Some(FooterHint {
-            rank: 1,
-            label: "scroll",
-        }),
-    },
-    ModalBinding {
-        label: "k / Up",
-        description: "Scroll up",
-        keys: &[
-            ModalKey::plain(KeyCode::Char('k')),
-            ModalKey::plain(KeyCode::Up),
-        ],
-        action: HelpAction::ScrollUp,
-        footer: None,
-    },
-    ModalBinding {
-        label: "PageDown",
-        description: "Page down",
-        keys: &[ModalKey::plain(KeyCode::PageDown)],
-        action: HelpAction::PageDown,
-        footer: None,
-    },
-    ModalBinding {
-        label: "PageUp",
-        description: "Page up",
-        keys: &[ModalKey::plain(KeyCode::PageUp)],
-        action: HelpAction::PageUp,
-        footer: None,
-    },
-    ModalBinding {
-        label: "g / Home",
-        description: "Scroll to top",
-        keys: &[
-            ModalKey::plain(KeyCode::Char('g')),
-            ModalKey::plain(KeyCode::Home),
-        ],
-        action: HelpAction::Top,
-        footer: None,
-    },
-    ModalBinding {
-        label: "G / End",
-        description: "Scroll to bottom",
-        keys: &[
-            ModalKey::plain(KeyCode::Char('G')),
-            ModalKey::plain(KeyCode::End),
-        ],
-        action: HelpAction::Bottom,
-        footer: None,
-    },
-    ModalBinding {
-        label: "/",
-        description: "Filter keybinds",
-        keys: &[ModalKey::plain(KeyCode::Char('/'))],
-        action: HelpAction::Search,
-        footer: Some(FooterHint {
-            rank: 2,
-            label: "filter",
-        }),
-    },
-];
+pub(super) static HELP_KEYS: LazyLock<Vec<ModalBinding<HelpAction>>> = LazyLock::new(|| {
+    vec![
+        ModalBinding {
+            label: "Esc / Enter / ?",
+            description: "Close help",
+            keys: vec![
+                ModalKey::plain(KeyCode::Esc),
+                ModalKey::plain(KeyCode::Enter),
+                ModalKey::plain(KeyCode::Char('?')),
+            ],
+            action: HelpAction::Close,
+            footer: Some(FooterHint {
+                rank: 3,
+                label: "close",
+            }),
+        },
+        ModalBinding {
+            label: "j / Down",
+            description: "Scroll down",
+            keys: vec![
+                ModalKey::plain(KeyCode::Char('j')),
+                ModalKey::plain(KeyCode::Down),
+            ],
+            action: HelpAction::ScrollDown,
+            // `ScrollUp` isn't also tagged: its label ("k / Up") is already a
+            // compound key display, so merging it in would double up the " / "
+            // separators (`super::footer`'s merge is for atomic key text like
+            // "j" + "k"). This row's own label already reads fine alone.
+            footer: Some(FooterHint {
+                rank: 1,
+                label: "scroll",
+            }),
+        },
+        ModalBinding {
+            label: "k / Up",
+            description: "Scroll up",
+            keys: vec![
+                ModalKey::plain(KeyCode::Char('k')),
+                ModalKey::plain(KeyCode::Up),
+            ],
+            action: HelpAction::ScrollUp,
+            footer: None,
+        },
+        ModalBinding {
+            label: "PageDown",
+            description: "Page down",
+            keys: vec![ModalKey::plain(KeyCode::PageDown)],
+            action: HelpAction::PageDown,
+            footer: None,
+        },
+        ModalBinding {
+            label: "PageUp",
+            description: "Page up",
+            keys: vec![ModalKey::plain(KeyCode::PageUp)],
+            action: HelpAction::PageUp,
+            footer: None,
+        },
+        ModalBinding {
+            label: "g / Home",
+            description: "Scroll to top",
+            keys: vec![
+                ModalKey::plain(KeyCode::Char('g')),
+                ModalKey::plain(KeyCode::Home),
+            ],
+            action: HelpAction::Top,
+            footer: None,
+        },
+        ModalBinding {
+            label: "G / End",
+            description: "Scroll to bottom",
+            keys: vec![
+                ModalKey::plain(KeyCode::Char('G')),
+                ModalKey::plain(KeyCode::End),
+            ],
+            action: HelpAction::Bottom,
+            footer: None,
+        },
+        ModalBinding {
+            label: "/",
+            description: "Filter keybinds",
+            keys: vec![ModalKey::plain(KeyCode::Char('/'))],
+            action: HelpAction::Search,
+            footer: Some(FooterHint {
+                rank: 2,
+                label: "filter",
+            }),
+        },
+    ]
+});
 
 // -- Help overlay filter (hint-only) ---------------------------------------
 
@@ -750,29 +787,31 @@ pub(super) const HELP_KEYS: &[ModalBinding<HelpAction>] = &[
 /// handler. Unlike `COMPOSE_HINTS`/`SEARCH_HINTS`, `Enter` here doesn't
 /// submit-and-leave — it locks the filter in and hands control back to
 /// `HELP_KEYS`' scroll keys, so its description says that explicitly.
-pub(super) const HELP_SEARCH_HINTS: &[ModalBinding<()>] = &[
-    ModalBinding {
-        label: "Enter",
-        description: "Lock in the filter (scroll keys resume)",
-        keys: &[ModalKey::plain(KeyCode::Enter)],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Esc",
-        description: "Clear the filter",
-        keys: &[ModalKey::plain(KeyCode::Esc)],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Backspace",
-        description: "Delete character",
-        keys: &[ModalKey::plain(KeyCode::Backspace)],
-        action: (),
-        footer: None,
-    },
-];
+pub(super) static HELP_SEARCH_HINTS: LazyLock<Vec<ModalBinding<()>>> = LazyLock::new(|| {
+    vec![
+        ModalBinding {
+            label: "Enter",
+            description: "Lock in the filter (scroll keys resume)",
+            keys: vec![ModalKey::plain(KeyCode::Enter)],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Esc",
+            description: "Clear the filter",
+            keys: vec![ModalKey::plain(KeyCode::Esc)],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Backspace",
+            description: "Delete character",
+            keys: vec![ModalKey::plain(KeyCode::Backspace)],
+            action: (),
+            footer: None,
+        },
+    ]
+});
 
 // -- Compose modal (hint-only) ---------------------------------------------
 
@@ -780,149 +819,151 @@ pub(super) const HELP_SEARCH_HINTS: &[ModalBinding<()>] = &[
 /// input (printable chars insert), so [`super::handle_compose_key`] keeps a
 /// hand-written match; this table documents the non-text keys and the drift
 /// cross-check drives them through that handler.
-pub(super) const COMPOSE_HINTS: &[ModalBinding<()>] = &[
-    ModalBinding {
-        label: "Enter",
-        description: "Submit",
-        keys: &[ModalKey::plain(KeyCode::Enter)],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 1,
-            label: "save",
-        }),
-    },
-    ModalBinding {
-        label: "Esc",
-        description: "Cancel",
-        keys: &[ModalKey::plain(KeyCode::Esc)],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 2,
-            label: "discard",
-        }),
-    },
-    ModalBinding {
-        label: "Shift-Enter / Ctrl-j",
-        description: "Insert newline (Shift-Enter needs a kitty-capable terminal)",
-        keys: &[
-            ModalKey::shift(KeyCode::Enter),
-            ModalKey::ctrl(KeyCode::Char('j')),
-        ],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Ctrl-t",
-        description: "Cycle classification",
-        keys: &[ModalKey::ctrl(KeyCode::Char('t'))],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "←/→/↑/↓",
-        description: "Move cursor",
-        keys: &[
-            ModalKey::plain(KeyCode::Left),
-            ModalKey::plain(KeyCode::Right),
-            ModalKey::plain(KeyCode::Up),
-            ModalKey::plain(KeyCode::Down),
-        ],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Ctrl/Alt-← · Alt-b",
-        description: "Move word left",
-        keys: &[
-            ModalKey::ctrl(KeyCode::Left),
-            ModalKey::alt(KeyCode::Left),
-            ModalKey::alt(KeyCode::Char('b')),
-        ],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Ctrl/Alt-→ · Alt-f",
-        description: "Move word right",
-        keys: &[
-            ModalKey::ctrl(KeyCode::Right),
-            ModalKey::alt(KeyCode::Right),
-            ModalKey::alt(KeyCode::Char('f')),
-        ],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Home / Ctrl-a",
-        description: "Move to line start",
-        keys: &[
-            ModalKey::plain(KeyCode::Home),
-            ModalKey::ctrl(KeyCode::Char('a')),
-        ],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "End / Ctrl-e",
-        description: "Move to line end",
-        keys: &[
-            ModalKey::plain(KeyCode::End),
-            ModalKey::ctrl(KeyCode::Char('e')),
-        ],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Ctrl-Home",
-        description: "Move to document start",
-        keys: &[ModalKey::ctrl(KeyCode::Home)],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Ctrl-End",
-        description: "Move to document end",
-        keys: &[ModalKey::ctrl(KeyCode::End)],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Backspace",
-        description: "Delete character before the cursor",
-        keys: &[ModalKey::plain(KeyCode::Backspace)],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Delete",
-        description: "Delete character at the cursor",
-        keys: &[ModalKey::plain(KeyCode::Delete)],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Ctrl/Alt-Backspace · Ctrl-w · Ctrl-h",
-        description: "Delete word before the cursor",
-        keys: &[
-            ModalKey::ctrl(KeyCode::Backspace),
-            ModalKey::alt(KeyCode::Backspace),
-            ModalKey::ctrl(KeyCode::Char('w')),
-            ModalKey::ctrl(KeyCode::Char('h')),
-        ],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Ctrl-Delete · Alt-d",
-        description: "Delete word at the cursor",
-        keys: &[
-            ModalKey::ctrl(KeyCode::Delete),
-            ModalKey::alt(KeyCode::Char('d')),
-        ],
-        action: (),
-        footer: None,
-    },
-];
+pub(super) static COMPOSE_HINTS: LazyLock<Vec<ModalBinding<()>>> = LazyLock::new(|| {
+    vec![
+        ModalBinding {
+            label: "Enter",
+            description: "Submit",
+            keys: vec![ModalKey::plain(KeyCode::Enter)],
+            action: (),
+            footer: Some(FooterHint {
+                rank: 1,
+                label: "save",
+            }),
+        },
+        ModalBinding {
+            label: "Esc",
+            description: "Cancel",
+            keys: vec![ModalKey::plain(KeyCode::Esc)],
+            action: (),
+            footer: Some(FooterHint {
+                rank: 2,
+                label: "discard",
+            }),
+        },
+        ModalBinding {
+            label: "Shift-Enter / Ctrl-j",
+            description: "Insert newline (Shift-Enter needs a kitty-capable terminal)",
+            keys: vec![
+                ModalKey::shift(KeyCode::Enter),
+                ModalKey::ctrl(KeyCode::Char('j')),
+            ],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Ctrl-t",
+            description: "Cycle classification",
+            keys: vec![ModalKey::ctrl(KeyCode::Char('t'))],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "←/→/↑/↓",
+            description: "Move cursor",
+            keys: vec![
+                ModalKey::plain(KeyCode::Left),
+                ModalKey::plain(KeyCode::Right),
+                ModalKey::plain(KeyCode::Up),
+                ModalKey::plain(KeyCode::Down),
+            ],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Ctrl/Alt-← · Alt-b",
+            description: "Move word left",
+            keys: vec![
+                ModalKey::ctrl(KeyCode::Left),
+                ModalKey::alt(KeyCode::Left),
+                ModalKey::alt(KeyCode::Char('b')),
+            ],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Ctrl/Alt-→ · Alt-f",
+            description: "Move word right",
+            keys: vec![
+                ModalKey::ctrl(KeyCode::Right),
+                ModalKey::alt(KeyCode::Right),
+                ModalKey::alt(KeyCode::Char('f')),
+            ],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Home / Ctrl-a",
+            description: "Move to line start",
+            keys: vec![
+                ModalKey::plain(KeyCode::Home),
+                ModalKey::ctrl(KeyCode::Char('a')),
+            ],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "End / Ctrl-e",
+            description: "Move to line end",
+            keys: vec![
+                ModalKey::plain(KeyCode::End),
+                ModalKey::ctrl(KeyCode::Char('e')),
+            ],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Ctrl-Home",
+            description: "Move to document start",
+            keys: vec![ModalKey::ctrl(KeyCode::Home)],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Ctrl-End",
+            description: "Move to document end",
+            keys: vec![ModalKey::ctrl(KeyCode::End)],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Backspace",
+            description: "Delete character before the cursor",
+            keys: vec![ModalKey::plain(KeyCode::Backspace)],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Delete",
+            description: "Delete character at the cursor",
+            keys: vec![ModalKey::plain(KeyCode::Delete)],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Ctrl/Alt-Backspace · Ctrl-w · Ctrl-h",
+            description: "Delete word before the cursor",
+            keys: vec![
+                ModalKey::ctrl(KeyCode::Backspace),
+                ModalKey::alt(KeyCode::Backspace),
+                ModalKey::ctrl(KeyCode::Char('w')),
+                ModalKey::ctrl(KeyCode::Char('h')),
+            ],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Ctrl-Delete · Alt-d",
+            description: "Delete word at the cursor",
+            keys: vec![
+                ModalKey::ctrl(KeyCode::Delete),
+                ModalKey::alt(KeyCode::Char('d')),
+            ],
+            action: (),
+            footer: None,
+        },
+    ]
+});
 
 // -- Commit-message modal (hint-only) ----------------------------------------
 
@@ -931,171 +972,175 @@ pub(super) const COMPOSE_HINTS: &[ModalBinding<()>] = &[
 /// insert), so [`super::modes::handle_commit_message_key`] keeps a
 /// hand-written match; this table documents the non-text keys and the drift
 /// cross-check drives them through that handler.
-pub(super) const COMMIT_MESSAGE_HINTS: &[ModalBinding<()>] = &[
-    ModalBinding {
-        label: "Enter",
-        description: "Commit staged changes with this message",
-        keys: &[ModalKey::plain(KeyCode::Enter)],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 1,
-            label: "commit",
-        }),
-    },
-    ModalBinding {
-        label: "Esc",
-        description: "Cancel back to the git panel",
-        keys: &[ModalKey::plain(KeyCode::Esc)],
-        action: (),
-        footer: Some(FooterHint {
-            rank: 2,
-            label: "cancel",
-        }),
-    },
-    ModalBinding {
-        label: "Shift-Enter / Ctrl-j",
-        description: "Insert newline / body line (Shift-Enter needs a kitty-capable terminal)",
-        keys: &[
-            ModalKey::shift(KeyCode::Enter),
-            ModalKey::ctrl(KeyCode::Char('j')),
-        ],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "←/→/↑/↓",
-        description: "Move cursor",
-        keys: &[
-            ModalKey::plain(KeyCode::Left),
-            ModalKey::plain(KeyCode::Right),
-            ModalKey::plain(KeyCode::Up),
-            ModalKey::plain(KeyCode::Down),
-        ],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Ctrl/Alt-← · Alt-b",
-        description: "Move word left",
-        keys: &[
-            ModalKey::ctrl(KeyCode::Left),
-            ModalKey::alt(KeyCode::Left),
-            ModalKey::alt(KeyCode::Char('b')),
-        ],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Ctrl/Alt-→ · Alt-f",
-        description: "Move word right",
-        keys: &[
-            ModalKey::ctrl(KeyCode::Right),
-            ModalKey::alt(KeyCode::Right),
-            ModalKey::alt(KeyCode::Char('f')),
-        ],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Home / Ctrl-a",
-        description: "Move to line start",
-        keys: &[
-            ModalKey::plain(KeyCode::Home),
-            ModalKey::ctrl(KeyCode::Char('a')),
-        ],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "End / Ctrl-e",
-        description: "Move to line end",
-        keys: &[
-            ModalKey::plain(KeyCode::End),
-            ModalKey::ctrl(KeyCode::Char('e')),
-        ],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Ctrl-Home",
-        description: "Move to document start",
-        keys: &[ModalKey::ctrl(KeyCode::Home)],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Ctrl-End",
-        description: "Move to document end",
-        keys: &[ModalKey::ctrl(KeyCode::End)],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Backspace",
-        description: "Delete character before the cursor",
-        keys: &[ModalKey::plain(KeyCode::Backspace)],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Delete",
-        description: "Delete character at the cursor",
-        keys: &[ModalKey::plain(KeyCode::Delete)],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Ctrl/Alt-Backspace · Ctrl-w · Ctrl-h",
-        description: "Delete word before the cursor",
-        keys: &[
-            ModalKey::ctrl(KeyCode::Backspace),
-            ModalKey::alt(KeyCode::Backspace),
-            ModalKey::ctrl(KeyCode::Char('w')),
-            ModalKey::ctrl(KeyCode::Char('h')),
-        ],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Ctrl-Delete · Alt-d",
-        description: "Delete word at the cursor",
-        keys: &[
-            ModalKey::ctrl(KeyCode::Delete),
-            ModalKey::alt(KeyCode::Char('d')),
-        ],
-        action: (),
-        footer: None,
-    },
-];
+pub(super) static COMMIT_MESSAGE_HINTS: LazyLock<Vec<ModalBinding<()>>> = LazyLock::new(|| {
+    vec![
+        ModalBinding {
+            label: "Enter",
+            description: "Commit staged changes with this message",
+            keys: vec![ModalKey::plain(KeyCode::Enter)],
+            action: (),
+            footer: Some(FooterHint {
+                rank: 1,
+                label: "commit",
+            }),
+        },
+        ModalBinding {
+            label: "Esc",
+            description: "Cancel back to the git panel",
+            keys: vec![ModalKey::plain(KeyCode::Esc)],
+            action: (),
+            footer: Some(FooterHint {
+                rank: 2,
+                label: "cancel",
+            }),
+        },
+        ModalBinding {
+            label: "Shift-Enter / Ctrl-j",
+            description: "Insert newline / body line (Shift-Enter needs a kitty-capable terminal)",
+            keys: vec![
+                ModalKey::shift(KeyCode::Enter),
+                ModalKey::ctrl(KeyCode::Char('j')),
+            ],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "←/→/↑/↓",
+            description: "Move cursor",
+            keys: vec![
+                ModalKey::plain(KeyCode::Left),
+                ModalKey::plain(KeyCode::Right),
+                ModalKey::plain(KeyCode::Up),
+                ModalKey::plain(KeyCode::Down),
+            ],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Ctrl/Alt-← · Alt-b",
+            description: "Move word left",
+            keys: vec![
+                ModalKey::ctrl(KeyCode::Left),
+                ModalKey::alt(KeyCode::Left),
+                ModalKey::alt(KeyCode::Char('b')),
+            ],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Ctrl/Alt-→ · Alt-f",
+            description: "Move word right",
+            keys: vec![
+                ModalKey::ctrl(KeyCode::Right),
+                ModalKey::alt(KeyCode::Right),
+                ModalKey::alt(KeyCode::Char('f')),
+            ],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Home / Ctrl-a",
+            description: "Move to line start",
+            keys: vec![
+                ModalKey::plain(KeyCode::Home),
+                ModalKey::ctrl(KeyCode::Char('a')),
+            ],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "End / Ctrl-e",
+            description: "Move to line end",
+            keys: vec![
+                ModalKey::plain(KeyCode::End),
+                ModalKey::ctrl(KeyCode::Char('e')),
+            ],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Ctrl-Home",
+            description: "Move to document start",
+            keys: vec![ModalKey::ctrl(KeyCode::Home)],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Ctrl-End",
+            description: "Move to document end",
+            keys: vec![ModalKey::ctrl(KeyCode::End)],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Backspace",
+            description: "Delete character before the cursor",
+            keys: vec![ModalKey::plain(KeyCode::Backspace)],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Delete",
+            description: "Delete character at the cursor",
+            keys: vec![ModalKey::plain(KeyCode::Delete)],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Ctrl/Alt-Backspace · Ctrl-w · Ctrl-h",
+            description: "Delete word before the cursor",
+            keys: vec![
+                ModalKey::ctrl(KeyCode::Backspace),
+                ModalKey::alt(KeyCode::Backspace),
+                ModalKey::ctrl(KeyCode::Char('w')),
+                ModalKey::ctrl(KeyCode::Char('h')),
+            ],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Ctrl-Delete · Alt-d",
+            description: "Delete word at the cursor",
+            keys: vec![
+                ModalKey::ctrl(KeyCode::Delete),
+                ModalKey::alt(KeyCode::Char('d')),
+            ],
+            action: (),
+            footer: None,
+        },
+    ]
+});
 
 // -- Search input (hint-only) ----------------------------------------------
 
 /// Search-input control keys, for the help overlay only. Like Compose, Search
 /// is free-text input, so [`super::handle_search_key`] keeps its hand-written
 /// match; this table documents the non-text keys.
-pub(super) const SEARCH_HINTS: &[ModalBinding<()>] = &[
-    ModalBinding {
-        label: "Enter",
-        description: "Confirm search",
-        keys: &[ModalKey::plain(KeyCode::Enter)],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Esc",
-        description: "Cancel (clears pattern if buffer empty)",
-        keys: &[ModalKey::plain(KeyCode::Esc)],
-        action: (),
-        footer: None,
-    },
-    ModalBinding {
-        label: "Backspace",
-        description: "Delete character",
-        keys: &[ModalKey::plain(KeyCode::Backspace)],
-        action: (),
-        footer: None,
-    },
-];
+pub(super) static SEARCH_HINTS: LazyLock<Vec<ModalBinding<()>>> = LazyLock::new(|| {
+    vec![
+        ModalBinding {
+            label: "Enter",
+            description: "Confirm search",
+            keys: vec![ModalKey::plain(KeyCode::Enter)],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Esc",
+            description: "Cancel (clears pattern if buffer empty)",
+            keys: vec![ModalKey::plain(KeyCode::Esc)],
+            action: (),
+            footer: None,
+        },
+        ModalBinding {
+            label: "Backspace",
+            description: "Delete character",
+            keys: vec![ModalKey::plain(KeyCode::Backspace)],
+            action: (),
+            footer: None,
+        },
+    ]
+});
 
 #[cfg(test)]
 mod tests {
@@ -1155,8 +1200,8 @@ index 111..222 100644
     /// an assertion here.
     #[test]
     fn every_list_table_entry_drives_its_documented_action() {
-        for binding in LIST_KEYS {
-            for key in binding.keys {
+        for binding in LIST_KEYS.iter() {
+            for key in &binding.keys {
                 let mut app = list_app();
                 let label = binding.label;
                 match binding.action {
@@ -1211,8 +1256,8 @@ index 111..222 100644
 
     #[test]
     fn every_staging_table_entry_drives_its_documented_action() {
-        for binding in STAGING_KEYS {
-            for key in binding.keys {
+        for binding in STAGING_KEYS.iter() {
+            for key in &binding.keys {
                 let mut app = staging_app();
                 let label = binding.label;
                 match binding.action {
@@ -1267,8 +1312,8 @@ index 111..222 100644
 
     #[test]
     fn every_peek_table_entry_drives_its_documented_action() {
-        for binding in PEEK_KEYS {
-            for key in binding.keys {
+        for binding in PEEK_KEYS.iter() {
+            for key in &binding.keys {
                 let mut app = peek_app();
                 let label = binding.label;
                 match binding.action {
@@ -1353,8 +1398,8 @@ index 111..222 100644
         use crate::ui::modes::handle_switcher_key;
         use crate::ui::switcher::SwitcherTab;
 
-        for binding in SWITCHER_KEYS {
-            for key in binding.keys {
+        for binding in SWITCHER_KEYS.iter() {
+            for key in &binding.keys {
                 let mut app = switcher_app();
                 let label = binding.label;
                 match binding.action {
@@ -1407,8 +1452,8 @@ index 111..222 100644
 
     #[test]
     fn every_help_table_entry_drives_its_documented_action() {
-        for binding in HELP_KEYS {
-            for key in binding.keys {
+        for binding in HELP_KEYS.iter() {
+            for key in &binding.keys {
                 let mut app = app();
                 app.help_open = true;
                 app.help_scroll.set(25);
@@ -1462,8 +1507,8 @@ index 111..222 100644
 
     #[test]
     fn every_help_search_hint_key_is_consumed_by_the_handler() {
-        for binding in HELP_SEARCH_HINTS {
-            for key in binding.keys {
+        for binding in HELP_SEARCH_HINTS.iter() {
+            for key in &binding.keys {
                 let mut app = help_search_app();
                 let before = app.help_search.clone();
                 handle_help_key(&mut app, key.event());
@@ -1500,7 +1545,7 @@ index 111..222 100644
         .map(|code| KeyEvent::new(code, KeyModifiers::NONE))
         .collect();
         for ev in universe {
-            if resolve(HELP_SEARCH_HINTS, ev).is_some() {
+            if resolve(&HELP_SEARCH_HINTS, ev).is_some() {
                 continue;
             }
             let mut app = help_search_app();
@@ -1544,8 +1589,8 @@ index 111..222 100644
 
     #[test]
     fn every_compose_hint_key_is_consumed_by_the_handler() {
-        for binding in COMPOSE_HINTS {
-            for key in binding.keys {
+        for binding in COMPOSE_HINTS.iter() {
+            for key in &binding.keys {
                 let mut app = compose_app();
                 let before = compose_snapshot(&app);
                 handle_compose_key(&mut app, key.event());
@@ -1582,7 +1627,7 @@ index 111..222 100644
             universe.push(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL));
         }
         for ev in universe {
-            if resolve(COMPOSE_HINTS, ev).is_some() {
+            if resolve(&COMPOSE_HINTS, ev).is_some() {
                 continue; // documented in the table; covered above
             }
             let mut app = compose_app();
@@ -1635,8 +1680,8 @@ index 111..222 100644
     #[test]
     fn every_commit_message_hint_key_is_consumed_by_the_handler() {
         use crate::ui::modes::handle_commit_message_key;
-        for binding in COMMIT_MESSAGE_HINTS {
-            for key in binding.keys {
+        for binding in COMMIT_MESSAGE_HINTS.iter() {
+            for key in &binding.keys {
                 let mut app = commit_message_app();
                 let before = commit_message_snapshot(&app);
                 handle_commit_message_key(&mut app, key.event());
@@ -1675,7 +1720,7 @@ index 111..222 100644
             universe.push(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL));
         }
         for ev in universe {
-            if resolve(COMMIT_MESSAGE_HINTS, ev).is_some() {
+            if resolve(&COMMIT_MESSAGE_HINTS, ev).is_some() {
                 continue; // documented in the table; covered above
             }
             let mut app = commit_message_app();
@@ -1704,8 +1749,8 @@ index 111..222 100644
 
     #[test]
     fn every_search_hint_key_is_consumed_by_the_handler() {
-        for binding in SEARCH_HINTS {
-            for key in binding.keys {
+        for binding in SEARCH_HINTS.iter() {
+            for key in &binding.keys {
                 let mut app = search_app();
                 let before = search_snapshot(&app);
                 handle_search_key(&mut app, key.event());
@@ -1743,7 +1788,7 @@ index 111..222 100644
         .map(|code| KeyEvent::new(code, KeyModifiers::NONE))
         .collect();
         for ev in universe {
-            if resolve(SEARCH_HINTS, ev).is_some() {
+            if resolve(&SEARCH_HINTS, ev).is_some() {
                 continue;
             }
             let mut app = search_app();
@@ -1819,8 +1864,8 @@ index 111..222 100644
     #[test]
     fn every_finder_hint_key_is_consumed_by_the_handler() {
         use crate::ui::modes::handle_finder_key;
-        for binding in FINDER_HINTS {
-            for key in binding.keys {
+        for binding in FINDER_HINTS.iter() {
+            for key in &binding.keys {
                 let mut app = finder_app();
                 let before = finder_snapshot(&app);
                 handle_finder_key(&mut app, key.event());
@@ -1860,7 +1905,7 @@ index 111..222 100644
         .map(|code| KeyEvent::new(code, KeyModifiers::NONE))
         .collect();
         for ev in universe {
-            if resolve(FINDER_HINTS, ev).is_some() {
+            if resolve(&FINDER_HINTS, ev).is_some() {
                 continue; // documented (Up/Down); covered above
             }
             let mut app = finder_app();
@@ -1879,18 +1924,18 @@ index 111..222 100644
     #[test]
     fn unbound_keys_resolve_to_nothing_in_every_table() {
         let ev = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
-        assert!(resolve(LIST_KEYS, ev).is_none());
-        assert!(resolve(STAGING_KEYS, ev).is_none());
-        assert!(resolve(PEEK_KEYS, ev).is_none());
-        assert!(resolve(HELP_KEYS, ev).is_none());
-        assert!(resolve(COMPOSE_HINTS, ev).is_none());
-        assert!(resolve(SEARCH_HINTS, ev).is_none());
-        assert!(resolve(SWITCHER_KEYS, ev).is_none());
-        assert!(resolve(HELP_SEARCH_HINTS, ev).is_none());
-        assert!(resolve(COMMIT_MESSAGE_HINTS, ev).is_none());
-        assert!(resolve(FINDER_HINTS, ev).is_none());
-        assert!(resolve(PROJECT_SEARCH_INPUT_HINTS, ev).is_none());
-        assert!(resolve(PROJECT_SEARCH_RESULTS_HINTS, ev).is_none());
+        assert!(resolve(&LIST_KEYS, ev).is_none());
+        assert!(resolve(&STAGING_KEYS, ev).is_none());
+        assert!(resolve(&PEEK_KEYS, ev).is_none());
+        assert!(resolve(&HELP_KEYS, ev).is_none());
+        assert!(resolve(&COMPOSE_HINTS, ev).is_none());
+        assert!(resolve(&SEARCH_HINTS, ev).is_none());
+        assert!(resolve(&SWITCHER_KEYS, ev).is_none());
+        assert!(resolve(&HELP_SEARCH_HINTS, ev).is_none());
+        assert!(resolve(&COMMIT_MESSAGE_HINTS, ev).is_none());
+        assert!(resolve(&FINDER_HINTS, ev).is_none());
+        assert!(resolve(&PROJECT_SEARCH_INPUT_HINTS, ev).is_none());
+        assert!(resolve(&PROJECT_SEARCH_RESULTS_HINTS, ev).is_none());
     }
 
     // -- Project Search mode (spec 06 Unit 2) -----------------------------
@@ -1994,8 +2039,8 @@ index 111..222 100644
     #[test]
     fn every_project_search_input_hint_key_is_consumed_by_the_handler() {
         use crate::ui::modes::handle_project_search_key;
-        for binding in PROJECT_SEARCH_INPUT_HINTS {
-            for key in binding.keys {
+        for binding in PROJECT_SEARCH_INPUT_HINTS.iter() {
+            for key in &binding.keys {
                 let mut app = project_search_app_with_focus(SearchFocus::Input);
                 let before = project_search_snapshot(&app);
                 handle_project_search_key(&mut app, key.event());
@@ -2012,8 +2057,8 @@ index 111..222 100644
     #[test]
     fn every_project_search_results_hint_key_is_consumed_by_the_handler() {
         use crate::ui::modes::handle_project_search_key;
-        for binding in PROJECT_SEARCH_RESULTS_HINTS {
-            for key in binding.keys {
+        for binding in PROJECT_SEARCH_RESULTS_HINTS.iter() {
+            for key in &binding.keys {
                 let mut app = project_search_app_with_focus(SearchFocus::Results);
                 let before = project_search_snapshot(&app);
                 handle_project_search_key(&mut app, key.event());
@@ -2066,7 +2111,7 @@ index 111..222 100644
     fn project_search_input_focus_ignores_control_keys_absent_from_its_table() {
         use crate::ui::modes::handle_project_search_key;
         for ev in project_search_control_key_universe() {
-            if resolve(PROJECT_SEARCH_INPUT_HINTS, ev).is_some() {
+            if resolve(&PROJECT_SEARCH_INPUT_HINTS, ev).is_some() {
                 continue; // documented; covered by the consumed-key test above
             }
             let mut app = project_search_app_with_focus(SearchFocus::Input);
@@ -2089,7 +2134,7 @@ index 111..222 100644
     fn project_search_results_focus_ignores_control_keys_absent_from_its_table() {
         use crate::ui::modes::handle_project_search_key;
         for ev in project_search_control_key_universe() {
-            if resolve(PROJECT_SEARCH_RESULTS_HINTS, ev).is_some() {
+            if resolve(&PROJECT_SEARCH_RESULTS_HINTS, ev).is_some() {
                 continue; // documented; covered by the consumed-key test above
             }
             let mut app = project_search_app_with_focus(SearchFocus::Results);
