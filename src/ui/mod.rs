@@ -51,6 +51,7 @@ mod project_search_view;
 mod refresh;
 mod render_glue;
 mod review_banner;
+mod review_ops;
 mod rows;
 mod search;
 mod stage_ops;
@@ -436,6 +437,20 @@ fn dispatch_key(
                         None => Flow::Continue,
                     };
                 }
+                // Review-session accept translation (spec 08 Unit 3): `Space`/
+                // `S` resolve through the keymap to `ToggleStage`/`StageFile`
+                // exactly as they always have (see `Action::ToggleAccept`'s
+                // doc) — this is the one place their *meaning* changes while
+                // reviewing, mirroring `quit_action`'s identical pattern for
+                // `q`. Every other target's `Space`/`S` handling is untouched:
+                // this arm is a no-op outside a review session, so it falls
+                // straight through to the generic dispatch below.
+                Action::ToggleStage if app.in_review_session() => {
+                    app.apply(Action::ToggleAccept);
+                }
+                Action::StageFile if app.in_review_session() => {
+                    app.apply(Action::AcceptFile);
+                }
                 other => {
                     for _ in 0..repeat_count(other, count) {
                         app.apply(other);
@@ -773,6 +788,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
             &app.theme,
             staging_allowed,
             code_intel_allowed,
+            app.in_review_session(),
             &state,
         );
     }

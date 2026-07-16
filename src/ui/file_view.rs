@@ -377,7 +377,8 @@ mod tests {
             assert!(help::binding_hidden(
                 action,
                 staging_allowed,
-                code_intel_allowed
+                code_intel_allowed,
+                false
             ));
         }
         for action in [
@@ -388,7 +389,8 @@ mod tests {
             assert!(help::binding_hidden(
                 action,
                 staging_allowed,
-                code_intel_allowed
+                code_intel_allowed,
+                false
             ));
         }
     }

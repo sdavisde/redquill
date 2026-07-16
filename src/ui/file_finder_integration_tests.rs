@@ -263,7 +263,8 @@ fn file_view_hides_and_disarms_staging_and_code_intel_keys() {
         assert!(help::binding_hidden(
             action,
             staging_allowed,
-            code_intel_allowed
+            code_intel_allowed,
+            false
         ));
     }
 

@@ -43,7 +43,7 @@ Keep these boundaries clean; they're the seams for testing and for future work:
 - `annotate/` — annotation model, persistence, stdout serialization.
 - `lsp/` — server lifecycle + the three requests. Must be fully async and never block the render loop; missing/slow servers degrade silently.
 - `ui/` — ratatui widgets, layout, event loop, keymap. Keymap is data (remappable), not hardcoded match arms scattered through widgets.
-- `review/` — per-file review-status model + persistence (spec 08, docs/specs/08-spec-branch-review-mode/08-spec-branch-review-mode.md). Planned seam: module lands in spec 08 task 3.0; documented here now so the map stays ahead of the code it describes rather than drifting behind it.
+- `review/` — per-file review-status model (spec 08 Unit 3, docs/specs/08-spec-branch-review-mode/08-spec-branch-review-mode.md): pure `ReviewStatus` tri-state and transition functions, no TUI types. Persistence (`review-state.json`, blob-SHA reconciliation) lands as a `review::store` submodule in spec 08 task 4.0.
 - `main.rs` — CLI args (working tree default, `--staged`, ref ranges, `--review`/`--base`, `-o file`), wiring.
 
 ## Conventions

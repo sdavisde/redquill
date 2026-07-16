@@ -118,6 +118,35 @@ fn normal_mode_hints_gain_q_end_review_during_a_review_session() {
     assert!(!labels(&without).contains(&"end review"));
 }
 
+/// During a review session (spec 08 Unit 3), `Space`/`S`/`d`'s footer hints
+/// swap from staging's to review's: `staging_allowed` is always `false` for
+/// a review target (read-only), so "stage hunk"/"stage file" are gone, and
+/// "accept"/"accept file"/"defer" take their place — the footer-strip half
+/// of the "inapplicable keys are omitted, not inert-but-listed" contract
+/// `help_overlay_shows_review_rows_and_hides_staging_rows_during_a_review_session`
+/// (`mod_tests.rs`) pins for the `?` overlay.
+#[test]
+fn normal_mode_hints_show_accept_defer_and_hide_staging_during_a_review_session() {
+    let km = Keymap::default_map();
+    // A review target is always `staging_allowed = false` (read-only) — see
+    // `App::target.staging_mode()` for `DiffTarget::Review`.
+    let entries = normal_hints(&km, false, true, false, true);
+    assert!(!labels(&entries).contains(&"stage hunk"));
+    assert!(!labels(&entries).contains(&"stage file"));
+    assert!(labels(&entries).contains(&"accept"));
+    assert!(labels(&entries).contains(&"accept file"));
+    assert!(labels(&entries).contains(&"defer"));
+    assert!(keys(&entries).contains(&"Space".to_string()));
+    assert!(keys(&entries).contains(&"S".to_string()));
+    assert!(keys(&entries).contains(&"d".to_string()));
+
+    // Absent outside a review session, even with staging allowed.
+    let without = normal_hints(&km, true, true, false, false);
+    assert!(!labels(&without).contains(&"accept"));
+    assert!(!labels(&without).contains(&"accept file"));
+    assert!(!labels(&without).contains(&"defer"));
+}
+
 #[test]
 fn visual_mode_hints_are_relabeled_and_synthetic_cancel_is_last_before_help() {
     let km = Keymap::default_map();
@@ -550,7 +579,7 @@ fn table_derived_hints_use_real_key_labels() {
             .filter(|b| b.scope == scope)
             .map(|b| b.key_label())
             .collect();
-        let entries = keymap_hints(&km, scope, true, true);
+        let entries = keymap_hints(&km, scope, true, true, true);
         for e in &entries {
             // Merged entries (`j/k`) join two atomic key labels with `/`; an
             // unmerged entry's key can itself legitimately *be* `/` (the

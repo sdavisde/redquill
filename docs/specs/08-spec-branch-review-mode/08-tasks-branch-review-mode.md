@@ -82,7 +82,7 @@ Covers: spec Unit 2 — banner + theme fields + contrast guard, layout accountin
 - [x] 2.6 Footer + `?` overlay entries for the review-mode `q` meaning via the shared tables; run gates; capture banner screenshot + lifecycle transcripts into `proofs/`; commit.
 - [x] 2.7 Polish pass from user dogfood feedback: banner padding/weight + right-aligned progress; end-review modal compacted to content, single-line options with accented keys, j/k/Enter selection (lazygit-style).
 
-### [ ] 3.0 Accept / defer files while reviewing
+### [x] 3.0 Accept / defer files while reviewing
 
 **User can verify:** during a review, `Space` accepts the cursor file (section collapses, `✓`-style marker appears in sidebar and section header, banner count increments), `Space` again un-accepts (expands, count decrements), `S` accepts from anywhere in the file, `d` defers (collapses with its own marker); `?` shows all three with review-specific descriptions; in a normal working-tree session these keys behave exactly as before.
 
@@ -97,12 +97,12 @@ Covers: spec Unit 3 — review-status enum + App map, key handling gated to revi
 
 #### 3.0 Tasks
 
-- [ ] 3.1 Create the `src/review/` module: `model.rs` with `ReviewStatus { Unreviewed (default), Deferred, Accepted, ChangedSinceAccepted }` and pure transition functions (`toggle_accept`, `toggle_defer`, including `ChangedSinceAccepted` + accept → `Accepted`). TDD the full transition table; exhaustive matches only; no TUI types.
-- [ ] 3.2 `App` state: path-keyed `HashMap<String, ReviewStatus>` mirroring `staged_states` (missing = `Unreviewed`), populated only for review sessions.
-- [ ] 3.3 Key handling: new `Action` variants (`ToggleAccept`, `AcceptFile`, `ToggleDefer`) bound to `Space`/`S`/`d`, active only on the `Review` target; other targets keep existing behavior untouched (staging keys on `Range` stay inert as shipped). Accept auto-collapses via `set_collapsed`, un-accept expands (mirroring stage-auto-collapse); defer collapses.
-- [ ] 3.4 Rendering: distinct single-cell markers (working glyphs `✓` accepted / `~` deferred / `!` changed-since-accepted; finalize against terminal font fallback) on sidebar rows and `rows.rs` section headers via O(1) map lookups, visually distinct from staging's `±`/`●`; wire the banner's `accepted/total` count from 2.2.
-- [ ] 3.5 Per-target key visibility: review keys appear in footer/`?` only in review sessions with review-specific descriptions, per the README rule that inapplicable keys are omitted rather than inert; extend the drift tests both directions.
-- [ ] 3.6 Run the perf tripwires unmodified (marker lookups must not change row-build complexity); run gates; capture marker screenshot + dual `?` overlay proof into `proofs/`; commit.
+- [x] 3.1 Create the `src/review/` module: `model.rs` with `ReviewStatus { Unreviewed (default), Deferred, Accepted, ChangedSinceAccepted }` and pure transition functions (`toggle_accept`, `toggle_defer`, including `ChangedSinceAccepted` + accept → `Accepted`). TDD the full transition table; exhaustive matches only; no TUI types.
+- [x] 3.2 `App` state: path-keyed `HashMap<String, ReviewStatus>` mirroring `staged_states` (missing = `Unreviewed`), populated only for review sessions.
+- [x] 3.3 Key handling: new `Action` variants (`ToggleAccept`, `AcceptFile`, `ToggleDefer`) bound to `Space`/`S`/`d`, active only on the `Review` target; other targets keep existing behavior untouched (staging keys on `Range` stay inert as shipped). Accept auto-collapses via `set_collapsed`, un-accept expands (mirroring stage-auto-collapse); defer collapses.
+- [x] 3.4 Rendering: single-cell markers on sidebar rows and `rows.rs` section headers via O(1) map lookups. Accepted renders as a **green `●` circle in the section header's marker slot (filename row in the buffer) and sidebar**, deliberately mirroring the staged-file affordance so an accepted-and-collapsed file reads clearly differently from a merely-collapsed one (user decision, 2026-07-16; safe because staging markers never render in review sessions — staging is read-only there). Deferred `~` and changed-since-accepted `!` stay visually distinct from staging's `±`/`●` (finalize against terminal font fallback). Wire the banner's `accepted/total` count from 2.2.
+- [x] 3.5 Per-target key visibility: review keys appear in footer/`?` only in review sessions with review-specific descriptions, per the README rule that inapplicable keys are omitted rather than inert; extend the drift tests both directions.
+- [x] 3.6 Run the perf tripwires unmodified (marker lookups must not change row-build complexity); run gates; capture marker screenshot + dual `?` overlay proof into `proofs/`; commit.
 
 ### [ ] 4.0 Review progress survives sessions and self-invalidates when files change
 

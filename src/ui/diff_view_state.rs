@@ -632,7 +632,7 @@ mod tests {
     use super::*;
     use crate::annotate::{AnnotationStore, Side, Target};
     use crate::git::RawFilePatch;
-    use crate::ui::rows::{StagedMarker, SyntaxSpans, build_multibuffer};
+    use crate::ui::rows::{ReviewMarker, StagedMarker, SyntaxSpans, build_multibuffer};
 
     fn file_with_raw(path: &str, raw: &str) -> FileDiff {
         FileDiff::from_patch(&RawFilePatch {
@@ -659,11 +659,13 @@ mod tests {
             view.set_collapsed(&path, c);
         }
         let markers = vec![StagedMarker::None; view.files.len()];
+        let review_markers = vec![ReviewMarker::None; view.files.len()];
         let syntax = vec![SyntaxSpans::default(); view.files.len()];
         let mb = build_multibuffer(
             &view.files,
             collapsed,
             &markers,
+            &review_markers,
             &AnnotationStore::new(),
             &syntax,
         );

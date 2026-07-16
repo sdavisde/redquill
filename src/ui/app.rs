@@ -20,6 +20,7 @@ use crate::git::{
 };
 use crate::highlight::Highlighter;
 use crate::lsp::RequestId;
+use crate::review::ReviewStatus;
 
 use super::background::{BackgroundTasks, CommandOutcome, TaskId, run_command};
 use super::command_log::{CommandLog, CommandLogEntry};
@@ -210,6 +211,16 @@ pub struct App {
     /// panel markers, refreshed alongside `staged`. Missing entries are
     /// [`StagedState::Unstaged`].
     pub staged_states: HashMap<String, StagedState>,
+    /// Per-path [`ReviewStatus`] driving the accept/defer markers and the
+    /// review banner's progress count (spec 08 Unit 3, see
+    /// [`super::review_ops`]), mirroring how `staged_states` drives the
+    /// `●`/`±` markers. Missing entries are [`ReviewStatus::Unreviewed`].
+    /// Only ever grows outside its default empty state during a review
+    /// session — `Space`/`S`/`d` only ever produce a review-status change
+    /// while [`App::in_review_session`] holds (see `super::review_ops`'s
+    /// self-guards), so a plain working-tree/staged/range session leaves
+    /// this permanently empty.
+    pub review_states: HashMap<String, ReviewStatus>,
     /// The focused row index into `staged` in the staging panel.
     pub staging_cursor: usize,
     /// A transient one-line message for the status footer (errors, no-op
@@ -495,6 +506,7 @@ impl App {
             last_commit: None,
             untracked_paths: Vec::new(),
             staged_states: HashMap::new(),
+            review_states: HashMap::new(),
             staging_cursor: 0,
             status_message: None,
             config: Config::default(),
@@ -632,13 +644,19 @@ impl App {
         }
     }
 
-    /// The review banner's `(accepted, total)` progress count. Until spec 08
-    /// Unit 3 wires up the real per-file review-status map, `accepted` is
-    /// always `0` and `total` is the file count — a placeholder that's
-    /// already correct for "nothing accepted yet", not a stub value that
-    /// needs replacing later for correctness (only for informativeness).
+    /// The review banner's `(accepted, total)` progress count (spec 08 Unit
+    /// 3): `accepted` counts files whose [`App::review_status`] is
+    /// [`ReviewStatus::Accepted`]; `total` is the file count. `review_states`
+    /// is only ever non-empty during a review session (see its doc), so this
+    /// is naturally `(0, len)` everywhere else.
     pub(super) fn review_progress(&self) -> (usize, usize) {
-        (0, self.view.files.len())
+        let accepted = self
+            .view
+            .files
+            .iter()
+            .filter(|f| self.review_status(&f.path) == ReviewStatus::Accepted)
+            .count();
+        (accepted, self.view.files.len())
     }
 
     /// Attaches the origin-rooted backend [`App::finish_review`] runs
@@ -827,6 +845,9 @@ impl App {
             Action::ToggleCommandLog => self.toggle_command_log(),
             Action::Refresh => self.manual_refresh(),
             Action::DismissConfigWarning => self.dismiss_config_warning(),
+            Action::ToggleAccept => self.toggle_accept_file(),
+            Action::AcceptFile => self.accept_file(),
+            Action::ToggleDefer => self.toggle_defer_file(),
             // `Quit`/`QuitDiscard` end the session; `OpenEditor` suspends the
             // TUI to spawn the configured editor. Both are intercepted by
             // `super::dispatch_key` before reaching here (see `Action::Quit`'s

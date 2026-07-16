@@ -56,20 +56,27 @@ fn sort_for_display(mut entries: Vec<FooterEntry>) -> Vec<FooterEntry> {
 /// Groups `km`'s bindings in `scope` that carry a [`FooterHint`], merging
 /// rows that share an identical hint (same rank *and* label) into one entry
 /// whose key text joins both rows' key labels with `/` (the `j`/`k` "move"
-/// pairing). `staging_allowed`/`code_intel_allowed` hide the same
-/// capability-gated rows the help overlay hides (see
+/// pairing). `staging_allowed`/`code_intel_allowed`/`review_session` hide the
+/// same capability-gated rows the help overlay hides (see
 /// [`super::help::binding_hidden`]) — `staging_allowed` is `false` on a
 /// read-only diff range, `code_intel_allowed` is `false` whenever the
-/// target's new side isn't the live working tree.
+/// target's new side isn't the live working tree, `review_session` is
+/// `false` outside a review session (spec 08 Unit 3).
 fn keymap_hints(
     km: &Keymap,
     scope: Scope,
     staging_allowed: bool,
     code_intel_allowed: bool,
+    review_session: bool,
 ) -> Vec<FooterEntry> {
     let mut grouped: Vec<(FooterHint, Vec<String>)> = Vec::new();
     for b in km.bindings().iter().filter(|b| b.scope == scope) {
-        if super::help::binding_hidden(b.action, staging_allowed, code_intel_allowed) {
+        if super::help::binding_hidden(
+            b.action,
+            staging_allowed,
+            code_intel_allowed,
+            review_session,
+        ) {
             continue;
         }
         let Some(hint) = b.footer else { continue };
@@ -144,7 +151,13 @@ fn normal_hints(
     viewing_commit: bool,
     review_session: bool,
 ) -> Vec<FooterEntry> {
-    let mut entries = keymap_hints(km, Scope::Diff, staging_allowed, code_intel_allowed);
+    let mut entries = keymap_hints(
+        km,
+        Scope::Diff,
+        staging_allowed,
+        code_intel_allowed,
+        review_session,
+    );
     if viewing_commit {
         entries.push(FooterEntry {
             rank: 6,
@@ -182,7 +195,10 @@ fn normal_hints(
 /// table can't carry a state-dependent label; the key and its promotion still
 /// come from the table.
 fn panel_hints(km: &Keymap, push_publishes: bool, review_session: bool) -> Vec<FooterEntry> {
-    let mut entries = keymap_hints(km, Scope::Panel, true, true);
+    // Review-status bindings (spec 08 Unit 3) are diff-scope only, so
+    // `review_session` never actually changes what this call returns; passed
+    // through for signature consistency with `normal_hints`.
+    let mut entries = keymap_hints(km, Scope::Panel, true, true, review_session);
     if push_publishes
         && let Some(hint) = km
             .bindings()
@@ -293,10 +309,14 @@ fn fallback_pending_label(action: Action) -> &'static str {
 /// `gd`/`gr` the same way [`super::help::binding_hidden`] hides them from the
 /// help overlay, so a pending `g` never advertises an inert code-intel jump.
 fn pending_hints(km: &Keymap, prefix: KeyEvent, code_intel_allowed: bool) -> Vec<FooterEntry> {
+    // No two-key sequence is a review action (spec 08 Unit 3's bindings are
+    // all single-key), so `review_session` is passed as `true` here — a
+    // fixed, always-permissive value, not a real flag — purely to satisfy
+    // `binding_hidden`'s signature; it can never actually hide a completion.
     let mut entries: Vec<FooterEntry> = km
         .completions_for(Scope::Diff, prefix)
         .into_iter()
-        .filter(|b| !super::help::binding_hidden(b.action, true, code_intel_allowed))
+        .filter(|b| !super::help::binding_hidden(b.action, true, code_intel_allowed, true))
         .map(|b| FooterEntry {
             rank: 1,
             key: b.key_label(),

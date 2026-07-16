@@ -82,7 +82,7 @@ The core stays forge-agnostic: redquill reviews *a local branch*, not "a GitHub 
 - In review mode, `Space` shall toggle the cursor file between `Accepted` and `Unreviewed`; accepting shall auto-collapse the file's section and un-accepting shall expand it (mirroring stage-auto-collapse).
 - In review mode, `S` shall accept the file under the cursor from anywhere inside it (mirroring `StageFile`).
 - In review mode, `d` shall toggle the cursor file between `Deferred` and `Unreviewed`; deferring shall collapse the section.
-- Each non-`Unreviewed` status shall render a distinct single-cell marker on the file's sidebar row and multibuffer section header (suggested: `✓` accepted, `~` deferred, `!` changed-since-accepted; final glyphs are an Open Question), via O(1) map lookups inside the existing row-build path.
+- Each non-`Unreviewed` status shall render a distinct single-cell marker on the file's sidebar row and multibuffer section header, via O(1) map lookups inside the existing row-build path. `Accepted` shall render as a green `●` circle in the section header's marker slot (the filename row in the buffer) and on the sidebar row — deliberately mirroring the staged-file affordance so an accepted-and-collapsed file is unmistakably different from a merely-collapsed one (user decision, 2026-07-16). `~` deferred and `!` changed-since-accepted remain suggestions (final glyphs per the Open Question).
 - Review-status keys shall be active only when the diff target is a review session; in all other targets `Space`/`S`/`d` keep their current behavior (which on `Range` targets is already inert for staging), and the `?` overlay shall show the mode-appropriate descriptions.
 - Local working-tree and `--staged` behavior, including the existing `StagedState` display, shall be completely unchanged.
 - The wall-clock perf tripwires in `src/ui/perf_tests.rs` shall pass unmodified — review-status lookups must not change the row-build complexity class.
@@ -124,7 +124,7 @@ The core stays forge-agnostic: redquill reviews *a local branch*, not "a GitHub 
 ## Design Considerations
 
 - **Banner**: single top row, full width, dark-red background with light foreground (exact colors via `Theme` fields, guarded by a contrast drift test). Text: `REVIEWING <branch> — q to end review`, plus an accepted-files progress count. Truncate the branch name first on narrow terminals; never wrap to a second row.
-- **Markers**: review-status glyphs must be visually distinct from the staging glyphs (`±`, `●`) so a user who uses both modes never confuses them.
+- **Markers**: deferred and changed-since-accepted glyphs must be visually distinct from the staging glyphs (`±`, `●`) so a user who uses both modes never confuses them. Deliberate exception (user decision, 2026-07-16): `Accepted` reuses the green `●` staged affordance on the filename row/sidebar — staging markers never render inside a review session (staging is read-only there), so the reuse is unambiguous in context and makes "accepted" as instantly legible in review mode as "staged" is in local mode.
 - **End-review modal**: mirrors existing confirm modals (commit, switcher) in style and key handling; the three exits must be labeled with their consequences ("keep worktree" / "remove worktree"), not just "pause"/"finish".
 - **Review-branch modal**: visually consistent with the spec-03 switcher list (current-branch exclusion, cursor navigation, Enter to select, Esc to dismiss).
 
@@ -164,6 +164,6 @@ The core stays forge-agnostic: redquill reviews *a local branch*, not "a GitHub 
 
 ## Open Questions
 
-1. Final marker glyphs for accepted/deferred/changed-since-accepted (suggested `✓`/`~`/`!`) — cosmetic, decide during implementation against terminal-width and font-fallback behavior.
+1. ~~Final marker glyph for accepted~~ Resolved 2026-07-16: accepted = green `●` (staged-affordance reuse, see Design Considerations). Final glyphs for deferred/changed-since-accepted (suggested `~`/`!`) — cosmetic, decide during implementation against terminal-width and font-fallback behavior.
 2. Banner progress-count format (`4/12` vs `4 of 12 accepted`) and truncation order on very narrow terminals — cosmetic.
 3. Whether the review-branch modal should offer remote-tracking branches with a "create local branch first" affordance — deferred to the forge-integration follow-up; local-only is acceptable for v1.

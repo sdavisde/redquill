@@ -278,12 +278,14 @@ fn commit_view_hides_and_disarms_staging_keys() {
     assert!(help::binding_hidden(
         Action::ToggleStage,
         staging_allowed,
-        code_intel_allowed
+        code_intel_allowed,
+        false
     ));
     assert!(help::binding_hidden(
         Action::StageFile,
         staging_allowed,
-        code_intel_allowed
+        code_intel_allowed,
+        false
     ));
 
     // Inert: pressing space (ToggleStage) does nothing observable to git
@@ -315,7 +317,12 @@ fn commit_view_hides_and_disarms_code_intel_keys() {
         Action::GotoReferences,
         Action::Hover,
     ] {
-        assert!(help::binding_hidden(action, true, code_intel_allowed));
+        assert!(help::binding_hidden(
+            action,
+            true,
+            code_intel_allowed,
+            false
+        ));
     }
     // `K` (Hover) must not open the peek overlay.
     press(&mut app, &keymap, &mut pending, KeyCode::Char('K'));
@@ -925,10 +932,13 @@ fn commit_view_help_overlay_shows_only_truthful_keys() {
                 | Action::GotoDefinition
                 | Action::GotoReferences
                 | Action::Hover
+                | Action::ToggleAccept
+                | Action::AcceptFile
+                | Action::ToggleDefer
         );
         // staging_allowed=false, code_intel_allowed=false in a commit view.
         assert_eq!(
-            help::binding_hidden(binding.action, false, false),
+            help::binding_hidden(binding.action, false, false, false),
             inert,
             "commit-view overlay lists exactly the keys that work: {:?} \
              (hidden should be {inert})",

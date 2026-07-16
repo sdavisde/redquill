@@ -156,6 +156,27 @@ pub enum Action {
     /// if one is showing. Bound in both scopes since the notice can be
     /// visible whether or not the git panel is focused.
     DismissConfigWarning,
+    /// `Space` in a review session (spec 08 Unit 3): toggles the cursor file
+    /// between `Accepted` and `Unreviewed` (see [`crate::review::toggle_accept`]).
+    /// Bound to the same physical key as [`Action::ToggleStage`]; outside a
+    /// review session `Space` keeps staging its pre-existing meaning —
+    /// `super::dispatch_key` is what translates the resolved
+    /// [`Action::ToggleStage`] into this action only while
+    /// `App::in_review_session()` holds (see its doc), so this variant is
+    /// never produced by a plain keymap lookup.
+    ToggleAccept,
+    /// `S` in a review session: accepts the cursor file unconditionally from
+    /// anywhere inside it (see [`crate::review::accept`]), mirroring
+    /// [`Action::StageFile`]'s "works from anywhere" gesture. Reached via
+    /// the same dispatch-time translation as [`Action::ToggleAccept`].
+    AcceptFile,
+    /// `d` in a review session: toggles the cursor file between `Deferred`
+    /// and `Unreviewed` (see [`crate::review::toggle_defer`]). Unlike the
+    /// two actions above, this is bound directly (`d` was previously free in
+    /// [`Scope::Diff`]) — its handler self-guards on
+    /// `App::in_review_session()` so a non-review session's `d` stays a
+    /// total no-op, byte-for-byte the same as when the key was unbound.
+    ToggleDefer,
 }
 
 /// The kebab-case config action-name for every [`Action`] variant (spec 07
@@ -222,6 +243,9 @@ pub(crate) fn action_name(action: Action) -> &'static str {
         Quit => "quit",
         QuitDiscard => "quit-discard",
         DismissConfigWarning => "dismiss-config-warning",
+        ToggleAccept => "toggle-accept",
+        AcceptFile => "accept-file",
+        ToggleDefer => "toggle-defer",
     }
 }
 
@@ -287,6 +311,9 @@ pub(crate) fn action_from_name(name: &str) -> Option<Action> {
         "quit" => Quit,
         "quit-discard" => QuitDiscard,
         "dismiss-config-warning" => DismissConfigWarning,
+        "toggle-accept" => ToggleAccept,
+        "accept-file" => AcceptFile,
+        "toggle-defer" => ToggleDefer,
         _ => return None,
     })
 }
@@ -623,6 +650,33 @@ impl Keymap {
                     ToggleStagingPanel,
                     "Toggle staging panel",
                 ),
+                // Review-session accept/defer (spec 08 Unit 3). `ToggleAccept`/
+                // `AcceptFile` share Space/`S` with `ToggleStage`/`StageFile`
+                // above — reachable only via `super::dispatch_key`'s
+                // review-session translation, never a direct keymap lookup
+                // (see `Action::ToggleAccept`'s doc) — so these rows exist
+                // purely so the help overlay/footer can document review's
+                // meaning for those keys; `super::help::binding_hidden` shows
+                // exactly one of each pair depending on `in_review_session()`.
+                // `ToggleDefer` is bound directly (`d` was free).
+                d(
+                    KeySeq::one(Char(' '), none),
+                    ToggleAccept,
+                    "Accept/un-accept file under cursor",
+                )
+                .footer(4, "accept"),
+                d(
+                    KeySeq::one(Char('S'), none),
+                    AcceptFile,
+                    "Accept file under cursor",
+                )
+                .footer(5, "accept file"),
+                d(
+                    KeySeq::one(Char('d'), none),
+                    ToggleDefer,
+                    "Defer/un-defer file under cursor",
+                )
+                .footer(6, "defer"),
                 d(
                     KeySeq::one(Char('`'), none),
                     FocusGitPanel,
@@ -976,8 +1030,12 @@ mod tests {
             km.lookup(key(KeyCode::Char('d'), KeyModifiers::CONTROL)),
             Some(Action::HalfPageDown)
         );
-        // Plain 'd' with no modifier is unbound.
-        assert_eq!(km.lookup(key(KeyCode::Char('d'), KeyModifiers::NONE)), None);
+        // Plain 'd' (no modifier) is a different binding entirely — the
+        // review-session defer toggle (spec 08 Unit 3), not half-page-down.
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('d'), KeyModifiers::NONE)),
+            Some(Action::ToggleDefer)
+        );
     }
 
     #[test]
@@ -1431,7 +1489,18 @@ mod tests {
                     "diff-scope binding {:?} must resolve identically via lookup and lookup_in",
                     b.action
                 );
-                assert_eq!(km.lookup_in(Scope::Diff, ev), Some(b.action));
+                // `ToggleAccept`/`AcceptFile` (spec 08 Unit 3) deliberately
+                // share Space/`S` with `ToggleStage`/`StageFile` — see
+                // `Action::ToggleAccept`'s doc: those rows exist purely so
+                // the help overlay/footer can document review's meaning for
+                // those keys, and are reachable only via
+                // `super::dispatch_key`'s review-session translation, never
+                // a direct keymap lookup — so they're exempt from "this row
+                // resolves to itself" (the `lookup`/`lookup_in` agreement
+                // above still holds for them either way).
+                if !matches!(b.action, Action::ToggleAccept | Action::AcceptFile) {
+                    assert_eq!(km.lookup_in(Scope::Diff, ev), Some(b.action));
+                }
             }
         }
     }

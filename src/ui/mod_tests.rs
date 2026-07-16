@@ -7,6 +7,7 @@ use crate::diff::FileDiff;
 use crate::git::{DiffTarget, RawFilePatch};
 use crate::highlight::TokenKind;
 use crate::lsp::SourceLocation;
+use crate::review::ReviewStatus;
 use crossterm::event::KeyModifiers;
 use ratatui::backend::TestBackend;
 
@@ -431,6 +432,74 @@ fn help_overlay_shows_staging_rows_on_the_working_tree_target() {
     assert!(content.contains("Stage/unstage file under cursor"));
     assert!(content.contains("Stage/unstage hunk"));
     assert!(content.contains("Toggle staging panel"));
+}
+
+/// The dual `?` overlay proof (spec 08 Unit 3, task 3.5): during a review
+/// session, the accept/defer rows appear with their review-specific
+/// descriptions and the (inapplicable) staging rows are gone — the mirror
+/// image of `help_overlay_shows_staging_rows_on_the_working_tree_target`
+/// above. Full real render via `draw()`, not a synthetic table check, so
+/// this also proves the "Review" group actually reaches the screen.
+#[test]
+fn help_overlay_shows_review_rows_and_hides_staging_rows_during_a_review_session() {
+    let backend = TestBackend::new(100, 55);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    app.help_open = true;
+    app.target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+    let keymap = Keymap::default_map();
+
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+    if std::env::var_os("REDQUILL_PROOF_DUMP").is_some() {
+        let w = buffer.area.width as usize;
+        let symbols: Vec<&str> = buffer.content().iter().map(|c| c.symbol()).collect();
+        for row in symbols.chunks(w) {
+            eprintln!("{}", row.concat());
+        }
+    }
+
+    assert!(content.contains("keybinds"));
+    assert!(content.contains("Review"), "the Review group must render");
+    assert!(content.contains("Accept/un-accept file under cursor"));
+    assert!(content.contains("Accept file under cursor"));
+    assert!(content.contains("Defer/un-defer file under cursor"));
+    // Read-only during a review (staging_mode() == ReadOnly), so the
+    // staging-specific rows must be gone — mirrors
+    // `help_overlay_hides_staging_rows_on_a_range_target`.
+    assert!(!content.contains("Stage/unstage file under cursor"));
+    assert!(!content.contains("Stage/unstage hunk"));
+    // Still works regardless of target, so it stays.
+    assert!(content.contains("Toggle staging panel"));
+}
+
+/// The mirror image: outside a review session the accept/defer rows are
+/// absent entirely (not just inert) — the working-tree overlay from
+/// `help_overlay_shows_staging_rows_on_the_working_tree_target` never
+/// mentions them.
+#[test]
+fn help_overlay_hides_review_rows_outside_a_review_session() {
+    let backend = TestBackend::new(100, 55);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    app.help_open = true; // target defaults to WorkingTree
+    let keymap = Keymap::default_map();
+
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+    assert!(!content.contains("Accept/un-accept file under cursor"));
+    assert!(!content.contains("Accept file under cursor (review sessions)"));
+    assert!(!content.contains("Defer/un-defer file under cursor"));
 }
 
 #[test]
@@ -1838,6 +1907,241 @@ fn q_opens_end_review_modal_and_shift_q_still_quits_instantly_in_a_review_sessio
         Flow::Quit(QuitOutcome::Discard) => {}
         other => panic!("Q in a review session must still quit instantly, got {other:?}"),
     }
+}
+
+// -- Accept/defer keys (spec 08 Unit 3) --------------------------------------
+
+/// `Space` in a review session dispatched through the real `dispatch_key`
+/// path (not `App::apply` directly): translates the resolved `ToggleStage`
+/// into `ToggleAccept`, accepts the cursor file, collapses its section, and
+/// the banner's `(accepted, total)` count reflects it immediately.
+#[test]
+fn space_accepts_the_cursor_file_in_a_review_session_via_dispatch_key() {
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
+    let mut app = App::new(vec![sample_file()]);
+    app.target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+    assert_eq!(app.review_progress(), (0, 1));
+
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+    );
+
+    assert_eq!(app.review_status("src/main.rs"), ReviewStatus::Accepted);
+    assert!(app.view.is_collapsed("src/main.rs"));
+    assert_eq!(
+        app.review_progress(),
+        (1, 1),
+        "banner accepted/total must reflect the accept immediately"
+    );
+
+    // A second press un-accepts and expands, and the count drops back down.
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+    );
+    assert_eq!(app.review_status("src/main.rs"), ReviewStatus::Unreviewed);
+    assert!(!app.view.is_collapsed("src/main.rs"));
+    assert_eq!(app.review_progress(), (0, 1));
+}
+
+/// `S` accepts unconditionally via the same dispatch-time translation.
+#[test]
+fn shift_s_accepts_the_cursor_file_in_a_review_session_via_dispatch_key() {
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
+    let mut app = App::new(vec![sample_file()]);
+    app.target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE),
+    );
+
+    assert_eq!(app.review_status("src/main.rs"), ReviewStatus::Accepted);
+    assert_eq!(app.review_progress(), (1, 1));
+}
+
+/// `d` toggles defer, bound directly (no translation needed).
+#[test]
+fn d_defers_the_cursor_file_in_a_review_session_via_dispatch_key() {
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
+    let mut app = App::new(vec![sample_file()]);
+    app.target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+    );
+
+    assert_eq!(app.review_status("src/main.rs"), ReviewStatus::Deferred);
+    assert!(app.view.is_collapsed("src/main.rs"));
+    // A deferred file never counts as accepted.
+    assert_eq!(app.review_progress(), (0, 1));
+}
+
+/// Outside a review session, `Space`/`S` keep staging's pre-existing
+/// meaning byte-for-byte: no review state is ever produced, no matter the
+/// target (a regression pin against `dispatch_key`'s review-session
+/// translation firing unconditionally).
+#[test]
+fn space_and_shift_s_never_produce_review_state_outside_a_review_session() {
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
+
+    for target in [
+        DiffTarget::WorkingTree,
+        DiffTarget::Range("main..HEAD".to_string()),
+    ] {
+        let mut app = App::new(vec![sample_file()]);
+        app.target = target.clone();
+        dispatch_key(
+            &mut app,
+            &keymap,
+            &mut pending,
+            &mut pending_count,
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+        );
+        dispatch_key(
+            &mut app,
+            &keymap,
+            &mut pending,
+            &mut pending_count,
+            KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE),
+        );
+        assert_eq!(
+            app.review_status("src/main.rs"),
+            ReviewStatus::Unreviewed,
+            "target {target:?} must never produce review state from Space/S"
+        );
+    }
+}
+
+/// Outside a review session, `d` is a total no-op — byte-for-byte the same
+/// as when the key was unbound (it was free before spec 08 Unit 3 claimed
+/// it): no state change, no status message, mode untouched.
+#[test]
+fn d_is_a_total_no_op_outside_a_review_session_via_dispatch_key() {
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
+    let mut app = App::new(vec![sample_file()]);
+    assert_eq!(app.target, DiffTarget::WorkingTree);
+
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+    );
+
+    assert_eq!(app.review_status("src/main.rs"), ReviewStatus::Unreviewed);
+    assert!(!app.view.is_collapsed("src/main.rs"));
+    assert!(app.status_message.is_none());
+    assert_eq!(app.mode, Mode::Normal);
+}
+
+fn file_named(path: &str) -> FileDiff {
+    let raw = format!(
+        "diff --git a/{path} b/{path}\nindex 111..222 100644\n--- a/{path}\n+++ b/{path}\n@@ -1,1 +1,1 @@\n-old\n+new\n"
+    );
+    FileDiff::from_patch(&RawFilePatch {
+        path: path.to_string(),
+        old_path: None,
+        raw,
+        is_binary: false,
+    })
+    .unwrap()
+}
+
+/// The reviewer-facing rendering proof (spec 08 Unit 3, task 3.4): sidebar
+/// and section-header markers for an accepted (`●`, reusing the staged
+/// glyph/color) and a deferred (`~`) file, alongside the banner's
+/// `accepted/total` progress count — the full real render, panel focused so
+/// the sidebar is visible. Set `REDQUILL_PROOF_DUMP=1` to print the rendered
+/// buffer to stderr (mirrors `perf_tests.rs`'s `REDQUILL_PERF_PRINT`
+/// convention) for a text-render screenshot substitute.
+#[test]
+fn review_markers_render_on_sidebar_and_section_headers_with_banner_count() {
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![file_named("a.rs"), file_named("b.rs")]);
+    app.target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+    app.apply(Action::ToggleAccept); // a.rs (cursor starts on its header)
+    app.select_file_by_path("b.rs");
+    app.apply(Action::ToggleDefer); // b.rs
+    // Move the cursor back to a.rs's header *without* going through
+    // `select_file_by_path` (which un-collapses its target on selection —
+    // correct for that gesture, but not what this proof wants): focusing
+    // the panel resets its cursor to row 0 and `panel_follow` (existing,
+    // pre-spec-08 behavior) re-syncs the diff to whatever file that row
+    // names, expanding it if `view.selected_file` disagrees. Pre-syncing
+    // `selected_file` to a.rs here (its collapsed header is still row 0)
+    // keeps both files rendered in their true collapsed-by-review state.
+    app.view.cursor = app.view.header_row_of_file[0];
+    app.rebuild_rows();
+    app.apply(Action::FocusGitPanel);
+    assert!(matches!(app.mode, Mode::Panel { .. }));
+    let keymap = Keymap::default_map();
+
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+    if std::env::var_os("REDQUILL_PROOF_DUMP").is_some() {
+        let w = buffer.area.width as usize;
+        let symbols: Vec<&str> = buffer.content().iter().map(|c| c.symbol()).collect();
+        for row in symbols.chunks(w) {
+            eprintln!("{}", row.concat());
+        }
+    }
+
+    assert!(content.contains("REVIEWING feature"));
+    assert!(
+        content.contains("1/2"),
+        "banner accepted/total: {content:?}"
+    );
+    // Both the sidebar and the section-header marker slot carry the glyphs;
+    // this asserts presence of each marker character somewhere on screen —
+    // the per-widget unit tests (`diff_view.rs`/`git_panel.rs`) pin the
+    // exact slot/color, this proves the whole render composes them together.
+    assert!(
+        content.contains('\u{25cf}'),
+        "accepted ● marker: {content:?}"
+    );
+    assert!(content.contains('~'), "deferred ~ marker: {content:?}");
 }
 
 // -- Branch/worktree switcher modal (spec 03, task 3.0) --------------------

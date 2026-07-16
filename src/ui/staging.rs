@@ -314,7 +314,7 @@ mod tests {
     use crate::annotate::AnnotationStore;
     use crate::diff::FileDiff;
     use crate::git::RawFilePatch;
-    use crate::ui::rows::{StagedMarker, SyntaxSpans, build_multibuffer};
+    use crate::ui::rows::{ReviewMarker, StagedMarker, SyntaxSpans, build_multibuffer};
 
     fn file_from_raw(path: &str, raw: &str) -> FileDiff {
         FileDiff::from_patch(&RawFilePatch {
@@ -335,6 +335,7 @@ mod tests {
             &view.files,
             &vec![false; n],
             &vec![StagedMarker::None; n],
+            &vec![ReviewMarker::None; n],
             &AnnotationStore::new(),
             &vec![SyntaxSpans::default(); n],
         );

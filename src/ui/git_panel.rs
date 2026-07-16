@@ -18,6 +18,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 
 use crate::git::{BranchStatus, CommitLogEntry, CommitSummary, DiffTarget};
+use crate::review::ReviewStatus;
 
 use super::app::App;
 use super::app::{Mode, PanelTab, SuspendedView};
@@ -97,11 +98,41 @@ fn staged_span(state: StagedState, theme: &Theme) -> Span<'static> {
     }
 }
 
-/// A CHANGES row: staged marker, change-kind letter, then the split path.
-fn file_line(letter: char, path: &str, state: StagedState, theme: &Theme) -> Line<'static> {
+/// The review-status indicator column (spec 08 Unit 3), rendered right after
+/// [`staged_span`] — the two slots never both carry a glyph for the same row
+/// (a review session's [`StagedState`] is always [`StagedState::Unstaged`]).
+/// `Accepted` reuses [`staged_span`]'s exact `●` glyph/color (deliberate
+/// exception — see [`super::rows::ReviewMarker`]'s doc); `Deferred`/
+/// `ChangedSinceAccepted` use their own colors and stay visually distinct
+/// from staging's `±`/`●`.
+fn review_span(status: ReviewStatus, theme: &Theme) -> Span<'static> {
+    match status {
+        ReviewStatus::Accepted => {
+            Span::styled("\u{25cf} ", Style::default().fg(theme.staged_indicator))
+        }
+        ReviewStatus::Deferred => {
+            Span::styled("~ ", Style::default().fg(theme.review_deferred_marker))
+        }
+        ReviewStatus::ChangedSinceAccepted => {
+            Span::styled("! ", Style::default().fg(theme.review_changed_marker))
+        }
+        ReviewStatus::Unreviewed => Span::raw("  "),
+    }
+}
+
+/// A CHANGES row: staged marker, review marker, change-kind letter, then the
+/// split path.
+fn file_line(
+    letter: char,
+    path: &str,
+    state: StagedState,
+    review: ReviewStatus,
+    theme: &Theme,
+) -> Line<'static> {
     let (dir, base) = split_path(path);
     Line::from(vec![
         staged_span(state, theme),
+        review_span(review, theme),
         Span::styled(
             format!("{letter} "),
             Style::default()
@@ -314,7 +345,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
                 for &i in &tracked {
                     let f = &app.view.files[i];
                     let state = app.staged_states.get(&f.path).copied().unwrap_or_default();
-                    let mut line = file_line(f.kind.letter(), &f.path, state, theme);
+                    let review = app.review_status(&f.path);
+                    let mut line = file_line(f.kind.letter(), &f.path, state, review, theme);
                     if let Some(old) = &f.old_path {
                         let (_, old_base) = split_path(old);
                         line.spans.push(Span::styled(
@@ -830,6 +862,36 @@ mod tests {
         assert!(content.contains("CHANGES"));
         assert!(content.contains("\u{25cf}")); // staged dot preserved
         assert!(content.contains("M session.rs")); // change-kind letter
+    }
+
+    #[test]
+    fn changes_section_shows_accepted_file_with_the_staged_dot() {
+        // Deliberate exception (spec 08 Unit 3, user decision 2026-07-16):
+        // an accepted file's sidebar marker must be the *same* green `●` a
+        // staged file gets, not a distinct glyph.
+        let mut app = App::new(vec![sample_file("session.rs")]);
+        app.target = crate::git::DiffTarget::Review {
+            base: "main".to_string(),
+            branch: "feature".to_string(),
+        };
+        app.apply(Action::ToggleAccept);
+        let content = render_panel(&app);
+        assert!(content.contains("CHANGES"));
+        assert!(content.contains("\u{25cf}")); // the reused staged dot
+        assert!(!content.contains('~'));
+        assert!(!content.contains('!'));
+    }
+
+    #[test]
+    fn changes_section_shows_deferred_file_with_a_distinct_marker() {
+        let mut app = App::new(vec![sample_file("session.rs")]);
+        app.target = crate::git::DiffTarget::Review {
+            base: "main".to_string(),
+            branch: "feature".to_string(),
+        };
+        app.apply(Action::ToggleDefer);
+        let content = render_panel(&app);
+        assert!(content.contains('~'));
     }
 
     #[test]

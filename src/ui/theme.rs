@@ -87,6 +87,13 @@ pub struct Theme {
     /// against [`Theme::review_banner_bg`].
     pub review_banner_fg: Color,
 
+    /// The deferred-file review marker's color (`~`).
+    pub review_deferred_marker: Color,
+    /// The changed-since-accepted review marker's color (`!`) — spec 08 Unit
+    /// 4 sets this status once persistence/reconciliation lands; the color
+    /// exists now so the marker glyph has a home from the start.
+    pub review_changed_marker: Color,
+
     // -- Change-kind letters (sidebar file list + staging panel) --
     pub kind_added: Color,
     pub kind_deleted: Color,
@@ -95,6 +102,14 @@ pub struct Theme {
     pub kind_untracked: Color,
 
     // -- Sidebar --
+    /// The `●` staged-file marker's color. Also the accepted-file review
+    /// marker's color (spec 08 Unit 3, deliberate exception, user decision
+    /// 2026-07-16): a review session's [`Theme::staged_indicator`] never
+    /// renders (review targets are read-only for staging), so reusing this
+    /// exact green for `Accepted`'s `●` deliberately mirrors the staged-file
+    /// affordance rather than inventing a new signal for the same "this file
+    /// is done, collapsed, no action needed" meaning — see
+    /// [`super::rows::ReviewMarker`].
     pub staged_indicator: Color,
     pub dir_prefix: Color,
     pub footer_text: Color,
@@ -153,6 +168,9 @@ impl Default for Theme {
 
             review_banner_bg: Color::Rgb(110, 10, 10),
             review_banner_fg: Color::Rgb(255, 235, 235),
+
+            review_deferred_marker: Color::Rgb(220, 170, 60),
+            review_changed_marker: Color::Rgb(240, 100, 100),
 
             kind_added: Color::Green,
             kind_deleted: Color::Red,
