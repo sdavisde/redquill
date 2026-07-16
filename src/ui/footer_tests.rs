@@ -3,6 +3,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::diff::FileDiff;
 use crate::git::RawFilePatch;
 use crate::ui::keymap::KeySeq;
+use crate::ui::modal_keys::{
+    COMPOSE_HINTS, LIST_KEYS, ModalKeymaps, PEEK_KEYS, STAGING_KEYS, SWITCHER_KEYS,
+};
 use crate::ui::{App, Mode, Row, dispatch_key};
 
 use super::*;
@@ -212,7 +215,7 @@ fn list_mode_hints_have_no_help_entry() {
     // so the footer must not claim it works — see footer.rs's module doc /
     // the implementation report for this deviation from a literal "every
     // modal mode gets `? help`" reading of the spec.
-    let entries = modal_hints(LIST_KEYS);
+    let entries = modal_hints(&LIST_KEYS);
     assert_eq!(
         labels(&entries),
         vec!["move", "open", "edit", "delete", "close"]
@@ -222,35 +225,43 @@ fn list_mode_hints_have_no_help_entry() {
 
 #[test]
 fn staging_mode_hints() {
-    let entries = modal_hints(STAGING_KEYS);
+    let entries = modal_hints(&STAGING_KEYS);
     assert_eq!(labels(&entries), vec!["move", "unstage", "close"]);
 }
 
 #[test]
 fn peek_mode_hints() {
-    let entries = modal_hints(PEEK_KEYS);
+    let entries = modal_hints(&PEEK_KEYS);
     assert_eq!(labels(&entries), vec!["move", "jump", "close"]);
 }
 
 #[test]
 fn switcher_mode_hints() {
-    let entries = modal_hints(SWITCHER_KEYS);
+    let entries = modal_hints(&SWITCHER_KEYS);
     assert_eq!(
         labels(&entries),
         vec!["switch tab", "move", "switch", "close"]
     );
     // "move" must stay MoveDown's own compound label ("j / Down") alone —
     // merging it with MoveUp's ("k / Up") would double up the " / "
-    // separators into "j / Down/k / Up".
+    // separators into "j / Down/k / Up". ToggleTab's label lists every bound
+    // key (computed from `ModalBinding::key_label`, spec 07 Unit 4 task 5.3 —
+    // no longer a hand-curated shorthand), including `Shift-Tab`/`Left`/
+    // `Right`, which the old static `"Tab / h / l"` text omitted.
     assert_eq!(
         keys(&entries),
-        vec!["Tab / h / l", "j / Down", "Enter", "Esc"]
+        vec![
+            "Tab / Shift-Tab / h / l / Left / Right",
+            "j / Down",
+            "Enter",
+            "Esc"
+        ]
     );
 }
 
 #[test]
 fn compose_mode_hints_are_just_save_and_discard() {
-    let entries = modal_hints(COMPOSE_HINTS);
+    let entries = modal_hints(&COMPOSE_HINTS);
     assert_eq!(keys(&entries), vec!["Enter", "Esc"]);
     assert_eq!(labels(&entries), vec!["save", "discard"]);
 }
@@ -271,13 +282,14 @@ fn search_mode_has_no_hint_strip() {
         },
         None,
         &km,
+        &ModalKeymaps::default(),
     );
     assert!(entries.is_empty());
 }
 
 #[test]
 fn help_open_hints_are_scroll_filter_close_with_no_help_entry() {
-    let entries = help_open_hints();
+    let entries = help_open_hints(&ModalKeymaps::default());
     assert_eq!(labels(&entries), vec!["scroll", "filter", "close"]);
     assert_eq!(keys(&entries), vec!["j / Down", "/", "Esc / Enter / ?"]);
 }
@@ -303,6 +315,7 @@ fn help_open_takes_precedence_over_the_mode_strip() {
         },
         None,
         &km,
+        &ModalKeymaps::default(),
     );
     assert_eq!(labels(&entries), vec!["scroll", "filter", "close"]);
 }
@@ -369,6 +382,7 @@ fn pending_prefix_replaces_the_mode_strip_in_normal_and_visual() {
         },
         g,
         &km,
+        &ModalKeymaps::default(),
     );
     assert_eq!(keys(&normal), vec!["g/", "gSpace", "gd", "gg", "gp", "gr"]);
     let visual = build_hints(
@@ -384,6 +398,7 @@ fn pending_prefix_replaces_the_mode_strip_in_normal_and_visual() {
         },
         g,
         &km,
+        &ModalKeymaps::default(),
     );
     assert_eq!(keys(&visual), vec!["g/", "gSpace", "gd", "gg", "gp", "gr"]);
 }
@@ -405,6 +420,7 @@ fn build_hints_drops_gd_and_gr_from_the_pending_strip_when_code_intel_is_disallo
         },
         g,
         &km,
+        &ModalKeymaps::default(),
     );
     assert_eq!(keys(&normal), vec!["g/", "gSpace", "gg", "gp"]);
 }
@@ -432,6 +448,7 @@ fn pending_prefix_is_ignored_outside_normal_and_visual() {
         },
         g,
         &km,
+        &ModalKeymaps::default(),
     );
     assert_eq!(panel, panel_hints(&km, false, false));
 }
@@ -491,6 +508,7 @@ fn every_mode_produces_a_nonempty_strip_except_search() {
             },
             None,
             &km,
+            &ModalKeymaps::default(),
         );
         assert!(
             !entries.is_empty(),
@@ -510,7 +528,8 @@ fn every_mode_produces_a_nonempty_strip_except_search() {
                 review_session: false,
             },
             None,
-            &km
+            &km,
+            &ModalKeymaps::default(),
         )
         .is_empty()
     );
@@ -806,6 +825,7 @@ fn footer_height_matches_wrap_hints_row_count() {
         },
         None,
         &km,
+        &a.modal_keys,
     );
     let expected = wrap_hints(&entries, 60).len() as u16;
     assert_eq!(footer_height(60, &a, &km, None), expected);

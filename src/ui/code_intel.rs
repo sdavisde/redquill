@@ -92,7 +92,8 @@ pub(super) fn request(app: &mut App, kind: PeekKind) {
     }
 
     if app.lsp.is_none() {
-        app.lsp = Some(Box::new(LspManager::new(root)));
+        let commands = super::lsp_config::effective_lsp_commands(&app.config.lsp);
+        app.lsp = Some(Box::new(LspManager::with_commands(root, commands)));
     }
     // A new request always cancels interest in whatever was pending.
     app.pending_lsp = None;

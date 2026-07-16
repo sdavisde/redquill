@@ -4,3 +4,8 @@
 # SDD proof artifacts (generated evidence, kept local)
 docs/specs/*/*-proofs/
 docs/specs/*/proofs/
+# Spec 07 task 1.0 explicitly commits its proof-summary markdown (unlike
+# specs 02/03/05, whose *-proofs/ dirs were deliberately untracked in
+# 066fcba); this narrow negation keeps that one directory trackable without
+# reopening the broader untrack decision for earlier specs.
+!docs/specs/07-spec-config-layer/07-proofs/

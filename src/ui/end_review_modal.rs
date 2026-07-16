@@ -1,9 +1,10 @@
 //! The end-review modal ([`super::app::Mode::EndReview`], spec 08 Unit 2): a
 //! centered overlay listing the three exits — pause / finish / cancel —
-//! rendered directly from [`super::modal_keys::END_REVIEW_KEYS`] so the
-//! modal's own text can never drift from the table `q`'s handler dispatches
-//! through (see [`super::modes::handle_end_review_key`]). Modeled on
-//! [`super::switcher_modal`] (centered, `Clear`-ed, bordered block).
+//! rendered from the app's effective end-review table
+//! (`app.modal_keys.end_review`, the default [`super::modal_keys::END_REVIEW_KEYS`])
+//! so the modal's own text can never drift from the table `q`'s handler
+//! dispatches through (see [`super::modes::handle_end_review_key`]). Modeled
+//! on [`super::switcher_modal`] (centered, `Clear`-ed, bordered block).
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
@@ -12,7 +13,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use super::app::{App, Mode};
-use super::modal_keys::END_REVIEW_KEYS;
 
 /// Centers a `width_pct`% x `height_pct`% rect inside `area`, matching
 /// [`super::switcher_modal`]'s helper of the same shape.
@@ -44,10 +44,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         )),
         Line::raw(""),
     ];
-    for binding in END_REVIEW_KEYS {
+    for binding in &app.modal_keys.end_review {
         lines.push(Line::from(vec![
             Span::styled(
-                format!("{:<9}", binding.label),
+                format!("{:<9}", binding.key_label()),
                 Style::default()
                     .fg(app.theme.help_key)
                     .add_modifier(Modifier::BOLD),

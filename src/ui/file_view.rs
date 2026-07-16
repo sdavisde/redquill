@@ -366,6 +366,7 @@ mod tests {
             },
             None,
             &keymap,
+            &app.modal_keys,
         );
         assert!(
             !entries.iter().any(|e| e.label.contains("stage")),

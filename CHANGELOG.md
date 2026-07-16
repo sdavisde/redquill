@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.9.0](https://github.com/sdavisde/redquill/compare/v0.8.0...v0.9.0) (2026-07-15)
+
+
+### Features
+
+* **ui:** enable kitty keyboard protocol for modifier disambiguation ([1a8e4a9](https://github.com/sdavisde/redquill/commit/1a8e4a957ca8ec42de9a4610ab46da7843b60de4))
+* **ui:** open file in external editor at cursor line via g&lt;Space&gt; ([fd1fe1b](https://github.com/sdavisde/redquill/commit/fd1fe1b6c09a3fb610c4e62074785692194046fb))
+* **ui:** shift-enter newline + desktop-style keys in compose/commit modals ([a3a142c](https://github.com/sdavisde/redquill/commit/a3a142c7c19852014397951db0ec531253bcb413))
+* **ui:** soft-wrap and cursor-following scroll in compose/commit modals ([99912ea](https://github.com/sdavisde/redquill/commit/99912eaf00c660f0deacad1206b046ae8d7335d5))
+* **ui:** word/line/doc motions in compose text buffer ([4e9f88b](https://github.com/sdavisde/redquill/commit/4e9f88b53cde74aea717c0e3db8777861ba2e8d1))
+
 ## [0.8.0](https://github.com/sdavisde/redquill/compare/v0.7.0...v0.8.0) (2026-07-15)
 
 

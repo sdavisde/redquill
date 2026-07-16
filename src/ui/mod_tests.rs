@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::annotate::{Classification, Target};
+use crate::config::SidebarSide;
 use crate::diff::FileDiff;
 use crate::git::{DiffTarget, RawFilePatch};
 use crate::highlight::TokenKind;
@@ -29,15 +30,17 @@ index 111..222 100644
     .unwrap()
 }
 
-/// `sidebar_width` is 30% of the containing area, clamped to `[40, 72]` —
-/// pure arithmetic, no terminal involved. Narrow terminals (`80` included)
-/// sit on the floor of 40; the rest walk the proportional band and both
-/// clamps, including the boundary just below/at the point where 30% first
-/// exceeds the floor (`136` -> `40` still clamped, `137` -> `41` unclamped)
-/// and the point where it first reaches the cap (`239` -> `71`,
-/// `240` -> `72`).
+/// Unconfigured (`None`), `sidebar_width` is 30% of the containing area,
+/// clamped to `[40, 72]` — pure arithmetic, no terminal involved. Narrow
+/// terminals (`80` included) sit on the floor of 40; the rest walk the
+/// proportional band and both clamps, including the boundary just below/at
+/// the point where 30% first exceeds the floor (`136` -> `40` still
+/// clamped, `137` -> `41` unclamped) and the point where it first reaches
+/// the cap (`239` -> `71`, `240` -> `72`). This is the "unset preserves
+/// today's formula exactly" contract (spec 07 task 1.7) — identical table,
+/// identical inputs, to the pre-config behavior.
 #[test]
-fn sidebar_width_matches_ratified_table() {
+fn sidebar_width_matches_ratified_table_when_unconfigured() {
     let cases: &[(u16, u16)] = &[
         (0, 40),
         (80, 40),
@@ -53,11 +56,28 @@ fn sidebar_width_matches_ratified_table() {
     ];
     for &(total, expected) in cases {
         assert_eq!(
-            sidebar_width(total),
+            sidebar_width(total, None),
             expected,
-            "sidebar_width({total}) should be {expected}"
+            "sidebar_width({total}, None) should be {expected}"
         );
     }
+}
+
+/// A configured width overrides the formula entirely, at any terminal size
+/// that has room for it.
+#[test]
+fn sidebar_width_configured_overrides_the_formula() {
+    assert_eq!(sidebar_width(200, Some(55)), 55);
+    assert_eq!(sidebar_width(80, Some(20)), 20);
+}
+
+/// A configured width wider than the terminal is clamped to the terminal's
+/// actual width at render time (the FR's "clamped to available space"),
+/// rather than overflowing the split.
+#[test]
+fn sidebar_width_configured_clamps_to_available_terminal_width() {
+    assert_eq!(sidebar_width(50, Some(72)), 50);
+    assert_eq!(sidebar_width(0, Some(40)), 0);
 }
 
 /// Renders a small `App` to a `TestBackend` and asserts the diff pane shows
@@ -1041,6 +1061,75 @@ fn empty_staging_panel_shows_hint() {
     assert!(content.contains("nothing staged yet"));
 }
 
+/// The staging panel's empty hint resolves its key from the effective
+/// keymap rather than a hardcoded literal (spec 07 Unit 4, task 4.6): a
+/// `[keys.diff] toggle-stage` remap must show up here with no code change.
+#[test]
+fn empty_staging_panel_hint_reflects_a_remapped_toggle_stage_key() {
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    app.mode = Mode::Staging;
+
+    let mut keys = crate::config::KeysConfig::default();
+    keys.diff.insert(
+        "toggle-stage".to_string(),
+        vec![crate::config::keys::KeySeqSpec::One(
+            crate::config::keys::ChordSpec {
+                code: crossterm::event::KeyCode::Char('x'),
+                mods: KeyModifiers::NONE,
+            },
+        )],
+    );
+    let (keymap, warnings) = keymap_config::effective_keymap(&keys);
+    assert!(warnings.is_empty());
+
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+    assert!(
+        content.contains("press x on a hunk to stage it"),
+        "staging hint must show the remapped key, not the stale default"
+    );
+}
+
+/// The annotation list panel's empty hint likewise resolves its key from the
+/// effective keymap: a `[keys.diff] compose` remap must show up here too.
+#[test]
+fn empty_list_panel_hint_reflects_a_remapped_compose_key() {
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    app.mode = Mode::List;
+
+    let mut keys = crate::config::KeysConfig::default();
+    keys.diff.insert(
+        "compose".to_string(),
+        vec![crate::config::keys::KeySeqSpec::One(
+            crate::config::keys::ChordSpec {
+                code: crossterm::event::KeyCode::Char('t'),
+                mods: KeyModifiers::NONE,
+            },
+        )],
+    );
+    let (keymap, warnings) = keymap_config::effective_keymap(&keys);
+    assert!(warnings.is_empty());
+
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+    assert!(
+        content.contains("press t to add one"),
+        "list hint must show the remapped key, not the stale default"
+    );
+}
+
 // -- Syntax highlighting (rendering layer) -------------------------------
 
 /// A row carrying a syntax-highlight span renders that span's text with
@@ -1328,7 +1417,7 @@ fn focused_pane_border_emphasis_follows_the_toggle() {
     let width = 80usize;
     // Derived, not a literal: the sidebar's left edge tracks `sidebar_width`
     // so this test can't silently drift when the ratio/clamps change.
-    let panel_start = width - sidebar_width(width as u16) as usize;
+    let panel_start = width - sidebar_width(width as u16, None) as usize;
     let backend = TestBackend::new(width as u16, 20);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = panel_smoke_app();
@@ -1395,7 +1484,7 @@ fn sidebar_rect_and_render_scale_with_terminal_width_when_panel_focused() {
     for &(width, expected_sidebar) in cases {
         // Pure layout: `split_layout` itself hands back the clamped width.
         let area = Rect::new(0, 0, width, 30);
-        let (sidebar_rect, diff_rect) = split_layout(area, true);
+        let (sidebar_rect, diff_rect) = split_layout(area, true, SidebarSide::Right, None);
         let sidebar_rect = sidebar_rect.expect("sidebar shown when panel focused");
         assert_eq!(
             sidebar_rect.width, expected_sidebar,
@@ -1459,6 +1548,42 @@ fn sidebar_rect_and_render_scale_with_terminal_width_when_panel_focused() {
             );
         }
     }
+}
+
+/// `[layout] sidebar_side = "left"` (spec 07 task 1.7) moves the sidebar to
+/// the left edge; the diff pane gets the remaining width on the right.
+#[test]
+fn split_layout_left_side_puts_sidebar_at_the_left_edge() {
+    let area = Rect::new(0, 0, 100, 30);
+    let (sidebar_rect, diff_rect) = split_layout(area, true, SidebarSide::Left, None);
+    let sidebar_rect = sidebar_rect.expect("sidebar shown when panel focused");
+    assert_eq!(sidebar_rect.x, 0);
+    assert_eq!(diff_rect.x, sidebar_rect.width);
+    assert_eq!(diff_rect.width, 100 - sidebar_rect.width);
+}
+
+/// `[layout] sidebar_width` (already range-validated at load time) picks the
+/// exact width, overriding the proportional formula, on both sides.
+#[test]
+fn split_layout_configured_width_overrides_the_formula_on_both_sides() {
+    let area = Rect::new(0, 0, 100, 30);
+
+    let (right_sidebar, _) = split_layout(area, true, SidebarSide::Right, Some(55));
+    assert_eq!(right_sidebar.expect("shown").width, 55);
+
+    let (left_sidebar, _) = split_layout(area, true, SidebarSide::Left, Some(55));
+    assert_eq!(left_sidebar.expect("shown").width, 55);
+}
+
+/// A hidden sidebar (`show_sidebar: false`) ignores `side`/`configured_width`
+/// entirely and hands the whole area to the diff pane, exactly as before
+/// config existed.
+#[test]
+fn split_layout_hidden_sidebar_ignores_side_and_width() {
+    let area = Rect::new(0, 0, 100, 30);
+    let (sidebar, diff) = split_layout(area, false, SidebarSide::Left, Some(55));
+    assert!(sidebar.is_none());
+    assert_eq!(diff.width, area.width);
 }
 
 /// Drives real `KeyEvent`s through `dispatch_key` — the exact path the
@@ -2029,6 +2154,126 @@ fn status_message_replaces_the_context_footer_strip() {
         !content.contains("git panel"),
         "status message should displace the footer strip"
     );
+}
+
+// -- Config-warning notice (spec 07 task 1.6) --------------------------------
+
+/// A loaded warning renders in the footer, naming the problem, without
+/// blocking the diff content above it — and is never printed to stdout (this
+/// is a `TestBackend` render, not process stdout, so nothing here could ever
+/// reach it either way).
+#[test]
+fn config_warning_notice_renders_in_the_footer_without_blocking_the_diff() {
+    let keymap = Keymap::default_map();
+    let mut app = App::new(vec![sample_file()]);
+    app.set_config(
+        crate::config::Config::default(),
+        vec![crate::config::ConfigWarning::SyntaxError {
+            path: "/tmp/config.toml".to_string(),
+            message: "TOML parse error at line 3".to_string(),
+        }],
+    );
+
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .clone()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(content.contains("/tmp/config.toml"));
+    assert!(content.contains("TOML parse error at line 3"));
+    // Diff content still renders (main.rs's own file content), unblocked.
+    assert!(content.contains("fn main"));
+}
+
+/// Multiple warnings show the first plus an "(and N more)" summary, per the
+/// FR ("first problem + and N more").
+#[test]
+fn config_warning_notice_summarizes_additional_warnings() {
+    let mut app = App::new(vec![sample_file()]);
+    app.set_config(
+        crate::config::Config::default(),
+        vec![
+            crate::config::ConfigWarning::UnknownKey {
+                section: "layout".to_string(),
+                key: "bogus".to_string(),
+            },
+            crate::config::ConfigWarning::InvalidValue {
+                section: "search".to_string(),
+                key: "case".to_string(),
+                message: "expected \"smart\"".to_string(),
+            },
+        ],
+    );
+    let notice = app.config_warning_notice().expect("warnings present");
+    assert!(notice.contains("bogus"));
+    assert!(notice.contains("and 1 more"));
+}
+
+/// `!` (`Action::DismissConfigWarning`) clears the notice for the session;
+/// the footer strip (or whatever else would show) resumes underneath.
+#[test]
+fn dismiss_config_warning_hides_the_notice() {
+    let keymap = Keymap::default_map();
+    let mut app = App::new(vec![sample_file()]);
+    app.set_config(
+        crate::config::Config::default(),
+        vec![crate::config::ConfigWarning::SyntaxError {
+            path: "/tmp/config.toml".to_string(),
+            message: "boom".to_string(),
+        }],
+    );
+    assert!(app.config_warning_visible());
+
+    app.apply(Action::DismissConfigWarning);
+
+    assert!(!app.config_warning_visible());
+    assert_eq!(app.config_warning_notice(), None);
+
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .clone()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(!content.contains("/tmp/config.toml"));
+}
+
+/// With no warnings collected, the notice never renders at all — the
+/// no-config invariant (zero visible difference from today).
+#[test]
+fn no_warnings_means_no_notice() {
+    let app = App::new(vec![sample_file()]);
+    assert!(!app.config_warning_visible());
+    assert_eq!(app.config_warning_notice(), None);
+}
+
+/// The footer reserves its one-row slot whenever the notice is visible, the
+/// same way it already does for a running op or a transient status message
+/// (`footer::footer_height`'s single computation both `draw` and the event
+/// loop's viewport mirror share).
+#[test]
+fn footer_height_reserves_a_row_for_a_visible_config_warning() {
+    let keymap = Keymap::default_map();
+    let mut app = App::new(vec![sample_file()]);
+    app.set_config(
+        crate::config::Config::default(),
+        vec![crate::config::ConfigWarning::SyntaxError {
+            path: "/tmp/config.toml".to_string(),
+            message: "boom".to_string(),
+        }],
+    );
+    assert_eq!(footer::footer_height(100, &app, &keymap, None), 1);
 }
 
 /// Regenerates `02-proofs/02-task-03-smoke.txt` from a real key-dispatch

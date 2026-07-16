@@ -77,23 +77,15 @@ const HINT_SPECS: [(Scope, Action, &str); 3] = [
     (Scope::Diff, Action::ToggleHelp, "open help"),
 ];
 
-/// The key label bound to `action` in `scope`, or `None` if no binding
-/// exists there (a table edit dropped or renamed the action).
-fn key_for(km: &Keymap, scope: Scope, action: Action) -> Option<String> {
-    km.bindings()
-        .iter()
-        .find(|b| b.scope == scope && b.action == action)
-        .map(|b| b.key_label())
-}
-
 /// Resolves [`HINT_SPECS`] against `km`, in order. An action whose binding is
 /// missing is skipped rather than shown with a blank key — see the module
-/// doc's degradation note.
+/// doc's degradation note. Key resolution itself is [`Keymap::label_for`],
+/// shared with every other place that spells a main-keymap key out in prose.
 pub(super) fn hints(km: &Keymap) -> Vec<Hint> {
     HINT_SPECS
         .iter()
         .filter_map(|&(scope, action, label)| {
-            key_for(km, scope, action).map(|key| Hint { key, label })
+            km.label_for(scope, action).map(|key| Hint { key, label })
         })
         .collect()
 }
@@ -208,7 +200,7 @@ mod tests {
 
     /// The drift test: every hinted action must resolve to a real key in the
     /// shared table. If an action in `HINT_SPECS` is ever renamed or its
-    /// binding removed, `key_for` returns `None` here and this test fails
+    /// binding removed, `Keymap::label_for` returns `None` here and this test fails
     /// loudly — the production path (`hints`) would otherwise silently drop
     /// the hint instead, which is correct for a live cosmetic degradation but
     /// wrong for CI to let slide.
@@ -217,7 +209,7 @@ mod tests {
         let km = Keymap::default_map();
         for &(scope, action, label) in &HINT_SPECS {
             assert!(
-                key_for(&km, scope, action).is_some(),
+                km.label_for(scope, action).is_some(),
                 "no {scope:?} binding for {action:?} (hint {label:?}) — \
                  the shared keymap table no longer has this action"
             );
@@ -243,7 +235,7 @@ mod tests {
         // through the table rather than hardcoding "`" twice, but this test
         // still demonstrates a resolved key looks like a real key label, not
         // an empty string or a debug-format action name.
-        let focus_panel_key = key_for(&km, Scope::Diff, Action::FocusGitPanel).unwrap();
+        let focus_panel_key = km.label_for(Scope::Diff, Action::FocusGitPanel).unwrap();
         assert_eq!(built[0].key, focus_panel_key);
     }
 }

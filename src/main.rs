@@ -15,9 +15,13 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 
 use redquill::annotate::render_markdown;
+use redquill::config;
 use redquill::diff::FileDiff;
 use redquill::git::{ChangeKind, DiffTarget, GitRunner, sanitize_branch_dir_name};
-use redquill::ui::{self, App, QuitOutcome, build_review};
+use redquill::ui::{
+    self, App, EditorConfigTier, EditorLaunch, QuitOutcome, build_review,
+    resolve_editor_config_tier,
+};
 
 /// redquill: a terminal UI for reviewing agentic code changes.
 ///
@@ -62,7 +66,7 @@ struct Cli {
 }
 
 /// Fully resolved configuration derived from parsed CLI arguments.
-struct Config {
+struct RunConfig {
     /// Ref range to diff, if any; `None` means the working tree.
     range: Option<String>,
     /// Whether to review the staged index instead of the working tree.
@@ -80,9 +84,9 @@ struct Config {
     editor: Option<String>,
 }
 
-impl From<Cli> for Config {
+impl From<Cli> for RunConfig {
     fn from(cli: Cli) -> Self {
-        Config {
+        RunConfig {
             range: cli.range,
             staged: cli.staged,
             review: cli.review,
@@ -93,7 +97,7 @@ impl From<Cli> for Config {
     }
 }
 
-impl Config {
+impl RunConfig {
     /// Resolves the non-review CLI flags into the diff target to inspect.
     /// Never called when `--review` is set — [`resolve_session`] branches
     /// on that before this is reached, since a review target additionally
@@ -126,7 +130,7 @@ impl Config {
 /// as they were.
 fn resolve_session(
     discovered: GitRunner,
-    config: &Config,
+    config: &RunConfig,
 ) -> anyhow::Result<(GitRunner, DiffTarget)> {
     let Some(branch) = &config.review else {
         return Ok((discovered, config.diff_target()));
@@ -187,7 +191,7 @@ fn paths_match(a: &Path, b: &Path) -> bool {
 }
 
 /// Prints a one-line summary per changed file for the resolved diff target.
-fn run(config: &Config) -> anyhow::Result<()> {
+fn run(config: &RunConfig) -> anyhow::Result<()> {
     let discovered = GitRunner::discover()?;
     let (runner, target) = resolve_session(discovered, config)?;
     let patches = runner.diff(&target)?;
@@ -220,28 +224,45 @@ fn run(config: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Resolves the editor `g<Space>` opens, in precedence order: the
-/// `--editor` flag, then `$VISUAL`, then `$EDITOR`, then `"nvim"`. Takes the
-/// flag/env values as explicit args (rather than reading `std::env::var`
-/// itself) so precedence is unit-testable without mutating process-global
-/// env state; `run_tui` reads the real env vars at the one call site. Empty
-/// or whitespace-only strings at any tier are treated as unset and fall
-/// through to the next — an exported `EDITOR=""` shouldn't silently break
-/// `g<Space>`.
+/// Resolves the editor `g<Space>` opens, in five-tier precedence order: the
+/// `--editor` flag, then `[editor]` config (`config_tier`, already resolved
+/// from `crate::config::EditorConfig` by
+/// `ui::resolve_editor_config_tier` — an `EditorConfigTier::UnknownPreset`
+/// is *not* a config-tier hit here; `run_tui` reports it as a warning and
+/// passes `EditorConfigTier::Absent` in its place instead, so this function
+/// only ever sees a real hit or a miss), then `$VISUAL`, then `$EDITOR`,
+/// then `"nvim"`. Takes every tier as an explicit arg (rather than reading
+/// `std::env::var`/resolving config itself) so precedence is unit-testable
+/// without mutating process-global env state or touching real config paths;
+/// `run_tui` reads the real env vars and config at the one call site. Empty
+/// or whitespace-only strings at the flag/`$VISUAL`/`$EDITOR` tiers are
+/// treated as unset and fall through to the next — an exported `EDITOR=""`
+/// shouldn't silently break `g<Space>` (unchanged from before this spec). A
+/// config-tier template always wins over `$VISUAL`/`$EDITOR`/`"nvim"` and
+/// carries no such "empty is unset" allowance: it's already been validated
+/// non-empty by `crate::config::EditorConfig::from_value`.
 fn resolve_editor(
     flag: Option<String>,
+    config_tier: EditorConfigTier,
     visual: Option<String>,
     editor_env: Option<String>,
-) -> String {
-    [flag, visual, editor_env]
+) -> EditorLaunch {
+    if let Some(cmd) = flag.filter(|s| !s.trim().is_empty()) {
+        return EditorLaunch::Command(cmd);
+    }
+    if let EditorConfigTier::Template(template) = config_tier {
+        return EditorLaunch::Template(template);
+    }
+    [visual, editor_env]
         .into_iter()
         .find_map(|candidate| candidate.filter(|s| !s.trim().is_empty()))
-        .unwrap_or_else(|| "nvim".to_string())
+        .map(EditorLaunch::Command)
+        .unwrap_or_else(|| EditorLaunch::Command("nvim".to_string()))
 }
 
 /// Runs the interactive TUI and, on quit, emits annotations per the
 /// resolved [`QuitOutcome`].
-fn run_tui(config: &Config) -> anyhow::Result<()> {
+fn run_tui(config: &RunConfig) -> anyhow::Result<()> {
     let discovered = GitRunner::discover()?;
     // `discovered` is rooted at the caller's cwd (the user's own checkout),
     // *outside* any managed review worktree `resolve_session` might create —
@@ -256,9 +277,38 @@ fn run_tui(config: &Config) -> anyhow::Result<()> {
         app.set_review_origin_ops(Box::new(discovered));
     }
     app.set_repo_root(runner.root().to_path_buf());
+    // Config loads exactly once, here, before the first render — there is no
+    // reload path (docs/specs/07-spec-config-layer). Warnings (missing file
+    // is silent and yields none; a syntax error or an invalid entry each
+    // yield one) are handed to the app for its dismissible status-line
+    // notice; never printed to stdout.
+    let (loaded_config, mut config_warnings) = config::load();
+    // The `[editor]` config tier is resolved *before* `loaded_config` moves
+    // into `app.set_config` below. An unknown preset name is folded into
+    // the same warning collection here (`ui::editor` owns the preset table
+    // that names its validity against — see that module's doc for why
+    // `crate::config` can't do this check itself) and then treated exactly
+    // like an absent config tier for precedence purposes.
+    let config_tier = match resolve_editor_config_tier(&loaded_config.editor) {
+        EditorConfigTier::UnknownPreset(name) => {
+            config_warnings.push(config::ConfigWarning::InvalidValue {
+                section: "editor".to_string(),
+                key: "preset".to_string(),
+                message: format!("unknown preset \"{name}\""),
+            });
+            EditorConfigTier::Absent
+        }
+        resolved => resolved,
+    };
+    app.set_config(loaded_config, config_warnings);
     let visual = std::env::var_os("VISUAL").map(|s| s.to_string_lossy().into_owned());
     let editor_env = std::env::var_os("EDITOR").map(|s| s.to_string_lossy().into_owned());
-    app.set_editor(resolve_editor(config.editor.clone(), visual, editor_env));
+    app.set_editor(resolve_editor(
+        config.editor.clone(),
+        config_tier,
+        visual,
+        editor_env,
+    ));
     let outcome = ui::run(&mut app)?;
 
     if let QuitOutcome::Emit = outcome {
@@ -274,7 +324,7 @@ fn run_tui(config: &Config) -> anyhow::Result<()> {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let config = Config::from(cli);
+    let config = RunConfig::from(cli);
 
     if std::io::stderr().is_terminal() {
         run_tui(&config)
@@ -287,6 +337,7 @@ fn main() -> anyhow::Result<()> {
 mod tests {
     use super::{Cli, paths_match, resolve_editor};
     use clap::Parser;
+    use redquill::ui::{EditorConfigTier, EditorLaunch};
 
     // -- Cli parsing: `--review` conflicts and `--base` gating --------------
 
@@ -361,53 +412,105 @@ mod tests {
         assert_eq!(
             resolve_editor(
                 Some("code --wait".to_string()),
+                EditorConfigTier::Template("zed {{filename}}:{{line}}".to_string()),
                 Some("emacs".to_string()),
                 Some("vi".to_string())
             ),
-            "code --wait"
+            EditorLaunch::Command("code --wait".to_string())
         );
     }
 
     #[test]
-    fn visual_wins_when_no_flag() {
+    fn config_template_wins_when_no_flag() {
         assert_eq!(
-            resolve_editor(None, Some("emacs".to_string()), Some("vi".to_string())),
-            "emacs"
+            resolve_editor(
+                None,
+                EditorConfigTier::Template("zed {{filename}}:{{line}}".to_string()),
+                Some("emacs".to_string()),
+                Some("vi".to_string())
+            ),
+            EditorLaunch::Template("zed {{filename}}:{{line}}".to_string())
         );
     }
 
     #[test]
-    fn editor_env_wins_when_no_flag_or_visual() {
-        assert_eq!(resolve_editor(None, None, Some("vi".to_string())), "vi");
+    fn visual_wins_when_no_flag_or_config_tier() {
+        assert_eq!(
+            resolve_editor(
+                None,
+                EditorConfigTier::Absent,
+                Some("emacs".to_string()),
+                Some("vi".to_string())
+            ),
+            EditorLaunch::Command("emacs".to_string())
+        );
+    }
+
+    #[test]
+    fn editor_env_wins_when_no_flag_config_tier_or_visual() {
+        assert_eq!(
+            resolve_editor(None, EditorConfigTier::Absent, None, Some("vi".to_string())),
+            EditorLaunch::Command("vi".to_string())
+        );
     }
 
     #[test]
     fn nvim_is_the_final_fallback() {
-        assert_eq!(resolve_editor(None, None, None), "nvim");
+        assert_eq!(
+            resolve_editor(None, EditorConfigTier::Absent, None, None),
+            EditorLaunch::Command("nvim".to_string())
+        );
     }
 
     #[test]
-    fn empty_flag_falls_through_to_visual() {
+    fn empty_flag_falls_through_to_config_tier() {
         assert_eq!(
             resolve_editor(
                 Some("   ".to_string()),
+                EditorConfigTier::Template("zed {{filename}}:{{line}}".to_string()),
                 Some("emacs".to_string()),
                 Some("vi".to_string())
             ),
-            "emacs"
+            EditorLaunch::Template("zed {{filename}}:{{line}}".to_string())
+        );
+    }
+
+    #[test]
+    fn empty_flag_and_absent_config_tier_falls_through_to_visual() {
+        assert_eq!(
+            resolve_editor(
+                Some("   ".to_string()),
+                EditorConfigTier::Absent,
+                Some("emacs".to_string()),
+                Some("vi".to_string())
+            ),
+            EditorLaunch::Command("emacs".to_string())
         );
     }
 
     #[test]
     fn empty_visual_falls_through_to_editor_env() {
         assert_eq!(
-            resolve_editor(None, Some("".to_string()), Some("vi".to_string())),
-            "vi"
+            resolve_editor(
+                None,
+                EditorConfigTier::Absent,
+                Some("".to_string()),
+                Some("vi".to_string())
+            ),
+            EditorLaunch::Command("vi".to_string())
         );
     }
 
     #[test]
     fn empty_editor_env_falls_through_to_nvim() {
-        assert_eq!(resolve_editor(None, None, Some("  \t".to_string())), "nvim");
+        assert_eq!(
+            resolve_editor(
+                None,
+                EditorConfigTier::Absent,
+                None,
+                Some("  \t".to_string())
+            ),
+            EditorLaunch::Command("nvim".to_string())
+        );
     }
 }

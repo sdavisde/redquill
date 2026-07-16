@@ -5,12 +5,23 @@ on:
     branches:
       - main
 
-# Note on the GITHUB_TOKEN recursive-trigger limitation:
-# Events raised by the default GITHUB_TOKEN (e.g. the release PR that
-# release-please opens/updates) do NOT trigger further workflow runs. So CI
-# does not run on the release PR itself. That is fine for this solo repo; if
-# branch protection ever requires status checks on that PR, swap the
-# release-please `token:` for a PAT so its pushes trigger CI.
+# Releases are fully automatic: release-please opens the release PR using a PAT
+# (not GITHUB_TOKEN), so CI runs on that PR, and auto-merge lands it as soon as
+# the required checks go green. That merge re-triggers this workflow with
+# release_created=true, which builds and publishes. No human step.
+#
+# The PAT is load-bearing in two places, and GITHUB_TOKEN cannot substitute for
+# either: events raised by GITHUB_TOKEN do not trigger workflow runs, so (a) the
+# release PR would never get the CI that branch protection on main requires, and
+# (b) auto-merge is attributed to whoever enabled it — if that were
+# github-actions[bot], the merge would not re-trigger this workflow and the
+# release would never build.
+
+# Serialize runs so two merges landing close together cannot race to tag from a
+# stale main.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release-please:
@@ -26,8 +37,22 @@ jobs:
       - uses: googleapis/release-please-action@v4
         id: release
         with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      # prs_created covers updates as well as creations, so pushing further
+      # releasable commits refreshes the PR and re-arms auto-merge.
+      - name: enable auto-merge on the release PR
+        if: ${{ steps.release.outputs.prs_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          PR_JSON: ${{ steps.release.outputs.pr }}
+        run: |
+          set -euo pipefail
+          number="$(jq -r '.number' <<<"${PR_JSON}")"
+          echo "enabling auto-merge on PR #${number}"
+          gh pr merge --auto --squash --repo "$GITHUB_REPOSITORY" "${number}"
 
   build:
     needs: release-please

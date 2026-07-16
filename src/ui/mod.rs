@@ -37,9 +37,12 @@ mod git_panel;
 mod help;
 mod history;
 mod keymap;
+mod keymap_config;
 mod list_panel;
+mod lsp_config;
 mod lsp_ops;
 mod modal_keys;
+mod modal_keys_config;
 mod modes;
 mod peek;
 mod peek_overlay;
@@ -64,6 +67,7 @@ mod welcome;
 
 pub use app::{App, Mode};
 pub use diff_view_state::DiffViewState;
+pub use editor::{EditorConfigTier, EditorLaunch, resolve_editor_config_tier};
 pub use keymap::{Action, Binding, Keymap};
 pub use lsp_ops::LspClient;
 pub use rows::{Row, build_rows};
@@ -90,6 +94,8 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
+
+use crate::config::SidebarSide;
 
 /// How long the event loop waits for a key event before giving up and
 /// draining LSP events anyway. Keeps `gd`/`gr`/`K` responses (and any
@@ -127,17 +133,28 @@ fn split_footer(area: Rect, footer_height: u16) -> (Rect, Rect) {
     (chunks[0], chunks[1])
 }
 
-/// Sidebar width: 30% of the containing area's width, clamped to `[40, 72]`
-/// columns. The floor deliberately widens the sidebar beyond the historical
-/// fixed 32 on narrow terminals (136 cols and below all get 40); the cap
-/// keeps a very wide terminal from dedicating an unreasonable share to the
-/// sidebar. `total` is widened to `u32` before the multiply so `total * 3`
-/// can never overflow `u16` — the widest input, `u16::MAX`, scales to
-/// `19660`, itself well within `u16`, so the final cast back is always in
-/// range.
-fn sidebar_width(total: u16) -> u16 {
-    let scaled = (u32::from(total) * 3 / 10) as u16;
-    scaled.clamp(40, 72)
+/// Sidebar width when unconfigured (`[layout] sidebar_width` unset): 30% of
+/// the containing area's width, clamped to `[40, 72]` columns. The floor
+/// deliberately widens the sidebar beyond the historical fixed 32 on narrow
+/// terminals (136 cols and below all get 40); the cap keeps a very wide
+/// terminal from dedicating an unreasonable share to the sidebar. `total` is
+/// widened to `u32` before the multiply so `total * 3` can never overflow
+/// `u16` — the widest input, `u16::MAX`, scales to `19660`, itself well
+/// within `u16`, so the final cast back is always in range.
+///
+/// `configured` (`[layout] sidebar_width`, already range-validated at
+/// load time — see `crate::config::LayoutConfig`) overrides this formula
+/// entirely when set, further clamped to `total` here so a width wider than
+/// the terminal never overflows the split (the FR's render-time clamp to
+/// "available space").
+fn sidebar_width(total: u16, configured: Option<u16>) -> u16 {
+    match configured {
+        Some(width) => width.min(total),
+        None => {
+            let scaled = (u32::from(total) * 3 / 10) as u16;
+            scaled.clamp(40, 72)
+        }
+    }
 }
 
 /// Splits the main content area into the sidebar and diff-pane rects. The
@@ -145,21 +162,32 @@ fn sidebar_width(total: u16) -> u16 {
 /// panel is focused (`Mode::Panel`) — visibility coincides exactly with
 /// focus, no separate state field. Mirrors [`split_right`]'s
 /// `(area, None)`-when-hidden pattern; when hidden the diff pane gets the
-/// full width. The sidebar renders on the right when shown, at
-/// [`sidebar_width`]'s proportional-with-clamps width; see
-/// `docs/config-layer.md` for making the side and width configurable.
-fn split_layout(area: Rect, show_sidebar: bool) -> (Option<Rect>, Rect) {
+/// full width. `side`/`configured_width` come from `[layout]`
+/// (`crate::config::LayoutConfig`); `side` picks which edge the sidebar
+/// renders against, and `configured_width` feeds [`sidebar_width`] (`None`
+/// preserves today's proportional-with-clamps formula exactly).
+fn split_layout(
+    area: Rect,
+    show_sidebar: bool,
+    side: SidebarSide,
+    configured_width: Option<u16>,
+) -> (Option<Rect>, Rect) {
     if !show_sidebar {
         return (None, area);
     }
+    let width = sidebar_width(area.width, configured_width);
+    let constraints = match side {
+        SidebarSide::Left => [Constraint::Length(width), Constraint::Min(0)],
+        SidebarSide::Right => [Constraint::Min(0), Constraint::Length(width)],
+    };
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Min(0),
-            Constraint::Length(sidebar_width(area.width)),
-        ])
+        .constraints(constraints)
         .split(area);
-    (Some(chunks[1]), chunks[0])
+    match side {
+        SidebarSide::Left => (Some(chunks[0]), chunks[1]),
+        SidebarSide::Right => (Some(chunks[1]), chunks[0]),
+    }
 }
 
 /// Splits the right-hand area into the diff pane and (when `show_panel`) a
@@ -454,17 +482,36 @@ fn resolve_editor_target(app: &mut App) -> Option<(PathBuf, u32)> {
     Some((PathBuf::from(path), line))
 }
 
-/// Spawns `editor` (see [`editor::build_editor_command`]) on `rel_path`
-/// (repo-relative) at `line`, with the repo root as the child's working
-/// directory so the editor opens exactly the path the user sees, and
-/// inherited stdio so it takes over the terminal directly. Blocks
-/// synchronously on `.status()` — the sanctioned exception to "never block
-/// the render loop": the caller has already suspended the TUI
-/// (`restore_terminal`) by the time this runs, so there is no render loop to
-/// block. Never goes through the background git-op runner; this isn't a git
-/// operation and must not be single-flighted or generation-guarded like one.
-fn launch_editor(editor: &str, repo_root: &Path, rel_path: &Path, line: u32) -> io::Result<()> {
-    let (program, args) = editor::build_editor_command(editor, rel_path, line);
+/// Spawns the resolved `editor` (see [`editor::build_editor_command`] /
+/// [`editor::build_from_template`]) on `rel_path` (repo-relative) at `line`,
+/// with the repo root as the child's working directory so the editor opens
+/// exactly the path the user sees, and inherited stdio so it takes over the
+/// terminal directly. Blocks synchronously on `.status()` — the sanctioned
+/// exception to "never block the render loop": the caller has already
+/// suspended the TUI (`restore_terminal`) by the time this runs, so there is
+/// no render loop to block. Never goes through the background git-op
+/// runner; this isn't a git operation and must not be single-flighted or
+/// generation-guarded like one.
+fn launch_editor(
+    editor: &EditorLaunch,
+    repo_root: &Path,
+    rel_path: &Path,
+    line: u32,
+) -> io::Result<()> {
+    let (program, args) = match editor {
+        // A config template was already validated to contain `{{filename}}`
+        // (by `crate::config::EditorConfig::from_value` for `edit_at_line`,
+        // or by construction for a built-in preset), so `None` here would
+        // mean a defensive-fallback bug rather than a user config error —
+        // still reported as an error, never a panic.
+        EditorLaunch::Template(template) => editor::build_from_template(template, rel_path, line)
+            .ok_or_else(|| {
+            io::Error::other(format!(
+                "editor template {template:?} has no {{{{filename}}}} placeholder"
+            ))
+        })?,
+        EditorLaunch::Command(command) => editor::build_editor_command(command, rel_path, line),
+    };
     Command::new(program)
         .args(args)
         .current_dir(repo_root)
@@ -494,28 +541,35 @@ fn launch_editor(editor: &str, repo_root: &Path, rel_path: &Path, line: u32) -> 
 ///   filter (`None`) instead of closing — so a second `Esc` (now with no
 ///   filter) is what closes help.
 fn handle_help_key(app: &mut App, key: KeyEvent) {
-    use modal_keys::HelpAction;
+    use modal_keys::{HelpAction, HelpSearchAction};
 
     if let Some((mut query, editing)) = app.help_search.clone() {
         if editing {
-            match key.code {
-                KeyCode::Esc => app.help_search = None,
-                KeyCode::Enter => app.help_search = Some((query, false)),
-                KeyCode::Backspace => {
-                    query.pop();
-                    app.help_search = Some((query, true));
+            if let Some(action) = modal_keys::resolve(&app.modal_keys.help_search, key) {
+                match action {
+                    HelpSearchAction::Lock => app.help_search = Some((query, false)),
+                    HelpSearchAction::Clear => app.help_search = None,
+                    HelpSearchAction::DeleteChar => {
+                        query.pop();
+                        app.help_search = Some((query, true));
+                    }
                 }
-                KeyCode::Char(c) => {
-                    query.push(c);
-                    app.help_search = Some((query, true));
-                }
-                _ => {}
+                return;
+            }
+            // Bare, unmodified `Char` extends the filter query — never
+            // remappable, per the free-text-mode contract.
+            if let KeyCode::Char(c) = key.code {
+                query.push(c);
+                app.help_search = Some((query, true));
             }
             return;
         }
         // Locked filter: `/` resumes editing it, `Esc` clears it before it
         // can reach the `Close` action below — everything else (including
         // Enter/`?`) falls through to the ordinary scroll-key resolution.
+        // Not part of `HELP_SEARCH_HINTS` (that table documents only the
+        // editing sub-state's keys) — this micro-state stays fixed, like the
+        // help overlay's own `?`/`/` toggle chrome.
         match key.code {
             KeyCode::Char('/') => {
                 app.help_search = Some((query, true));
@@ -529,7 +583,7 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
         }
     }
 
-    let Some(action) = modal_keys::resolve(modal_keys::HELP_KEYS, key) else {
+    let Some(action) = modal_keys::resolve(&app.modal_keys.help, key) else {
         return;
     };
     let page = app.help_viewport.get().max(1);
@@ -568,7 +622,12 @@ fn diff_pane_rect(full_area: Rect, app: &App, keymap: &Keymap, pending: Option<K
     let (_, area) = split_banner(full_area, app.in_review_session());
     let footer_h = footer::footer_height(area.width, app, keymap, pending);
     let (main_area, _) = split_footer(area, footer_h);
-    let (_, right_area) = split_layout(main_area, app.git_panel_focused());
+    let (_, right_area) = split_layout(
+        main_area,
+        app.git_panel_focused(),
+        app.config.layout.sidebar_side,
+        app.config.layout.sidebar_width,
+    );
     let (diff_area, _) = split_right(right_area, bottom_open(app));
     diff_area
 }
@@ -584,7 +643,12 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     let (banner_area, area) = split_banner(full_area, app.in_review_session());
     let footer_h = footer::footer_height(area.width, app, keymap, pending);
     let (main_area, footer_area) = split_footer(area, footer_h);
-    let (sidebar_area, right_area) = split_layout(main_area, app.git_panel_focused());
+    let (sidebar_area, right_area) = split_layout(
+        main_area,
+        app.git_panel_focused(),
+        app.config.layout.sidebar_side,
+        app.config.layout.sidebar_width,
+    );
     let (diff_area, panel_area) = split_right(right_area, bottom_open(app));
     debug_assert_eq!(
         diff_area,
@@ -601,7 +665,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
         review_banner::render(frame, banner_area, &app.theme, branch, accepted, total);
     }
     if let Some(sidebar_area) = sidebar_area {
-        git_panel::render(frame, sidebar_area, app);
+        git_panel::render(frame, sidebar_area, app, keymap);
     }
     // Project Search is a full-screen view (Zed-like), replacing the diff
     // pane's content rather than overlaying it — sidebar/bottom-panel areas
@@ -619,8 +683,8 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
             command_log::render(frame, panel_area, app);
         } else {
             match app.mode {
-                Mode::Staging => staging_panel::render(frame, panel_area, app),
-                _ => list_panel::render(frame, panel_area, app),
+                Mode::Staging => staging_panel::render(frame, panel_area, app, keymap),
+                _ => list_panel::render(frame, panel_area, app, keymap),
             }
         }
     }
@@ -643,6 +707,18 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
         // is still working.
         let footer = Line::from(Span::styled(
             format!(" \u{27f3} {label}\u{2026}"),
+            Style::default().fg(app.theme.status_message),
+        ));
+        frame.render_widget(footer, footer_area);
+    } else if let Some(notice) = app.config_warning_notice() {
+        // A config-load problem (spec 07 Unit 1): dismissible (`!`) and
+        // non-blocking — it never covers the diff/panel content above, only
+        // this footer row — and, like every other footer message, never
+        // written to stdout (stdout is reserved for the annotation
+        // markdown). Outranks a transient status message so it survives the
+        // ordinary idle gaps between them; `!` clears it for the session.
+        let footer = Line::from(Span::styled(
+            format!(" {notice} (! to dismiss)"),
             Style::default().fg(app.theme.status_message),
         ));
         frame.render_widget(footer, footer_area);
@@ -670,6 +746,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
             },
             pending,
             keymap,
+            &app.modal_keys,
         );
         let lines = footer::render_hint_strip(&entries, footer_area.width, &app.theme);
         frame.render_widget(ratatui::widgets::Paragraph::new(lines), footer_area);
@@ -689,7 +766,10 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
         help::render(
             frame,
             area,
-            keymap,
+            &help::HelpTables {
+                keymap,
+                modal_keys: &app.modal_keys,
+            },
             &app.theme,
             staging_allowed,
             code_intel_allowed,
@@ -784,7 +864,21 @@ fn install_panic_hook() {
 pub fn run(app: &mut App) -> anyhow::Result<QuitOutcome> {
     install_panic_hook();
     let mut terminal = init_terminal()?;
-    let keymap = Keymap::default_map();
+    // Effective-keymap construction happens exactly once, here, before the
+    // event loop starts: `default_map()` plus `[keys.diff]`/`[keys.panel]`
+    // config overrides (spec 07 Unit 4). Merge-time warnings (unknown
+    // action names, same-scope collisions) join the config-load warnings
+    // `main` already collected via `App::set_config`, so both surface
+    // through the same dismissible status-line notice.
+    let (keymap, keymap_warnings) = keymap_config::effective_keymap(&app.config.keys);
+    app.config_warnings.extend(keymap_warnings);
+    // Same one-shot construction for every modal mode's table (spec 07 Unit
+    // 4 task 5.3/5.4): `modal_keys::ModalKeymaps::default()` (the compiled-in
+    // defaults) with each `[keys.<mode>]` override applied, stored on `app`
+    // so every modal handler and render call reads a plain owned table.
+    let (modal_keymaps, modal_warnings) = modal_keys_config::effective_modal_keys(&app.config.keys);
+    app.modal_keys = modal_keymaps;
+    app.config_warnings.extend(modal_warnings);
     let outcome = event_loop(&mut terminal, app, &keymap);
     restore_terminal();
     // Shut down any LSP servers spawned this session only after the
@@ -817,11 +911,12 @@ fn event_loop(
         let size = terminal.size()?;
         let full_area = Rect::new(0, 0, size.width, size.height);
         // Delegates to `diff_pane_rect` — the same split chain `draw` itself
-        // runs — so the viewport height measured here for the diff pane
-        // matches what actually renders this frame (same `app`/`pending`
-        // state, same computation). See `diff_pane_rect`'s doc for why this
-        // indirection exists rather than each site re-deriving the splits
-        // inline.
+        // runs, including the review-session banner split (spec 08 Unit 2) and
+        // the `[layout]` sidebar config (spec 07) — so the viewport height
+        // measured here for the diff pane matches what actually renders this
+        // frame (same `app`/`pending` state, same computation). See
+        // `diff_pane_rect`'s doc for why this indirection exists rather than
+        // each site re-deriving the splits inline.
         let diff_area = diff_pane_rect(full_area, app, keymap, pending_prefix);
         app.view.set_viewport_height(diff_view::viewport_height(
             diff_area,

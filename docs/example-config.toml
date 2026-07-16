@@ -1,0 +1,438 @@
+# redquill example config
+#
+# This file documents every key redquill's config layer currently
+# understands (spec 07, docs/specs/07-spec-config-layer/). Copy the sections
+# you want into your own config and delete the rest — every key is optional
+# and defaults to today's shipped behavior, so an empty file (or no file at
+# all) behaves identically to this example with everything commented out.
+#
+# Location: redquill looks for this file at
+#   $XDG_CONFIG_HOME/redquill/config.toml
+# falling back to
+#   ~/.config/redquill/config.toml
+# on both Linux and macOS (deliberately not macOS's
+# ~/Library/Application Support, matching helix/yazi). On Windows, the
+# platform config directory is used instead.
+#
+# The file is read exactly once, at startup — there is no reload keybind or
+# file watcher. Restart redquill after editing this file for changes to take
+# effect.
+#
+# A missing file is completely silent (no notice, no behavior change). A
+# file that fails to parse as TOML is ignored in its entirety (every section
+# falls back to its default) and a dismissible status-line notice names the
+# file path and the parser's error. A file that parses but has an unknown
+# key, or an invalid value for a known key, applies every other valid
+# setting and shows one warning per ignored entry — never write to stdout
+# (stdout is reserved for the annotation markdown redquill emits on `q`).
+
+# -----------------------------------------------------------------------
+# [layout] — sidebar placement and width
+# -----------------------------------------------------------------------
+[layout]
+
+# Which edge of the terminal the git panel sidebar renders against, once
+# opened (`` ` ``). Allowed values: "left", "right".
+# Default: "right"
+sidebar_side = "right"
+
+# The sidebar's width, in terminal columns. Must be an integer between 20
+# and 200 inclusive; a value outside that range is treated as invalid (a
+# warning is shown and the default formula below is used instead). The
+# configured width is further clamped to whatever width the terminal
+# actually has each frame, so it can never push the diff pane off-screen.
+#
+# Leaving this key unset (or commenting it out) preserves redquill's
+# built-in formula exactly: 30% of the terminal's width, clamped to the
+# range [40, 72] columns. There is no way to spell "use the formula" other
+# than omitting the key.
+#
+# sidebar_width = 60
+
+# -----------------------------------------------------------------------
+# [search] — Project Search (`g/`) startup defaults
+# -----------------------------------------------------------------------
+[search]
+
+# The case-sensitivity mode Project Search opens with. Allowed values:
+#   "smart"       — case-insensitive unless the pattern contains an
+#                   uppercase letter (vim's smartcase)
+#   "sensitive"   — always case-sensitive
+#   "insensitive" — always case-insensitive
+# Default: "smart"
+#
+# This only seeds a *fresh* Project Search session — pressing `Alt-c` during
+# an open session still cycles the mode as usual, and closing/reopening
+# reseeds from this config again rather than remembering the prior
+# session's toggle.
+case = "smart"
+
+# Whether Project Search opens with whole-word matching on. In-session
+# toggle: `Alt-w`.
+# Default: false
+whole_word = false
+
+# Whether Project Search opens treating the pattern as a fixed string
+# rather than a regex. In-session toggle: `Alt-r`.
+# Default: false
+literal = false
+
+# -----------------------------------------------------------------------
+# [editor] — the editor `g<Space>` opens, at the cursor line
+# -----------------------------------------------------------------------
+[editor]
+
+# Two ways to tell redquill how to open your editor at a specific line;
+# both are optional and both default to unset (see the five-tier
+# precedence note below). Set at most one — if both are set,
+# `edit_at_line` always wins and `preset` is ignored.
+
+# `preset`: the name of a built-in template. Allowed values:
+#   "vim", "nvim", "helix", "vscode", "vscodium", "zed", "emacs", "nano",
+#   "micro", "sublime", "kakoune"
+# An unrecognized name is an invalid value: a warning is shown and
+# redquill falls through to the next precedence tier ($VISUAL/$EDITOR/
+# "nvim") exactly as if `preset` had been left unset.
+# Default: unset
+#
+# preset = "zed"
+
+# `edit_at_line`: a command template, for any editor not covered by
+# `preset` (or to override a preset's built-in template). Two
+# placeholders are substituted: `{{filename}}` (required — a template
+# without it is an invalid value, warning + fallthrough) and `{{line}}`
+# (optional — a template that never mentions it just doesn't get a line
+# number). The template is split into whitespace-separated tokens first,
+# then each placeholder is substituted *within* its token — never through
+# a shell — so a single token can mix literal text with one or both
+# placeholders (e.g. `{{filename}}:{{line}}`), and a filename containing
+# spaces still survives as one argv element.
+# Default: unset
+#
+# edit_at_line = "myeditor --goto {{filename}}:{{line}}"
+
+# Resolution precedence (highest wins): the `--editor` CLI flag, then this
+# `[editor]` section (`edit_at_line`, or `preset` expanded via the table
+# above), then `$VISUAL`, then `$EDITOR`, then the built-in default
+# "nvim". Every tier below this section still uses redquill's original
+# two-family heuristic for a plain command string (VS Code/VSCodium get
+# `--goto file:line`; everything else gets `+line file`) — that heuristic
+# never applies to a `[editor]`-resolved template, which is used exactly
+# as written.
+
+# -----------------------------------------------------------------------
+# [lsp] — language server overrides for `gd`/`gr`/`K` code intelligence
+# -----------------------------------------------------------------------
+#
+# One sub-table per language redquill knows how to spawn a server for:
+# `[lsp.rust]`, `[lsp.typescript]`, `[lsp.python]`, `[lsp.go]`. Adding a
+# fifth language is a code change, not a config key (this section only
+# overrides the four built-in ones). Every sub-table is independently
+# optional — set only the languages you want to change; the rest keep
+# redquill's built-in defaults:
+#
+#   rust:       rust-analyzer
+#   typescript: typescript-language-server --stdio
+#   python:     pyright-langserver --stdio
+#   go:         gopls
+#
+# Each sub-table accepts three keys, all optional:
+#
+#   command = "<string>"       — replaces the language's default binary.
+#   args    = ["<string>", ...] — replaces the language's default argv.
+#   enabled = <bool>            — default true.
+#
+# `command` and `args` apply independently: setting only `args` keeps the
+# default `command` and uses your args instead (e.g. adding a flag to the
+# stock server); setting only `command` keeps the default `args` (the
+# common case when `command` points at a wrapper script that just execs
+# the real server and forwards whatever argv it was given). Set both to
+# fully replace the invocation.
+#
+# `enabled = false` removes that language from the effective server table
+# entirely — `gd`/`gr`/`K` degrade for that language exactly as they do
+# today for any language with no configured server at all: silently, with
+# the same "no code intelligence here" footer message, never an error.
+# This is also what happens if a *configured* command is missing or fails
+# to start — config errors here (wrong type, e.g. `args` not a list of
+# strings) are the only thing that produces a warning; a bad binary path
+# degrades silently like any other missing server.
+#
+# Example: point Rust at a logging wrapper that execs the real
+# rust-analyzer, and turn Go's server off entirely.
+#
+# [lsp.rust]
+# command = "/home/me/bin/rust-analyzer-wrapper"
+#
+# [lsp.go]
+# enabled = false
+#
+# Every other key inside an `[lsp.<lang>]` table beyond `command`/`args`/
+# `enabled`, and every language name beyond the four above, is an unknown
+# key/section — collected as a warning, ignored, and every other valid
+# setting in the file still applies.
+
+# -----------------------------------------------------------------------
+# [keys.diff] / [keys.panel] — remap the main keymap (spec 07 Unit 4)
+# -----------------------------------------------------------------------
+#
+# Every binding in the main keymap (the diff view's Normal/Visual-mode keys,
+# and the git panel's own keys once it holds focus) is remappable, one
+# table per scope: `[keys.diff]` and `[keys.panel]`. Every modal mode (the
+# staging panel, the branch/worktree switcher, the fuzzy finder, Compose,
+# and so on) has its own `[keys.<mode>]` table with the identical grammar
+# and merge semantics — see the "[keys.<mode>] — remap modal panels" section
+# further down for the complete list of modes and actions.
+#
+# Each entry is `action-name = "<key>"` or `action-name = ["<key>", ...]`.
+# Action names are the kebab-case names listed below — the complete set
+# this build understands, one line per name, each showing its *default* key
+# so you can see what you'd be changing.
+#
+# Key-string grammar: one physical key is `[modifier-]*name`, where
+# `modifier` is `ctrl`/`alt`/`shift` (case-insensitive, any number may
+# stack) and `name` is a single character (`"a"`, `"?"`, `"$"`) or one of:
+# `esc`, `enter`, `tab`, `space`, `backspace`, `delete`, `home`, `end`,
+# `pageup`, `pagedown`, `up`, `down`, `left`, `right`, `insert`, `f1`..`f24`.
+# Examples: `"a"`, `"ctrl-k"`, `"alt-enter"`, `"shift-tab"`, `"f5"`, `"esc"`.
+# A two-key sequence (like the built-in `gd`/`za`) is written space-
+# separated: `"g d"`. Three or more chords is rejected.
+#
+# Merge semantics: naming an action gives it *exactly* the listed keys —
+# its default keys are replaced, not appended to. An action left unnamed
+# keeps its defaults untouched. An empty array (`= []`) unbinds the action
+# entirely. If your key collides with another binding already in the same
+# scope, your binding wins and the colliding one is dropped — a warning
+# names the collision so you know it happened. An unrecognized action name,
+# or a key string that doesn't parse, is an invalid value: that one entry
+# is ignored (with a warning) and every other setting in the file still
+# applies.
+#
+# Example: J jumps to the next file (replacing Tab), quit accepts either
+# `q` or Ctrl-c, and the fold/unfold gesture is unbound entirely.
+#
+# [keys.diff]
+# next-file = "J"
+# quit = ["q", "ctrl-c"]
+# toggle-collapse = []
+#
+# The complete `[keys.diff]` action-name list (default key(s) in the
+# comment; `?`/`Esc` both toggle help, `Q`/`Ctrl-c` both quit-discard):
+#
+# compose = "c"                       # Comment on line/hunk/file (or visual selection)
+# cursor-down = "j"                   # Move cursor down
+# cursor-up = "k"                     # Move cursor up
+# cursor-left = "h"                   # Move column cursor left
+# cursor-right = "l"                  # Move column cursor right
+# cursor-line-start = "0"             # Move column cursor to start of line
+# cursor-line-end = "$"               # Move column cursor to end of line
+# word-forward = "w"                  # Jump column cursor to next word
+# word-backward = "b"                 # Jump column cursor to previous word
+# half-page-down = "ctrl-d"           # Scroll half page down
+# half-page-up = "ctrl-u"             # Scroll half page up
+# full-page-down = "ctrl-f"           # Scroll full page down
+# full-page-up = "ctrl-b"             # Scroll full page up
+# jump-to-top = "g g"                 # Jump to top of diff
+# jump-to-bottom = "G"                # Jump to bottom of diff
+# next-hunk = "]"                     # Next hunk
+# prev-hunk = "["                     # Previous hunk
+# next-file = "tab"                   # Next file section
+# prev-file = "shift-tab"             # Previous file section
+# toggle-collapse = "z a"             # Collapse/expand file section
+# recenter-cursor = "z z"             # Center viewport on cursor
+# scroll-cursor-top = "z t"           # Scroll cursor to top of viewport
+# scroll-cursor-bottom = "z b"        # Scroll cursor to bottom of viewport
+# toggle-help = "?"                   # Toggle help (also bound to "esc")
+# enter-visual = "v"                  # Enter visual selection / cancel
+# toggle-list = "a"                   # Toggle annotation list panel
+# toggle-stage = "space"              # Stage/unstage hunk (lines in visual mode)
+# stage-file = "S"                    # Stage/unstage file under cursor
+# toggle-staging-panel = "s"          # Toggle staging panel
+# focus-git-panel = "`"               # Open git panel
+# toggle-command-log = "@"            # Toggle command log pane
+# dismiss-config-warning = "!"        # Dismiss config warning notice
+# refresh = "R"                       # Refresh diff from working tree
+# search = "/"                        # Search
+# search-next = "n"                   # Next search match
+# search-prev = "N"                   # Previous search match
+# search-word-forward = "*"           # Search word under cursor, next occurrence
+# search-word-backward = "#"          # Search word under cursor, previous occurrence
+# goto-definition = "g d"             # Go to definition
+# goto-references = "g r"             # Find references
+# open-file-finder = "g p"            # Open fuzzy file finder
+# open-project-search = "g /"         # Open project search
+# open-editor = "g space"             # Open file at cursor in editor
+# hover = "K"                         # Hover docs
+# quit = "q"                          # Quit and emit annotations
+# quit-discard = ["Q", "ctrl-c"]      # Quit and discard annotations
+#
+# The complete `[keys.panel]` action-name list (resolved only while the git
+# panel holds focus, after "`"/focus-git-panel):
+#
+# [keys.panel]
+# panel-cursor-down = "j"             # Move panel cursor down
+# panel-cursor-up = "k"               # Move panel cursor up
+# panel-select = "enter"              # Focus diff on this file (History tab: open the commit)
+# toggle-panel-tab = "tab"            # Switch Changes / History tab
+# remote-fetch = "f"                  # Fetch from remote
+# remote-pull = "p"                   # Pull from remote
+# remote-push = "P"                   # Push to remote (publishes an unpublished branch)
+# commit-staged = "c"                 # Commit staged changes
+# open-switcher = "b"                 # Open branch/worktree switcher
+# focus-git-panel = "`"               # Close git panel
+# toggle-help = "?"                   # Toggle help
+# toggle-command-log = "@"            # Toggle command log pane
+# dismiss-config-warning = "!"        # Dismiss config warning notice
+# quit = "q"                          # Quit and emit annotations
+# quit-discard = ["Q", "ctrl-c"]      # Quit and discard annotations
+
+# -----------------------------------------------------------------------
+# [keys.<mode>] — remap modal panels (spec 07 Unit 4 task 5.0)
+# -----------------------------------------------------------------------
+#
+# Every modal mode — a mode that handles its own keys directly instead of
+# going through the main keymap (the annotation list, the staging panel,
+# the LSP peek overlay, the branch/worktree switcher, the help overlay's
+# scroll keys and its own `/` filter, Compose, the commit-message modal,
+# the diff-view `/` search input, the fuzzy file finder, and the two
+# Project Search focuses) — has its own `[keys.<mode>]` table, with the
+# identical grammar and merge semantics as `[keys.diff]`/`[keys.panel]`
+# above: `action-name = "<key>"` or `= ["<key>", ...]`, an override
+# replaces that action's default keys entirely, an unlisted action keeps
+# its defaults, `= []` unbinds it, and a same-table collision is won by
+# the override (with a warning).
+#
+# Free-text modes (Compose, the commit-message modal, Search, Finder, and
+# both Project Search focuses) type printable characters into a buffer or
+# query — that character insertion is never an action and can't be bound;
+# only the *control* keys listed below (Enter/Esc/arrows/Backspace/...)
+# are actions.
+#
+# The twelve mode names and their complete action lists, each showing its
+# default key(s):
+#
+# [keys.list]                          # Annotation list panel (`a`)
+# move-down = "j"                      # Move focus down
+# move-up = "k"                        # Move focus up
+# jump = "enter"                       # Jump to annotation
+# edit = "e"                           # Edit
+# delete = "d"                         # Delete
+# close = ["a", "esc"]                 # Close panel
+#
+# [keys.staging]                       # Staging panel (`s`)
+# move-down = "j"                      # Move focus down
+# move-up = "k"                        # Move focus up
+# unstage = ["space", "enter"]         # Unstage file
+# close = ["s", "esc"]                 # Close panel
+#
+# [keys.peek]                          # LSP peek overlay (`gd`/`gr`/`K`)
+# move-down = "j"                      # Move selection / scroll hover down
+# move-up = "k"                        # Move selection / scroll hover up
+# enter = "enter"                      # Jump to location (definition/references)
+# close = "esc"                        # Close
+#
+# [keys.switcher]                      # Branch/worktree switcher (`b`, panel scope)
+# toggle-tab = ["tab", "shift-tab", "h", "l", "left", "right"]  # Switch tab
+# move-down = ["j", "down"]             # Move selection down
+# move-up = ["k", "up"]                 # Move selection up
+# confirm = "enter"                    # Switch to the selected branch/worktree
+# close = "esc"                        # Close
+#
+# [keys.help]                          # Help overlay scroll/close/filter-open keys
+# close = ["esc", "enter", "?"]         # Close help
+# scroll-down = ["j", "down"]           # Scroll down
+# scroll-up = ["k", "up"]               # Scroll up
+# page-down = "pagedown"               # Page down
+# page-up = "pageup"                   # Page up
+# top = ["g", "home"]                   # Scroll to top
+# bottom = ["G", "end"]                 # Scroll to bottom
+# search = "/"                         # Filter keybinds
+#
+# [keys.help-search]                   # Help overlay's own `/` filter, while editing it
+# lock = "enter"                       # Lock in the filter (scroll keys resume)
+# clear = "esc"                        # Clear the filter
+# delete-char = "backspace"            # Delete character
+#
+# [keys.compose]                       # Comment modal (`c` / visual `c`)
+# submit = "enter"                     # Submit
+# cancel = "esc"                       # Cancel
+# newline = ["shift-enter", "ctrl-j"]   # Insert newline (Shift-Enter needs a kitty-capable terminal)
+# cycle-classification = "ctrl-t"      # Cycle classification
+# move-left = "left"                   # Move cursor left
+# move-right = "right"                 # Move cursor right
+# move-up = "up"                       # Move cursor up
+# move-down = "down"                   # Move cursor down
+# word-left = ["ctrl-left", "alt-left", "alt-b"]    # Move word left
+# word-right = ["ctrl-right", "alt-right", "alt-f"]  # Move word right
+# line-start = ["home", "ctrl-a"]       # Move to line start
+# line-end = ["end", "ctrl-e"]          # Move to line end
+# doc-start = "ctrl-home"              # Move to document start
+# doc-end = "ctrl-end"                 # Move to document end
+# delete-back = "backspace"            # Delete character before the cursor
+# delete-forward = "delete"            # Delete character at the cursor
+# delete-word-back = ["ctrl-backspace", "alt-backspace", "ctrl-w", "ctrl-h"]  # Delete word before the cursor
+# delete-word-forward = ["ctrl-delete", "alt-d"]     # Delete word at the cursor
+#
+# [keys.commit-message]                # Commit-message modal (`c`, git panel, spec 04)
+# submit = "enter"                     # Commit staged changes with this message
+# cancel = "esc"                       # Cancel back to the git panel
+# newline = ["shift-enter", "ctrl-j"]   # Insert newline / body line
+# move-left = "left"                   # Move cursor left
+# move-right = "right"                 # Move cursor right
+# move-up = "up"                       # Move cursor up
+# move-down = "down"                   # Move cursor down
+# word-left = ["ctrl-left", "alt-left", "alt-b"]    # Move word left
+# word-right = ["ctrl-right", "alt-right", "alt-f"]  # Move word right
+# line-start = ["home", "ctrl-a"]       # Move to line start
+# line-end = ["end", "ctrl-e"]          # Move to line end
+# doc-start = "ctrl-home"              # Move to document start
+# doc-end = "ctrl-end"                 # Move to document end
+# delete-back = "backspace"            # Delete character before the cursor
+# delete-forward = "delete"            # Delete character at the cursor
+# delete-word-back = ["ctrl-backspace", "alt-backspace", "ctrl-w", "ctrl-h"]  # Delete word before the cursor
+# delete-word-forward = ["ctrl-delete", "alt-d"]     # Delete word at the cursor
+#
+# [keys.search]                        # Diff-view `/` search input
+# confirm = "enter"                    # Confirm search
+# cancel = "esc"                       # Cancel (clears pattern if buffer empty)
+# delete-char = "backspace"            # Delete character
+#
+# [keys.finder]                        # Fuzzy file finder overlay (`gp`, spec 06 Unit 1)
+# move-up = "up"                       # Move selection up
+# move-down = "down"                   # Move selection down
+# open = "enter"                       # Open the selected file (read-only whole-file view)
+# close = "esc"                        # Close (returns to the prior view unchanged)
+# delete-char = "backspace"            # Delete character
+#
+# [keys.project-search-input]          # Project Search (`g/`, spec 06 Unit 2), input focused
+# move-up = "up"                       # Move result selection up
+# move-down = "down"                   # Move result selection down
+# open = "enter"                       # Open the selected result
+# focus-results = "esc"                # Move focus to the results list (view stays open)
+# toggle-focus = "tab"                 # Toggle focus between input and results
+# delete-char = "backspace"            # Delete character
+# toggle-case = "alt-c"                # Cycle case sensitivity (smart / sensitive / insensitive)
+# toggle-whole-word = "alt-w"          # Toggle whole-word matching
+# toggle-literal = "alt-r"             # Toggle regex / literal matching
+#
+# [keys.project-search-results]        # Project Search, results focused
+# edit-query = "/"                     # Edit query (focus input; query preserved)
+# close = "esc"                        # Close (returns to the exact prior diff position)
+# move-up = ["k", "up"]                 # Move result selection up
+# move-down = ["j", "down"]             # Move result selection down
+# open = "enter"                       # Open the selected result
+# toggle-focus = "tab"                 # Toggle focus between input and results
+# toggle-case = "alt-c"                # Cycle case sensitivity (smart / sensitive / insensitive)
+# toggle-whole-word = "alt-w"          # Toggle whole-word matching
+# toggle-literal = "alt-r"             # Toggle regex / literal matching
+#
+# Example: remap the staging panel's unstage key to `x` and the switcher's
+# confirm key to `l` (also still one of ToggleTab's defaults, so this would
+# collide in a real config — shown separately here for two independent,
+# non-colliding one-line examples):
+#
+# [keys.staging]
+# unstage = "x"
+#
+# [keys.switcher]
+# confirm = "y"

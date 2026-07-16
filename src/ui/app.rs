@@ -12,6 +12,7 @@ use crate::annotate::{AnnotationStore, Source, Target};
 // import in the production build.
 #[cfg(test)]
 use crate::annotate::Side;
+use crate::config::{Config, ConfigWarning};
 use crate::diff::FileDiff;
 use crate::git::{
     BranchStatus, CommitLogEntry, CommitSummary, DiffTarget, RawFilePatch, RemoteOp, StagingMode,
@@ -25,6 +26,7 @@ use super::command_log::{CommandLog, CommandLogEntry};
 use super::commit_message::CommitMessageState;
 use super::compose::ComposeState;
 use super::diff_view_state::DiffViewState;
+use super::editor::EditorLaunch;
 use super::file_finder::{FinderState, InFlightFinderLoad};
 use super::history::InFlightHistory;
 use super::keymap::Action;
@@ -206,19 +208,43 @@ pub struct App {
     /// A transient one-line message for the status footer (errors, no-op
     /// explanations, success echoes). Cleared on the next keypress.
     pub status_message: Option<String>,
+    /// The config loaded once at startup (`docs/specs/07-spec-config-layer`,
+    /// Unit 1: `[layout]`/`[search]` so far), via [`App::set_config`].
+    /// Defaults to [`Config::default()`] — today's shipped behavior — for
+    /// every `App` built without that call (every pre-existing unit test).
+    pub config: Config,
+    /// Problems encountered loading `config`, shown in the dismissible
+    /// status-line notice (see [`App::config_warning_notice`]) and never
+    /// printed to stdout (stdout is reserved for the annotation markdown).
+    pub config_warnings: Vec<ConfigWarning>,
+    /// Whether the user has dismissed the config-warning notice this
+    /// session (`!`, [`Action::DismissConfigWarning`]). Config loads exactly
+    /// once at startup, so this never needs to reset mid-session.
+    pub config_warning_dismissed: bool,
+    /// Every modal mode's effective key table — [`super::modal_keys`]'s
+    /// compiled-in defaults with `[keys.<mode>]` config overrides already
+    /// applied (spec 07 Unit 4 task 5.3/5.4), built exactly once via
+    /// [`App::set_modal_keys`] alongside the main keymap in [`super::run`].
+    /// Defaults to [`super::modal_keys::ModalKeymaps::default`] (the
+    /// unmodified compiled-in tables) for every `App` built without that
+    /// call, matching `config`'s own default-to-shipped-behavior contract.
+    pub(super) modal_keys: super::modal_keys::ModalKeymaps,
     /// The git backend staging and refresh run through. `None` in
     /// git-less contexts (e.g. pure-navigation unit tests), where staging
     /// degrades to a footer message.
     pub(super) stage_ops: Option<Box<dyn StageOps>>,
     /// The color palette every renderer routes through.
     pub theme: Theme,
-    /// The editor `g<Space>` suspends the TUI to open, e.g. `"nvim"` or
-    /// `"code --wait"`. Resolved once in `main` via `resolve_editor`'s
-    /// precedence (the `--editor` flag, then `$VISUAL`, then `$EDITOR`, then
-    /// `"nvim"`) and set via [`App::set_editor`]; defaults to `"nvim"` here
-    /// so pure-navigation unit tests that build an `App` directly (bypassing
-    /// `main`'s resolution) still have a usable default.
-    pub editor: String,
+    /// The editor `g<Space>` suspends the TUI to open: either a
+    /// `[editor]`-config template (`EditorLaunch::Template`, e.g. from
+    /// `preset = "zed"`) or a plain command (`EditorLaunch::Command`, e.g.
+    /// `"nvim"` or `"code --wait"`). Resolved once in `main` via
+    /// `resolve_editor`'s five-tier precedence (`--editor` flag > `[editor]`
+    /// config > `$VISUAL` > `$EDITOR` > `"nvim"`) and set via
+    /// [`App::set_editor`]; defaults to [`EditorLaunch::default`] (today's
+    /// `"nvim"` fallback) so pure-navigation unit tests that build an `App`
+    /// directly (bypassing `main`'s resolution) still have a usable default.
+    pub editor: EditorLaunch,
     /// The tree-sitter highlighting engine. Owned here so its per-language
     /// config cache persists across selections. `pub(super)` for the
     /// code-intelligence module's peek-preview highlighting.
@@ -464,9 +490,13 @@ impl App {
             staged_states: HashMap::new(),
             staging_cursor: 0,
             status_message: None,
+            config: Config::default(),
+            config_warnings: Vec::new(),
+            config_warning_dismissed: false,
+            modal_keys: super::modal_keys::ModalKeymaps::default(),
             stage_ops: None,
             theme: Theme::default(),
-            editor: "nvim".into(),
+            editor: EditorLaunch::default(),
             highlighter: Highlighter::new(),
             highlight_cache: HighlightCache::default(),
             search: SearchState::default(),
@@ -573,9 +603,9 @@ impl App {
     }
 
     /// Sets the editor `g<Space>` opens (resolved by `main` per
-    /// `resolve_editor`'s precedence: the `--editor` flag, then `$VISUAL`,
-    /// then `$EDITOR`, then `"nvim"`).
-    pub fn set_editor(&mut self, editor: String) {
+    /// `resolve_editor`'s five-tier precedence: the `--editor` flag,
+    /// `[editor]` config, then `$VISUAL`, then `$EDITOR`, then `"nvim"`).
+    pub fn set_editor(&mut self, editor: EditorLaunch) {
         self.editor = editor;
     }
 
@@ -611,6 +641,48 @@ impl App {
     /// outside one simply never call `finish_review`.
     pub fn set_review_origin_ops(&mut self, ops: Box<dyn StageOps>) {
         self.review_origin_ops = Some(ops);
+    }
+
+    /// Sets the loaded config and any warnings collected while loading it
+    /// (`main`'s one-shot call, before the first render — see
+    /// `crate::config::load`; there is no reload path). `config.search`
+    /// seeds the *next* Project Search session's startup toggles (see
+    /// [`super::project_search::ProjectSearchState::seeded`]); an
+    /// already-open session is untouched, per the FR.
+    pub fn set_config(&mut self, config: Config, warnings: Vec<ConfigWarning>) {
+        self.config = config;
+        self.config_warnings = warnings;
+        self.config_warning_dismissed = false;
+    }
+
+    /// Dismisses the config-warning notice (`!`,
+    /// [`Action::DismissConfigWarning`]). A no-op once already dismissed or
+    /// when there was nothing to show.
+    pub fn dismiss_config_warning(&mut self) {
+        self.config_warning_dismissed = true;
+    }
+
+    /// Whether the config-warning notice should currently render: at least
+    /// one warning was collected and the user hasn't dismissed it this
+    /// session.
+    pub fn config_warning_visible(&self) -> bool {
+        !self.config_warning_dismissed && !self.config_warnings.is_empty()
+    }
+
+    /// The notice text for the status line: the first warning's message,
+    /// plus `"(and N more)"` when there is more than one. `None` when
+    /// [`App::config_warning_visible`] is `false`.
+    pub fn config_warning_notice(&self) -> Option<String> {
+        if !self.config_warning_visible() {
+            return None;
+        }
+        let first = self.config_warnings.first()?;
+        let rest = self.config_warnings.len() - 1;
+        Some(if rest > 0 {
+            format!("config: {first} (and {rest} more)")
+        } else {
+            format!("config: {first}")
+        })
     }
 
     /// Whether a keyboard-capturing overlay is currently up: the help overlay
@@ -747,6 +819,7 @@ impl App {
             Action::OpenProjectSearch => self.open_project_search(),
             Action::ToggleCommandLog => self.toggle_command_log(),
             Action::Refresh => self.manual_refresh(),
+            Action::DismissConfigWarning => self.dismiss_config_warning(),
             // `Quit`/`QuitDiscard` end the session; `OpenEditor` suspends the
             // TUI to spawn the configured editor. Both are intercepted by
             // `super::dispatch_key` before reaching here (see `Action::Quit`'s

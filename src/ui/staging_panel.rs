@@ -10,6 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 use super::app::App;
+use super::keymap::{Action, Keymap, Scope};
 use super::stage_ops::StagedFile;
 use super::theme::Theme;
 
@@ -26,13 +27,20 @@ fn item_line(entry: &StagedFile, theme: &Theme) -> Line<'static> {
 }
 
 /// Renders the staging panel into `area`. An empty staged list renders a
-/// hint line instead of an empty list.
-pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+/// hint line instead of an empty list; the hint's key is resolved from
+/// `keymap` (diff scope, [`Action::ToggleStage`]) rather than hardcoded, so
+/// a `[keys.diff]` remap can't leave this text naming a stale key (spec 07
+/// Unit 4, task 4.6) — an unbound action falls back to generic wording
+/// rather than showing no key at all.
+pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
     let block = Block::default().borders(Borders::ALL).title("staged");
 
     if app.staged.is_empty() {
-        let hint =
-            Paragraph::new("nothing staged yet — press space on a hunk to stage it").block(block);
+        let text = match keymap.label_for(Scope::Diff, Action::ToggleStage) {
+            Some(key) => format!("nothing staged yet — press {key} on a hunk to stage it"),
+            None => "nothing staged yet".to_string(),
+        };
+        let hint = Paragraph::new(text).block(block);
         frame.render_widget(hint, area);
         return;
     }

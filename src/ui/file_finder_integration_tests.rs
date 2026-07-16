@@ -247,6 +247,7 @@ fn file_view_hides_and_disarms_staging_and_code_intel_keys() {
         },
         None,
         &keymap,
+        &app.modal_keys,
     );
     assert!(
         !entries.iter().any(|e| e.label.contains("stage")),

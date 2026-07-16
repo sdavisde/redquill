@@ -30,11 +30,7 @@ use ratatui::widgets::{
 };
 
 use super::keymap::{Action, Binding, Keymap, Scope};
-use super::modal_keys::{
-    COMMIT_MESSAGE_HINTS, COMPOSE_HINTS, END_REVIEW_KEYS, FINDER_HINTS, HELP_SEARCH_HINTS,
-    LIST_KEYS, ModalBinding, PEEK_KEYS, PROJECT_SEARCH_INPUT_HINTS, PROJECT_SEARCH_RESULTS_HINTS,
-    SEARCH_HINTS, STAGING_KEYS, SWITCHER_KEYS,
-};
+use super::modal_keys::{ModalBinding, ModalKeymaps};
 use super::search;
 use super::theme::Theme;
 
@@ -64,7 +60,7 @@ fn group_of(action: Action) -> &'static str {
         ToggleStage | StageFile | ToggleStagingPanel => "Stage",
         Search | SearchNext | SearchPrev | SearchWordForward | SearchWordBackward => "Search",
         ToggleList | ToggleHelp | FocusGitPanel | ToggleCommandLog | Refresh | OpenFileFinder
-        | OpenProjectSearch | OpenEditor => "Panels",
+        | OpenProjectSearch | OpenEditor | DismissConfigWarning => "Panels",
         GotoDefinition | GotoReferences | Hover => "Code intelligence",
         PanelCursorDown | PanelCursorUp | PanelSelect | TogglePanelTab | RemoteFetch
         | RemotePull | RemotePush | CommitStaged | OpenSwitcher => "Git panel",
@@ -137,43 +133,52 @@ pub(super) fn binding_hidden(
 /// Flattens a per-mode key table (see [`super::modal_keys`]) into the
 /// `(key label, description)` rows the overlay prints — the erased view that
 /// lets tables with different per-mode action types share one render loop.
-fn modal_hints<A>(table: &'static [ModalBinding<A>]) -> Vec<(&'static str, &'static str)> {
-    table.iter().map(|b| (b.label, b.description)).collect()
+/// Takes the *effective* table (`app.modal_keys.*`, spec 07 Unit 4 task 5.4),
+/// not the compiled-in `'static` default, so a config remap shows up here
+/// with no additional wiring.
+fn modal_hints<A: Clone>(table: &[ModalBinding<A>]) -> Vec<(String, &'static str)> {
+    table
+        .iter()
+        .map(|b| (b.key_label(), b.description))
+        .collect()
 }
 
 /// The modal-mode hint sections, in render order: each mode's section title
 /// paired with the rows of its shared key table. The same tables drive the
 /// modal handlers' dispatch, so the overlay can't document keys the handlers
 /// don't accept (and vice versa — the `modal_keys` cross-check test pins the
-/// handler side). `HELP_SEARCH_HINTS` (the overlay's own `/` filter, a
-/// free-text input like Compose/Search) gets a section here for the same
-/// reason those do; `HELP_KEYS` doesn't, since it's the enum-dispatch table
-/// for the overlay's own scroll/close keys, already documented on the footer.
-fn modal_sections() -> [(&'static str, Vec<(&'static str, &'static str)>); 12] {
+/// handler side). `help-search` (the overlay's own `/` filter, a free-text
+/// input like Compose/Search) gets a section here for the same reason those
+/// do; `help` doesn't, since it's the enum-dispatch table for the overlay's
+/// own scroll/close keys, already documented on the footer.
+fn modal_sections(modal_keys: &ModalKeymaps) -> [(&'static str, Vec<(String, &'static str)>); 12] {
     [
-        ("Compose mode", modal_hints(COMPOSE_HINTS)),
-        ("List mode", modal_hints(LIST_KEYS)),
-        ("Staging panel", modal_hints(STAGING_KEYS)),
-        ("Search input", modal_hints(SEARCH_HINTS)),
-        ("Peek mode", modal_hints(PEEK_KEYS)),
-        ("Branch/worktree switcher", modal_hints(SWITCHER_KEYS)),
+        ("Compose mode", modal_hints(&modal_keys.compose)),
+        ("List mode", modal_hints(&modal_keys.list)),
+        ("Staging panel", modal_hints(&modal_keys.staging)),
+        ("Search input", modal_hints(&modal_keys.search)),
+        ("Peek mode", modal_hints(&modal_keys.peek)),
+        (
+            "Branch/worktree switcher",
+            modal_hints(&modal_keys.switcher),
+        ),
         (
             "Commit message (c, git panel)",
-            modal_hints(COMMIT_MESSAGE_HINTS),
+            modal_hints(&modal_keys.commit_message),
         ),
-        ("Help filter (/)", modal_hints(HELP_SEARCH_HINTS)),
-        ("Fuzzy file finder (gp)", modal_hints(FINDER_HINTS)),
+        ("Help filter (/)", modal_hints(&modal_keys.help_search)),
+        ("Fuzzy file finder (gp)", modal_hints(&modal_keys.finder)),
         (
             "Project search — input focus (g/)",
-            modal_hints(PROJECT_SEARCH_INPUT_HINTS),
+            modal_hints(&modal_keys.project_search_input),
         ),
         (
             "Project search — results focus",
-            modal_hints(PROJECT_SEARCH_RESULTS_HINTS),
+            modal_hints(&modal_keys.project_search_results),
         ),
         (
             "End review modal (q, review session)",
-            modal_hints(END_REVIEW_KEYS),
+            modal_hints(&modal_keys.end_review),
         ),
     ]
 }
@@ -208,6 +213,15 @@ pub struct HelpViewState<'a> {
     pub search: Option<(&'a str, bool)>,
 }
 
+/// The two tables the overlay renders from, bundled to keep [`render`]'s
+/// argument count under clippy's `too_many_arguments` threshold: the main
+/// keymap and every modal mode's effective table (`app`'s post-`[keys.*]`
+/// -override tables, spec 07 Unit 4 task 5.4) are always passed together.
+pub struct HelpTables<'a> {
+    pub keymap: &'a Keymap,
+    pub modal_keys: &'a ModalKeymaps,
+}
+
 /// Renders the help overlay, centered over `area`. Bindings from the
 /// [`Keymap`] table are grouped Navigation / Annotate / Panels / Quit, with
 /// Compose-mode and List-mode hints appended below (those modes bypass the
@@ -222,7 +236,7 @@ pub struct HelpViewState<'a> {
 pub fn render(
     frame: &mut Frame,
     area: Rect,
-    keymap: &Keymap,
+    tables: &HelpTables,
     theme: &Theme,
     staging_allowed: bool,
     code_intel_allowed: bool,
@@ -234,8 +248,8 @@ pub fn render(
     let query = search.map_or("", |(q, _)| q);
     let editing = search.is_some_and(|(_, editing)| editing);
 
-    let sections = modal_sections();
-    let bindings = keymap.bindings();
+    let sections = modal_sections(tables.modal_keys);
+    let bindings = tables.keymap.bindings();
     // Column width is computed from the unfiltered rows, so it never jumps
     // around as the query narrows what's actually shown.
     let key_width = bindings
@@ -292,7 +306,7 @@ pub fn render(
             let hints: Vec<(&str, &str)> = hints
                 .iter()
                 .filter(|(k, d)| row_matches(k, d, query))
-                .copied()
+                .map(|(k, d)| (k.as_str(), *d))
                 .collect();
             (*title, hints)
         })
@@ -335,12 +349,19 @@ pub fn render(
     // Width: fit the widest content line (or the subtitle/footer), plus a
     // column for the scrollbar, plus borders and 1-col side padding. Capped
     // so it never spills off a narrow terminal and never grows absurdly wide.
+    // The cap grew from 92 to 130 (spec 07 Unit 4 task 5.3): modal-mode key
+    // labels are now computed from a row's actual `keys` (see
+    // `ModalBinding::key_label`) rather than a hand-tuned static string, so a
+    // row with several alternate encodings for one action (e.g. the switcher's
+    // `ToggleTab`, bound to `Tab`/`Shift-Tab`/`h`/`l`/`Left`/`Right`) can
+    // render a longer key column than the old curated text did; 130
+    // comfortably fits the current widest default row with room to spare.
     let content_w = lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16;
     let inner_w = content_w
         .max(subtitle.chars().count() as u16)
         .max(footer.chars().count() as u16)
         .saturating_add(1); // scrollbar gutter
-    let width = (inner_w + 4).min(area.width.saturating_sub(2)).min(92);
+    let width = (inner_w + 4).min(area.width.saturating_sub(2)).min(130);
 
     // Height: borders (2) + subtitle (1) + spacer (1) = 4 rows of chrome
     // around the list (the footer hint rides the bottom border, costing no
