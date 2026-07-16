@@ -77,6 +77,16 @@ pub struct Theme {
     /// their header row — stay visible against the diff buffer.
     pub file_header_bg: Color,
 
+    /// The review-session banner's background (spec 08 Unit 2): a dark red,
+    /// deliberately unlike any other chrome color in this palette, so the
+    /// banner reads as an unmistakable "you are in a review, not your own
+    /// working tree" signal. Paired with [`Theme::review_banner_fg`]; the
+    /// pairing's contrast is guarded by a drift test in this module.
+    pub review_banner_bg: Color,
+    /// The review-session banner's foreground: a light, high-contrast color
+    /// against [`Theme::review_banner_bg`].
+    pub review_banner_fg: Color,
+
     // -- Change-kind letters (sidebar file list + staging panel) --
     pub kind_added: Color,
     pub kind_deleted: Color,
@@ -140,6 +150,9 @@ impl Default for Theme {
             annotation_bg: Color::Rgb(24, 22, 32),
             annotation_accent: Color::Rgb(140, 120, 200),
             file_header_bg: Color::Rgb(20, 24, 28),
+
+            review_banner_bg: Color::Rgb(110, 10, 10),
+            review_banner_fg: Color::Rgb(255, 235, 235),
 
             kind_added: Color::Green,
             kind_deleted: Color::Red,
@@ -338,5 +351,36 @@ mod tests {
         for tint in [theme.added_bg, theme.removed_bg] {
             assert!(channel_sum(blend(theme.selected_row_bg, tint)) > channel_sum(tint));
         }
+    }
+
+    // -- Review banner contrast (spec 08 Unit 2) -----------------------------
+    //
+    // Written before `review_banner_bg`/`review_banner_fg` existed (TDD): the
+    // banner must read as an unmistakable, high-contrast "you're in a review"
+    // signal, so these guard both halves of that claim — the background
+    // reads as dark, and the foreground reads as far brighter than it.
+
+    #[test]
+    fn review_banner_bg_reads_as_dark() {
+        let theme = Theme::default();
+        assert!(
+            channel_sum(theme.review_banner_bg) < 300,
+            "banner background {:?} must read as dark",
+            theme.review_banner_bg
+        );
+    }
+
+    #[test]
+    fn review_banner_fg_is_far_brighter_than_its_background() {
+        let theme = Theme::default();
+        assert!(
+            channel_sum(theme.review_banner_fg) > 600,
+            "banner foreground {:?} must read as bright",
+            theme.review_banner_fg
+        );
+        assert!(
+            channel_sum(theme.review_banner_fg) > channel_sum(theme.review_banner_bg) + 400,
+            "banner foreground must stay high-contrast against its dark-red background"
+        );
     }
 }

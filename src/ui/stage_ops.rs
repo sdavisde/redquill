@@ -116,6 +116,21 @@ pub trait StageOps {
     fn worktree_list(&self) -> Result<Vec<WorktreeEntry>, GitError> {
         Err(GitError::Parse("worktree list unavailable".into()))
     }
+    /// Removes a managed review worktree (see [`GitRunner::worktree_remove`],
+    /// spec 08 Unit 2). Must be called through a backend rooted *outside*
+    /// the worktree being removed (see
+    /// [`super::app::App::review_origin_ops`]'s doc). The default errors,
+    /// mirroring [`StageOps::branch_list`].
+    fn worktree_remove(&self, path: &std::path::Path) -> Result<(), GitError> {
+        let _ = path;
+        Err(GitError::Parse("worktree remove unavailable".into()))
+    }
+    /// Prunes stale worktree administrative records (see
+    /// [`GitRunner::worktree_prune`], spec 08 Unit 2). The default errors,
+    /// mirroring [`StageOps::branch_list`].
+    fn worktree_prune(&self) -> Result<(), GitError> {
+        Err(GitError::Parse("worktree prune unavailable".into()))
+    }
     /// Switches the working tree to branch `name` (see
     /// [`GitRunner::switch_branch`]). The default errors, mirroring
     /// [`StageOps::branch_list`].
@@ -222,6 +237,14 @@ impl StageOps for GitRunner {
 
     fn worktree_list(&self) -> Result<Vec<WorktreeEntry>, GitError> {
         GitRunner::worktree_list(self)
+    }
+
+    fn worktree_remove(&self, path: &std::path::Path) -> Result<(), GitError> {
+        GitRunner::worktree_remove(self, path)
+    }
+
+    fn worktree_prune(&self) -> Result<(), GitError> {
+        GitRunner::worktree_prune(self)
     }
 
     fn switch_branch(&self, name: &str) -> Result<(), GitError> {

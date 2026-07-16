@@ -499,7 +499,8 @@ impl App {
             | Mode::Switcher
             | Mode::CommitMessage
             | Mode::Finder
-            | Mode::ProjectSearch => {}
+            | Mode::ProjectSearch
+            | Mode::EndReview { .. } => {}
             Mode::Normal | Mode::Visual { .. } => {
                 self.mode = Mode::Panel {
                     cursor: 0,

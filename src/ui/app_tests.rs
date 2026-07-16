@@ -584,6 +584,39 @@ fn submit_compose_with_body_adds_annotation_and_refreshes_rows() {
     ));
 }
 
+/// A review session's annotations map to `Source::Range("base...branch")`
+/// (spec 08 Unit 2 — see `App::annotation_source`'s doc), so they group
+/// under the existing `Reviewing: <spec>` metadata line unchanged. Pinned
+/// byte-exactly against the real stdout serializer (`render_markdown`),
+/// since no prior test exercised the three-dot review spec specifically
+/// (only a plain two-dot `Source::Range` was covered in
+/// `annotate::markdown`'s test module).
+#[test]
+fn a_review_sessions_annotation_groups_under_the_three_dot_reviewing_line() {
+    let mut app = App::new(vec![file("a.rs", 1)]);
+    app.target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+    app.apply(Action::Compose);
+    for c in "looks good".chars() {
+        app.compose.as_mut().unwrap().buffer.insert_char(c);
+    }
+    app.submit_compose();
+
+    let annotation = app.annotations.iter().next().unwrap();
+    assert_eq!(
+        annotation.source,
+        crate::annotate::Source::Range("main...feature".to_string())
+    );
+
+    let markdown = crate::annotate::render_markdown(&app.annotations);
+    assert_eq!(
+        markdown,
+        "Reviewing: main...feature\n\n## a.rs\n\n[issue] looks good\n"
+    );
+}
+
 #[test]
 fn submit_compose_with_empty_body_cancels_without_error() {
     let mut app = App::new(vec![file("a.rs", 1)]);

@@ -391,6 +391,60 @@ pub(super) const SWITCHER_KEYS: &[ModalBinding<SwitcherAction>] = &[
     },
 ];
 
+// -- End-review modal (spec 08 Unit 2) --------------------------------------
+
+/// What a key does in the end-review modal (`q` in a review session): the
+/// three exits, each labeled with its consequence in [`END_REVIEW_KEYS`]'s
+/// `description` rather than just "pause"/"finish" (per the spec's design
+/// note that the modal must name what happens to the worktree).
+#[derive(Clone, Copy)]
+pub(super) enum EndReviewAction {
+    /// Emit annotations and quit; the worktree and review state are kept.
+    Pause,
+    /// Emit annotations, remove the worktree (and, spec 08 Unit 4, delete
+    /// the persisted review-state entry), then quit. On removal failure the
+    /// modal closes with the git error surfaced instead of quitting.
+    Finish,
+    /// Close the modal and keep reviewing; nothing happens.
+    Cancel,
+}
+
+pub(super) const END_REVIEW_KEYS: &[ModalBinding<EndReviewAction>] = &[
+    ModalBinding {
+        label: "p",
+        description: "Pause — emit annotations, quit (keep worktree)",
+        keys: &[ModalKey::plain(KeyCode::Char('p'))],
+        action: EndReviewAction::Pause,
+        footer: Some(FooterHint {
+            rank: 1,
+            label: "pause",
+        }),
+    },
+    ModalBinding {
+        label: "f",
+        description: "Finish — emit annotations, remove worktree, quit",
+        keys: &[ModalKey::plain(KeyCode::Char('f'))],
+        action: EndReviewAction::Finish,
+        footer: Some(FooterHint {
+            rank: 2,
+            label: "finish",
+        }),
+    },
+    ModalBinding {
+        label: "c / Esc",
+        description: "Cancel — close this modal, keep reviewing",
+        keys: &[
+            ModalKey::plain(KeyCode::Char('c')),
+            ModalKey::plain(KeyCode::Esc),
+        ],
+        action: EndReviewAction::Cancel,
+        footer: Some(FooterHint {
+            rank: 3,
+            label: "cancel",
+        }),
+    },
+];
+
 // -- Fuzzy file finder (hint-only) -----------------------------------------
 
 /// Fuzzy file finder control keys (spec 06 Unit 1), for the help overlay and
@@ -1398,6 +1452,60 @@ index 111..222 100644
                         assert!(
                             matches!(app.mode, Mode::Panel { .. }),
                             "Switcher {label}: must close back to the panel"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// An `App` mid-review, with `Mode::EndReview` already open (`origin:
+    /// Normal`), so every end-review action has an observable effect.
+    fn end_review_app() -> App {
+        let mut app = app();
+        app.target = crate::git::DiffTarget::Review {
+            base: "main".to_string(),
+            branch: "feature".to_string(),
+        };
+        app.open_end_review_modal();
+        app
+    }
+
+    #[test]
+    fn every_end_review_table_entry_drives_its_documented_action() {
+        use crate::ui::{Flow, QuitOutcome, modes::handle_end_review_key};
+
+        for binding in END_REVIEW_KEYS {
+            for key in binding.keys {
+                let mut app = end_review_app();
+                let label = binding.label;
+                match binding.action {
+                    EndReviewAction::Pause => {
+                        let flow = handle_end_review_key(&mut app, key.event());
+                        assert!(
+                            matches!(flow, Flow::Quit(QuitOutcome::Emit)),
+                            "End review {label}: pause must quit emitting annotations"
+                        );
+                    }
+                    EndReviewAction::Finish => {
+                        // No `review_origin_ops` attached here (no git
+                        // backend in this fixture), so finish degrades to a
+                        // footer message and stays open rather than quitting
+                        // — still proving `f` reaches `App::finish_review`.
+                        let _ = handle_end_review_key(&mut app, key.event());
+                        assert_eq!(
+                            app.mode,
+                            Mode::Normal,
+                            "End review {label}: a failed finish closes back to the origin mode"
+                        );
+                        assert!(app.status_message.is_some());
+                    }
+                    EndReviewAction::Cancel => {
+                        let _ = handle_end_review_key(&mut app, key.event());
+                        assert_eq!(
+                            app.mode,
+                            Mode::Normal,
+                            "End review {label}: cancel returns to the origin mode"
                         );
                     }
                 }

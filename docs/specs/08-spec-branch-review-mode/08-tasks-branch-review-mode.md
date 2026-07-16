@@ -59,7 +59,7 @@ Covers: spec Unit 1 (CLI path), `DiffTarget::Review` variant, base resolution (`
 - [x] 1.6 Amend CLAUDE.md: product write ceiling gains `git worktree add <path> <branch>`, `git worktree remove <path>` (never `--force`), `git worktree prune`, with forced removal explicitly forbidden; agent ceiling unchanged; architecture map gains the `review/` module line (landed in 3.1 but documented once here).
 - [x] 1.7 Run gates; capture the transcripts + `gd` screenshot into `proofs/`; commit.
 
-### [ ] 2.0 Review banner and ending a review: `q` → pause or finish
+### [x] 2.0 Review banner and ending a review: `q` → pause or finish
 
 **User can verify:** while reviewing, a dark-red full-width banner reads `REVIEWING <branch> — q to end review`; pressing `q` opens a modal whose choices are labeled with consequences; **pause** quits with annotations on stdout and the worktree still present; **finish** quits with annotations on stdout and `git worktree list` no longer shows the worktree; `Q` quits instantly with nothing emitted; a deliberately dirtied worktree makes finish fail with a message instead of deleting anything. In a plain working-tree session, `q`/`Q` are byte-for-byte unchanged.
 
@@ -74,12 +74,12 @@ Covers: spec Unit 2 — banner + theme fields + contrast guard, layout accountin
 
 #### 2.0 Tasks
 
-- [ ] 2.1 TDD theme additions: write the contrast drift-guard assertions first (brightness-delta pattern already in `theme.rs`), then add `review_banner_bg` (dark red) and `review_banner_fg` (light) to `Theme` and its default.
-- [ ] 2.2 TDD a pure banner-content helper: `(branch, accepted, total, width) → line`, truncating the branch name first, never wrapping. Render as a `Constraint::Length(1)` top band in `draw()` **and** subtract the same row in the viewport-measurement mirror in `src/ui/mod.rs` — add a test or debug assertion that the two split computations agree when the banner is active.
-- [ ] 2.3 End-review modal: new `Mode` variant + handler in `modes.rs`, key table in `modal_keys.rs` (pause / finish / cancel, labels naming consequences: "keep worktree" / "remove worktree"), bidirectional drift test. In review mode `q` opens this modal instead of quitting; `Q` keeps its global instant-quit; outside review mode `q`/`Q` are untouched — pin that with an explicit regression test.
-- [ ] 2.4 Runner methods `worktree_remove(path)` (fixed argv, never `--force`) and `worktree_prune()` (TDD in tempdirs, isolation helper from 1.5). Wire finish = emit annotations (existing `Reviewing: <range>` grouping, zero format changes) → remove worktree → prune → quit; on removal failure surface git's message and stay in the session. Pause = emit + quit, touching nothing.
-- [ ] 2.5 Tempdir integration tests: pause leaves the worktree, finish removes it, `Q` emits nothing, dirty-worktree finish fails with the worktree and session intact.
-- [ ] 2.6 Footer + `?` overlay entries for the review-mode `q` meaning via the shared tables; run gates; capture banner screenshot + lifecycle transcripts into `proofs/`; commit.
+- [x] 2.1 TDD theme additions: write the contrast drift-guard assertions first (brightness-delta pattern already in `theme.rs`), then add `review_banner_bg` (dark red) and `review_banner_fg` (light) to `Theme` and its default.
+- [x] 2.2 TDD a pure banner-content helper: `(branch, accepted, total, width) → line`, truncating the branch name first, never wrapping. Render as a `Constraint::Length(1)` top band in `draw()` **and** subtract the same row in the viewport-measurement mirror in `src/ui/mod.rs` — add a test or debug assertion that the two split computations agree when the banner is active.
+- [x] 2.3 End-review modal: new `Mode` variant + handler in `modes.rs`, key table in `modal_keys.rs` (pause / finish / cancel, labels naming consequences: "keep worktree" / "remove worktree"), bidirectional drift test. In review mode `q` opens this modal instead of quitting; `Q` keeps its global instant-quit; outside review mode `q`/`Q` are untouched — pin that with an explicit regression test.
+- [x] 2.4 Runner methods `worktree_remove(path)` (fixed argv, never `--force`) and `worktree_prune()` (TDD in tempdirs, isolation helper from 1.5). Wire finish = emit annotations (existing `Reviewing: <range>` grouping, zero format changes) → remove worktree → prune → quit; on removal failure surface git's message and stay in the session. Pause = emit + quit, touching nothing.
+- [x] 2.5 Tempdir integration tests: pause leaves the worktree, finish removes it, `Q` emits nothing, dirty-worktree finish fails with the worktree and session intact.
+- [x] 2.6 Footer + `?` overlay entries for the review-mode `q` meaning via the shared tables; run gates; capture banner screenshot + lifecycle transcripts into `proofs/`; commit.
 
 ### [ ] 3.0 Accept / defer files while reviewing
 

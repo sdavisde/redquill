@@ -1581,6 +1581,140 @@ fn quit_family_quits_from_focused_panel() {
     }
 }
 
+// -- Review-session banner layout (spec 08 Unit 2) --------------------------
+
+/// `split_banner` reserves exactly one row at the top when shown, and is a
+/// pure passthrough when not — pinning the pure half of the split chain
+/// `draw` and the event loop's viewport-measurement mirror both run through.
+#[test]
+fn split_banner_reserves_exactly_one_row_when_shown() {
+    let area = Rect::new(0, 0, 100, 40);
+    let (banner, rest) = split_banner(area, true);
+    let banner = banner.expect("banner must render when shown");
+    assert_eq!(banner.height, 1);
+    assert_eq!(banner.y, 0);
+    assert_eq!(rest.y, 1);
+    assert_eq!(rest.height, 39);
+
+    let (banner_hidden, rest_hidden) = split_banner(area, false);
+    assert!(banner_hidden.is_none());
+    assert_eq!(rest_hidden, area);
+}
+
+/// `diff_pane_rect` — the shared function [`event_loop`]'s viewport
+/// measurement and `draw`'s own `debug_assert_eq!` both depend on — must
+/// shrink the diff pane by exactly the banner's one row during a review
+/// session, and leave it untouched otherwise. A wide fixed area keeps the
+/// footer strip at its 1-row floor for both targets, isolating the banner's
+/// effect from any unrelated width-driven footer wrapping.
+#[test]
+fn diff_pane_rect_shrinks_by_exactly_the_banner_row_during_a_review_session() {
+    let keymap = Keymap::default_map();
+    let full_area = Rect::new(0, 0, 200, 40);
+
+    let mut plain = App::new(vec![sample_file()]);
+    plain.target = DiffTarget::WorkingTree;
+    let plain_area = diff_pane_rect(full_area, &plain, &keymap, None);
+
+    let mut review = App::new(vec![sample_file()]);
+    review.target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+    let review_area = diff_pane_rect(full_area, &review, &keymap, None);
+
+    assert_eq!(
+        review_area.height + 1,
+        plain_area.height,
+        "a review session's banner row must be subtracted from the diff pane's height"
+    );
+    assert_eq!(review_area.y, plain_area.y + 1);
+    assert_eq!(review_area.x, plain_area.x);
+    assert_eq!(review_area.width, plain_area.width);
+}
+
+// -- `q`/`Q` review-mode lifecycle (spec 08 Unit 2) -------------------------
+
+/// Outside a review session, `q`/`Q` are byte-for-byte unchanged: `q` still
+/// quits emitting, `Q` still quits discarding — pinned as an explicit
+/// regression test against `quit_action`'s review-session branch.
+#[test]
+fn q_and_shift_q_are_unchanged_outside_a_review_session() {
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
+
+    let mut app = App::new(vec![sample_file()]);
+    match dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+    ) {
+        Flow::Quit(QuitOutcome::Emit) => {}
+        other => panic!("q outside a review session must quit emitting, got {other:?}"),
+    }
+
+    let mut app = App::new(vec![sample_file()]);
+    match dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::NONE),
+    ) {
+        Flow::Quit(QuitOutcome::Discard) => {}
+        other => panic!("Q outside a review session must quit discarding, got {other:?}"),
+    }
+}
+
+/// In a review session, `q` opens the end-review modal instead of quitting;
+/// `Q` keeps its global "quit immediately, emit nothing" meaning.
+#[test]
+fn q_opens_end_review_modal_and_shift_q_still_quits_instantly_in_a_review_session() {
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
+
+    let mut app = App::new(vec![sample_file()]);
+    app.target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+    match dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+    ) {
+        Flow::Continue => {}
+        other => panic!("q in a review session must not quit directly, got {other:?}"),
+    }
+    assert!(
+        matches!(app.mode, Mode::EndReview { .. }),
+        "q in a review session must open the end-review modal, got {:?}",
+        app.mode
+    );
+
+    let mut app = App::new(vec![sample_file()]);
+    app.target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+    match dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::NONE),
+    ) {
+        Flow::Quit(QuitOutcome::Discard) => {}
+        other => panic!("Q in a review session must still quit instantly, got {other:?}"),
+    }
+}
+
 // -- Branch/worktree switcher modal (spec 03, task 3.0) --------------------
 
 /// `b` resolves to `OpenSwitcher` only in panel scope, driven through the

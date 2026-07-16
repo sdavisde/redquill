@@ -27,6 +27,8 @@ mod compose_modal;
 mod diff_view;
 mod diff_view_state;
 mod editor;
+mod end_review;
+mod end_review_modal;
 mod file_finder;
 mod file_finder_modal;
 mod file_view;
@@ -45,6 +47,7 @@ mod project_search;
 mod project_search_view;
 mod refresh;
 mod render_glue;
+mod review_banner;
 mod rows;
 mod search;
 mod stage_ops;
@@ -172,6 +175,24 @@ fn split_right(area: Rect, show_panel: bool) -> (Rect, Option<Rect>) {
     (chunks[0], Some(chunks[1]))
 }
 
+/// Splits off the full-width, single-row review banner band (spec 08 Unit 2)
+/// from the top of `area` when `show_banner` is true (an active review
+/// session — see [`App::in_review_session`]), leaving the rest for
+/// everything else (footer, sidebar, diff pane). Mirrors [`split_footer`]'s
+/// `(Some/None, rest)` shape. This split runs in *both* [`draw`] and the
+/// event loop's viewport-measurement mirror — see that mirror's doc comment
+/// for why the two call sites must never disagree.
+fn split_banner(area: Rect, show_banner: bool) -> (Option<Rect>, Rect) {
+    if !show_banner {
+        return (None, area);
+    }
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(area);
+    (Some(chunks[0]), chunks[1])
+}
+
 /// Whether the current mode shows a bottom panel next frame.
 fn panel_open(mode: Mode) -> bool {
     matches!(mode, Mode::List | Mode::Staging)
@@ -186,6 +207,7 @@ fn bottom_open(app: &App) -> bool {
 }
 
 /// What the event loop should do after dispatching one key.
+#[derive(Debug)]
 enum Flow {
     /// Keep looping.
     Continue,
@@ -196,6 +218,22 @@ enum Flow {
     /// have already been resolved and guard-checked by
     /// [`resolve_editor_target`] by the time this variant is produced.
     OpenEditor { path: PathBuf, line: u32 },
+}
+
+/// What `Action::Quit` (`q`) does, shared by both interception sites
+/// (diff-scope [`dispatch_key`] and [`modes::handle_panel_key`]) so review
+/// mode's `q` can't drift between them (spec 08 Unit 2): during a review
+/// session it opens the end-review modal instead of quitting; otherwise it
+/// quits exactly as before, emitting annotations. `Action::QuitDiscard`
+/// (`Q`) is untouched by this — its global "quit immediately, emit nothing"
+/// meaning holds in every mode, review session or not.
+fn quit_action(app: &mut App) -> Flow {
+    if app.in_review_session() {
+        app.open_end_review_modal();
+        Flow::Continue
+    } else {
+        Flow::Quit(QuitOutcome::Emit)
+    }
 }
 
 /// The largest numeric prefix [`dispatch_key`]'s digit interception will
@@ -278,6 +316,7 @@ fn dispatch_key(
         Mode::CommitMessage => modes::handle_commit_message_key(app, key),
         Mode::Finder => modes::handle_finder_key(app, key),
         Mode::ProjectSearch => modes::handle_project_search_key(app, key),
+        Mode::EndReview { .. } => return modes::handle_end_review_key(app, key),
         Mode::Normal | Mode::Visual { .. } => {
             // While an overlay is open it captures keys — here that overlay
             // can only be the help overlay, since Compose and Peek have their
@@ -361,7 +400,7 @@ fn dispatch_key(
             };
             let count = pending_count.take();
             match action {
-                Action::Quit => return Flow::Quit(QuitOutcome::Emit),
+                Action::Quit => return quit_action(app),
                 Action::QuitDiscard => return Flow::Quit(QuitOutcome::Discard),
                 Action::OpenEditor => {
                     return match resolve_editor_target(app) {
@@ -514,6 +553,26 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// The diff pane's rect for `full_area`: the same split chain [`draw`] runs
+/// (banner, gated on [`App::in_review_session`] — [`split_banner`] — then
+/// [`footer::footer_height`]/[`split_footer`], [`split_layout`],
+/// [`split_right`]), reduced to just the one rect the event loop's
+/// viewport-measurement mirror needs. `draw` and [`event_loop`] both end up
+/// depending on this one function for the banner-aware measurement (`draw`
+/// via the `debug_assert_eq!` below, which fails fast in a debug build if its
+/// own inline chain ever drifts from this one), so the banner row can't be
+/// subtracted in one call site and forgotten in the other — exactly the
+/// failure mode this pair of call sites has needed a standing warning about
+/// (see the module doc's note on the mirror).
+fn diff_pane_rect(full_area: Rect, app: &App, keymap: &Keymap, pending: Option<KeyEvent>) -> Rect {
+    let (_, area) = split_banner(full_area, app.in_review_session());
+    let footer_h = footer::footer_height(area.width, app, keymap, pending);
+    let (main_area, _) = split_footer(area, footer_h);
+    let (_, right_area) = split_layout(main_area, app.git_panel_focused());
+    let (diff_area, _) = split_right(right_area, bottom_open(app));
+    diff_area
+}
+
 /// Draws one frame: git panel, diff pane, bottom panel (annotation list or
 /// staging panel, if open), status footer, help overlay (if open), and the
 /// Compose modal (if open). `pending` mirrors the event loop's pending
@@ -521,12 +580,26 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
 /// strip (`za`, `gd`/`gr`/...) matches what the next keystroke will actually
 /// resolve.
 fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<KeyEvent>) {
-    let area = frame.area();
+    let full_area = frame.area();
+    let (banner_area, area) = split_banner(full_area, app.in_review_session());
     let footer_h = footer::footer_height(area.width, app, keymap, pending);
     let (main_area, footer_area) = split_footer(area, footer_h);
     let (sidebar_area, right_area) = split_layout(main_area, app.git_panel_focused());
     let (diff_area, panel_area) = split_right(right_area, bottom_open(app));
+    debug_assert_eq!(
+        diff_area,
+        diff_pane_rect(full_area, app, keymap, pending),
+        "draw()'s inline split chain must agree with the event loop's \
+         viewport-measurement mirror (diff_pane_rect) — a review-session \
+         banner row subtracted in only one of the two would desync cursor/\
+         scroll math from what actually renders"
+    );
 
+    if let Some(banner_area) = banner_area {
+        let (accepted, total) = app.review_progress();
+        let branch = app.review_branch().unwrap_or_default();
+        review_banner::render(frame, banner_area, &app.theme, branch, accepted, total);
+    }
     if let Some(sidebar_area) = sidebar_area {
         git_panel::render(frame, sidebar_area, app);
     }
@@ -593,6 +666,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
                 viewing_commit: app.viewing_commit(),
                 help_open: app.help_open,
                 project_search_focus: app.project_search_focus(),
+                review_session: app.in_review_session(),
             },
             pending,
             keymap,
@@ -636,6 +710,9 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     }
     if matches!(app.mode, Mode::Finder) {
         file_finder_modal::render(frame, area, app);
+    }
+    if matches!(app.mode, Mode::EndReview { .. }) {
+        end_review_modal::render(frame, area, app);
     }
 }
 
@@ -739,14 +816,13 @@ fn event_loop(
     loop {
         let size = terminal.size()?;
         let full_area = Rect::new(0, 0, size.width, size.height);
-        // Mirrors `draw`'s own `footer::footer_height` call so the viewport
-        // height measured here for the diff pane matches what actually
-        // renders this frame (same `app`/`pending` state, same computation —
-        // see `footer::footer_height`'s doc comment).
-        let footer_h = footer::footer_height(full_area.width, app, keymap, pending_prefix);
-        let (main_area, _) = split_footer(full_area, footer_h);
-        let (_, right_area) = split_layout(main_area, app.git_panel_focused());
-        let (diff_area, _) = split_right(right_area, bottom_open(app));
+        // Delegates to `diff_pane_rect` — the same split chain `draw` itself
+        // runs — so the viewport height measured here for the diff pane
+        // matches what actually renders this frame (same `app`/`pending`
+        // state, same computation). See `diff_pane_rect`'s doc for why this
+        // indirection exists rather than each site re-deriving the splits
+        // inline.
+        let diff_area = diff_pane_rect(full_area, app, keymap, pending_prefix);
         app.view.set_viewport_height(diff_view::viewport_height(
             diff_area,
             app.active_commit.is_some(),

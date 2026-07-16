@@ -292,3 +292,91 @@ fn worktree_add_fails_readably_when_branch_checked_out_elsewhere() {
     assert!(!second.exists());
     assert!(first.join("base.txt").exists());
 }
+
+// -- worktree_remove / worktree_prune (spec 08 Unit 2) ----------------------
+
+#[test]
+fn worktree_remove_removes_a_clean_worktree() {
+    let repo = init_repo_on_branch("main");
+    git(repo.path(), &["branch", "feature"]);
+    let runner = runner_for(&repo);
+    let wt_path = repo.path().join(".git").join("redquill").join("wt");
+    assert_inside_tempdir(&wt_path, &repo);
+    runner.worktree_add(&wt_path, "feature").unwrap();
+    assert!(wt_path.join("base.txt").exists());
+
+    runner.worktree_remove(&wt_path).unwrap();
+
+    assert!(!wt_path.exists(), "the worktree directory must be gone");
+    let list = git_out(repo.path(), &["worktree", "list", "--porcelain"]);
+    assert!(
+        !list.contains(wt_path.to_str().unwrap()),
+        "git worktree list must no longer mention the removed worktree: {list}"
+    );
+    // The user's original checkout is untouched.
+    let original_branch = git_out(repo.path(), &["branch", "--show-current"]);
+    assert_eq!(original_branch, "main");
+}
+
+#[test]
+fn worktree_remove_never_forces_and_fails_safely_on_a_dirty_worktree() {
+    let repo = init_repo_on_branch("main");
+    git(repo.path(), &["branch", "feature"]);
+    let runner = runner_for(&repo);
+    let wt_path = repo.path().join(".git").join("redquill").join("wt");
+    assert_inside_tempdir(&wt_path, &repo);
+    runner.worktree_add(&wt_path, "feature").unwrap();
+    // Dirty the worktree: an uncommitted modification to a tracked file,
+    // which `git worktree remove` (no `--force`) must refuse to discard.
+    write(&wt_path, "base.txt", b"dirtied\n");
+
+    let err = runner.worktree_remove(&wt_path).unwrap_err();
+    match err {
+        GitError::Command { stderr, .. } => assert!(!stderr.is_empty()),
+        other => panic!("expected GitError::Command, got {other:?}"),
+    }
+
+    // Nothing was removed: the worktree, its dirty content, and git's own
+    // admin record all survive the failed attempt.
+    assert!(wt_path.join("base.txt").exists());
+    assert_eq!(
+        fs::read(wt_path.join("base.txt")).unwrap(),
+        b"dirtied\n",
+        "the dirty content must survive a refused, non-forced removal"
+    );
+    let list = git_out(repo.path(), &["worktree", "list", "--porcelain"]);
+    assert!(
+        list.contains(wt_path.to_str().unwrap()),
+        "a failed removal must leave git's admin record intact: {list}"
+    );
+}
+
+#[test]
+fn worktree_prune_clears_a_stale_admin_entry_left_by_an_external_deletion() {
+    let repo = init_repo_on_branch("main");
+    git(repo.path(), &["branch", "feature"]);
+    let runner = runner_for(&repo);
+    let wt_path = repo.path().join(".git").join("redquill").join("wt");
+    assert_inside_tempdir(&wt_path, &repo);
+    runner.worktree_add(&wt_path, "feature").unwrap();
+
+    // Simulate the directory vanishing outside of git's knowledge (e.g. an
+    // external `rm -rf`), rather than going through `worktree remove` —
+    // this is exactly the stale-admin-record shape `worktree prune` exists
+    // to clear.
+    assert_inside_tempdir(&wt_path, &repo);
+    fs::remove_dir_all(&wt_path).unwrap();
+    let list_before = git_out(repo.path(), &["worktree", "list", "--porcelain"]);
+    assert!(
+        list_before.contains(wt_path.to_str().unwrap()),
+        "the admin record must still be present right after the external delete: {list_before}"
+    );
+
+    runner.worktree_prune().unwrap();
+
+    let list_after = git_out(repo.path(), &["worktree", "list", "--porcelain"]);
+    assert!(
+        !list_after.contains(wt_path.to_str().unwrap()),
+        "prune must clear the stale admin record: {list_after}"
+    );
+}

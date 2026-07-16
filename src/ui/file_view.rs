@@ -362,6 +362,7 @@ mod tests {
                 viewing_commit: false,
                 help_open: false,
                 project_search_focus: app.project_search_focus(),
+                review_session: app.in_review_session(),
             },
             None,
             &keymap,

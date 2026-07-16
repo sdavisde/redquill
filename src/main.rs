@@ -243,10 +243,18 @@ fn resolve_editor(
 /// resolved [`QuitOutcome`].
 fn run_tui(config: &Config) -> anyhow::Result<()> {
     let discovered = GitRunner::discover()?;
-    let (runner, target) = resolve_session(discovered, config)?;
+    // `discovered` is rooted at the caller's cwd (the user's own checkout),
+    // *outside* any managed review worktree `resolve_session` might create —
+    // kept alive (cloned into `resolve_session`) so a review session's
+    // finish gesture (spec 08 Unit 2) can remove that worktree through a
+    // backend that isn't rooted inside the very directory being removed.
+    let (runner, target) = resolve_session(discovered.clone(), config)?;
     let snapshot = build_review(&runner, &target)?;
 
-    let mut app = App::with_git(snapshot, target, Box::new(runner.clone()));
+    let mut app = App::with_git(snapshot, target.clone(), Box::new(runner.clone()));
+    if matches!(target, DiffTarget::Review { .. }) {
+        app.set_review_origin_ops(Box::new(discovered));
+    }
     app.set_repo_root(runner.root().to_path_buf());
     let visual = std::env::var_os("VISUAL").map(|s| s.to_string_lossy().into_owned());
     let editor_env = std::env::var_os("EDITOR").map(|s| s.to_string_lossy().into_owned());

@@ -20,7 +20,8 @@ impl App {
             | Mode::Switcher
             | Mode::CommitMessage
             | Mode::Finder
-            | Mode::ProjectSearch => {}
+            | Mode::ProjectSearch
+            | Mode::EndReview { .. } => {}
             Mode::Normal | Mode::Visual { .. } => {
                 if !self.annotations.is_empty() {
                     self.list_cursor = self.list_cursor.min(self.annotations.len() - 1);

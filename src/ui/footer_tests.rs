@@ -50,7 +50,7 @@ fn keys(entries: &[FooterEntry]) -> Vec<String> {
 #[test]
 fn normal_mode_hints_match_the_curated_list_in_order() {
     let km = Keymap::default_map();
-    let entries = normal_hints(&km, true, true, false);
+    let entries = normal_hints(&km, true, true, false, false);
     assert_eq!(
         keys(&entries),
         vec!["j/k", "]", "za", "Space", "S", "c", "/", "`", "?"]
@@ -79,23 +79,40 @@ fn normal_mode_hints_match_the_curated_list_in_order() {
 #[test]
 fn normal_mode_hints_gain_esc_return_while_viewing_a_commit() {
     let km = Keymap::default_map();
-    let entries = normal_hints(&km, true, true, true);
+    let entries = normal_hints(&km, true, true, true, false);
     assert!(labels(&entries).contains(&"return"));
     assert!(keys(&entries).contains(&"Esc".to_string()));
     // Absent otherwise.
-    let without = normal_hints(&km, true, true, false);
+    let without = normal_hints(&km, true, true, false, false);
     assert!(!labels(&without).contains(&"return"));
 }
 
 #[test]
 fn normal_mode_hints_exclude_staging_when_not_allowed() {
     let km = Keymap::default_map();
-    let entries = normal_hints(&km, false, true, false);
+    let entries = normal_hints(&km, false, true, false, false);
     assert!(!labels(&entries).contains(&"stage hunk"));
     assert!(!labels(&entries).contains(&"stage file"));
     // Everything else survives.
     assert_eq!(entries.len(), 7);
     assert_eq!(labels(&entries).last(), Some(&"help"), "help stays last");
+}
+
+/// While a review session is active (spec 08 Unit 2), the Normal strip gains
+/// a synthetic `q end review` hint — `q`'s table row carries no
+/// `FooterHint` at all outside a review (see `Action::Quit`'s binding in
+/// `keymap.rs`), so this entry only exists here, driven by the
+/// `review_session` flag rather than the static table.
+#[test]
+fn normal_mode_hints_gain_q_end_review_during_a_review_session() {
+    let km = Keymap::default_map();
+    let entries = normal_hints(&km, true, true, false, true);
+    assert!(labels(&entries).contains(&"end review"));
+    assert!(keys(&entries).contains(&"q".to_string()));
+    assert_eq!(labels(&entries).last(), Some(&"help"), "help stays last");
+    // Absent outside a review session.
+    let without = normal_hints(&km, true, true, false, false);
+    assert!(!labels(&without).contains(&"end review"));
 }
 
 #[test]
@@ -126,7 +143,7 @@ fn visual_mode_hints_exclude_stage_lines_when_not_allowed() {
 #[test]
 fn panel_mode_hints_match_the_curated_list_in_order() {
     let km = Keymap::default_map();
-    let entries = panel_hints(&km, false);
+    let entries = panel_hints(&km, false, false);
     assert_eq!(
         keys(&entries),
         vec!["j/k", "Enter", "f", "p", "P", "c", "`", "Tab", "?"]
@@ -147,6 +164,20 @@ fn panel_mode_hints_match_the_curated_list_in_order() {
     );
 }
 
+/// The panel strip's review-session synthetic `q end review` hint — same
+/// contract as `normal_mode_hints_gain_q_end_review_during_a_review_session`,
+/// for the panel-scope idle strip.
+#[test]
+fn panel_mode_hints_gain_q_end_review_during_a_review_session() {
+    let km = Keymap::default_map();
+    let entries = panel_hints(&km, false, true);
+    assert!(labels(&entries).contains(&"end review"));
+    assert!(keys(&entries).contains(&"q".to_string()));
+    assert_eq!(labels(&entries).last(), Some(&"help"), "help stays last");
+    let without = panel_hints(&km, false, false);
+    assert!(!labels(&without).contains(&"end review"));
+}
+
 /// On an unpublished branch (`push_publishes`), the `P` hint relabels to
 /// `publish` — same key, same slot, only the label changes — matching what
 /// `Action::RemotePush` actually runs in that state (see
@@ -154,7 +185,7 @@ fn panel_mode_hints_match_the_curated_list_in_order() {
 #[test]
 fn panel_push_hint_relabels_to_publish_on_an_unpublished_branch() {
     let km = Keymap::default_map();
-    let entries = panel_hints(&km, true);
+    let entries = panel_hints(&km, true, false);
     assert_eq!(
         keys(&entries),
         vec!["j/k", "Enter", "f", "p", "P", "c", "`", "Tab", "?"]
@@ -236,6 +267,7 @@ fn search_mode_has_no_hint_strip() {
             viewing_commit: false,
             help_open: false,
             project_search_focus: SearchFocus::Input,
+            review_session: false,
         },
         None,
         &km,
@@ -267,6 +299,7 @@ fn help_open_takes_precedence_over_the_mode_strip() {
             viewing_commit: false,
             help_open: true,
             project_search_focus: SearchFocus::Input,
+            review_session: false,
         },
         None,
         &km,
@@ -332,6 +365,7 @@ fn pending_prefix_replaces_the_mode_strip_in_normal_and_visual() {
             viewing_commit: false,
             help_open: false,
             project_search_focus: SearchFocus::Input,
+            review_session: false,
         },
         g,
         &km,
@@ -346,6 +380,7 @@ fn pending_prefix_replaces_the_mode_strip_in_normal_and_visual() {
             viewing_commit: false,
             help_open: false,
             project_search_focus: SearchFocus::Input,
+            review_session: false,
         },
         g,
         &km,
@@ -366,6 +401,7 @@ fn build_hints_drops_gd_and_gr_from_the_pending_strip_when_code_intel_is_disallo
             viewing_commit: false,
             help_open: false,
             project_search_focus: SearchFocus::Input,
+            review_session: false,
         },
         g,
         &km,
@@ -392,11 +428,12 @@ fn pending_prefix_is_ignored_outside_normal_and_visual() {
             viewing_commit: false,
             help_open: false,
             project_search_focus: SearchFocus::Input,
+            review_session: false,
         },
         g,
         &km,
     );
-    assert_eq!(panel, panel_hints(&km, false));
+    assert_eq!(panel, panel_hints(&km, false, false));
 }
 
 #[test]
@@ -450,6 +487,7 @@ fn every_mode_produces_a_nonempty_strip_except_search() {
                 viewing_commit: false,
                 help_open: false,
                 project_search_focus: SearchFocus::Input,
+                review_session: false,
             },
             None,
             &km,
@@ -469,6 +507,7 @@ fn every_mode_produces_a_nonempty_strip_except_search() {
                 viewing_commit: false,
                 help_open: false,
                 project_search_focus: SearchFocus::Input,
+                review_session: false,
             },
             None,
             &km
@@ -691,7 +730,7 @@ fn panel_help_hint_is_real_and_shadows_panel_dispatch() {
 #[test]
 fn generous_width_fits_the_whole_normal_strip_on_one_line() {
     let km = Keymap::default_map();
-    let entries = normal_hints(&km, true, true, false);
+    let entries = normal_hints(&km, true, true, false, false);
     let lines = wrap_hints(&entries, 120);
     assert_eq!(lines.len(), 1);
     let shown: usize = lines.iter().map(Vec::len).sum();
@@ -701,7 +740,7 @@ fn generous_width_fits_the_whole_normal_strip_on_one_line() {
 #[test]
 fn medium_width_wraps_to_two_lines_without_splitting_a_hint() {
     let km = Keymap::default_map();
-    let entries = normal_hints(&km, true, true, false);
+    let entries = normal_hints(&km, true, true, false, false);
     let lines = wrap_hints(&entries, 60);
     assert_eq!(lines.len(), 2);
     let shown: usize = lines.iter().map(Vec::len).sum();
@@ -718,7 +757,7 @@ fn medium_width_wraps_to_two_lines_without_splitting_a_hint() {
 #[test]
 fn narrow_width_drops_lowest_priority_hints_but_keeps_help() {
     let km = Keymap::default_map();
-    let entries = normal_hints(&km, true, true, false);
+    let entries = normal_hints(&km, true, true, false, false);
     let lines = wrap_hints(&entries, 20);
     assert!(lines.len() <= 2);
     let shown: usize = lines.iter().map(Vec::len).sum();
@@ -734,7 +773,7 @@ fn narrow_width_drops_lowest_priority_hints_but_keeps_help() {
 fn dropping_never_removes_help_while_anything_else_remains() {
     // An adversarially narrow width: keeps forcing drops down to the wire.
     let km = Keymap::default_map();
-    let entries = normal_hints(&km, true, true, false);
+    let entries = normal_hints(&km, true, true, false, false);
     let lines = wrap_hints(&entries, 8);
     let shown_labels: Vec<&str> = lines.iter().flatten().map(|e| e.label).collect();
     assert!(shown_labels.contains(&"help"));
@@ -763,6 +802,7 @@ fn footer_height_matches_wrap_hints_row_count() {
             viewing_commit: false,
             help_open: a.help_open,
             project_search_focus: a.project_search_focus(),
+            review_session: false,
         },
         None,
         &km,

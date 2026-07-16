@@ -31,9 +31,9 @@ use ratatui::widgets::{
 
 use super::keymap::{Action, Binding, Keymap, Scope};
 use super::modal_keys::{
-    COMMIT_MESSAGE_HINTS, COMPOSE_HINTS, FINDER_HINTS, HELP_SEARCH_HINTS, LIST_KEYS, ModalBinding,
-    PEEK_KEYS, PROJECT_SEARCH_INPUT_HINTS, PROJECT_SEARCH_RESULTS_HINTS, SEARCH_HINTS,
-    STAGING_KEYS, SWITCHER_KEYS,
+    COMMIT_MESSAGE_HINTS, COMPOSE_HINTS, END_REVIEW_KEYS, FINDER_HINTS, HELP_SEARCH_HINTS,
+    LIST_KEYS, ModalBinding, PEEK_KEYS, PROJECT_SEARCH_INPUT_HINTS, PROJECT_SEARCH_RESULTS_HINTS,
+    SEARCH_HINTS, STAGING_KEYS, SWITCHER_KEYS,
 };
 use super::search;
 use super::theme::Theme;
@@ -149,7 +149,7 @@ fn modal_hints<A>(table: &'static [ModalBinding<A>]) -> Vec<(&'static str, &'sta
 /// free-text input like Compose/Search) gets a section here for the same
 /// reason those do; `HELP_KEYS` doesn't, since it's the enum-dispatch table
 /// for the overlay's own scroll/close keys, already documented on the footer.
-fn modal_sections() -> [(&'static str, Vec<(&'static str, &'static str)>); 11] {
+fn modal_sections() -> [(&'static str, Vec<(&'static str, &'static str)>); 12] {
     [
         ("Compose mode", modal_hints(COMPOSE_HINTS)),
         ("List mode", modal_hints(LIST_KEYS)),
@@ -170,6 +170,10 @@ fn modal_sections() -> [(&'static str, Vec<(&'static str, &'static str)>); 11] {
         (
             "Project search — results focus",
             modal_hints(PROJECT_SEARCH_RESULTS_HINTS),
+        ),
+        (
+            "End review modal (q, review session)",
+            modal_hints(END_REVIEW_KEYS),
         ),
     ]
 }

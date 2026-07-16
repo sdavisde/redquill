@@ -12,7 +12,9 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::App;
-use super::modal_keys::{self, ListAction, PeekAction, StagingAction, SwitcherAction};
+use super::modal_keys::{
+    self, EndReviewAction, ListAction, PeekAction, StagingAction, SwitcherAction,
+};
 
 /// Applies one editing/motion key to a modal text `buffer`, returning whether
 /// it consumed the key. Shared verbatim by the Compose and commit-message
@@ -200,7 +202,7 @@ pub(super) fn handle_panel_key(
     use super::keymap::Scope;
     use super::{Action, Flow, QuitOutcome};
     match keymap.lookup_in(Scope::Panel, key) {
-        Some(Action::Quit) => Flow::Quit(QuitOutcome::Emit),
+        Some(Action::Quit) => super::quit_action(app),
         Some(Action::QuitDiscard) => Flow::Quit(QuitOutcome::Discard),
         Some(action) => {
             app.apply(action);
@@ -321,6 +323,36 @@ pub(super) fn handle_switcher_key(app: &mut App, key: KeyEvent) {
         SwitcherAction::MoveUp => app.switcher_move_up(),
         SwitcherAction::Confirm => app.switcher_confirm(),
         SwitcherAction::Close => app.close_switcher(),
+    }
+}
+
+/// Handles one key event while [`super::Mode::EndReview`] is active (spec 08
+/// Unit 2: `q` in a review session opens this modal instead of quitting —
+/// see [`super::quit_action`]): `p` pauses (quits, emitting annotations
+/// through the ordinary on-quit path — the worktree and review state are
+/// untouched), `f` finishes (removes the worktree via
+/// [`super::App::finish_review`], quitting on success or surfacing the
+/// failure and staying open), `c`/`Esc` cancel back to the mode `q` was
+/// pressed from. Dispatch is driven by [`modal_keys::END_REVIEW_KEYS`] — the
+/// same table the help overlay renders. Unlike most modal handlers this one
+/// returns [`super::Flow`] (like [`handle_panel_key`]): pause/a successful
+/// finish end the session, so the event loop must see the quit rather than
+/// this function looping it internally.
+pub(super) fn handle_end_review_key(app: &mut App, key: KeyEvent) -> super::Flow {
+    use super::{Flow, QuitOutcome};
+    let Some(action) = modal_keys::resolve(modal_keys::END_REVIEW_KEYS, key) else {
+        return Flow::Continue;
+    };
+    match action {
+        EndReviewAction::Pause => Flow::Quit(QuitOutcome::Emit),
+        EndReviewAction::Finish => match app.finish_review() {
+            Some(outcome) => Flow::Quit(outcome),
+            None => Flow::Continue,
+        },
+        EndReviewAction::Cancel => {
+            app.cancel_end_review();
+            Flow::Continue
+        }
     }
 }
 

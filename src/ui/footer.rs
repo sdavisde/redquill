@@ -31,9 +31,9 @@ use crossterm::event::KeyEvent;
 use super::app::{App, Mode};
 use super::keymap::{Action, FooterHint, Keymap, Scope};
 use super::modal_keys::{
-    COMMIT_MESSAGE_HINTS, COMPOSE_HINTS, FINDER_HINTS, HELP_KEYS, LIST_KEYS, ModalBinding,
-    PEEK_KEYS, PROJECT_SEARCH_INPUT_HINTS, PROJECT_SEARCH_RESULTS_HINTS, STAGING_KEYS,
-    SWITCHER_KEYS,
+    COMMIT_MESSAGE_HINTS, COMPOSE_HINTS, END_REVIEW_KEYS, FINDER_HINTS, HELP_KEYS, LIST_KEYS,
+    ModalBinding, PEEK_KEYS, PROJECT_SEARCH_INPUT_HINTS, PROJECT_SEARCH_RESULTS_HINTS,
+    STAGING_KEYS, SWITCHER_KEYS,
 };
 use super::project_search::SearchFocus;
 use super::theme::Theme;
@@ -143,6 +143,7 @@ fn normal_hints(
     staging_allowed: bool,
     code_intel_allowed: bool,
     viewing_commit: bool,
+    review_session: bool,
 ) -> Vec<FooterEntry> {
     let mut entries = keymap_hints(km, Scope::Diff, staging_allowed, code_intel_allowed);
     if viewing_commit {
@@ -151,6 +152,22 @@ fn normal_hints(
             key: "Esc".to_string(),
             label: "return",
         });
+    }
+    if review_session && let Some(key) = find_key(km, Scope::Diff, Action::Quit, "q") {
+        // `q`'s table row has no `FooterHint` of its own (see the doc on
+        // `Action::Quit`'s binding in `keymap.rs`), since outside a review
+        // session it isn't promoted into the idle strip at all — this
+        // synthetic entry only exists while reviewing, when `q`'s *meaning*
+        // changes (opens the end-review modal rather than quitting), which
+        // is worth surfacing here rather than leaving to the always-visible
+        // banner text alone.
+        entries.push(FooterEntry {
+            rank: 9,
+            key,
+            label: "end review",
+        });
+    }
+    if viewing_commit || review_session {
         entries = sort_for_display(entries);
     }
     entries
@@ -165,7 +182,7 @@ fn normal_hints(
 /// presentation-side relabel in the [`visual_hints`] mold, because the static
 /// table can't carry a state-dependent label; the key and its promotion still
 /// come from the table.
-fn panel_hints(km: &Keymap, push_publishes: bool) -> Vec<FooterEntry> {
+fn panel_hints(km: &Keymap, push_publishes: bool, review_session: bool) -> Vec<FooterEntry> {
     let mut entries = keymap_hints(km, Scope::Panel, true, true);
     if push_publishes
         && let Some(hint) = km
@@ -178,6 +195,16 @@ fn panel_hints(km: &Keymap, push_publishes: bool) -> Vec<FooterEntry> {
             .find(|e| e.rank == hint.rank && e.label == hint.label)
     {
         entry.label = "publish";
+    }
+    // See `normal_hints`'s identical synthetic entry for why this exists
+    // only during a review session.
+    if review_session && let Some(key) = find_key(km, Scope::Panel, Action::Quit, "q") {
+        entries.push(FooterEntry {
+            rank: 9,
+            key,
+            label: "end review",
+        });
+        entries = sort_for_display(entries);
     }
     entries
 }
@@ -318,6 +345,13 @@ pub(super) struct FooterFlags {
     /// between [`PROJECT_SEARCH_INPUT_HINTS`] and
     /// [`PROJECT_SEARCH_RESULTS_HINTS`] (spec 06 round-1 UX fix).
     pub(super) project_search_focus: SearchFocus,
+    /// Whether a review session is active (spec 08 Unit 2,
+    /// [`super::app::App::in_review_session`]); adds a synthetic `q end
+    /// review` entry to the Normal/Panel idle strips (see
+    /// [`normal_hints`]/[`panel_hints`]) — `q`'s *meaning* changes while
+    /// reviewing, so its hint changes too, even though outside a review
+    /// session `q` carries no footer hint at all.
+    pub(super) review_session: bool,
 }
 
 /// Builds the footer strip's hints for the current app state — the pure core
@@ -340,6 +374,7 @@ pub(super) fn build_hints(
         viewing_commit,
         help_open,
         project_search_focus,
+        review_session,
     } = flags;
     if help_open {
         return help_open_hints();
@@ -350,9 +385,15 @@ pub(super) fn build_hints(
         return pending_hints(km, prefix, code_intel_allowed);
     }
     match mode {
-        Mode::Normal => normal_hints(km, staging_allowed, code_intel_allowed, viewing_commit),
+        Mode::Normal => normal_hints(
+            km,
+            staging_allowed,
+            code_intel_allowed,
+            viewing_commit,
+            review_session,
+        ),
         Mode::Visual { .. } => visual_hints(km, staging_allowed),
-        Mode::Panel { .. } => panel_hints(km, push_publishes),
+        Mode::Panel { .. } => panel_hints(km, push_publishes, review_session),
         Mode::List => modal_hints(LIST_KEYS),
         Mode::Staging => modal_hints(STAGING_KEYS),
         Mode::Peek => modal_hints(PEEK_KEYS),
@@ -366,6 +407,7 @@ pub(super) fn build_hints(
         },
         // The search input occupies the footer itself; no hint strip.
         Mode::Search => Vec::new(),
+        Mode::EndReview { .. } => modal_hints(END_REVIEW_KEYS),
     }
 }
 
@@ -460,6 +502,7 @@ pub(super) fn footer_height(
             viewing_commit: app.viewing_commit(),
             help_open: app.help_open,
             project_search_focus: app.project_search_focus(),
+            review_session: app.in_review_session(),
         },
         pending,
         keymap,

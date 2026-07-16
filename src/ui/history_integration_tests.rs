@@ -264,6 +264,7 @@ fn commit_view_hides_and_disarms_staging_keys() {
             viewing_commit: app.viewing_commit(),
             help_open: app.help_open,
             project_search_focus: app.project_search_focus(),
+            review_session: app.in_review_session(),
         },
         None,
         &keymap,

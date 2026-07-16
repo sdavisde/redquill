@@ -105,6 +105,29 @@ pub enum Mode {
     /// query/toggles/results/selection survive the round trip (see
     /// [`App::file_view_return_mode`]).
     ProjectSearch,
+    /// The end-review modal (`q` in a review session, spec 08 Unit 2) is
+    /// open: pause / finish / cancel. `origin` is where `q` was pressed
+    /// from — `Cancel` restores it exactly. This is the state-design
+    /// exception documented on [`EndReviewOrigin`]: it would ordinarily be a
+    /// struct field ("must survive mode exit"), but since it only matters
+    /// for *this* mode's lifetime, carrying it as the variant's own payload
+    /// keeps it from going stale as a field while every other mode is
+    /// active.
+    EndReview { origin: EndReviewOrigin },
+}
+
+/// Where `q` was pressed from, carried by [`Mode::EndReview`] so its Cancel
+/// gesture can restore the exact prior mode. A dedicated small enum rather
+/// than `Box<Mode>` recursion: [`Mode`] derives `Copy` (every call site that
+/// matches `app.mode` by value depends on that), and a `Box` field would
+/// remove it crate-wide. `q` is only ever intercepted from these three
+/// contexts (see [`super::quit_action`]/[`super::modes::handle_panel_key`]),
+/// so this closed enum covers every case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndReviewOrigin {
+    Normal,
+    Visual { anchor: usize },
+    Panel { cursor: usize, tab: PanelTab },
 }
 
 /// The TUI's full state: the per-view diff state (files, selection, rows,
@@ -339,6 +362,15 @@ pub struct App {
     /// — kept alive (and untouched) while a hit's file view is showing on
     /// top, so `Esc` from that file view resumes with everything intact.
     pub(super) project_search: Option<ProjectSearchState>,
+    /// A git backend rooted *outside* the managed review worktree, used only
+    /// for `git worktree remove`/`prune` at finish time (spec 08 Unit 2).
+    /// `stage_ops` is rooted *inside* the worktree for a review session (so
+    /// diff/LSP/staging-panel reads are truthful against it) — but git may
+    /// refuse to remove a worktree the calling process/runner sits in, so
+    /// finish must run through a separate handle rooted at the original
+    /// repository instead. `None` outside a review session, or in
+    /// git-less/test contexts that never call finish.
+    pub(super) review_origin_ops: Option<Box<dyn StageOps>>,
 }
 
 /// The prior view state suspended while a commit view (opened from the git
@@ -466,6 +498,7 @@ impl App {
             suspended_file_view: None,
             file_view_return_mode: Mode::Normal,
             project_search: None,
+            review_origin_ops: None,
         };
         app.rebuild_rows();
         app
@@ -544,6 +577,40 @@ impl App {
     /// then `$EDITOR`, then `"nvim"`).
     pub fn set_editor(&mut self, editor: String) {
         self.editor = editor;
+    }
+
+    /// Whether the active diff target is a branch review session (spec 08
+    /// Unit 2): gates the banner, `q`'s end-review-modal behavior, and (spec
+    /// 08 Unit 3) the accept/defer keys. One named predicate so "is this a
+    /// review?" can't be answered inconsistently across call sites.
+    pub(super) fn in_review_session(&self) -> bool {
+        matches!(self.target, DiffTarget::Review { .. })
+    }
+
+    /// The branch under review, when [`App::in_review_session`] is true.
+    pub(super) fn review_branch(&self) -> Option<&str> {
+        match &self.target {
+            DiffTarget::Review { branch, .. } => Some(branch.as_str()),
+            _ => None,
+        }
+    }
+
+    /// The review banner's `(accepted, total)` progress count. Until spec 08
+    /// Unit 3 wires up the real per-file review-status map, `accepted` is
+    /// always `0` and `total` is the file count — a placeholder that's
+    /// already correct for "nothing accepted yet", not a stub value that
+    /// needs replacing later for correctness (only for informativeness).
+    pub(super) fn review_progress(&self) -> (usize, usize) {
+        (0, self.view.files.len())
+    }
+
+    /// Attaches the origin-rooted backend [`App::finish_review`] runs
+    /// `worktree_remove`/`worktree_prune` through (see
+    /// [`App::review_origin_ops`]'s doc for why it must be a separate handle
+    /// from `stage_ops`). Only meaningful for a review session; callers
+    /// outside one simply never call `finish_review`.
+    pub fn set_review_origin_ops(&mut self, ops: Box<dyn StageOps>) {
+        self.review_origin_ops = Some(ops);
     }
 
     /// Whether a keyboard-capturing overlay is currently up: the help overlay

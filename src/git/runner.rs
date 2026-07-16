@@ -281,6 +281,36 @@ impl GitRunner {
         Ok(())
     }
 
+    /// Removes a worktree at `path` (`git worktree remove <path>`, fixed
+    /// argv, never `--force`, spec 08 Unit 2). Fails with
+    /// [`GitError::Command`] (git's own stderr — e.g. a dirty tree) rather
+    /// than retrying with force; the caller decides how to surface it and
+    /// must leave the worktree and any persisted review state untouched on
+    /// failure.
+    pub fn worktree_remove(&self, path: &Path) -> Result<(), GitError> {
+        let path_str = path.to_string_lossy().into_owned();
+        let args = ["worktree", "remove", path_str.as_str()];
+        let output = Command::new("git")
+            .current_dir(&self.root)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(map_spawn_err)?;
+
+        if !output.status.success() {
+            return Err(command_error(&args, &output.status, &output.stderr));
+        }
+        Ok(())
+    }
+
+    /// Prunes stale worktree administrative records (`git worktree prune`,
+    /// fixed argv, spec 08 Unit 2). Run only after a successful
+    /// [`GitRunner::worktree_remove`], to clear now-stale admin entries.
+    pub fn worktree_prune(&self) -> Result<(), GitError> {
+        self.run_raw(&["worktree", "prune"])?;
+        Ok(())
+    }
+
     /// Switches the working tree to branch `name` (`git switch -- <name>`).
     /// Never forces: a dirty tree that would be overwritten, or a branch
     /// already checked out in another worktree, surfaces as
