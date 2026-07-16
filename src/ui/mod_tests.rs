@@ -1061,6 +1061,75 @@ fn empty_staging_panel_shows_hint() {
     assert!(content.contains("nothing staged yet"));
 }
 
+/// The staging panel's empty hint resolves its key from the effective
+/// keymap rather than a hardcoded literal (spec 07 Unit 4, task 4.6): a
+/// `[keys.diff] toggle-stage` remap must show up here with no code change.
+#[test]
+fn empty_staging_panel_hint_reflects_a_remapped_toggle_stage_key() {
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    app.mode = Mode::Staging;
+
+    let mut keys = crate::config::KeysConfig::default();
+    keys.diff.insert(
+        "toggle-stage".to_string(),
+        vec![crate::config::keys::KeySeqSpec::One(
+            crate::config::keys::ChordSpec {
+                code: crossterm::event::KeyCode::Char('x'),
+                mods: KeyModifiers::NONE,
+            },
+        )],
+    );
+    let (keymap, warnings) = keymap_config::effective_keymap(&keys);
+    assert!(warnings.is_empty());
+
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+    assert!(
+        content.contains("press x on a hunk to stage it"),
+        "staging hint must show the remapped key, not the stale default"
+    );
+}
+
+/// The annotation list panel's empty hint likewise resolves its key from the
+/// effective keymap: a `[keys.diff] compose` remap must show up here too.
+#[test]
+fn empty_list_panel_hint_reflects_a_remapped_compose_key() {
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    app.mode = Mode::List;
+
+    let mut keys = crate::config::KeysConfig::default();
+    keys.diff.insert(
+        "compose".to_string(),
+        vec![crate::config::keys::KeySeqSpec::One(
+            crate::config::keys::ChordSpec {
+                code: crossterm::event::KeyCode::Char('t'),
+                mods: KeyModifiers::NONE,
+            },
+        )],
+    );
+    let (keymap, warnings) = keymap_config::effective_keymap(&keys);
+    assert!(warnings.is_empty());
+
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+    assert!(
+        content.contains("press t to add one"),
+        "list hint must show the remapped key, not the stale default"
+    );
+}
+
 // -- Syntax highlighting (rendering layer) -------------------------------
 
 /// A row carrying a syntax-highlight span renders that span's text with

@@ -22,6 +22,7 @@ use crate::git::{BranchStatus, CommitLogEntry, CommitSummary, DiffTarget};
 use super::app::App;
 use super::app::{Mode, PanelTab, SuspendedView};
 use super::diff_view_state::DiffViewState;
+use super::keymap::{Action, Keymap, Scope};
 use super::stage_ops::{StagedState, build_review};
 use super::theme::Theme;
 use super::time_format::{now_unix, relative_time};
@@ -157,14 +158,17 @@ fn commit_line(commit: Option<&CommitSummary>, theme: &Theme) -> Line<'static> {
     }
 }
 
-/// The remote-operation keybind hints for the bottom section: `f fetch`,
-/// `p pull`, `P push` (or `P publish` while the branch has no upstream —
-/// `push_publishes`, mirroring the footer strip's relabel), with each key
-/// emphasized in the help-key color and its label dimmed. These surface the
-/// existing bindings (see the panel keymap); the panel doesn't add any new
-/// action.
-fn remote_keys_line(theme: &Theme, push_publishes: bool) -> Line<'static> {
-    let key = |k: &'static str| {
+/// The remote-operation keybind hints for the bottom section: `<key> fetch`,
+/// `<key> pull`, `<key> push` (or `publish` while the branch has no
+/// upstream — `push_publishes`, mirroring the footer strip's relabel), with
+/// each key emphasized in the help-key color and its label dimmed. Keys are
+/// resolved from `keymap` (panel scope) rather than hardcoded, so a
+/// `[keys.panel]` remap or unbind of `remote-fetch`/`remote-pull`/
+/// `remote-push` can't leave this line showing a stale key (spec 07 Unit 4,
+/// task 4.6) — an unbound action's segment is simply omitted, the same
+/// graceful-degradation convention `super::welcome`'s hints use.
+fn remote_keys_line(theme: &Theme, keymap: &Keymap, push_publishes: bool) -> Line<'static> {
+    let key = |k: String| {
         Span::styled(
             k,
             Style::default()
@@ -173,15 +177,21 @@ fn remote_keys_line(theme: &Theme, push_publishes: bool) -> Line<'static> {
         )
     };
     let label = |l: &'static str| Span::styled(l, Style::default().fg(theme.footer_text));
-    Line::from(vec![
-        Span::raw(" "),
-        key("f"),
-        label(" fetch  "),
-        key("p"),
-        label(" pull  "),
-        key("P"),
-        label(if push_publishes { " publish" } else { " push" }),
-    ])
+    let mut spans = vec![Span::raw(" ")];
+    for (action, text) in [
+        (Action::RemoteFetch, " fetch  "),
+        (Action::RemotePull, " pull  "),
+        (
+            Action::RemotePush,
+            if push_publishes { " publish" } else { " push" },
+        ),
+    ] {
+        if let Some(k) = keymap.label_for(Scope::Panel, action) {
+            spans.push(key(k));
+            spans.push(label(text));
+        }
+    }
+    Line::from(spans)
 }
 
 /// The branch header shown as the panel's block title: `git: <name>` plus, if
@@ -273,7 +283,7 @@ fn history_item(
 }
 
 /// Renders the git panel into `area`.
-pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
     // The list fills the panel above a three-row bottom section: counts, the
     // tip-commit summary, and the fetch/pull/push keybind hints.
     let chunks = Layout::default()
@@ -437,7 +447,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .split(chunks[1]);
     frame.render_widget(counts, footer[0]);
     frame.render_widget(commit_line(app.last_commit.as_ref(), theme), footer[1]);
-    frame.render_widget(remote_keys_line(theme, app.push_publishes()), footer[2]);
+    frame.render_widget(
+        remote_keys_line(theme, keymap, app.push_publishes()),
+        footer[2],
+    );
 }
 
 /// The git panel's focus and navigation handlers, split out of `app.rs`
@@ -728,10 +741,19 @@ mod tests {
     /// Renders `app`'s panel to a 32x24 `TestBackend` and returns the flat
     /// buffer text.
     fn render_panel(app: &App) -> String {
+        render_panel_with_keymap(app, &Keymap::default_map())
+    }
+
+    /// [`render_panel`], but over an explicit keymap — used to prove the
+    /// remote-op hint line resolves keys dynamically (spec 07 Unit 4, task
+    /// 4.6) rather than hardcoding `f`/`p`/`P`.
+    fn render_panel_with_keymap(app: &App, keymap: &Keymap) -> String {
         let backend = TestBackend::new(32, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         let area = Rect::new(0, 0, 32, 24);
-        terminal.draw(|frame| render(frame, area, app)).unwrap();
+        terminal
+            .draw(|frame| render(frame, area, app, keymap))
+            .unwrap();
         terminal
             .backend()
             .buffer()
@@ -894,6 +916,43 @@ mod tests {
         let content = render_panel(&app);
         assert!(content.contains("P publish"));
         assert!(!content.contains("P push"));
+    }
+
+    /// The remote-op hint line resolves its keys from the keymap rather than
+    /// hardcoding `f`/`p`/`P` (spec 07 Unit 4, task 4.6): a `[keys.panel]`
+    /// remap of `remote-fetch` must show up here with no code change, and an
+    /// unbind must drop that segment entirely rather than showing a stale
+    /// key.
+    #[test]
+    fn remote_keys_line_reflects_a_remapped_and_an_unbound_action() {
+        let mut app = App::new(vec![sample_file("session.rs")]);
+        app.branch = Some(branch("main", Some("origin/main"), Some((0, 0))));
+
+        let mut keys = crate::config::KeysConfig::default();
+        keys.panel.insert(
+            "remote-fetch".to_string(),
+            vec![crate::config::keys::KeySeqSpec::One(
+                crate::config::keys::ChordSpec {
+                    code: crossterm::event::KeyCode::Char('F'),
+                    mods: crossterm::event::KeyModifiers::NONE,
+                },
+            )],
+        );
+        keys.panel.insert("remote-pull".to_string(), Vec::new());
+        let (keymap, warnings) = super::super::keymap_config::effective_keymap(&keys);
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+        let content = render_panel_with_keymap(&app, &keymap);
+        assert!(content.contains("F fetch"), "must show the remapped key");
+        assert!(
+            !content.contains("f fetch"),
+            "the stale default must be gone"
+        );
+        assert!(
+            !content.contains("pull"),
+            "an unbound action's segment must be omitted entirely"
+        );
+        assert!(content.contains("P push"), "untouched action is unaffected");
     }
 
     // -- Empty states ------------------------------------------------------

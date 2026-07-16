@@ -171,3 +171,115 @@ literal = false
 # `enabled`, and every language name beyond the four above, is an unknown
 # key/section — collected as a warning, ignored, and every other valid
 # setting in the file still applies.
+
+# -----------------------------------------------------------------------
+# [keys.diff] / [keys.panel] — remap the main keymap (spec 07 Unit 4)
+# -----------------------------------------------------------------------
+#
+# Every binding in the main keymap (the diff view's Normal/Visual-mode keys,
+# and the git panel's own keys once it holds focus) is remappable, one
+# table per scope: `[keys.diff]` and `[keys.panel]`. (Modal tables — the
+# staging panel, the branch/worktree switcher, the fuzzy finder, and so on —
+# are not covered by this section; see a future spec.)
+#
+# Each entry is `action-name = "<key>"` or `action-name = ["<key>", ...]`.
+# Action names are the kebab-case names listed below — the complete set
+# this build understands, one line per name, each showing its *default* key
+# so you can see what you'd be changing.
+#
+# Key-string grammar: one physical key is `[modifier-]*name`, where
+# `modifier` is `ctrl`/`alt`/`shift` (case-insensitive, any number may
+# stack) and `name` is a single character (`"a"`, `"?"`, `"$"`) or one of:
+# `esc`, `enter`, `tab`, `space`, `backspace`, `delete`, `home`, `end`,
+# `pageup`, `pagedown`, `up`, `down`, `left`, `right`, `insert`, `f1`..`f24`.
+# Examples: `"a"`, `"ctrl-k"`, `"alt-enter"`, `"shift-tab"`, `"f5"`, `"esc"`.
+# A two-key sequence (like the built-in `gd`/`za`) is written space-
+# separated: `"g d"`. Three or more chords is rejected.
+#
+# Merge semantics: naming an action gives it *exactly* the listed keys —
+# its default keys are replaced, not appended to. An action left unnamed
+# keeps its defaults untouched. An empty array (`= []`) unbinds the action
+# entirely. If your key collides with another binding already in the same
+# scope, your binding wins and the colliding one is dropped — a warning
+# names the collision so you know it happened. An unrecognized action name,
+# or a key string that doesn't parse, is an invalid value: that one entry
+# is ignored (with a warning) and every other setting in the file still
+# applies.
+#
+# Example: J jumps to the next file (replacing Tab), quit accepts either
+# `q` or Ctrl-c, and the fold/unfold gesture is unbound entirely.
+#
+# [keys.diff]
+# next-file = "J"
+# quit = ["q", "ctrl-c"]
+# toggle-collapse = []
+#
+# The complete `[keys.diff]` action-name list (default key(s) in the
+# comment; `?`/`Esc` both toggle help, `Q`/`Ctrl-c` both quit-discard):
+#
+# compose = "c"                       # Comment on line/hunk/file (or visual selection)
+# cursor-down = "j"                   # Move cursor down
+# cursor-up = "k"                     # Move cursor up
+# cursor-left = "h"                   # Move column cursor left
+# cursor-right = "l"                  # Move column cursor right
+# cursor-line-start = "0"             # Move column cursor to start of line
+# cursor-line-end = "$"               # Move column cursor to end of line
+# word-forward = "w"                  # Jump column cursor to next word
+# word-backward = "b"                 # Jump column cursor to previous word
+# half-page-down = "ctrl-d"           # Scroll half page down
+# half-page-up = "ctrl-u"             # Scroll half page up
+# full-page-down = "ctrl-f"           # Scroll full page down
+# full-page-up = "ctrl-b"             # Scroll full page up
+# jump-to-top = "g g"                 # Jump to top of diff
+# jump-to-bottom = "G"                # Jump to bottom of diff
+# next-hunk = "]"                     # Next hunk
+# prev-hunk = "["                     # Previous hunk
+# next-file = "tab"                   # Next file section
+# prev-file = "shift-tab"             # Previous file section
+# toggle-collapse = "z a"             # Collapse/expand file section
+# recenter-cursor = "z z"             # Center viewport on cursor
+# scroll-cursor-top = "z t"           # Scroll cursor to top of viewport
+# scroll-cursor-bottom = "z b"        # Scroll cursor to bottom of viewport
+# toggle-help = "?"                   # Toggle help (also bound to "esc")
+# enter-visual = "v"                  # Enter visual selection / cancel
+# toggle-list = "a"                   # Toggle annotation list panel
+# toggle-stage = "space"              # Stage/unstage hunk (lines in visual mode)
+# stage-file = "S"                    # Stage/unstage file under cursor
+# toggle-staging-panel = "s"          # Toggle staging panel
+# focus-git-panel = "`"               # Open git panel
+# toggle-command-log = "@"            # Toggle command log pane
+# dismiss-config-warning = "!"        # Dismiss config warning notice
+# refresh = "R"                       # Refresh diff from working tree
+# search = "/"                        # Search
+# search-next = "n"                   # Next search match
+# search-prev = "N"                   # Previous search match
+# search-word-forward = "*"           # Search word under cursor, next occurrence
+# search-word-backward = "#"          # Search word under cursor, previous occurrence
+# goto-definition = "g d"             # Go to definition
+# goto-references = "g r"             # Find references
+# open-file-finder = "g p"            # Open fuzzy file finder
+# open-project-search = "g /"         # Open project search
+# open-editor = "g space"             # Open file at cursor in editor
+# hover = "K"                         # Hover docs
+# quit = "q"                          # Quit and emit annotations
+# quit-discard = ["Q", "ctrl-c"]      # Quit and discard annotations
+#
+# The complete `[keys.panel]` action-name list (resolved only while the git
+# panel holds focus, after "`"/focus-git-panel):
+#
+# [keys.panel]
+# panel-cursor-down = "j"             # Move panel cursor down
+# panel-cursor-up = "k"               # Move panel cursor up
+# panel-select = "enter"              # Focus diff on this file (History tab: open the commit)
+# toggle-panel-tab = "tab"            # Switch Changes / History tab
+# remote-fetch = "f"                  # Fetch from remote
+# remote-pull = "p"                   # Pull from remote
+# remote-push = "P"                   # Push to remote (publishes an unpublished branch)
+# commit-staged = "c"                 # Commit staged changes
+# open-switcher = "b"                 # Open branch/worktree switcher
+# focus-git-panel = "`"               # Close git panel
+# toggle-help = "?"                   # Toggle help
+# toggle-command-log = "@"            # Toggle command log pane
+# dismiss-config-warning = "!"        # Dismiss config warning notice
+# quit = "q"                          # Quit and emit annotations
+# quit-discard = ["Q", "ctrl-c"]      # Quit and discard annotations

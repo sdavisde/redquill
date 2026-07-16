@@ -119,14 +119,14 @@ Make the main `Keymap` table remappable: kebab-case action-name mapping over the
 
 #### 4.0 Tasks
 
-- [ ] 4.1 Spike (timeboxed): verify `crokey` parses the needed chord notation and converts cleanly to `KeyChord { KeyCode, KeyModifiers }`, and confirm how two-chord sequences ("g d") layer on top (crokey parses single combinations; the sequence split is ours). Decide crokey vs hand-rolled parser mirroring its notation; record justification for the dependency commit. Acceptance: a written note in the PR/commit + the chosen path compiles with a round-trip test.
-- [ ] 4.2 TDD: action-name mapping in `src/config/keys.rs` — kebab-case name per `Action` variant via a single total table; drift test asserts bijectivity (every variant named exactly once, every name resolves back) so a new `Action` variant fails the build's tests until named.
-- [ ] 4.3 TDD: key-string grammar — single chords (`"a"`, `"ctrl-k"`, `"alt-enter"`, `"shift-tab"`, `"f5"`, `"esc"`), space-separated two-chord sequences (`"g d"`), max two chords (three+ rejected); parse-reject tests for garbage; a consistency test that grammar output formats agree with `KeyChord::label()` rendering so config notation and help display can't drift.
-- [ ] 4.4 TDD: merge semantics — `apply_overrides(default_map(), overrides) -> Vec<Binding>`: an action named in config gets exactly the listed keys (defaults for it dropped); unlisted actions untouched; `[]` unbinds; same-scope collision → user binding wins, colliding default dropped, collision recorded as warning. Failing tests for each case first.
-- [ ] 4.5 Add `[keys.diff]`/`[keys.panel]` deserialization (`action-name = "key"` or `= ["key", ...]`) to `Config`; unknown action names and unparseable key strings are invalid values (entry ignored + warning). Wire effective-keymap construction at startup in place of bare `default_map()`.
-- [ ] 4.6 Verify help/footer truthfulness: add a test that builds a keymap with an override + an unbind and asserts the help model reflects both (the overlay already derives from `Keymap::bindings()`; this pins it).
-- [ ] 4.7 Run the perf tripwire tests unchanged (`src/ui/perf_tests.rs`) and capture the run; add annotated `[keys.diff]`/`[keys.panel]` sections to `docs/example-config.toml` including the complete generated action-name list.
-- [ ] 4.8 Run the User demo; capture `proofs/4-remap-help.png` and `proofs/4-perf-tripwires.txt`; gates; commit (dependency commit separate if crokey chosen).
+- [x] 4.1 Spike (timeboxed): verify `crokey` parses the needed chord notation and converts cleanly to `KeyChord { KeyCode, KeyModifiers }`, and confirm how two-chord sequences ("g d") layer on top (crokey parses single combinations; the sequence split is ours). Decide crokey vs hand-rolled parser mirroring its notation; record justification for the dependency commit. Acceptance: a written note in the PR/commit + the chosen path compiles with a round-trip test.
+- [x] 4.2 TDD: action-name mapping in `src/config/keys.rs` — kebab-case name per `Action` variant via a single total table; drift test asserts bijectivity (every variant named exactly once, every name resolves back) so a new `Action` variant fails the build's tests until named.
+- [x] 4.3 TDD: key-string grammar — single chords (`"a"`, `"ctrl-k"`, `"alt-enter"`, `"shift-tab"`, `"f5"`, `"esc"`), space-separated two-chord sequences (`"g d"`), max two chords (three+ rejected); parse-reject tests for garbage; a consistency test that grammar output formats agree with `KeyChord::label()` rendering so config notation and help display can't drift.
+- [x] 4.4 TDD: merge semantics — `apply_overrides(default_map(), overrides) -> Vec<Binding>`: an action named in config gets exactly the listed keys (defaults for it dropped); unlisted actions untouched; `[]` unbinds; same-scope collision → user binding wins, colliding default dropped, collision recorded as warning. Failing tests for each case first.
+- [x] 4.5 Add `[keys.diff]`/`[keys.panel]` deserialization (`action-name = "key"` or `= ["key", ...]`) to `Config`; unknown action names and unparseable key strings are invalid values (entry ignored + warning). Wire effective-keymap construction at startup in place of bare `default_map()`.
+- [x] 4.6 Verify help/footer truthfulness: add a test that builds a keymap with an override + an unbind and asserts the help model reflects both (the overlay already derives from `Keymap::bindings()`; this pins it).
+- [x] 4.7 Run the perf tripwire tests unchanged (`src/ui/perf_tests.rs`) and capture the run; add annotated `[keys.diff]`/`[keys.panel]` sections to `docs/example-config.toml` including the complete generated action-name list.
+- [x] 4.8 Run the User demo; capture `proofs/4-remap-help.png` and `proofs/4-perf-tripwires.txt`; gates; commit (dependency commit separate if crokey chosen).
 
 ### [ ] 5.0 Config file remaps every modal panel (`[keys.staging]`, `[keys.switcher]`, ...)
 
@@ -149,7 +149,9 @@ Two separately-committed halves per repo rules: (refactor) convert the `const` t
 - [ ] 5.5 Complete `docs/example-config.toml` with every modal `[keys.*]` table and its full action-name list.
 - [ ] 5.6 Run the User demo; capture `proofs/5-modal-remap.png`; gates; behavior commit (separate from 5.1's refactor commit).
 
-### [ ] 6.0 A new user can adopt the whole system from the docs (README, retirement, acceptance journeys)
+### [!] 6.0 A new user can adopt the whole system from the docs (README, retirement, acceptance journeys)
+
+THIS TASK IS BLOCKED, DO NOT START WORK ON THIS TASK UNDER ANY CIRCUMSTANCES. I DO NOT KNOW WHETHER OR NOT WE ACTUALLY WANT TO DO THIS WORK. THERE IS ALSO CHANGES TO THE README IN MAIN THAT WE'D NEED TO WORK AGAINST, AND THESE CHANGES GO AGAINST MY INTENTIONS FOR THE README RIGHT NOW.
 
 The final slice is the adoption experience itself: README gains a Configuration section (file location, quick example, pointer to `docs/example-config.toml`) and drops the stale "config layer planned" line; `docs/config-layer.md` is deleted or replaced with a pointer to spec 07; the `src/config/` module doc gets the extensibility walkthrough (exact steps to add a hypothetical `[theme]` section touching no loader code — the spec's success metric 5); a drift-style test asserts every action name and key string in `docs/example-config.toml` actually parses and resolves, so the example can't rot; and the spec's three user-journey acceptance tasks run against a real build with persisted evidence.
 

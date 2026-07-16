@@ -33,8 +33,10 @@
 //! `crate::ui` or any TUI/ratatui type; `Config` crosses into
 //! `crate::ui::App` as plain data, never the other way around.
 
+pub mod keys;
 mod load;
 
+pub use keys::KeysConfig;
 pub use load::{PathEnv, load, load_from, resolve_config_path};
 
 use thiserror::Error;
@@ -179,6 +181,11 @@ pub struct Config {
     pub search: SearchConfig,
     pub editor: EditorConfig,
     pub lsp: LspConfig,
+    /// `[keys.diff]`/`[keys.panel]` (Unit 4): raw, not-yet-resolved main-
+    /// keymap overrides. See [`KeysConfig`]'s doc for why action-name
+    /// resolution and the actual merge onto `Keymap::default_map()` live
+    /// ui-side (`crate::ui::keymap_config`) rather than here.
+    pub keys: KeysConfig,
 }
 
 /// One problem [`load`] encountered, in a form ready for the UI's warning
@@ -245,6 +252,9 @@ impl Config {
         }
         if let Some(value) = raw.remove("lsp") {
             config.lsp = LspConfig::from_value(value, &mut warnings);
+        }
+        if let Some(value) = raw.remove("keys") {
+            config.keys = KeysConfig::from_value(value, &mut warnings);
         }
         for key in raw.keys() {
             warnings.push(ConfigWarning::unknown("top-level", key));

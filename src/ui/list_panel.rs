@@ -11,6 +11,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use crate::annotate::{Annotation, Side, Target};
 
 use super::app::App;
+use super::keymap::{Action, Keymap, Scope};
 use super::theme::Theme;
 
 fn side_marker(side: Side) -> &'static str {
@@ -52,12 +53,20 @@ fn item_line(annotation: &Annotation, theme: &Theme) -> Line<'static> {
 }
 
 /// Renders the annotation list panel into `area`. An empty store renders a
-/// hint line instead of an empty list.
-pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+/// hint line instead of an empty list; the hint's key is resolved from
+/// `keymap` (diff scope, [`Action::Compose`]) rather than hardcoded, so a
+/// `[keys.diff]` remap can't leave this text naming a stale key (spec 07
+/// Unit 4, task 4.6) — an unbound action falls back to generic wording
+/// rather than showing no key at all.
+pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
     let block = Block::default().borders(Borders::ALL).title("notes");
 
     if app.annotations.is_empty() {
-        let hint = Paragraph::new("no annotations yet — press c to add one").block(block);
+        let text = match keymap.label_for(Scope::Diff, Action::Compose) {
+            Some(key) => format!("no annotations yet — press {key} to add one"),
+            None => "no annotations yet".to_string(),
+        };
+        let hint = Paragraph::new(text).block(block);
         frame.render_widget(hint, area);
         return;
     }

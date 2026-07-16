@@ -158,6 +158,139 @@ pub enum Action {
     DismissConfigWarning,
 }
 
+/// The kebab-case config action-name for every [`Action`] variant (spec 07
+/// Unit 4, `[keys.diff]`/`[keys.panel]`'s left-hand side). An exhaustive
+/// match: a new `Action` variant fails to *compile* here until it's named,
+/// which is a stronger guarantee than a test — see
+/// [`tests::action_names_are_total_and_bijective`] for the runtime half
+/// (uniqueness, and that every name resolves back via [`action_from_name`]).
+pub(crate) fn action_name(action: Action) -> &'static str {
+    use Action::*;
+    match action {
+        CursorDown => "cursor-down",
+        CursorUp => "cursor-up",
+        CursorLeft => "cursor-left",
+        CursorRight => "cursor-right",
+        CursorLineStart => "cursor-line-start",
+        CursorLineEnd => "cursor-line-end",
+        WordForward => "word-forward",
+        WordBackward => "word-backward",
+        HalfPageDown => "half-page-down",
+        HalfPageUp => "half-page-up",
+        FullPageDown => "full-page-down",
+        FullPageUp => "full-page-up",
+        JumpToTop => "jump-to-top",
+        JumpToBottom => "jump-to-bottom",
+        NextHunk => "next-hunk",
+        PrevHunk => "prev-hunk",
+        NextFile => "next-file",
+        PrevFile => "prev-file",
+        ToggleCollapse => "toggle-collapse",
+        RecenterCursor => "recenter-cursor",
+        ScrollCursorTop => "scroll-cursor-top",
+        ScrollCursorBottom => "scroll-cursor-bottom",
+        ToggleHelp => "toggle-help",
+        EnterVisual => "enter-visual",
+        Compose => "compose",
+        ToggleList => "toggle-list",
+        ToggleStage => "toggle-stage",
+        StageFile => "stage-file",
+        ToggleStagingPanel => "toggle-staging-panel",
+        Search => "search",
+        SearchNext => "search-next",
+        SearchPrev => "search-prev",
+        SearchWordForward => "search-word-forward",
+        SearchWordBackward => "search-word-backward",
+        GotoDefinition => "goto-definition",
+        GotoReferences => "goto-references",
+        Hover => "hover",
+        FocusGitPanel => "focus-git-panel",
+        PanelCursorDown => "panel-cursor-down",
+        PanelCursorUp => "panel-cursor-up",
+        PanelSelect => "panel-select",
+        TogglePanelTab => "toggle-panel-tab",
+        RemoteFetch => "remote-fetch",
+        RemotePull => "remote-pull",
+        RemotePush => "remote-push",
+        CommitStaged => "commit-staged",
+        OpenSwitcher => "open-switcher",
+        OpenFileFinder => "open-file-finder",
+        OpenProjectSearch => "open-project-search",
+        OpenEditor => "open-editor",
+        ToggleCommandLog => "toggle-command-log",
+        Refresh => "refresh",
+        Quit => "quit",
+        QuitDiscard => "quit-discard",
+        DismissConfigWarning => "dismiss-config-warning",
+    }
+}
+
+/// Reverse of [`action_name`]: resolves a config-file action-name string
+/// back to the [`Action`] it names, or `None` for an unrecognized string (an
+/// [`super::super::config::ConfigWarning::InvalidValue`]-worthy "unknown
+/// action name" at the config edge — see `super::keymap_config`).
+pub(crate) fn action_from_name(name: &str) -> Option<Action> {
+    use Action::*;
+    Some(match name {
+        "cursor-down" => CursorDown,
+        "cursor-up" => CursorUp,
+        "cursor-left" => CursorLeft,
+        "cursor-right" => CursorRight,
+        "cursor-line-start" => CursorLineStart,
+        "cursor-line-end" => CursorLineEnd,
+        "word-forward" => WordForward,
+        "word-backward" => WordBackward,
+        "half-page-down" => HalfPageDown,
+        "half-page-up" => HalfPageUp,
+        "full-page-down" => FullPageDown,
+        "full-page-up" => FullPageUp,
+        "jump-to-top" => JumpToTop,
+        "jump-to-bottom" => JumpToBottom,
+        "next-hunk" => NextHunk,
+        "prev-hunk" => PrevHunk,
+        "next-file" => NextFile,
+        "prev-file" => PrevFile,
+        "toggle-collapse" => ToggleCollapse,
+        "recenter-cursor" => RecenterCursor,
+        "scroll-cursor-top" => ScrollCursorTop,
+        "scroll-cursor-bottom" => ScrollCursorBottom,
+        "toggle-help" => ToggleHelp,
+        "enter-visual" => EnterVisual,
+        "compose" => Compose,
+        "toggle-list" => ToggleList,
+        "toggle-stage" => ToggleStage,
+        "stage-file" => StageFile,
+        "toggle-staging-panel" => ToggleStagingPanel,
+        "search" => Search,
+        "search-next" => SearchNext,
+        "search-prev" => SearchPrev,
+        "search-word-forward" => SearchWordForward,
+        "search-word-backward" => SearchWordBackward,
+        "goto-definition" => GotoDefinition,
+        "goto-references" => GotoReferences,
+        "hover" => Hover,
+        "focus-git-panel" => FocusGitPanel,
+        "panel-cursor-down" => PanelCursorDown,
+        "panel-cursor-up" => PanelCursorUp,
+        "panel-select" => PanelSelect,
+        "toggle-panel-tab" => TogglePanelTab,
+        "remote-fetch" => RemoteFetch,
+        "remote-pull" => RemotePull,
+        "remote-push" => RemotePush,
+        "commit-staged" => CommitStaged,
+        "open-switcher" => OpenSwitcher,
+        "open-file-finder" => OpenFileFinder,
+        "open-project-search" => OpenProjectSearch,
+        "open-editor" => OpenEditor,
+        "toggle-command-log" => ToggleCommandLog,
+        "refresh" => Refresh,
+        "quit" => Quit,
+        "quit-discard" => QuitDiscard,
+        "dismiss-config-warning" => DismissConfigWarning,
+        _ => return None,
+    })
+}
+
 /// One key chord: a code plus its required modifiers, matched against an
 /// incoming [`KeyEvent`] with `SHIFT` stripped whenever the code itself
 /// already encodes shift (an uppercase char, a shifted punctuation char, or
@@ -234,6 +367,32 @@ impl KeySeq {
     fn two(code1: KeyCode, mods1: KeyModifiers, code2: KeyCode, mods2: KeyModifiers) -> KeySeq {
         KeySeq::Two(KeyChord::new(code1, mods1), KeyChord::new(code2, mods2))
     }
+
+    /// Builds a runtime [`KeySeq`] from a parsed grammar spec
+    /// (`crate::config::keys::KeySeqSpec`) — the one place the config-side
+    /// key-string grammar's plain chord data becomes the real
+    /// `KeyChord`/`KeySeq` representation. Used only by
+    /// [`super::keymap_config`], the edge module that merges
+    /// `[keys.diff]`/`[keys.panel]` overrides onto `Keymap::default_map()`
+    /// (spec 07 Unit 4).
+    pub(crate) fn from_spec(spec: crate::config::keys::KeySeqSpec) -> KeySeq {
+        use crate::config::keys::KeySeqSpec;
+        match spec {
+            KeySeqSpec::One(c) => KeySeq::one(c.code, c.mods),
+            KeySeqSpec::Two(a, b) => KeySeq::two(a.code, a.mods, b.code, b.mods),
+        }
+    }
+}
+
+/// A display label for a bare key sequence (no action attached) — the same
+/// rendering [`Binding::key_label`] uses, factored out so
+/// [`super::keymap_config`]'s collision-warning text can label a key
+/// without constructing a throwaway [`Binding`].
+pub(crate) fn key_seq_label(seq: KeySeq) -> String {
+    match seq {
+        KeySeq::One(chord) => chord.label(),
+        KeySeq::Two(first, second) => format!("{}{}", first.label(), second.label()),
+    }
 }
 
 /// Presence promotes a [`Binding`] (or a [`super::modal_keys::ModalBinding`])
@@ -282,10 +441,7 @@ pub struct Binding {
 impl Binding {
     /// A display label for the key sequence, e.g. `"Ctrl-d"`, `"gd"`.
     pub fn key_label(&self) -> String {
-        match self.keys {
-            KeySeq::One(chord) => chord.label(),
-            KeySeq::Two(first, second) => format!("{}{}", first.label(), second.label()),
-        }
+        key_seq_label(self.keys)
     }
 
     /// Promotes this row into the footer strip (see [`FooterHint`]).
@@ -645,9 +801,34 @@ impl Keymap {
         }
     }
 
+    /// Builds a [`Keymap`] from an explicit binding list — the constructor
+    /// `super::keymap_config`'s merge machinery uses to assemble the
+    /// effective (post-config-override) table from `default_map`'s
+    /// bindings (spec 07 Unit 4; see that module for the merge semantics).
+    pub(crate) fn from_bindings(bindings: Vec<Binding>) -> Keymap {
+        Keymap { bindings }
+    }
+
     /// All bindings, in table order — what the help overlay iterates.
     pub fn bindings(&self) -> &[Binding] {
         &self.bindings
+    }
+
+    /// The display label of the first binding for `action` within `scope`
+    /// (e.g. `"Space"` for [`Action::ToggleStage`] in [`Scope::Diff`]), or
+    /// `None` if `action` isn't bound there (a config override unbound it,
+    /// or the action was never bound in that scope to begin with). Every
+    /// place that spells a main-keymap action's key out in prose — rather
+    /// than rendering the [`Keymap`] table directly, like the help overlay
+    /// and footer already do — reads through this, so a remap or unbind can
+    /// never leave stale key text on screen (spec 07 Unit 4, task 4.6): see
+    /// `super::welcome`'s next-step hints, `super::git_panel`'s remote-op
+    /// line, and the staging/list panels' empty-state hints.
+    pub(crate) fn label_for(&self, scope: Scope, action: Action) -> Option<String> {
+        self.bindings
+            .iter()
+            .find(|b| b.scope == scope && b.action == action)
+            .map(Binding::key_label)
     }
 
     /// Resolves a single key event to an [`Action`] in [`Scope::Diff`],
@@ -1559,5 +1740,92 @@ mod tests {
             km.lookup_in(Scope::Diff, key(KeyCode::Char('@'), KeyModifiers::SHIFT)),
             Some(Action::ToggleCommandLog)
         );
+    }
+
+    // -- Config action-name mapping (spec 07 Unit 4, task 4.2) ---------------
+
+    /// Bijectivity's runtime half: `action_name` is total by construction
+    /// (an exhaustive match — a missing arm fails the *build*, not just this
+    /// test), so what's left to check at runtime is (1) no two actions that
+    /// actually appear in the keymap share a name and (2) every name
+    /// resolves back to the same action via `action_from_name`. Iterating
+    /// `default_map().bindings()` rather than every `Action` variant
+    /// directly mirrors `help.rs`'s own `group_of` drift test — the
+    /// "every user-visible action is reachable from the keymap" convention
+    /// (CLAUDE.md) means the two enumerations coincide in practice, and Rust
+    /// has no built-in enum-variant reflection without a derive-macro
+    /// dependency this repo doesn't carry.
+    #[test]
+    fn action_names_are_total_and_bijective() {
+        let km = Keymap::default_map();
+        let mut seen_names = std::collections::HashSet::new();
+        let mut seen_actions: Vec<Action> = Vec::new();
+        for b in km.bindings() {
+            if seen_actions.contains(&b.action) {
+                continue;
+            }
+            seen_actions.push(b.action);
+            let name = action_name(b.action);
+            assert!(
+                seen_names.insert(name),
+                "duplicate action name {name:?} (action {:?})",
+                b.action
+            );
+            assert_eq!(
+                action_from_name(name),
+                Some(b.action),
+                "name {name:?} must resolve back to {:?}",
+                b.action
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_action_name_resolves_to_none() {
+        assert_eq!(action_from_name("not-a-real-action"), None);
+    }
+
+    // -- Grammar/label consistency (spec 07 Unit 4, task 4.3) ----------------
+
+    /// Every default binding's `key_label()` (what `?` and the footer show)
+    /// must round-trip through `crate::config::keys::parse_key_string` back
+    /// into the *same* chord(s) — so config notation and help display can
+    /// never drift apart. Two-key sequences are decomposed and each
+    /// constituent chord's label is checked independently, since the
+    /// overlay's compact two-key label (`"gd"`) is a display convenience
+    /// distinct from the grammar's space-separated sequence notation
+    /// (`"g d"`); the grammar operates one chord at a time either way.
+    #[test]
+    fn default_binding_key_labels_round_trip_through_the_config_grammar() {
+        use crate::config::keys::{KeySeqSpec, parse_key_string};
+
+        fn assert_round_trips(chord: KeyChord) {
+            let label = chord.label();
+            let parsed = parse_key_string(&label)
+                .unwrap_or_else(|e| panic!("label {label:?} failed to parse: {e}"));
+            match parsed {
+                KeySeqSpec::One(spec) => {
+                    assert_eq!(
+                        KeyChord::new(spec.code, spec.mods),
+                        chord,
+                        "label {label:?} round-tripped to a different chord"
+                    );
+                }
+                KeySeqSpec::Two(..) => {
+                    panic!("single chord label {label:?} parsed as a two-chord sequence")
+                }
+            }
+        }
+
+        let km = Keymap::default_map();
+        for b in km.bindings() {
+            match b.keys {
+                KeySeq::One(chord) => assert_round_trips(chord),
+                KeySeq::Two(first, second) => {
+                    assert_round_trips(first);
+                    assert_round_trips(second);
+                }
+            }
+        }
     }
 }

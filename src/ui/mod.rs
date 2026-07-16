@@ -35,6 +35,7 @@ mod git_panel;
 mod help;
 mod history;
 mod keymap;
+mod keymap_config;
 mod list_panel;
 mod lsp_config;
 mod lsp_ops;
@@ -578,7 +579,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     let (diff_area, panel_area) = split_right(right_area, bottom_open(app));
 
     if let Some(sidebar_area) = sidebar_area {
-        git_panel::render(frame, sidebar_area, app);
+        git_panel::render(frame, sidebar_area, app, keymap);
     }
     // Project Search is a full-screen view (Zed-like), replacing the diff
     // pane's content rather than overlaying it — sidebar/bottom-panel areas
@@ -596,8 +597,8 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
             command_log::render(frame, panel_area, app);
         } else {
             match app.mode {
-                Mode::Staging => staging_panel::render(frame, panel_area, app),
-                _ => list_panel::render(frame, panel_area, app),
+                Mode::Staging => staging_panel::render(frame, panel_area, app, keymap),
+                _ => list_panel::render(frame, panel_area, app, keymap),
             }
         }
     }
@@ -769,7 +770,14 @@ fn install_panic_hook() {
 pub fn run(app: &mut App) -> anyhow::Result<QuitOutcome> {
     install_panic_hook();
     let mut terminal = init_terminal()?;
-    let keymap = Keymap::default_map();
+    // Effective-keymap construction happens exactly once, here, before the
+    // event loop starts: `default_map()` plus `[keys.diff]`/`[keys.panel]`
+    // config overrides (spec 07 Unit 4). Merge-time warnings (unknown
+    // action names, same-scope collisions) join the config-load warnings
+    // `main` already collected via `App::set_config`, so both surface
+    // through the same dismissible status-line notice.
+    let (keymap, keymap_warnings) = keymap_config::effective_keymap(&app.config.keys);
+    app.config_warnings.extend(keymap_warnings);
     let outcome = event_loop(&mut terminal, app, &keymap);
     restore_terminal();
     // Shut down any LSP servers spawned this session only after the
