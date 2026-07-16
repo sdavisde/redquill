@@ -63,7 +63,7 @@ Establish the end-to-end config pipeline — path discovery (`$XDG_CONFIG_HOME`/
 - [x] 1.9 Create `docs/example-config.toml` with fully annotated `[layout]` and `[search]` sections (every key, allowed values, defaults stated).
 - [x] 1.10 Run the User demo; capture `proofs/1-sidebar-left.png`, `proofs/1-malformed-warning.png`, `proofs/1-no-config-identical.txt`; run all four gates; commit (deps commit may precede feature commit).
 
-### [~] 2.0 Config file picks your editor (`[editor]` templating + presets)
+### [x] 2.0 Config file picks your editor (`[editor]` templating + presets)
 
 Add `[editor]` config: `edit_at_line` template with `{{filename}}`/`{{line}}` placeholders (argv-token substitution, never a shell) and `preset` with the built-in table (vim, nvim, helix, vscode, vscodium, zed, emacs, nano, micro, sublime, kakoune). Wire into the resolution precedence `--editor` > config > `$VISUAL` > `$EDITOR` > `nvim`, keeping the family heuristic for non-config tiers; replaces the hardcoded two-family special case in `src/ui/editor.rs` with data. Adds the `[editor]` section (with the full preset list) to `docs/example-config.toml`.
 
@@ -84,7 +84,7 @@ Add `[editor]` config: `edit_at_line` template with `{{filename}}`/`{{line}}` pl
 - [x] 2.5 Add the annotated `[editor]` section (template syntax, placeholder rules, full preset list) to `docs/example-config.toml`.
 - [x] 2.6 Run the User demo with a logging wrapper named `zed` on PATH; capture `proofs/2-zed-preset.txt`; gates; commit.
 
-### [ ] 3.0 Config file controls code intelligence (`[lsp]` overrides)
+### [~] 3.0 Config file controls code intelligence (`[lsp]` overrides)
 
 Add `[lsp.rust|typescript|python|go]` tables (`command`, `args`, `enabled`) overlaid onto `default_commands()`; `enabled = false` prevents spawn with today's silent degradation; type errors in the section follow the warning contract. Config structs stay edge-side — `lsp/` receives plain `LangServerCmd`-shaped data. Adds the `[lsp]` section to `docs/example-config.toml`.
 
