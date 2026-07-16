@@ -128,7 +128,7 @@ Make the main `Keymap` table remappable: kebab-case action-name mapping over the
 - [x] 4.7 Run the perf tripwire tests unchanged (`src/ui/perf_tests.rs`) and capture the run; add annotated `[keys.diff]`/`[keys.panel]` sections to `docs/example-config.toml` including the complete generated action-name list.
 - [x] 4.8 Run the User demo; capture `proofs/4-remap-help.png` and `proofs/4-perf-tripwires.txt`; gates; commit (dependency commit separate if crokey chosen).
 
-### [~] 5.0 Config file remaps every modal panel (`[keys.staging]`, `[keys.switcher]`, ...)
+### [x] 5.0 Config file remaps every modal panel (`[keys.staging]`, `[keys.switcher]`, ...)
 
 Two separately-committed halves per repo rules: (refactor) convert the `const` tables in `src/ui/modal_keys.rs` to runtime-built tables from the same default data — move-only invariant, identical test counts, zero assertion edits; (behavior) apply `[keys.<mode>]` overrides with task 4's merge semantics, preserving the bidirectional drift tests and keeping free-text character insertion non-remappable. Completes `docs/example-config.toml` with every modal `[keys.*]` table and its action names.
 
