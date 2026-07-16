@@ -24,6 +24,8 @@ mod commit_message;
 mod commit_modal;
 mod compose;
 mod compose_modal;
+mod confirm_remote_op;
+mod confirm_remote_op_modal;
 mod diff_view;
 mod diff_view_state;
 mod editor;
@@ -346,6 +348,7 @@ fn dispatch_key(
         Mode::Finder => modes::handle_finder_key(app, key),
         Mode::ProjectSearch => modes::handle_project_search_key(app, key),
         Mode::EndReview { .. } => return modes::handle_end_review_key(app, key),
+        Mode::ConfirmRemoteOp { .. } => modes::handle_confirm_remote_op_key(app, key),
         Mode::Normal | Mode::Visual { .. } => {
             // While an overlay is open it captures keys — here that overlay
             // can only be the help overlay, since Compose and Peek have their
@@ -810,6 +813,9 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     if matches!(app.mode, Mode::EndReview { .. }) {
         end_review_modal::render(frame, area, app);
     }
+    if matches!(app.mode, Mode::ConfirmRemoteOp { .. }) {
+        confirm_remote_op_modal::render(frame, area, app);
+    }
 }
 
 /// Whether the kitty keyboard-enhancement flags were successfully pushed by
@@ -1037,3 +1043,7 @@ mod file_finder_integration_tests;
 #[cfg(test)]
 #[path = "project_search_integration_tests.rs"]
 mod project_search_integration_tests;
+
+#[cfg(test)]
+#[path = "review_guard_integration_tests.rs"]
+mod review_guard_integration_tests;

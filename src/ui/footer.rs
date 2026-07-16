@@ -417,6 +417,10 @@ pub(super) fn build_hints(
         Mode::Visual { .. } => visual_hints(km, staging_allowed),
         Mode::Panel { .. } => panel_hints(km, push_publishes, review_session),
         Mode::List => modal_hints(&modal_keys.list),
+        // Review sessions repurpose `Mode::Staging` as the accepted-files
+        // panel (spec 08 Unit 5) — see `super::help::modal_sections`'s
+        // identical swap for the `?` overlay.
+        Mode::Staging if review_session => modal_hints(&modal_keys.accepted_panel),
         Mode::Staging => modal_hints(&modal_keys.staging),
         Mode::Peek => modal_hints(&modal_keys.peek),
         Mode::Switcher => modal_hints(&modal_keys.switcher),
@@ -430,6 +434,7 @@ pub(super) fn build_hints(
         // The search input occupies the footer itself; no hint strip.
         Mode::Search => Vec::new(),
         Mode::EndReview { .. } => modal_hints(&modal_keys.end_review),
+        Mode::ConfirmRemoteOp { .. } => modal_hints(&modal_keys.confirm_remote_op),
     }
 }
 

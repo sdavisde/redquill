@@ -26,10 +26,18 @@ pub enum ReviewStatus {
     ChangedSinceAccepted,
 }
 
-/// The `Space` gesture: toggles the file between `Accepted` and everything
-/// else. `Deferred` and `ChangedSinceAccepted` both accept on the first
-/// press (neither round-trips through `Unreviewed` first); an already-
-/// `Accepted` file un-accepts straight back to `Unreviewed`.
+/// The `Space`/`S` toggle: toggles the file between `Accepted` and
+/// everything else. `Deferred` and `ChangedSinceAccepted` both accept on the
+/// first press (neither round-trips through `Unreviewed` first); an
+/// already-`Accepted` file un-accepts straight back to `Unreviewed`.
+///
+/// Both `Space` (`ToggleAccept`, cursor-row granularity is irrelevant — spec
+/// 08 deliberately has no hunk/line-level accept) and `S` (`AcceptFile`,
+/// works from anywhere in the file) drive this same transition (spec 08
+/// Unit 5, amending Unit 3's originally one-directional `S`, to fully mirror
+/// `StageFile`'s toggle direction) — see `src/ui/review_ops.rs`'s
+/// `toggle_accept_file`/`accept_file`, which differ only in which key
+/// resolves to them, not in the transition applied.
 pub fn toggle_accept(status: ReviewStatus) -> ReviewStatus {
     match status {
         ReviewStatus::Accepted => ReviewStatus::Unreviewed,
@@ -39,11 +47,16 @@ pub fn toggle_accept(status: ReviewStatus) -> ReviewStatus {
     }
 }
 
-/// The `S` gesture: accepts unconditionally, regardless of the current
-/// status — mirrors `StageFile`'s "works from anywhere in the file, not
-/// just its header row" gesture, always landing on `Accepted`. This is also
-/// the transition a re-accept applies to a `ChangedSinceAccepted` file (at
-/// its fresh blob SHA, once spec 08 Unit 4 wires persistence).
+/// An unconditional accept, regardless of the current status — always
+/// lands on `Accepted`, with no un-accept direction. Not used by either
+/// `Space` or `S` today (spec 08 Unit 5 amended `S` to the full
+/// [`toggle_accept`] toggle, matching `StageFile`'s toggle direction — see
+/// that function's doc); reserved for the re-accept-at-a-fresh-blob-SHA
+/// gesture spec 08 Unit 4 will wire up for a `ChangedSinceAccepted` file,
+/// which must always accept forward and never toggle back to `Unreviewed`
+/// on a repeated press. Kept as a distinct function rather than folded into
+/// `toggle_accept` so that future call site has an unconditional primitive
+/// to reach for without re-deriving one.
 pub fn accept(_status: ReviewStatus) -> ReviewStatus {
     ReviewStatus::Accepted
 }

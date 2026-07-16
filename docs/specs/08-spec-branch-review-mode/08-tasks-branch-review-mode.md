@@ -143,3 +143,23 @@ Covers: spec Unit 1 (in-app path) — panel-scope binding, modal reusing spec-03
 - [ ] 5.2 In-app session start sharing the CLI path's core: resolve base → ensure worktree → re-root via `App::reroot` (build-before-swap, LSP re-create, annotation preservation) → `Review` target snapshot → load + reconcile persisted state (4.4). One "ensure review session" code path, two entry points.
 - [ ] 5.3 In-app failure surfacing: `worktree_add`/reroot errors render in the modal or panel message area (existing error-surface pattern), never crash, never mutate state.
 - [ ] 5.4 Reroot-into-review tempdir integration test (isolation helper mandatory — this is the switcher-adjacent shape the incident implicates); `?` overlay entry; run gates; capture modal + parity screenshots into `proofs/`; commit.
+
+### [x] 6.0 Local-mode parity: `S` toggle, accepted-files panel, guarded panel writes
+
+Added 2026-07-16 from the user-ratified parity audit (spec Unit 5). Local staging constructs get deliberate review-mode analogues; the git panel's write ops get confirm-first guards during review.
+
+**User can verify:** in a review, `S` on an accepted file un-accepts it and re-expands the section; `s` opens an accepted-files panel where `Space`/`Enter` un-accepts an entry; `p`/`P` prompt with a modal naming the branch under review (Esc cancels, confirm proceeds); `f` fetch runs unprompted; `c`'s commit modal carries a reviewed-branch warning line; in a local session every one of these behaviors is byte-for-byte unchanged.
+
+#### 6.0 Proof Artifact(s)
+
+- Test: `S` toggle transition tests (accepted → un-accept + expand) mirroring the `StageFile` toggle tests demonstrate the parity fix (FR: Unit 5 `S` toggle).
+- Screenshot/test-render: accepted-files panel listing accepted files and un-accepting one via `Space` demonstrates the unstage-panel analogue (FR: Unit 5 panel).
+- Test/render: pull/push confirm modal naming the reviewed branch, unprompted fetch, and the commit modal's review warning demonstrate the guarded write surfaces (FR: Unit 5 guards); drift tests cover every new modal table.
+- Test: regression pins for staging panel, pull/push, and commit outside review sessions demonstrate local behavior is untouched.
+
+#### 6.0 Tasks
+
+- [x] 6.1 `S` toggle parity: route `AcceptFile` through a toggle mirroring `stage_file()`'s Full→unstage direction — `Accepted` → un-accept (`Unreviewed`) + expand, anything else → accept + collapse. TDD the transition change in `src/review/model.rs`/`review_ops.rs`; keep `Space`'s existing toggle untouched (regression-pinned).
+- [x] 6.2 Accepted-files panel: in review sessions `Mode::Staging`'s list is fed from `review_states` (accepted files only) instead of `git status`; `Space`/`Enter` un-accepts + re-expands; empty-state line ("no files accepted yet"); footer/`?` describe the panel session-appropriately via the shared tables with bidirectional drift tests; local staging panel pinned byte-for-byte unchanged.
+- [x] 6.3 Guarded panel writes in review: confirm modal for `p`/`P` naming the reviewed branch (new `modal_keys.rs` table + drift test; confirm → existing `request_remote_op`, Esc cancels; `f` fetch untouched); commit modal gains a review-session warning line naming the reviewed branch (nothing-staged gate unchanged); regression tests pin all non-review behavior.
+- [x] 6.4 Tempdir integration tests for the guarded ops and panel un-accept (isolation helper mandatory); run gates; capture panel + confirm-modal renders into `proofs/`; commit.

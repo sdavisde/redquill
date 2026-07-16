@@ -13,9 +13,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::App;
 use super::modal_keys::{
-    self, CommitMessageAction, ComposeAction, EndReviewAction, FinderAction, ListAction,
-    PeekAction, ProjectSearchInputAction, ProjectSearchResultsAction, SearchAction, StagingAction,
-    SwitcherAction,
+    self, AcceptedPanelAction, CommitMessageAction, ComposeAction, ConfirmRemoteOpAction,
+    EndReviewAction, FinderAction, ListAction, PeekAction, ProjectSearchInputAction,
+    ProjectSearchResultsAction, SearchAction, StagingAction, SwitcherAction,
 };
 
 /// Handles one key event while [`super::Mode::Compose`] is active. Resolves
@@ -112,6 +112,23 @@ pub(super) fn handle_list_key(app: &mut App, key: KeyEvent) {
 /// `app.modal_keys.staging` — the same table the help overlay renders.
 /// Bypasses the [`super::Keymap`] table entirely.
 pub(super) fn handle_staging_key(app: &mut App, key: KeyEvent) {
+    // Review sessions repurpose `Mode::Staging` as the accepted-files panel
+    // (spec 08 Unit 5): resolve against its own table instead of the local
+    // staging panel's, so the two never cross-dispatch (`unstage_focused_file`
+    // would be untruthful during a review — there is nothing staged to
+    // unstage — and `un_accept_focused_file` would be meaningless locally).
+    if app.in_review_session() {
+        let Some(action) = modal_keys::resolve(&app.modal_keys.accepted_panel, key) else {
+            return;
+        };
+        match action {
+            AcceptedPanelAction::MoveDown => app.staging_move_down(),
+            AcceptedPanelAction::MoveUp => app.staging_move_up(),
+            AcceptedPanelAction::UnAccept => app.un_accept_focused_file(),
+            AcceptedPanelAction::Close => app.close_staging(),
+        }
+        return;
+    }
     let Some(action) = modal_keys::resolve(&app.modal_keys.staging, key) else {
         return;
     };
@@ -157,6 +174,12 @@ pub(super) fn handle_search_key(app: &mut App, key: KeyEvent) {
 /// The focused git panel is a first-class view rather than an overlay, so the
 /// quit family (`q`/`Q`/Ctrl-C) quits from it just as from the diff view —
 /// hence the [`super::Flow`] return, letting the event loop end the session.
+///
+/// `p`/`P` (pull/push) additionally open the confirm modal instead of
+/// running immediately whenever [`super::app::App::in_review_session`] holds
+/// (spec 08 Unit 5) — `f` (fetch) is untouched, since reviewers are expected
+/// to fetch freely. Every other action still runs through the unchanged
+/// generic `app.apply(action)` path.
 pub(super) fn handle_panel_key(
     app: &mut App,
     key: KeyEvent,
@@ -167,11 +190,34 @@ pub(super) fn handle_panel_key(
     match keymap.lookup_in(Scope::Panel, key) {
         Some(Action::Quit) => super::quit_action(app),
         Some(Action::QuitDiscard) => Flow::Quit(QuitOutcome::Discard),
+        Some(Action::RemotePull) if app.in_review_session() => {
+            app.open_confirm_remote_op_modal(crate::git::RemoteOp::Pull);
+            Flow::Continue
+        }
+        Some(Action::RemotePush) if app.in_review_session() => {
+            app.open_confirm_remote_op_modal(app.remote_push_op());
+            Flow::Continue
+        }
         Some(action) => {
             app.apply(action);
             Flow::Continue
         }
         None => Flow::Continue,
+    }
+}
+
+/// Handles one key event while [`super::Mode::ConfirmRemoteOp`] is active
+/// (spec 08 Unit 5): resolves against `app.modal_keys.confirm_remote_op`,
+/// dispatching confirm/cancel through [`App`]'s state-transition methods
+/// (`src/ui/confirm_remote_op.rs`). Bypasses the [`super::Keymap`] table
+/// entirely, like every other modal mode.
+pub(super) fn handle_confirm_remote_op_key(app: &mut App, key: KeyEvent) {
+    let Some(action) = modal_keys::resolve(&app.modal_keys.confirm_remote_op, key) else {
+        return;
+    };
+    match action {
+        ConfirmRemoteOpAction::Confirm => app.confirm_remote_op(),
+        ConfirmRemoteOpAction::Cancel => app.cancel_confirm_remote_op(),
     }
 }
 

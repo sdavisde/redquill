@@ -80,7 +80,7 @@ The core stays forge-agnostic: redquill reviews *a local branch*, not "a GitHub 
 
 - The system shall model per-file review status as an exhaustively-matched enum: `Unreviewed` (default), `Deferred`, `Accepted`, `ChangedSinceAccepted`, stored as a path-keyed map on `App` mirroring `staged_states`.
 - In review mode, `Space` shall toggle the cursor file between `Accepted` and `Unreviewed`; accepting shall auto-collapse the file's section and un-accepting shall expand it (mirroring stage-auto-collapse).
-- In review mode, `S` shall accept the file under the cursor from anywhere inside it (mirroring `StageFile`).
+- In review mode, `S` shall accept the file under the cursor from anywhere inside it, mirroring `StageFile` fully — including its toggle direction: `S` on an already-`Accepted` file un-accepts it back to `Unreviewed` and re-expands the section (amended per Unit 5, user decision 2026-07-16).
 - In review mode, `d` shall toggle the cursor file between `Deferred` and `Unreviewed`; deferring shall collapse the section.
 - Each non-`Unreviewed` status shall render a distinct single-cell marker on the file's sidebar row and multibuffer section header, via O(1) map lookups inside the existing row-build path. `Accepted` shall render as a green `●` circle in the section header's marker slot (the filename row in the buffer) and on the sidebar row — deliberately mirroring the staged-file affordance so an accepted-and-collapsed file is unmistakably different from a merely-collapsed one (user decision, 2026-07-16). `~` deferred and `!` changed-since-accepted remain suggestions (final glyphs per the Open Question).
 - Review-status keys shall be active only when the diff target is a review session; in all other targets `Space`/`S`/`d` keep their current behavior (which on `Range` targets is already inert for staging), and the `?` overlay shall show the mode-appropriate descriptions.
@@ -110,6 +110,25 @@ The core stays forge-agnostic: redquill reviews *a local branch*, not "a GitHub 
 
 - Test: round-trip and reconciliation tests in tempdir repos demonstrate persistence, blob-SHA staleness demotion, deferred carry-over, GC of deleted branches, and corrupt-file recovery.
 - CLI: a scripted two-session transcript (accept files → quit → commit a change to one file on the branch → relaunch) demonstrates exactly the touched file shows `ChangedSinceAccepted` while the rest stay accepted.
+
+### Unit 5: Local-mode parity surfaces (added by 2026-07-16 parity audit, user-ratified)
+
+**Purpose:** Every construct the user knows from local staging sessions gets a deliberate analogue — or a deliberate, recorded omission — in a review session, so the two modes feel like one tool. Added after a code audit found the staging panel, `S` toggle semantics, and the git panel's write operations were never re-examined for review mode.
+
+**Functional Requirements:**
+
+- `S` on an already-`Accepted` file shall un-accept it back to `Unreviewed` and re-expand its section — the full `StageFile` toggle analogue (this amends Unit 3's `S` requirement).
+- In a review session, the `s` staging panel shall become the **accepted-files panel**: it lists the review's accepted files, `Space`/`Enter` on an entry un-accepts it (its diff section re-expands), and the empty state says no files are accepted yet. Outside review sessions the staging panel is byte-for-byte unchanged. Footer and `?` overlay describe the panel session-appropriately via the shared key tables, with bidirectional drift tests.
+- In a review session, `p` (pull) and `P` (push) in the git panel shall require confirmation through a modal that names the branch under review (e.g. `Push <branch> — the branch under review?`); confirm runs the existing sanctioned op, Esc cancels. `f` (fetch) stays unprompted — reviewers are expected to fetch. Outside review sessions all three are unchanged. (Confirm-first over hard-block: user decision, 2026-07-16, preserving the maintainer workflow of pulling an author's new commits mid-review.)
+- In a review session, the commit modal (`c`) shall show a prominent warning line naming the branch under review before the user can confirm; the existing nothing-staged gate is unchanged. (Same confirm-first policy as pull/push.)
+- Deliberate omissions, recorded so they read as decisions rather than gaps: no hunk/line-level accept (review status is per-file by design); no "partially accepted" state; no `[N accepted]` count in the git panel (progress lives in the banner).
+
+**Proof Artifacts:**
+
+- Test: `S` toggle transition tests (accepted → un-accept + expand) mirroring the existing `StageFile` toggle tests.
+- Screenshot/test-render: the accepted-files panel listing accepted files and un-accepting one via `Space`, demonstrating the unstage-panel analogue.
+- Test/render: the pull/push confirm modal naming the reviewed branch, fetch running unprompted, and the commit modal's review warning line; drift tests for every new modal table.
+- Test: regressions pinning staging panel, pull/push, and commit behavior outside review sessions as byte-for-byte unchanged.
 
 ## Non-Goals (Out of Scope)
 

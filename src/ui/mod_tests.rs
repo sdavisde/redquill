@@ -4,7 +4,7 @@ use super::*;
 use crate::annotate::{Classification, Target};
 use crate::config::SidebarSide;
 use crate::diff::FileDiff;
-use crate::git::{DiffTarget, RawFilePatch};
+use crate::git::{DiffTarget, RawFilePatch, RemoteOp};
 use crate::highlight::TokenKind;
 use crate::lsp::SourceLocation;
 use crate::review::ReviewStatus;
@@ -2144,6 +2144,137 @@ fn review_markers_render_on_sidebar_and_section_headers_with_banner_count() {
     assert!(content.contains('~'), "deferred ~ marker: {content:?}");
 }
 
+// -- Accepted-files panel (spec 08 Unit 5) -----------------------------------
+
+/// `s` in a review session with nothing accepted yet shows the
+/// review-appropriate empty-state hint — the mirror of
+/// `empty_staging_panel_shows_hint`, resolving `Space`'s key from the
+/// effective keymap (`Action::ToggleAccept`) rather than a hardcoded key,
+/// same convention as the local panel's own hint.
+#[test]
+fn empty_accepted_panel_shows_review_appropriate_hint() {
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    app.target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+    app.apply(Action::ToggleStagingPanel);
+    assert_eq!(app.mode, Mode::Staging);
+    let keymap = Keymap::default_map();
+
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+    assert!(content.contains("no files accepted yet"));
+    assert!(content.contains("Space"));
+    // Never the local panel's own wording.
+    assert!(!content.contains("nothing staged yet"));
+}
+
+/// The accepted-files panel lists accepted files (not deferred/unreviewed
+/// ones) and un-accepting one via `Space` removes it from the list,
+/// re-expands its diff section, and drops the banner's accepted count —
+/// the full round trip through the real `dispatch_key` path (spec 08 Unit
+/// 5, task 6.2's "unstage-panel analogue" proof).
+#[test]
+fn accepted_panel_lists_accepted_files_and_space_un_accepts() {
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![
+        file_named("a.rs"),
+        file_named("b.rs"),
+        file_named("c.rs"),
+    ]);
+    app.target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+    app.apply(Action::ToggleAccept); // a.rs accepted
+    app.select_file_by_path("b.rs");
+    app.apply(Action::ToggleDefer); // b.rs deferred, not accepted
+    app.select_file_by_path("c.rs");
+    app.apply(Action::ToggleAccept); // c.rs accepted
+    assert_eq!(app.review_progress(), (2, 3));
+
+    app.apply(Action::ToggleStagingPanel);
+    assert_eq!(app.mode, Mode::Staging);
+    // The panel's underlying list model (not a rendered-text scan, which
+    // can't distinguish the panel's own list from the diff pane's section
+    // headers rendered alongside it — every file's header shows there
+    // regardless of accept/defer status): exactly the two accepted files,
+    // in diff order, deferred `b.rs` excluded.
+    let listed: Vec<&str> = app.staged.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(
+        listed,
+        vec!["a.rs", "c.rs"],
+        "deferred file must not be listed"
+    );
+
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
+
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+    if std::env::var_os("REDQUILL_PROOF_DUMP").is_some() {
+        let w = buffer.area.width as usize;
+        let symbols: Vec<&str> = buffer.content().iter().map(|c| c.symbol()).collect();
+        for row in symbols.chunks(w) {
+            eprintln!("{}", row.concat());
+        }
+    }
+    assert!(content.contains("a.rs"));
+    assert!(content.contains("c.rs"));
+
+    // Un-accept the focused (first) entry via the real dispatch path.
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+    );
+    assert_eq!(app.review_status("a.rs"), ReviewStatus::Unreviewed);
+    assert!(!app.view.is_collapsed("a.rs"));
+    assert_eq!(
+        app.staged.len(),
+        1,
+        "the un-accepted file drops off the list"
+    );
+    assert_eq!(app.review_progress(), (1, 3));
+}
+
+/// Outside a review session, `s` still opens the ordinary staging panel —
+/// byte-for-byte the pre-existing behavior (a regression pin against the
+/// accepted-panel repurposing added this task).
+#[test]
+fn staging_panel_is_unchanged_outside_a_review_session() {
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    assert_eq!(app.target, DiffTarget::WorkingTree);
+    app.apply(Action::ToggleStagingPanel);
+    assert_eq!(app.mode, Mode::Staging);
+    let keymap = Keymap::default_map();
+
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+    assert!(content.contains("nothing staged yet"));
+    assert!(!content.contains("no files accepted yet"));
+}
+
 // -- Branch/worktree switcher modal (spec 03, task 3.0) --------------------
 
 /// `b` resolves to `OpenSwitcher` only in panel scope, driven through the
@@ -2172,6 +2303,111 @@ fn b_in_panel_mode_opens_switcher_through_dispatch_key() {
         app.status_message.is_some(),
         "b must act (no-backend footer message) from the focused panel"
     );
+}
+
+// -- Guarded panel writes during review (spec 08 Unit 5) --------------------
+
+/// `p`/`P` in a review session open the confirm modal instead of running the
+/// op immediately; `f` stays unprompted, running through the unchanged
+/// direct path.
+#[test]
+fn p_and_shift_p_open_a_confirm_modal_in_a_review_session_f_stays_unprompted() {
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
+
+    let mut app = panel_smoke_app();
+    app.target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+    app.apply(Action::FocusGitPanel);
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+    );
+    assert!(
+        matches!(app.mode, Mode::ConfirmRemoteOp { op, .. } if op == RemoteOp::Pull),
+        "p in a review session must open the pull confirm modal, got {:?}",
+        app.mode
+    );
+
+    let mut app = panel_smoke_app();
+    app.target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+    app.apply(Action::FocusGitPanel);
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE),
+    );
+    assert!(
+        matches!(app.mode, Mode::ConfirmRemoteOp { op, .. } if op == RemoteOp::Push),
+        "P in a review session must open the push confirm modal, got {:?}",
+        app.mode
+    );
+
+    let mut app = panel_smoke_app();
+    app.target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+    app.apply(Action::FocusGitPanel);
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+    );
+    assert!(
+        matches!(app.mode, Mode::Panel { .. }),
+        "f must stay unprompted (no confirm modal) even in a review session, got {:?}",
+        app.mode
+    );
+    assert!(
+        app.status_message.is_some(),
+        "f must still act directly (no-backend footer message)"
+    );
+}
+
+/// Outside a review session, `p`/`P`/`f` are byte-for-byte unchanged: none
+/// of them ever opens the confirm modal (a regression pin against the
+/// guard added this task).
+#[test]
+fn p_shift_p_and_f_never_open_a_confirm_modal_outside_a_review_session() {
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
+
+    for ch in ['p', 'P', 'f'] {
+        let mut app = panel_smoke_app();
+        assert_eq!(app.target, DiffTarget::WorkingTree);
+        app.apply(Action::FocusGitPanel);
+        dispatch_key(
+            &mut app,
+            &keymap,
+            &mut pending,
+            &mut pending_count,
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+        );
+        assert!(
+            matches!(app.mode, Mode::Panel { .. }),
+            "{ch} outside a review session must never open the confirm modal, got {:?}",
+            app.mode
+        );
+        assert!(
+            app.status_message.is_some(),
+            "{ch} must still act directly (no-backend footer message)"
+        );
+    }
 }
 
 /// `b` in Normal mode (diff scope) is unaffected by the panel-scope

@@ -545,7 +545,8 @@ impl App {
             | Mode::CommitMessage
             | Mode::Finder
             | Mode::ProjectSearch
-            | Mode::EndReview { .. } => {}
+            | Mode::EndReview { .. }
+            | Mode::ConfirmRemoteOp { .. } => {}
             Mode::Normal | Mode::Visual { .. } => {
                 self.mode = Mode::Panel {
                     cursor: 0,

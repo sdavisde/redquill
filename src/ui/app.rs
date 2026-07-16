@@ -124,6 +124,23 @@ pub enum Mode {
         origin: EndReviewOrigin,
         cursor: usize,
     },
+    /// The pull/push confirm modal (`p`/`P` in a review session, spec 08
+    /// Unit 5) is open: confirming this specific remote-writing op against
+    /// the branch under review is the confirm-first guard `p`/`P` gain
+    /// during a review (`f` fetch stays unprompted — see
+    /// [`super::modes::handle_panel_key`]). Only ever opened from the
+    /// focused git panel (`p`/`P` are panel-scope bindings — see
+    /// [`RemoteOp`]'s import), so `cursor`/`tab` are exactly what `Esc` or a
+    /// confirmed op restores [`Mode::Panel`] to; `op` is the operation a
+    /// confirm actually runs — resolved once at open time (mirroring
+    /// [`App::remote_push_op`]'s own resolution point), not re-derived at
+    /// confirm time, so the modal's own question text and the op it runs
+    /// can never disagree.
+    ConfirmRemoteOp {
+        op: RemoteOp,
+        cursor: usize,
+        tab: PanelTab,
+    },
 }
 
 /// Where `q` was pressed from, carried by [`Mode::EndReview`] so its Cancel
@@ -190,7 +207,17 @@ pub struct App {
     /// The diff target being reviewed; decides whether `space` stages
     /// (working tree), unstages (staged), or is read-only (range).
     pub target: DiffTarget,
-    /// Files with staged changes, per the latest `git status` refresh.
+    /// Files with staged changes, per the latest `git status` refresh —
+    /// the local staging panel's list. During a review session (spec 08
+    /// Unit 5) this field is dual-purposed for the **accepted-files panel**
+    /// instead: `App::refresh_accepted_list` (see `super::review_ops`)
+    /// repopulates it from `review_states` (accepted files only, diff
+    /// order) whenever [`Mode::Staging`] opens, and `staging_cursor` indexes
+    /// it the same way either way. Safe to share because the two panels are
+    /// mutually exclusive by session — a plain local session never touches
+    /// `review_states`, and a review session's `git status` is always clean
+    /// (review targets are read-only for staging), so nothing here ever
+    /// needs to hold both meanings at once.
     pub staged: Vec<StagedFile>,
     /// Current branch / upstream / ahead-behind state, read at startup and
     /// on every [`App::refresh`]. `None` in git-less contexts, or until the

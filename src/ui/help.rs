@@ -167,11 +167,30 @@ fn modal_hints<A: Clone>(table: &[ModalBinding<A>]) -> Vec<(String, &'static str
 /// input like Compose/Search) gets a section here for the same reason those
 /// do; `help` doesn't, since it's the enum-dispatch table for the overlay's
 /// own scroll/close keys, already documented on the footer.
-fn modal_sections(modal_keys: &ModalKeymaps) -> [(&'static str, Vec<(String, &'static str)>); 12] {
+///
+/// `review_session` swaps the "Staging panel" slot for the accepted-files
+/// panel's own table/title during a review session (spec 08 Unit 5) —
+/// `Mode::Staging` is one mode shared by both panels
+/// (`super::modes::handle_staging_key` dispatches to whichever table
+/// applies), so only one of the two ever documents itself here at a time,
+/// exactly like `Action::ToggleStage`/`Action::ToggleAccept`'s mutual
+/// exclusion in [`binding_hidden`].
+fn modal_sections(
+    modal_keys: &ModalKeymaps,
+    review_session: bool,
+) -> [(&'static str, Vec<(String, &'static str)>); 13] {
+    let staging_section = if review_session {
+        (
+            "Accepted files panel (s, review sessions)",
+            modal_hints(&modal_keys.accepted_panel),
+        )
+    } else {
+        ("Staging panel", modal_hints(&modal_keys.staging))
+    };
     [
         ("Compose mode", modal_hints(&modal_keys.compose)),
         ("List mode", modal_hints(&modal_keys.list)),
-        ("Staging panel", modal_hints(&modal_keys.staging)),
+        staging_section,
         ("Search input", modal_hints(&modal_keys.search)),
         ("Peek mode", modal_hints(&modal_keys.peek)),
         (
@@ -195,6 +214,10 @@ fn modal_sections(modal_keys: &ModalKeymaps) -> [(&'static str, Vec<(String, &'s
         (
             "End review modal (q, review session)",
             modal_hints(&modal_keys.end_review),
+        ),
+        (
+            "Pull/push confirm (p/P, review session)",
+            modal_hints(&modal_keys.confirm_remote_op),
         ),
     ]
 }
@@ -268,7 +291,7 @@ pub fn render(
     let query = search.map_or("", |(q, _)| q);
     let editing = search.is_some_and(|(_, editing)| editing);
 
-    let sections = modal_sections(tables.modal_keys);
+    let sections = modal_sections(tables.modal_keys, review_session);
     let bindings = tables.keymap.bindings();
     // Column width is computed from the unfiltered rows, so it never jumps
     // around as the query narrows what's actually shown.

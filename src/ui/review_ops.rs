@@ -13,9 +13,10 @@
 //! — from a test, or a future caller that forgets the dispatch-time
 //! translation — can never produce review state outside a review session.
 
-use crate::review::{ReviewStatus, accept, toggle_accept, toggle_defer};
+use crate::review::{ReviewStatus, toggle_accept, toggle_defer};
 
 use super::App;
+use super::stage_ops::StagedFile;
 
 impl App {
     /// The review status of `path` (missing entry = `Unreviewed`) — the
@@ -82,15 +83,23 @@ impl App {
         self.apply_review_transition(toggle_accept, ReviewStatus::Accepted);
     }
 
-    /// `S` in a review session: accepts the cursor file unconditionally from
-    /// anywhere inside it (see [`crate::review::accept`]), mirroring
-    /// `App::stage_file`'s "works from anywhere" gesture — always collapses.
-    /// Same reachability guard as [`App::toggle_accept_file`].
+    /// `S` in a review session: toggles the cursor file between `Accepted`
+    /// and `Unreviewed` from anywhere inside it (see
+    /// [`crate::review::toggle_accept`]) — the full `StageFile` toggle
+    /// analogue (spec 08 Unit 5, amending Unit 3's originally
+    /// one-directional `S`): an already-`Accepted` file un-accepts and
+    /// re-expands, exactly like [`App::toggle_accept_file`]/`Space`. The two
+    /// handlers apply the identical transition and differ only in which key
+    /// resolves to them — review has no hunk/line-level granularity for
+    /// `Space` to differentiate on (a deliberate omission, spec 08 Unit 5),
+    /// so unlike `ToggleStage`/`StageFile`'s granularity split, `Space`/`S`
+    /// are now behavioral synonyms by design. Same reachability guard as
+    /// [`App::toggle_accept_file`].
     pub(super) fn accept_file(&mut self) {
         if !self.in_review_session() {
             return;
         }
-        self.apply_review_transition(accept, ReviewStatus::Accepted);
+        self.apply_review_transition(toggle_accept, ReviewStatus::Accepted);
     }
 
     /// `d` in a review session: toggles the cursor file between `Deferred`
@@ -104,6 +113,49 @@ impl App {
             return;
         }
         self.apply_review_transition(toggle_defer, ReviewStatus::Deferred);
+    }
+
+    // -- Accepted-files panel (spec 08 Unit 5) -------------------------------
+
+    /// Rebuilds `App::staged` (and, transitively, what the staging panel
+    /// renders and indexes via `staging_cursor`) from `review_states` for
+    /// the **accepted-files panel**: every file in `view.files` (diff
+    /// order, so entries appear in the same stable order the sidebar uses)
+    /// whose review status is `Accepted`, with `letter` taken from its
+    /// `FileChangeKind` — the same letter the CHANGES sidebar shows.
+    /// `App::staged`'s doc explains why sharing that storage with the local
+    /// staging panel is safe (the two are mutually exclusive by session).
+    pub(super) fn refresh_accepted_list(&mut self) {
+        self.staged = self
+            .view
+            .files
+            .iter()
+            .filter(|f| self.review_status(&f.path) == ReviewStatus::Accepted)
+            .map(|f| StagedFile {
+                path: f.path.clone(),
+                letter: f.kind.letter(),
+            })
+            .collect();
+    }
+
+    /// Un-accepts the accepted-files panel's focused entry (`Space`/`Enter`,
+    /// spec 08 Unit 5): sets its status back to `Unreviewed`, re-expands its
+    /// diff section, rebuilds rows, then refreshes the panel list (which
+    /// shrinks by one) and re-clamps the cursor — the review analogue of
+    /// `App::unstage_focused_file`. A no-op on an empty list. The banner's
+    /// `(accepted, total)` count (`App::review_progress`) reflects this
+    /// immediately, since it always recomputes live from `review_states`.
+    pub(super) fn un_accept_focused_file(&mut self) {
+        let Some(entry) = self.staged.get(self.staging_cursor) else {
+            return;
+        };
+        let path = entry.path.clone();
+        self.set_review_status(&path, ReviewStatus::Unreviewed);
+        self.view.set_collapsed(&path, false);
+        self.rebuild_rows();
+        self.refresh_accepted_list();
+        self.staging_cursor = self.staging_cursor.min(self.staged.len().saturating_sub(1));
+        self.set_status_message(format!("un-accepted {path}"));
     }
 }
 
@@ -180,12 +232,44 @@ mod tests {
     }
 
     #[test]
-    fn accept_file_is_unconditional_even_when_already_deferred() {
+    fn accept_file_from_deferred_accepts_and_collapses() {
         let mut app = review_app(&["a.rs"]);
         app.apply(Action::ToggleDefer);
         assert_eq!(app.review_status("a.rs"), ReviewStatus::Deferred);
         app.apply(Action::AcceptFile);
         assert_eq!(app.review_status("a.rs"), ReviewStatus::Accepted);
+        assert!(app.view.is_collapsed("a.rs"));
+    }
+
+    /// Spec 08 Unit 5 parity fix: `S` on an already-`Accepted` file
+    /// un-accepts it back to `Unreviewed` and re-expands its section — the
+    /// full `StageFile` toggle analogue, not the one-directional accept
+    /// Unit 3 originally shipped.
+    #[test]
+    fn accept_file_toggles_an_already_accepted_file_back_to_unreviewed_and_expands() {
+        let mut app = review_app(&["a.rs"]);
+        app.apply(Action::AcceptFile);
+        assert_eq!(app.review_status("a.rs"), ReviewStatus::Accepted);
+        assert!(app.view.is_collapsed("a.rs"));
+
+        app.apply(Action::AcceptFile);
+        assert_eq!(app.review_status("a.rs"), ReviewStatus::Unreviewed);
+        assert!(!app.view.is_collapsed("a.rs"));
+    }
+
+    /// `S` from anywhere in an already-collapsed accepted file still
+    /// resolves to *that* file's toggle (not a no-op just because the
+    /// cursor isn't on the header row).
+    #[test]
+    fn accept_file_toggle_works_from_anywhere_in_the_file() {
+        let mut app = review_app(&["a.rs"]);
+        app.apply(Action::AcceptFile); // accept + collapse
+        assert!(app.view.is_collapsed("a.rs"));
+        // Un-accept expands the section again, so the cursor can move into
+        // the body before toggling a second time.
+        app.view.cursor = app.view.rows.len().saturating_sub(1);
+        app.apply(Action::AcceptFile);
+        assert_eq!(app.review_status("a.rs"), ReviewStatus::Unreviewed);
     }
 
     #[test]
@@ -193,6 +277,20 @@ mod tests {
         let mut app = App::new(vec![file("a.rs")]);
         app.apply(Action::AcceptFile);
         assert_eq!(app.review_status("a.rs"), ReviewStatus::Unreviewed);
+    }
+
+    /// `Space`'s own toggle is untouched by the `S` parity fix — same
+    /// transition, same reachability guard, regression-pinned independently
+    /// of `S`'s tests above (spec 08 Unit 5 amends only `S`'s direction).
+    #[test]
+    fn toggle_accept_space_behavior_is_unchanged_by_the_s_parity_fix() {
+        let mut app = review_app(&["a.rs"]);
+        app.apply(Action::ToggleAccept);
+        assert_eq!(app.review_status("a.rs"), ReviewStatus::Accepted);
+        assert!(app.view.is_collapsed("a.rs"));
+        app.apply(Action::ToggleAccept);
+        assert_eq!(app.review_status("a.rs"), ReviewStatus::Unreviewed);
+        assert!(!app.view.is_collapsed("a.rs"));
     }
 
     // -- ToggleDefer (d) ----------------------------------------------------
