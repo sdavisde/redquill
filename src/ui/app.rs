@@ -442,6 +442,42 @@ pub struct App {
     /// repository instead. `None` outside a review session, or in
     /// git-less/test contexts that never call finish.
     pub(super) review_origin_ops: Option<Box<dyn StageOps>>,
+    /// The path `<git-common-dir>/redquill/review-state.json` resolves to
+    /// for this session (spec 08 Unit 4), set once at startup by
+    /// [`App::set_review_state_path`]. `None` outside a review session (or
+    /// in git-less/test contexts), in which case every persistence gesture
+    /// degrades to a no-op — see [`App::persist_review_state`].
+    pub(super) review_state_path: Option<PathBuf>,
+    /// The blob SHA (`git rev-parse <branch>:<path>`) each currently
+    /// `Accepted`/`ChangedSinceAccepted` path in `review_states` was
+    /// accepted at, mirrored 1:1 alongside `review_states` so
+    /// [`App::persist_review_state`] can write it back out and
+    /// reconciliation on the *next* session can compare against it. Missing
+    /// entries mean "no blob to record" (an accepted deletion), not
+    /// "unknown" — the same optional-value convention
+    /// [`crate::review::store::PersistedFile::blob_sha`] itself uses.
+    /// Never holds an entry for a `Deferred`/`Unreviewed` path (see
+    /// [`super::review_ops::App::set_review_status`]'s cleanup).
+    pub(super) review_blob_shas: HashMap<String, Option<String>>,
+    /// The background-task poller [`App::persist_review_state`] spawns each
+    /// save on (spec 08 Unit 4's "off the render loop" requirement — the
+    /// same non-blocking pattern [`App::request_remote_op`] uses for remote
+    /// ops, generalized here to a plain disk write via
+    /// [`crate::review::store::save_review`]). Drained once per tick by
+    /// [`App::poll_review_save`]; a failed save surfaces as a status
+    /// message rather than blocking or losing the in-memory state — the
+    /// next status change retries with fresh data regardless.
+    pub(super) review_save_tasks: BackgroundTasks<Result<(), String>>,
+    /// The count of review-state saves spawned but not yet drained by
+    /// [`App::poll_review_save`] — incremented on every
+    /// [`App::persist_review_state`] spawn, decremented as each result
+    /// drains. Not a single-flight guard (saves are idempotent overwrites,
+    /// so nothing is rejected while one is in flight — see
+    /// [`App::review_save_tasks`]'s doc); exists so a "did every in-flight
+    /// save land" check has somewhere to read, both for a future
+    /// quit-safety wait and for tests that need to await a save
+    /// deterministically rather than sleeping a fixed guess.
+    pub(super) review_saves_pending: u32,
 }
 
 /// The prior view state suspended while a commit view (opened from the git
@@ -575,6 +611,10 @@ impl App {
             file_view_return_mode: Mode::Normal,
             project_search: None,
             review_origin_ops: None,
+            review_state_path: None,
+            review_blob_shas: HashMap::new(),
+            review_save_tasks: BackgroundTasks::new(),
+            review_saves_pending: 0,
         };
         app.rebuild_rows();
         app
@@ -693,6 +733,65 @@ impl App {
     /// outside one simply never call `finish_review`.
     pub fn set_review_origin_ops(&mut self, ops: Box<dyn StageOps>) {
         self.review_origin_ops = Some(ops);
+    }
+
+    /// Sets the path this session persists review progress to (spec 08
+    /// Unit 4, `<git-common-dir>/redquill/review-state.json`), resolved once
+    /// by `main`'s review-session bootstrap before the first render. Every
+    /// persistence gesture ([`App::persist_review_state`]) is a no-op
+    /// without this — outside a review session, or in a git-less/test
+    /// context, nothing is ever written.
+    pub fn set_review_state_path(&mut self, path: PathBuf) {
+        self.review_state_path = Some(path);
+    }
+
+    /// Seeds `review_states`/`review_blob_shas` from a freshly loaded and
+    /// reconciled persisted review (spec 08 Unit 4), applying the matching
+    /// initial collapse state the same way [`App::with_git`] seeds it for
+    /// staged files: `Accepted`/`Deferred` start collapsed (nothing new to
+    /// review there yet); `ChangedSinceAccepted` starts **expanded** — the
+    /// spec's explicit "visibly marked, not collapsed" requirement, since
+    /// the whole point is drawing the reviewer's eye back to what changed;
+    /// `Unreviewed` (no entry) is unaffected, matching every other file's
+    /// default expanded state. Called once at session start, before the
+    /// first render, by `main`'s review-session bootstrap; meaningless (and
+    /// never called) for any other target.
+    pub fn set_review_states(
+        &mut self,
+        states: HashMap<String, ReviewStatus>,
+        blob_shas: HashMap<String, Option<String>>,
+    ) {
+        for (path, status) in &states {
+            let collapse = matches!(status, ReviewStatus::Accepted | ReviewStatus::Deferred);
+            self.view.set_collapsed(path, collapse);
+        }
+        self.review_states = states;
+        self.review_blob_shas = blob_shas;
+        self.rebuild_rows();
+    }
+
+    /// Drains completed background review-state saves (spec 08 Unit 4, once
+    /// per event-loop tick alongside [`App::poll_git_ops`]). A failed save —
+    /// a disk error, or the background task panicking — surfaces as a
+    /// status message; the in-memory `review_states`/`review_blob_shas` are
+    /// never rolled back on a failed save, so the very next status change's
+    /// save simply retries with current data. Foreign or stale task ids
+    /// need no special handling here (unlike `git_op`'s single-flight
+    /// guard) — saves are idempotent overwrites of the same branch's entry,
+    /// so draining every completed one in order is always safe.
+    pub(super) fn poll_review_save(&mut self) {
+        for (_, result) in self.review_save_tasks.poll() {
+            self.review_saves_pending = self.review_saves_pending.saturating_sub(1);
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    self.set_status_message(format!("review state save failed: {e}"));
+                }
+                Err(panic) => {
+                    self.set_status_message(format!("review state save failed: {}", panic.message));
+                }
+            }
+        }
     }
 
     /// Sets the loaded config and any warnings collected while loading it

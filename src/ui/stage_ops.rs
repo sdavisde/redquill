@@ -184,6 +184,16 @@ pub trait StageOps {
     fn async_file_candidates_fetcher(&self) -> Option<AsyncFileCandidatesFetcher> {
         None
     }
+    /// Reads `path`'s blob SHA on `branch` (see [`GitRunner::blob_sha`],
+    /// spec 08 Unit 4), for capturing at accept time and re-checking at
+    /// reconciliation time. The default errors, mirroring
+    /// [`StageOps::branch_list`], so backend-less or navigation-only fakes
+    /// need not implement it — accept/reconcile then degrade to recording no
+    /// blob SHA rather than crashing.
+    fn blob_sha(&self, branch: &str, path: &str) -> Result<Option<String>, GitError> {
+        let _ = (branch, path);
+        Err(GitError::Parse("blob sha unavailable".into()))
+    }
 }
 
 impl StageOps for GitRunner {
@@ -209,6 +219,10 @@ impl StageOps for GitRunner {
 
     fn unapply_cached(&self, patch: &str) -> Result<(), GitError> {
         GitRunner::unapply_cached(self, patch)
+    }
+
+    fn blob_sha(&self, branch: &str, path: &str) -> Result<Option<String>, GitError> {
+        GitRunner::blob_sha(self, branch, path)
     }
 
     fn read_worktree_file(&self, path: &str) -> Option<Vec<u8>> {

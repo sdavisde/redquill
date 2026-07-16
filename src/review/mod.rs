@@ -7,9 +7,11 @@
 //! `staged_states`).
 //!
 //! Persistence (`review-state.json`, blob-SHA reconciliation, GC) is spec 08
-//! Unit 4's follow-up submodule — out of scope here, which only knows the
-//! in-memory state machine.
+//! Unit 4's `store`/`reconcile` submodules.
 
 mod model;
+mod reconcile;
+pub mod store;
 
 pub use model::{ReviewStatus, accept, toggle_accept, toggle_defer};
+pub use reconcile::reconcile;

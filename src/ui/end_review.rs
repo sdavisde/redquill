@@ -82,13 +82,18 @@ impl App {
     /// The `f` (finish) gesture: removes the managed review worktree through
     /// [`App::review_origin_ops`] (never `stage_ops`, which is rooted
     /// *inside* the worktree being removed — see that field's doc), then
-    /// prunes stale worktree admin records. Returns `Some(QuitOutcome::Emit)`
+    /// prunes stale worktree admin records and — spec 08 Unit 4, closing the
+    /// loop with this unit — deletes this branch's persisted review-state
+    /// entry, so a later fresh `--review` of the same branch starts clean
+    /// rather than resuming stale progress. Returns `Some(QuitOutcome::Emit)`
     /// on success — the caller quits exactly like a plain `q`, so annotations
     /// emit through the existing on-quit path unchanged. On failure (e.g. a
     /// dirty worktree; or no origin backend/no review session attached, in a
     /// git-less test context) the git message is surfaced as a status
     /// message and the modal closes back to its origin mode — the review
-    /// continues, nothing is removed.
+    /// continues, nothing is removed, and the persisted state entry is left
+    /// untouched (the worktree removal is the gate; the state entry is only
+    /// ever deleted alongside a worktree that actually went away).
     pub(super) fn finish_review(&mut self) -> Option<QuitOutcome> {
         let Some(ops) = self.review_origin_ops.as_deref() else {
             self.set_status_message("finish unavailable (no origin git backend)");
@@ -107,6 +112,19 @@ impl App {
                 // the user (stale admin records are harmless clutter, not a
                 // correctness issue).
                 let _ = ops.worktree_prune();
+                // Same best-effort treatment: the worktree is already gone,
+                // so a failure to also delete the (much less consequential)
+                // state entry isn't worth surfacing over — the next launch's
+                // GC (spec 08 Unit 4 task 4.5) would clean up a leftover
+                // entry anyway once the branch itself is gone, and while the
+                // branch still exists a stale entry just means the next
+                // `--review` of it resumes old progress instead of starting
+                // fresh, not a crash or data-loss risk.
+                if let (Some(state_path), Some(branch)) =
+                    (self.review_state_path.clone(), self.review_branch())
+                {
+                    let _ = crate::review::store::delete_review(&state_path, branch);
+                }
                 Some(QuitOutcome::Emit)
             }
             Err(e) => {
@@ -294,6 +312,86 @@ index 111..222 100644
             *prune_calls.borrow(),
             1,
             "prune must run after a successful remove"
+        );
+    }
+
+    #[test]
+    fn finish_deletes_the_branchs_persisted_state_entry() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state_path = tmp.path().join("review-state.json");
+        crate::review::store::save_review(
+            &state_path,
+            "feature",
+            crate::review::store::PersistedReview {
+                base: "main".to_string(),
+                worktree_path: PathBuf::from("/tmp/review-worktree"),
+                files: std::collections::BTreeMap::new(),
+            },
+        )
+        .unwrap();
+        // A different branch's entry must survive.
+        crate::review::store::save_review(
+            &state_path,
+            "other-branch",
+            crate::review::store::PersistedReview {
+                base: "main".to_string(),
+                worktree_path: PathBuf::from("/tmp/other-worktree"),
+                files: std::collections::BTreeMap::new(),
+            },
+        )
+        .unwrap();
+
+        let mut app = review_app();
+        app.set_repo_root(PathBuf::from("/tmp/review-worktree"));
+        app.set_review_state_path(state_path.clone());
+        app.set_review_origin_ops(Box::new(WorktreeFake::default()));
+        app.open_end_review_modal();
+
+        let outcome = app.finish_review();
+
+        assert_eq!(outcome, Some(QuitOutcome::Emit));
+        let state = crate::review::store::load(&state_path);
+        assert!(
+            !state.reviews.contains_key("feature"),
+            "finish must delete this review's own entry"
+        );
+        assert!(
+            state.reviews.contains_key("other-branch"),
+            "finish must never touch another branch's entry"
+        );
+    }
+
+    #[test]
+    fn finish_failure_leaves_the_persisted_state_entry_untouched() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state_path = tmp.path().join("review-state.json");
+        crate::review::store::save_review(
+            &state_path,
+            "feature",
+            crate::review::store::PersistedReview {
+                base: "main".to_string(),
+                worktree_path: PathBuf::from("/tmp/review-worktree"),
+                files: std::collections::BTreeMap::new(),
+            },
+        )
+        .unwrap();
+
+        let mut app = review_app();
+        app.set_repo_root(PathBuf::from("/tmp/review-worktree"));
+        app.set_review_state_path(state_path.clone());
+        app.set_review_origin_ops(Box::new(WorktreeFake {
+            remove_error: Some("fatal: worktree is dirty".to_string()),
+            ..Default::default()
+        }));
+        app.open_end_review_modal();
+
+        let outcome = app.finish_review();
+
+        assert_eq!(outcome, None);
+        let state = crate::review::store::load(&state_path);
+        assert!(
+            state.reviews.contains_key("feature"),
+            "a failed finish must leave the persisted entry in place"
         );
     }
 

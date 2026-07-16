@@ -104,7 +104,7 @@ Covers: spec Unit 3 — review-status enum + App map, key handling gated to revi
 - [x] 3.5 Per-target key visibility: review keys appear in footer/`?` only in review sessions with review-specific descriptions, per the README rule that inapplicable keys are omitted rather than inert; extend the drift tests both directions.
 - [x] 3.6 Run the perf tripwires unmodified (marker lookups must not change row-build complexity); run gates; capture marker screenshot + dual `?` overlay proof into `proofs/`; commit.
 
-### [ ] 4.0 Review progress survives sessions and self-invalidates when files change
+### [x] 4.0 Review progress survives sessions and self-invalidates when files change
 
 **User can verify:** accept files, quit with pause; relaunch `--review <branch>` → accepted files are still accepted and collapsed; commit a change to one accepted file on the branch, relaunch → exactly that file shows the changed-since-accepted marker, un-collapsed, and one `Space` re-accepts it; deferred files carry over; finish deletes the state entry; deleting the branch then launching redquill GCs the entry; a hand-corrupted state file is set aside with a stderr note instead of crashing.
 
@@ -118,12 +118,12 @@ Covers: spec Unit 4 — `review-state.json` in the common git dir, atomic writes
 
 #### 4.0 Tasks
 
-- [ ] 4.1 TDD the schema in `src/review/store.rs`: serde types (schema `version` field; per-branch entry = base ref, worktree path, per-file `{ status, blob_sha }`), byte-exact round-trip test, atomic write (temp file + rename in the same directory), path = `<git_common_dir>/redquill/review-state.json`. Typed errors; no TUI types.
-- [ ] 4.2 TDD runner method `blob_sha(branch, path)` wrapping `git rev-parse <branch>:<path>` (full SHA; typed handling for paths absent on the branch — an accepted deleted file records its absence, not a SHA).
-- [ ] 4.3 TDD pure reconciliation: `(persisted entry, current blob SHAs) → status map` — matching `Accepted` stays; mismatch → `ChangedSinceAccepted`; `Deferred` carries over; files new on the branch since last session are `Unreviewed`.
-- [ ] 4.4 Wire persistence into the session: save after every status change (crash/`Q`-safe, off the render loop per the concurrency rules); on session start load + reconcile; `ChangedSinceAccepted` renders un-collapsed with its marker and `Space` re-accepts at the fresh SHA.
-- [ ] 4.5 Launch-time GC + corruption handling: drop entries whose branch no longer exists (never touching live entries); corrupt file → rename to `review-state.json.corrupt`, one stderr line, continue empty. Document this as the module's silent-degradation contract in the module doc. Tempdir tests for both.
-- [ ] 4.6 Finish (2.4) additionally deletes the branch's state entry; two-session tempdir integration test covering resume → staleness → re-accept → finish; run gates; capture the two-session and cleanup transcripts into `proofs/`; commit.
+- [x] 4.1 TDD the schema in `src/review/store.rs`: serde types (schema `version` field; per-branch entry = base ref, worktree path, per-file `{ status, blob_sha }`), byte-exact round-trip test, atomic write (temp file + rename in the same directory), path = `<git_common_dir>/redquill/review-state.json`. Typed errors; no TUI types.
+- [x] 4.2 TDD runner method `blob_sha(branch, path)` wrapping `git rev-parse <branch>:<path>` (full SHA; typed handling for paths absent on the branch — an accepted deleted file records its absence, not a SHA).
+- [x] 4.3 TDD pure reconciliation: `(persisted entry, current blob SHAs) → status map` — matching `Accepted` stays; mismatch → `ChangedSinceAccepted`; `Deferred` carries over; files new on the branch since last session are `Unreviewed`.
+- [x] 4.4 Wire persistence into the session: save after every status change (crash/`Q`-safe, off the render loop per the concurrency rules); on session start load + reconcile; `ChangedSinceAccepted` renders un-collapsed with its marker and `Space` re-accepts at the fresh SHA.
+- [x] 4.5 Launch-time GC + corruption handling: drop entries whose branch no longer exists (never touching live entries); corrupt file → rename to `review-state.json.corrupt`, one stderr line, continue empty. Document this as the module's silent-degradation contract in the module doc. Tempdir tests for both.
+- [x] 4.6 Finish (2.4) additionally deletes the branch's state entry; two-session tempdir integration test covering resume → staleness → re-accept → finish; run gates; capture the two-session and cleanup transcripts into `proofs/`; commit.
 
 ### [ ] 5.0 Start a review without leaving the app: review-branch modal
 

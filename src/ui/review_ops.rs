@@ -12,7 +12,23 @@
 //! additionally self-guarded on the same predicate, so calling one directly
 //! — from a test, or a future caller that forgets the dispatch-time
 //! translation — can never produce review state outside a review session.
+//!
+//! Also owns persistence (spec 08 Unit 4): every status-changing gesture
+//! below ends with [`App::persist_review_state`], which spawns the actual
+//! disk write on a background thread (never the render loop, mirroring
+//! `App::request_remote_op`'s pattern) via
+//! [`crate::review::store::save_review`]. Blob-SHA capture
+//! ([`App::maybe_capture_blob_sha`]) is the one exception kept synchronous:
+//! a single local `git rev-parse` is exactly the class of quick git call
+//! `App::stage_file`'s own synchronous `ops.stage_file` already makes
+//! directly from a key handler, so this follows that shipped precedent
+//! rather than introducing a second, inconsistent threading story for one
+//! more fast local read.
 
+use std::collections::BTreeMap;
+
+use crate::git::DiffTarget;
+use crate::review::store::{PersistedFile, PersistedReview, PersistedStatus};
 use crate::review::{ReviewStatus, toggle_accept, toggle_defer};
 
 use super::App;
@@ -29,13 +45,106 @@ impl App {
 
     /// Records `status` for `path`, dropping the map entry entirely on
     /// `Unreviewed` so the map only ever holds non-default entries —
-    /// exactly `staged_states`' own "missing = default" convention.
+    /// exactly `staged_states`' own "missing = default" convention. Also
+    /// drops any captured `review_blob_shas` entry whenever the new status
+    /// isn't `Accepted`/`ChangedSinceAccepted` (those are the only two
+    /// statuses a blob SHA is ever meaningful for) — [`App::persist_review_state`]
+    /// treats a missing entry as "no blob to record", so this keeps a
+    /// stale SHA from lingering after an un-accept or a defer.
     fn set_review_status(&mut self, path: &str, status: ReviewStatus) {
         if status == ReviewStatus::Unreviewed {
             self.review_states.remove(path);
         } else {
             self.review_states.insert(path.to_string(), status);
         }
+        if !matches!(
+            status,
+            ReviewStatus::Accepted | ReviewStatus::ChangedSinceAccepted
+        ) {
+            self.review_blob_shas.remove(path);
+        }
+    }
+
+    /// Captures `path`'s current blob SHA on the branch under review
+    /// (`git rev-parse <branch>:<path>`, spec 08 Unit 4) whenever `next` is
+    /// `Accepted` — the moment-of-acceptance capture the spec calls for,
+    /// including the re-accept case (`ChangedSinceAccepted -> Accepted`,
+    /// which fetches the *fresh* SHA, superseding the stale one this
+    /// overwrites). A no-op for every other status (nothing to capture) and
+    /// degrades silently (records no SHA rather than erroring) without a
+    /// git backend or outside a review session — the caller is always
+    /// already inside `apply_review_transition`, which only ever runs while
+    /// `in_review_session()` holds.
+    fn maybe_capture_blob_sha(&mut self, path: &str, next: ReviewStatus) {
+        if next != ReviewStatus::Accepted {
+            return;
+        }
+        let DiffTarget::Review { branch, .. } = &self.target else {
+            return;
+        };
+        let branch = branch.clone();
+        let sha = self
+            .stage_ops()
+            .and_then(|ops| ops.blob_sha(&branch, path).ok())
+            .flatten();
+        self.review_blob_shas.insert(path.to_string(), sha);
+    }
+
+    /// Builds this review's current [`PersistedReview`] from
+    /// `review_states`/`review_blob_shas` and spawns the atomic disk write
+    /// on a background thread (spec 08 Unit 4's "off the render loop"
+    /// requirement — mirrors [`App::request_remote_op`]'s pattern). A no-op
+    /// without a resolved [`App::review_state_path`] (outside a review
+    /// session, or a git-less/test context) or without a live
+    /// [`crate::git::DiffTarget::Review`] target/repo root.
+    ///
+    /// `ChangedSinceAccepted` files persist as `PersistedStatus::Accepted`
+    /// with their **preserved** (stale) blob SHA, not a fresh one — this is
+    /// deliberate: the status itself is never set by a live gesture (only
+    /// [`App::set_review_states`]'s load-time reconciliation ever produces
+    /// it), so by construction the only way this function ever sees one is
+    /// "still hasn't been re-accepted since it went stale", and persisting
+    /// its original SHA unchanged is exactly what keeps the *next* session's
+    /// reconciliation re-deriving `ChangedSinceAccepted` again rather than
+    /// silently "fixing" the staleness by accident.
+    fn persist_review_state(&mut self) {
+        let Some(state_path) = self.review_state_path.clone() else {
+            return;
+        };
+        let DiffTarget::Review { base, branch } = self.target.clone() else {
+            return;
+        };
+        let Some(worktree_path) = self.repo_root.clone() else {
+            return;
+        };
+
+        let mut files: BTreeMap<String, PersistedFile> = BTreeMap::new();
+        for (path, status) in &self.review_states {
+            let persisted_status = match status {
+                ReviewStatus::Accepted | ReviewStatus::ChangedSinceAccepted => {
+                    PersistedStatus::Accepted
+                }
+                ReviewStatus::Deferred => PersistedStatus::Deferred,
+                ReviewStatus::Unreviewed => continue,
+            };
+            files.insert(
+                path.clone(),
+                PersistedFile {
+                    status: persisted_status,
+                    blob_sha: self.review_blob_shas.get(path).cloned().flatten(),
+                },
+            );
+        }
+        let review = PersistedReview {
+            base,
+            worktree_path,
+            files,
+        };
+        self.review_save_tasks.spawn(move || {
+            crate::review::store::save_review(&state_path, &branch, review)
+                .map_err(|e| e.to_string())
+        });
+        self.review_saves_pending += 1;
     }
 
     /// The path of the file under the cursor, or `None` on an empty diff.
@@ -63,12 +172,14 @@ impl App {
         };
         let next = transition(self.review_status(&path));
         self.set_review_status(&path, next);
+        self.maybe_capture_blob_sha(&path, next);
         self.view.set_collapsed(&path, next == collapse_when);
         self.rebuild_rows();
         if let Some(index) = self.view.files.iter().position(|f| f.path == path) {
             self.view.cursor = self.view.header_row_of_file[index];
             self.view.ensure_visible();
         }
+        self.persist_review_state();
     }
 
     /// `Space` in a review session: toggles the cursor file between
@@ -156,6 +267,7 @@ impl App {
         self.refresh_accepted_list();
         self.staging_cursor = self.staging_cursor.min(self.staged.len().saturating_sub(1));
         self.set_status_message(format!("un-accepted {path}"));
+        self.persist_review_state();
     }
 }
 
@@ -362,5 +474,208 @@ mod tests {
     fn review_progress_is_zero_outside_a_review_session() {
         let app = App::new(vec![file("a.rs"), file("b.rs")]);
         assert_eq!(app.review_progress(), (0, 2));
+    }
+
+    // -- Persistence wiring (spec 08 Unit 4) -----------------------------------
+
+    use crate::git::GitError;
+    use crate::review::store;
+    use std::collections::HashMap as StdHashMap;
+    use std::time::{Duration, Instant};
+
+    /// A `StageOps` fake that answers `blob_sha` from a canned table and
+    /// stubs every other method with an inert default — enough to exercise
+    /// `App::persist_review_state`'s blob-SHA capture without a real git
+    /// backend.
+    struct BlobShaFake {
+        shas: StdHashMap<(String, String), Option<String>>,
+    }
+
+    impl super::super::stage_ops::StageOps for BlobShaFake {
+        fn diff(&self, _target: &DiffTarget) -> Result<Vec<crate::git::RawFilePatch>, GitError> {
+            Ok(Vec::new())
+        }
+        fn status(&self) -> Result<Vec<crate::git::FileStatus>, GitError> {
+            Ok(Vec::new())
+        }
+        fn stage_file(&self, _path: &str) -> Result<(), GitError> {
+            Ok(())
+        }
+        fn unstage_file(&self, _path: &str) -> Result<(), GitError> {
+            Ok(())
+        }
+        fn apply_cached(&self, _patch: &str) -> Result<(), GitError> {
+            Ok(())
+        }
+        fn unapply_cached(&self, _patch: &str) -> Result<(), GitError> {
+            Ok(())
+        }
+        fn read_worktree_file(&self, _path: &str) -> Option<Vec<u8>> {
+            None
+        }
+        fn show_file(&self, _spec: &str) -> Option<String> {
+            None
+        }
+        fn blob_sha(&self, branch: &str, path: &str) -> Result<Option<String>, GitError> {
+            Ok(self
+                .shas
+                .get(&(branch.to_string(), path.to_string()))
+                .cloned()
+                .flatten())
+        }
+    }
+
+    /// A review-session `App` with a real background-thread-capable fake
+    /// backend and a tempdir-backed state path, ready to exercise
+    /// `persist_review_state`'s real (backgrounded) write.
+    fn persisting_review_app(shas: &[(&str, &str, &str)]) -> (App, tempfile::TempDir) {
+        let mut table = StdHashMap::new();
+        for (branch, path, sha) in shas {
+            table.insert(
+                (branch.to_string(), path.to_string()),
+                Some(sha.to_string()),
+            );
+        }
+        let mut app = review_app(&["a.rs", "b.rs"]);
+        app.stage_ops = Some(Box::new(BlobShaFake { shas: table }));
+        app.repo_root = Some(std::path::PathBuf::from("/tmp/redquill-worktrees/feature"));
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state_path = tmp.path().join("review-state.json");
+        app.set_review_state_path(state_path);
+        (app, tmp)
+    }
+
+    /// Polls until every in-flight review-state save has drained (or a 5s
+    /// deadline passes) — the same drain-loop shape
+    /// `commit_integration_tests.rs`'s `wait_for_commit` uses for `git_op`,
+    /// checking `review_saves_pending` instead.
+    fn wait_for_review_save(app: &mut App) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.review_saves_pending > 0 && Instant::now() < deadline {
+            app.poll_review_save();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            app.review_saves_pending, 0,
+            "review save did not complete in time"
+        );
+    }
+
+    #[test]
+    fn accepting_a_file_persists_its_blob_sha_to_disk() {
+        let (mut app, _tmp) = persisting_review_app(&[("feature", "a.rs", "sha-a-1")]);
+        let path = app.review_state_path.clone().unwrap();
+
+        app.apply(Action::ToggleAccept); // a.rs
+        wait_for_review_save(&mut app);
+
+        let state = store::load(&path);
+        let review = state.reviews.get("feature").expect("branch entry saved");
+        assert_eq!(review.base, "main");
+        let entry = review.files.get("a.rs").expect("a.rs entry saved");
+        assert_eq!(entry.status, store::PersistedStatus::Accepted);
+        assert_eq!(entry.blob_sha.as_deref(), Some("sha-a-1"));
+    }
+
+    #[test]
+    fn un_accepting_removes_the_files_entry_from_the_saved_state() {
+        let (mut app, _tmp) = persisting_review_app(&[("feature", "a.rs", "sha-a-1")]);
+        let path = app.review_state_path.clone().unwrap();
+
+        app.apply(Action::ToggleAccept);
+        wait_for_review_save(&mut app);
+        app.apply(Action::ToggleAccept); // un-accept
+        wait_for_review_save(&mut app);
+
+        let state = store::load(&path);
+        let review = state.reviews.get("feature").expect("branch entry saved");
+        assert!(
+            !review.files.contains_key("a.rs"),
+            "an un-accepted file must not linger in the saved state"
+        );
+    }
+
+    #[test]
+    fn deferring_persists_with_no_blob_sha() {
+        let (mut app, _tmp) = persisting_review_app(&[]);
+        let path = app.review_state_path.clone().unwrap();
+
+        app.apply(Action::ToggleDefer); // a.rs
+        wait_for_review_save(&mut app);
+
+        let state = store::load(&path);
+        let entry = state.reviews["feature"].files.get("a.rs").unwrap();
+        assert_eq!(entry.status, store::PersistedStatus::Deferred);
+        assert_eq!(entry.blob_sha, None);
+    }
+
+    #[test]
+    fn accept_file_s_also_persists() {
+        let (mut app, _tmp) = persisting_review_app(&[("feature", "a.rs", "sha-s")]);
+        let path = app.review_state_path.clone().unwrap();
+
+        app.apply(Action::AcceptFile);
+        wait_for_review_save(&mut app);
+
+        let state = store::load(&path);
+        let entry = state.reviews["feature"].files.get("a.rs").unwrap();
+        assert_eq!(entry.blob_sha.as_deref(), Some("sha-s"));
+    }
+
+    #[test]
+    fn re_accepting_a_changed_since_accepted_file_persists_the_fresh_sha() {
+        let (mut app, _tmp) = persisting_review_app(&[("feature", "a.rs", "sha-fresh")]);
+        let path = app.review_state_path.clone().unwrap();
+        // Seed a.rs as already ChangedSinceAccepted with a stale SHA, as
+        // `App::set_review_states` would after a reconciled load.
+        app.review_states
+            .insert("a.rs".to_string(), ReviewStatus::ChangedSinceAccepted);
+        app.review_blob_shas
+            .insert("a.rs".to_string(), Some("sha-stale".to_string()));
+
+        app.apply(Action::ToggleAccept); // re-accept a.rs (cursor starts there)
+        wait_for_review_save(&mut app);
+
+        assert_eq!(app.review_status("a.rs"), ReviewStatus::Accepted);
+        let state = store::load(&path);
+        let entry = state.reviews["feature"].files.get("a.rs").unwrap();
+        assert_eq!(
+            entry.blob_sha.as_deref(),
+            Some("sha-fresh"),
+            "re-accepting must capture the fresh SHA, not the stale one"
+        );
+    }
+
+    #[test]
+    fn accepted_panel_un_accept_persists_too() {
+        // A distinct call site from `apply_review_transition` (the panel's
+        // `Space`/`Enter` un-accept, spec 08 Unit 5) — must persist on its
+        // own, not just Space/S's shared path.
+        let (mut app, _tmp) = persisting_review_app(&[("feature", "a.rs", "sha-a-1")]);
+        let path = app.review_state_path.clone().unwrap();
+
+        app.apply(Action::ToggleAccept); // accept a.rs
+        wait_for_review_save(&mut app);
+        app.refresh_accepted_list();
+        app.staging_cursor = 0;
+        app.un_accept_focused_file();
+        wait_for_review_save(&mut app);
+
+        let state = store::load(&path);
+        let review = state.reviews.get("feature").expect("branch entry saved");
+        assert!(
+            !review.files.contains_key("a.rs"),
+            "the panel's un-accept must persist too, not just Space/S's"
+        );
+    }
+
+    #[test]
+    fn persist_is_a_no_op_without_a_state_path() {
+        // No `set_review_state_path` call: outside a review session with
+        // persistence wired up (e.g. a plain in-memory test `App`), nothing
+        // is spawned and nothing panics.
+        let mut app = review_app(&["a.rs"]);
+        app.apply(Action::ToggleAccept);
+        assert!(app.review_save_tasks.poll().is_empty());
     }
 }

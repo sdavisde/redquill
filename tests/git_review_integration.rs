@@ -380,3 +380,102 @@ fn worktree_prune_clears_a_stale_admin_entry_left_by_an_external_deletion() {
         "prune must clear the stale admin record: {list_after}"
     );
 }
+
+// -- blob_sha (spec 08 Unit 4) -----------------------------------------------
+
+#[test]
+fn blob_sha_returns_the_full_sha_for_an_existing_path_on_a_branch() {
+    let repo = init_repo_on_branch("main");
+    write(repo.path(), "a.rs", b"fn a() {}\n");
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "-qm", "add a.rs"]);
+    let expected = git_out(repo.path(), &["rev-parse", "main:a.rs"]);
+    assert_eq!(
+        expected.len(),
+        40,
+        "a full (unabbreviated) SHA-1 hex string"
+    );
+
+    let runner = runner_for(&repo);
+    let sha = runner.blob_sha("main", "a.rs").unwrap();
+    assert_eq!(sha, Some(expected));
+}
+
+#[test]
+fn blob_sha_changes_when_the_files_content_changes() {
+    let repo = init_repo_on_branch("main");
+    write(repo.path(), "a.rs", b"fn a() {}\n");
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "-qm", "add a.rs"]);
+    let runner = runner_for(&repo);
+    let first = runner.blob_sha("main", "a.rs").unwrap();
+
+    write(repo.path(), "a.rs", b"fn a() { changed(); }\n");
+    git(repo.path(), &["commit", "-aqm", "change a.rs"]);
+    let second = runner.blob_sha("main", "a.rs").unwrap();
+
+    assert_ne!(first, second);
+    assert!(first.is_some());
+    assert!(second.is_some());
+}
+
+#[test]
+fn blob_sha_is_none_for_a_path_absent_from_the_branch() {
+    let repo = init_repo_on_branch("main");
+    let runner = runner_for(&repo);
+    let sha = runner.blob_sha("main", "no-such-file.rs").unwrap();
+    assert_eq!(sha, None);
+}
+
+#[test]
+fn blob_sha_is_none_for_a_path_deleted_on_a_later_commit() {
+    let repo = init_repo_on_branch("main");
+    write(repo.path(), "a.rs", b"fn a() {}\n");
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "-qm", "add a.rs"]);
+    let accepted_sha = repo_head_blob_sha(&repo, "a.rs");
+
+    git(repo.path(), &["rm", "-q", "a.rs"]);
+    git(repo.path(), &["commit", "-qm", "delete a.rs"]);
+
+    let runner = runner_for(&repo);
+    let sha = runner.blob_sha("main", "a.rs").unwrap();
+    assert_eq!(
+        sha, None,
+        "a deleted file must report no blob, not an error"
+    );
+    assert!(
+        accepted_sha.len() == 40,
+        "sanity: the pre-deletion SHA was real"
+    );
+}
+
+#[test]
+fn blob_sha_is_none_for_an_unknown_branch() {
+    // Never an error — see the method's doc: a deleted/renamed branch
+    // degrades the same way an absent path does, matching this module's
+    // "expected, not an error" treatment elsewhere.
+    let repo = init_repo_on_branch("main");
+    write(repo.path(), "a.rs", b"fn a() {}\n");
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "-qm", "add a.rs"]);
+
+    let runner = runner_for(&repo);
+    let sha = runner.blob_sha("no-such-branch", "a.rs").unwrap();
+    assert_eq!(sha, None);
+}
+
+#[test]
+fn blob_sha_never_leaves_a_fatal_message_on_stderr_visible_to_the_caller() {
+    // Structural: `-q` (quiet) is passed, so the ordinary "doesn't resolve"
+    // case never surfaces git's noisy `fatal:` text through this method's
+    // `Ok(None)` — nothing to assert on stdout/stderr capture here beyond
+    // the method still returning cleanly for a path that doesn't exist.
+    let repo = init_repo_on_branch("main");
+    let runner = runner_for(&repo);
+    assert_eq!(runner.blob_sha("main", "missing.rs").unwrap(), None);
+}
+
+fn repo_head_blob_sha(repo: &TempDir, path: &str) -> String {
+    git_out(repo.path(), &["rev-parse", &format!("HEAD:{path}")])
+}

@@ -363,4 +363,34 @@ impl GitRunner {
         let out = self.run_utf8(&["ls-files", "-z", "--others", "--exclude-standard"])?;
         Ok(parse_ls_files_z(&out))
     }
+
+    /// Returns `path`'s blob SHA on `branch` (`git rev-parse --verify -q
+    /// <branch>:<path>`, full SHA — spec 08 Unit 4), for capturing at accept
+    /// time and comparing again at reconciliation time to detect staleness.
+    /// `Ok(None)` — never an error — whenever the spec doesn't resolve to a
+    /// blob: the path doesn't exist at `branch` (an accepted deletion
+    /// records its absence, not a SHA — the caller's job, not this
+    /// method's, to decide what that *means*), or `branch` itself doesn't
+    /// resolve (a deleted/renamed branch degrades the same way, matching
+    /// this module's "expected, not an error" treatment for `rev_exists`/
+    /// [`GitRunner::last_commit`]). `-q` suppresses git's `fatal:` stderr
+    /// noise for the ordinary "doesn't resolve" case, mirroring
+    /// [`GitRunner::rev_exists`]'s `--verify` precedent. A genuine failure
+    /// to run `git` at all (not found, spawn error, non-UTF8 output) still
+    /// surfaces as `Err`.
+    pub fn blob_sha(&self, branch: &str, path: &str) -> Result<Option<String>, GitError> {
+        let spec = format!("{branch}:{path}");
+        let args = ["rev-parse", "--verify", "-q", spec.as_str()];
+        let output = Command::new("git")
+            .current_dir(&self.root)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(map_spawn_err)?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let out = String::from_utf8(output.stdout).map_err(GitError::Utf8)?;
+        Ok(Some(out.trim().to_string()))
+    }
 }

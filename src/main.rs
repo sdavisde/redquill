@@ -9,6 +9,7 @@
 //! stderr is not a terminal — e.g. piped, or running under a test harness —
 //! falls back to the plain-text summary so redquill stays scriptable.
 
+use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
@@ -18,6 +19,7 @@ use redquill::annotate::render_markdown;
 use redquill::config;
 use redquill::diff::FileDiff;
 use redquill::git::{ChangeKind, DiffTarget, GitRunner, sanitize_branch_dir_name};
+use redquill::review::{ReviewStatus, reconcile, store};
 use redquill::ui::{
     self, App, EditorConfigTier, EditorLaunch, QuitOutcome, build_review,
     resolve_editor_config_tier,
@@ -190,6 +192,83 @@ fn paths_match(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// Resolves `<git-common-dir>/redquill/review-state.json`'s path for this
+/// repository and garbage-collects entries whose branch no longer exists
+/// (spec 08 Unit 4, "on every launch") before returning it. Runs
+/// unconditionally — even outside a review session — since another,
+/// already-paused review's entry should still get cleaned up
+/// opportunistically the next time redquill runs at all, not only the next
+/// time that specific branch is reviewed again. Best-effort throughout: a
+/// `git_common_dir`/`branch_list` failure degrades to skipping GC for this
+/// launch (never fails the launch itself — this is housekeeping, not
+/// something worth blocking a session over), and a GC save failure is
+/// silently retried on the next launch the same way.
+fn gc_review_state(discovered: &GitRunner) -> Option<PathBuf> {
+    let common_dir = discovered.git_common_dir().ok()?;
+    let path = common_dir.join("redquill").join("review-state.json");
+    let Ok(branches) = discovered.branch_list() else {
+        return Some(path);
+    };
+    let existing: HashSet<String> = branches.into_iter().map(|b| b.name).collect();
+    let mut state = store::load(&path);
+    if store::gc(&mut state, &existing) {
+        let _ = store::save(&path, &state);
+        // Best-effort: clears stale worktree admin records for any managed
+        // worktree whose branch just got GC'd (spec 08 Unit 4: "GC... and
+        // prune their worktree records"). A failure here is not worth
+        // surfacing — it's the same harmless-clutter case
+        // `App::finish_review`'s own prune call already treats this way.
+        let _ = discovered.worktree_prune();
+    }
+    Some(path)
+}
+
+/// Loads and reconciles `branch`'s persisted review state (spec 08 Unit 4)
+/// against its *current* blob SHAs, resolved through `runner` (the
+/// session's own runner, rooted inside the review worktree, so `blob_sha`
+/// reads the branch's real current tip). Returns empty maps when nothing
+/// was ever persisted for this branch — an entirely ordinary first review,
+/// not an error. The second map mirrors `review_states`' 1:1 blob-SHA
+/// companion `App::review_blob_shas` expects: for both `Accepted` and
+/// `ChangedSinceAccepted` results this is the *persisted* SHA (not
+/// `runner`'s freshly-read current one) — for `Accepted` the two are equal
+/// anyway (reconciliation only keeps `Accepted` on a match), and for
+/// `ChangedSinceAccepted` the persisted (now-stale) SHA is exactly what
+/// `App::persist_review_state` needs to keep writing back out unchanged
+/// until the user re-accepts (see that method's doc for why re-deriving
+/// staleness on every subsequent save, rather than silently losing it,
+/// matters).
+fn load_reconciled_review_state(
+    runner: &GitRunner,
+    state_path: &Path,
+    branch: &str,
+) -> (
+    HashMap<String, ReviewStatus>,
+    HashMap<String, Option<String>>,
+) {
+    let state = store::load(state_path);
+    let Some(review) = state.reviews.get(branch) else {
+        return (HashMap::new(), HashMap::new());
+    };
+    let mut current_shas = HashMap::new();
+    for path in review.files.keys() {
+        let sha = runner.blob_sha(branch, path).unwrap_or(None);
+        current_shas.insert(path.clone(), sha);
+    }
+    let statuses = reconcile(review, &current_shas);
+    let mut blob_shas = HashMap::new();
+    for (path, status) in &statuses {
+        if matches!(
+            status,
+            ReviewStatus::Accepted | ReviewStatus::ChangedSinceAccepted
+        ) && let Some(entry) = review.files.get(path)
+        {
+            blob_shas.insert(path.clone(), entry.blob_sha.clone());
+        }
+    }
+    (statuses, blob_shas)
+}
+
 /// Prints a one-line summary per changed file for the resolved diff target.
 fn run(config: &RunConfig) -> anyhow::Result<()> {
     let discovered = GitRunner::discover()?;
@@ -264,6 +343,12 @@ fn resolve_editor(
 /// resolved [`QuitOutcome`].
 fn run_tui(config: &RunConfig) -> anyhow::Result<()> {
     let discovered = GitRunner::discover()?;
+    // Runs on every launch, review session or not (spec 08 Unit 4) — GC'ing
+    // *other* paused reviews' stale entries shouldn't wait for the next time
+    // that specific branch happens to be reviewed again. Must happen before
+    // `discovered` is potentially moved into `app.set_review_origin_ops`
+    // below.
+    let review_state_path = gc_review_state(&discovered);
     // `discovered` is rooted at the caller's cwd (the user's own checkout),
     // *outside* any managed review worktree `resolve_session` might create —
     // kept alive (cloned into `resolve_session`) so a review session's
@@ -273,7 +358,16 @@ fn run_tui(config: &RunConfig) -> anyhow::Result<()> {
     let snapshot = build_review(&runner, &target)?;
 
     let mut app = App::with_git(snapshot, target.clone(), Box::new(runner.clone()));
-    if matches!(target, DiffTarget::Review { .. }) {
+    if let DiffTarget::Review { branch, .. } = &target {
+        // Load + reconcile this branch's persisted progress (spec 08 Unit
+        // 4) before the first render, so `Accepted`/`Deferred` files start
+        // collapsed and a stale `Accepted` file starts marked
+        // `ChangedSinceAccepted` and un-collapsed from the very first frame.
+        if let Some(state_path) = &review_state_path {
+            let (states, blob_shas) = load_reconciled_review_state(&runner, state_path, branch);
+            app.set_review_states(states, blob_shas);
+            app.set_review_state_path(state_path.clone());
+        }
         app.set_review_origin_ops(Box::new(discovered));
     }
     app.set_repo_root(runner.root().to_path_buf());
@@ -512,5 +606,222 @@ mod tests {
             ),
             EditorLaunch::Command("nvim".to_string())
         );
+    }
+
+    // -- gc_review_state / load_reconciled_review_state (spec 08 Unit 4) ------
+    //
+    // Real-git tempdir tests: `gc_review_state`/`load_reconciled_review_state`
+    // are private to the binary crate (not part of `redquill::ui`'s public
+    // surface), so — like `commit_integration_tests.rs`'s identical reasoning
+    // for `dispatch_key` — they can only be exercised from *this* crate's own
+    // `#[cfg(test)]` module, which is exactly where `cargo test`'s
+    // `unittests src/main.rs` binary already runs from.
+
+    use super::{gc_review_state, load_reconciled_review_state};
+    use redquill::git::GitRunner;
+    use redquill::review::{ReviewStatus, store};
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let output = Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .output()
+            .expect("failed to spawn git");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn write(dir: &std::path::Path, rel: &str, contents: &str) {
+        std::fs::write(dir.join(rel), contents).unwrap();
+    }
+
+    fn canon(path: &std::path::Path) -> std::path::PathBuf {
+        std::fs::canonicalize(path).unwrap_or_else(|e| panic!("canonicalize {path:?}: {e}"))
+    }
+
+    /// The shared isolation guard every mutating git call in this section
+    /// runs before touching disk — mirrors `tests/git_review_integration.rs`'s
+    /// `assert_inside_tempdir` (task 1.5), duplicated here per this repo's
+    /// established one-copy-per-file convention (this module can't share
+    /// code with the `tests/*.rs` binaries).
+    fn assert_inside_tempdir(path: &std::path::Path, tmp: &TempDir) {
+        let tmp_root = canon(tmp.path());
+        let mut probe = path.to_path_buf();
+        while !probe.exists() {
+            match probe.parent() {
+                Some(parent) => probe = parent.to_path_buf(),
+                None => panic!("path {path:?} has no existing ancestor to canonicalize"),
+            }
+        }
+        assert!(
+            canon(&probe).starts_with(&tmp_root),
+            "refusing to run a mutating git call outside the tempdir: {path:?}"
+        );
+    }
+
+    fn repo_with_branch(name: &str) -> TempDir {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        assert_inside_tempdir(dir, &tmp);
+        git(dir, &["init", "-q", "-b", name]);
+        git(dir, &["config", "user.email", "test@redquill.invalid"]);
+        git(dir, &["config", "user.name", "redquill test"]);
+        git(dir, &["config", "commit.gpgsign", "false"]);
+        write(dir, "base.txt", "line one\n");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "initial"]);
+        tmp
+    }
+
+    #[test]
+    fn gc_review_state_drops_entries_for_deleted_branches_and_keeps_live_ones() {
+        let repo = repo_with_branch("main");
+        git(repo.path(), &["branch", "feature-live"]);
+        // `feature-gone` is deliberately never created as a real branch —
+        // simulating a previously-reviewed branch the author (or the user)
+        // has since deleted.
+        let runner = GitRunner::discover_in(repo.path()).unwrap();
+        let common_dir = runner.git_common_dir().unwrap();
+        let state_path = common_dir.join("redquill").join("review-state.json");
+        assert_inside_tempdir(&state_path, &repo);
+
+        for branch in ["feature-live", "feature-gone"] {
+            store::save_review(
+                &state_path,
+                branch,
+                store::PersistedReview {
+                    base: "main".to_string(),
+                    worktree_path: repo.path().join("wt").join(branch),
+                    files: Default::default(),
+                },
+            )
+            .unwrap();
+        }
+
+        let resolved = gc_review_state(&runner);
+
+        assert_eq!(resolved, Some(state_path.clone()));
+        let state = store::load(&state_path);
+        assert!(
+            state.reviews.contains_key("feature-live"),
+            "GC must never touch an entry for a branch that still exists"
+        );
+        assert!(
+            !state.reviews.contains_key("feature-gone"),
+            "GC must drop an entry for a branch that no longer exists"
+        );
+    }
+
+    #[test]
+    fn gc_review_state_is_a_no_op_when_every_branch_still_exists() {
+        let repo = repo_with_branch("main");
+        git(repo.path(), &["branch", "feature"]);
+        let runner = GitRunner::discover_in(repo.path()).unwrap();
+        let common_dir = runner.git_common_dir().unwrap();
+        let state_path = common_dir.join("redquill").join("review-state.json");
+        assert_inside_tempdir(&state_path, &repo);
+        store::save_review(
+            &state_path,
+            "feature",
+            store::PersistedReview {
+                base: "main".to_string(),
+                worktree_path: repo.path().join("wt"),
+                files: Default::default(),
+            },
+        )
+        .unwrap();
+        let before = store::load(&state_path);
+
+        gc_review_state(&runner);
+
+        assert_eq!(store::load(&state_path), before);
+    }
+
+    #[test]
+    fn load_reconciled_review_state_demotes_a_changed_file_and_carries_over_the_rest() {
+        let repo = repo_with_branch("main");
+        write(repo.path(), "a.rs", "fn a() {}\n");
+        write(repo.path(), "b.rs", "fn b() {}\n");
+        git(repo.path(), &["add", "."]);
+        git(repo.path(), &["commit", "-qm", "add a.rs and b.rs"]);
+        let runner = GitRunner::discover_in(repo.path()).unwrap();
+        let a_sha_at_accept = runner.blob_sha("main", "a.rs").unwrap().unwrap();
+        let b_sha_at_accept = runner.blob_sha("main", "b.rs").unwrap().unwrap();
+
+        let common_dir = runner.git_common_dir().unwrap();
+        let state_path = common_dir.join("redquill").join("review-state.json");
+        assert_inside_tempdir(&state_path, &repo);
+        let mut files = std::collections::BTreeMap::new();
+        files.insert(
+            "a.rs".to_string(),
+            store::PersistedFile {
+                status: store::PersistedStatus::Accepted,
+                blob_sha: Some(a_sha_at_accept),
+            },
+        );
+        files.insert(
+            "b.rs".to_string(),
+            store::PersistedFile {
+                status: store::PersistedStatus::Accepted,
+                blob_sha: Some(b_sha_at_accept.clone()),
+            },
+        );
+        files.insert(
+            "c.rs".to_string(),
+            store::PersistedFile {
+                status: store::PersistedStatus::Deferred,
+                blob_sha: None,
+            },
+        );
+        store::save_review(
+            &state_path,
+            "main",
+            store::PersistedReview {
+                base: "main".to_string(),
+                worktree_path: repo.path().to_path_buf(),
+                files,
+            },
+        )
+        .unwrap();
+
+        // Change a.rs on the branch after the "accept" above.
+        write(repo.path(), "a.rs", "fn a() { changed(); }\n");
+        git(repo.path(), &["commit", "-aqm", "change a.rs"]);
+
+        let (states, blob_shas) = load_reconciled_review_state(&runner, &state_path, "main");
+
+        assert_eq!(
+            states.get("a.rs"),
+            Some(&ReviewStatus::ChangedSinceAccepted)
+        );
+        assert_eq!(states.get("b.rs"), Some(&ReviewStatus::Accepted));
+        assert_eq!(states.get("c.rs"), Some(&ReviewStatus::Deferred));
+        // The stale SHA is preserved (not overwritten with the new one) —
+        // `App::persist_review_state`'s contract for `ChangedSinceAccepted`.
+        assert_ne!(blob_shas.get("a.rs").cloned().flatten().unwrap(), {
+            runner.blob_sha("main", "a.rs").unwrap().unwrap()
+        });
+        assert_eq!(
+            blob_shas.get("b.rs").cloned().flatten(),
+            Some(b_sha_at_accept)
+        );
+    }
+
+    #[test]
+    fn load_reconciled_review_state_is_empty_for_a_branch_with_no_persisted_entry() {
+        let repo = repo_with_branch("main");
+        let runner = GitRunner::discover_in(repo.path()).unwrap();
+        let common_dir = runner.git_common_dir().unwrap();
+        let state_path = common_dir.join("redquill").join("review-state.json");
+
+        let (states, blob_shas) = load_reconciled_review_state(&runner, &state_path, "main");
+
+        assert!(states.is_empty());
+        assert!(blob_shas.is_empty());
     }
 }

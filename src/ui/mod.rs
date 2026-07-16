@@ -1008,6 +1008,10 @@ fn event_loop(
         // (see `project_search`'s module doc) — so results keep streaming
         // in behind it.
         app.poll_project_search();
+        // Drain any completed review-state save (spec 08 Unit 4), same
+        // cadence as the other pollers — the write itself runs off this
+        // loop entirely (see `App::persist_review_state`).
+        app.poll_review_save();
 
         // Spawn a working-tree read on a fixed cadence (independent of
         // keypresses) so external edits appear without the user asking. The
@@ -1047,3 +1051,7 @@ mod project_search_integration_tests;
 #[cfg(test)]
 #[path = "review_guard_integration_tests.rs"]
 mod review_guard_integration_tests;
+
+#[cfg(test)]
+#[path = "review_persistence_integration_tests.rs"]
+mod review_persistence_integration_tests;
