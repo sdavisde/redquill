@@ -104,7 +104,7 @@ Add `[lsp.rust|typescript|python|go]` tables (`command`, `args`, `enabled`) over
 - [x] 3.3 Add the annotated `[lsp]` section to `docs/example-config.toml` (all four language tables, `enabled` semantics, degradation note).
 - [x] 3.4 Run the User demo with a logging wrapper as `[lsp.rust] command`; capture `proofs/3-lsp-override.txt` including the wrapper log; gates; commit.
 
-### [~] 4.0 Config file remaps the main keymap (`[keys.diff]`, `[keys.panel]`)
+### [x] 4.0 Config file remaps the main keymap (`[keys.diff]`, `[keys.panel]`)
 
 Make the main `Keymap` table remappable: kebab-case action-name mapping over the `Action` enum with a bijectivity drift test; key-string grammar (crokey-style chords, space-separated two-chord sequences); per-action merge semantics (config replaces that action's keys; unlisted actions keep defaults; `[]` unbinds; collisions resolve user-wins + warning); help overlay and footer render effective bindings. Adds `[keys.diff]`/`[keys.panel]` with the complete action-name list to `docs/example-config.toml`. Perf tripwires unchanged.
 
@@ -128,7 +128,7 @@ Make the main `Keymap` table remappable: kebab-case action-name mapping over the
 - [x] 4.7 Run the perf tripwire tests unchanged (`src/ui/perf_tests.rs`) and capture the run; add annotated `[keys.diff]`/`[keys.panel]` sections to `docs/example-config.toml` including the complete generated action-name list.
 - [x] 4.8 Run the User demo; capture `proofs/4-remap-help.png` and `proofs/4-perf-tripwires.txt`; gates; commit (dependency commit separate if crokey chosen).
 
-### [ ] 5.0 Config file remaps every modal panel (`[keys.staging]`, `[keys.switcher]`, ...)
+### [~] 5.0 Config file remaps every modal panel (`[keys.staging]`, `[keys.switcher]`, ...)
 
 Two separately-committed halves per repo rules: (refactor) convert the `const` tables in `src/ui/modal_keys.rs` to runtime-built tables from the same default data — move-only invariant, identical test counts, zero assertion edits; (behavior) apply `[keys.<mode>]` overrides with task 4's merge semantics, preserving the bidirectional drift tests and keeping free-text character insertion non-remappable. Completes `docs/example-config.toml` with every modal `[keys.*]` table and its action names.
 
