@@ -85,7 +85,7 @@ Add `[editor]` config: `edit_at_line` template with `{{filename}}`/`{{line}}` pl
 - [x] 2.5 Add the annotated `[editor]` section (template syntax, placeholder rules, full preset list) to `docs/example-config.toml`.
 - [x] 2.6 Run the User demo with a logging wrapper named `zed` on PATH; capture `proofs/2-zed-preset.txt`; gates; commit.
 
-### [~] 3.0 Config file controls code intelligence (`[lsp]` overrides)
+### [x] 3.0 Config file controls code intelligence (`[lsp]` overrides)
 
 Add `[lsp.rust|typescript|python|go]` tables (`command`, `args`, `enabled`) overlaid onto `default_commands()`; `enabled = false` prevents spawn with today's silent degradation; type errors in the section follow the warning contract. Config structs stay edge-side — `lsp/` receives plain `LangServerCmd`-shaped data. Adds the `[lsp]` section to `docs/example-config.toml`.
 
@@ -104,7 +104,7 @@ Add `[lsp.rust|typescript|python|go]` tables (`command`, `args`, `enabled`) over
 - [x] 3.3 Add the annotated `[lsp]` section to `docs/example-config.toml` (all four language tables, `enabled` semantics, degradation note).
 - [x] 3.4 Run the User demo with a logging wrapper as `[lsp.rust] command`; capture `proofs/3-lsp-override.txt` including the wrapper log; gates; commit.
 
-### [ ] 4.0 Config file remaps the main keymap (`[keys.diff]`, `[keys.panel]`)
+### [~] 4.0 Config file remaps the main keymap (`[keys.diff]`, `[keys.panel]`)
 
 Make the main `Keymap` table remappable: kebab-case action-name mapping over the `Action` enum with a bijectivity drift test; key-string grammar (crokey-style chords, space-separated two-chord sequences); per-action merge semantics (config replaces that action's keys; unlisted actions keep defaults; `[]` unbinds; collisions resolve user-wins + warning); help overlay and footer render effective bindings. Adds `[keys.diff]`/`[keys.panel]` with the complete action-name list to `docs/example-config.toml`. Perf tripwires unchanged.
 
