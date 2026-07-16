@@ -1,4 +1,4 @@
-# redquill
+# <img src="redquill-logo.png" alt="redquill logo" width="40" height="40"> redquill (rq)
 
 **A Portable, Efficeint tool for reviewing agentic code**
 
