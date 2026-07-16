@@ -5,6 +5,7 @@
 //! far; the rest are module stubs filled in by later roadmap tasks.
 
 pub mod annotate;
+pub mod config;
 pub mod diff;
 pub mod git;
 pub mod highlight;
