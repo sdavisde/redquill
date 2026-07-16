@@ -166,9 +166,9 @@ The final slice is the adoption experience itself: README gains a Configuration 
 
 #### 6.0 Tasks
 
-- [ ] 6.1 Drift test: a unit test loads `docs/example-config.toml` through the real `load()` path (via `include_str!` or repo-relative path) and asserts zero warnings — every section, action name, key string, and preset in the example parses and resolves. This is the guard that keeps the example truthful forever.
-- [ ] 6.2 README: add a Configuration section (file location incl. macOS note, a 5-10 line quick example, pointer to `docs/example-config.toml`); update line ~50 to stop saying the config layer is "planned".
-- [ ] 6.3 Retire `docs/config-layer.md`: delete it and fix all references (README, `src/ui/mod.rs` doc comment points at it) to reference spec 07 / the example config instead.
-- [ ] 6.4 Write the extensibility walkthrough in the `src/config/` module doc: the exact steps to add a hypothetical `[theme]` section (define section struct with defaults → add one `Config` field → consume it), explicitly noting zero changes to discovery/parse/warning code (spec success metric 5).
-- [ ] 6.5 Verify `proofs/` is covered by the existing gitignore pattern (add if this spec's dir isn't); run the three acceptance journeys from the spec's Success Metrics against a release-ish build; persist `proofs/6-journey-editor.txt`, `proofs/6-journey-remap.png`, `proofs/6-journey-badconfig.png`.
-- [ ] 6.6 Full-gate transcript to `proofs/6-gates.txt`; final commit; confirm no stray references to the old config-layer skeleton remain (`grep -r "config-layer" --include="*.rs" --include="*.md"` excluding the spec dir).
+- [-] 6.1 Drift test: a unit test loads `docs/example-config.toml` through the real `load()` path (via `include_str!` or repo-relative path) and asserts zero warnings — every section, action name, key string, and preset in the example parses and resolves. This is the guard that keeps the example truthful forever.
+- [-] 6.2 README: add a Configuration section (file location incl. macOS note, a 5-10 line quick example, pointer to `docs/example-config.toml`); update line ~50 to stop saying the config layer is "planned".
+- [-] 6.3 Retire `docs/config-layer.md`: delete it and fix all references (README, `src/ui/mod.rs` doc comment points at it) to reference spec 07 / the example config instead.
+- [-] 6.4 Write the extensibility walkthrough in the `src/config/` module doc: the exact steps to add a hypothetical `[theme]` section (define section struct with defaults → add one `Config` field → consume it), explicitly noting zero changes to discovery/parse/warning code (spec success metric 5).
+- [-] 6.5 Verify `proofs/` is covered by the existing gitignore pattern (add if this spec's dir isn't); run the three acceptance journeys from the spec's Success Metrics against a release-ish build; persist `proofs/6-journey-editor.txt`, `proofs/6-journey-remap.png`, `proofs/6-journey-badconfig.png`.
+- [-] 6.6 Full-gate transcript to `proofs/6-gates.txt`; final commit; confirm no stray references to the old config-layer skeleton remain (`grep -r "config-layer" --include="*.rs" --include="*.md"` excluding the spec dir).
