@@ -88,6 +88,8 @@ use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+use crate::config::SidebarSide;
+
 /// How long the event loop waits for a key event before giving up and
 /// draining LSP events anyway. Keeps `gd`/`gr`/`K` responses (and any
 /// server-driven state) flowing even while the user isn't typing, without
@@ -124,17 +126,28 @@ fn split_footer(area: Rect, footer_height: u16) -> (Rect, Rect) {
     (chunks[0], chunks[1])
 }
 
-/// Sidebar width: 30% of the containing area's width, clamped to `[40, 72]`
-/// columns. The floor deliberately widens the sidebar beyond the historical
-/// fixed 32 on narrow terminals (136 cols and below all get 40); the cap
-/// keeps a very wide terminal from dedicating an unreasonable share to the
-/// sidebar. `total` is widened to `u32` before the multiply so `total * 3`
-/// can never overflow `u16` — the widest input, `u16::MAX`, scales to
-/// `19660`, itself well within `u16`, so the final cast back is always in
-/// range.
-fn sidebar_width(total: u16) -> u16 {
-    let scaled = (u32::from(total) * 3 / 10) as u16;
-    scaled.clamp(40, 72)
+/// Sidebar width when unconfigured (`[layout] sidebar_width` unset): 30% of
+/// the containing area's width, clamped to `[40, 72]` columns. The floor
+/// deliberately widens the sidebar beyond the historical fixed 32 on narrow
+/// terminals (136 cols and below all get 40); the cap keeps a very wide
+/// terminal from dedicating an unreasonable share to the sidebar. `total` is
+/// widened to `u32` before the multiply so `total * 3` can never overflow
+/// `u16` — the widest input, `u16::MAX`, scales to `19660`, itself well
+/// within `u16`, so the final cast back is always in range.
+///
+/// `configured` (`[layout] sidebar_width`, already range-validated at
+/// load time — see `crate::config::LayoutConfig`) overrides this formula
+/// entirely when set, further clamped to `total` here so a width wider than
+/// the terminal never overflows the split (the FR's render-time clamp to
+/// "available space").
+fn sidebar_width(total: u16, configured: Option<u16>) -> u16 {
+    match configured {
+        Some(width) => width.min(total),
+        None => {
+            let scaled = (u32::from(total) * 3 / 10) as u16;
+            scaled.clamp(40, 72)
+        }
+    }
 }
 
 /// Splits the main content area into the sidebar and diff-pane rects. The
@@ -142,21 +155,32 @@ fn sidebar_width(total: u16) -> u16 {
 /// panel is focused (`Mode::Panel`) — visibility coincides exactly with
 /// focus, no separate state field. Mirrors [`split_right`]'s
 /// `(area, None)`-when-hidden pattern; when hidden the diff pane gets the
-/// full width. The sidebar renders on the right when shown, at
-/// [`sidebar_width`]'s proportional-with-clamps width; see
-/// `docs/config-layer.md` for making the side and width configurable.
-fn split_layout(area: Rect, show_sidebar: bool) -> (Option<Rect>, Rect) {
+/// full width. `side`/`configured_width` come from `[layout]`
+/// (`crate::config::LayoutConfig`); `side` picks which edge the sidebar
+/// renders against, and `configured_width` feeds [`sidebar_width`] (`None`
+/// preserves today's proportional-with-clamps formula exactly).
+fn split_layout(
+    area: Rect,
+    show_sidebar: bool,
+    side: SidebarSide,
+    configured_width: Option<u16>,
+) -> (Option<Rect>, Rect) {
     if !show_sidebar {
         return (None, area);
     }
+    let width = sidebar_width(area.width, configured_width);
+    let constraints = match side {
+        SidebarSide::Left => [Constraint::Length(width), Constraint::Min(0)],
+        SidebarSide::Right => [Constraint::Min(0), Constraint::Length(width)],
+    };
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Min(0),
-            Constraint::Length(sidebar_width(area.width)),
-        ])
+        .constraints(constraints)
         .split(area);
-    (Some(chunks[1]), chunks[0])
+    match side {
+        SidebarSide::Left => (Some(chunks[0]), chunks[1]),
+        SidebarSide::Right => (Some(chunks[1]), chunks[0]),
+    }
 }
 
 /// Splits the right-hand area into the diff pane and (when `show_panel`) a
@@ -524,7 +548,12 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     let area = frame.area();
     let footer_h = footer::footer_height(area.width, app, keymap, pending);
     let (main_area, footer_area) = split_footer(area, footer_h);
-    let (sidebar_area, right_area) = split_layout(main_area, app.git_panel_focused());
+    let (sidebar_area, right_area) = split_layout(
+        main_area,
+        app.git_panel_focused(),
+        app.config.layout.sidebar_side,
+        app.config.layout.sidebar_width,
+    );
     let (diff_area, panel_area) = split_right(right_area, bottom_open(app));
 
     if let Some(sidebar_area) = sidebar_area {
@@ -570,6 +599,18 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
         // is still working.
         let footer = Line::from(Span::styled(
             format!(" \u{27f3} {label}\u{2026}"),
+            Style::default().fg(app.theme.status_message),
+        ));
+        frame.render_widget(footer, footer_area);
+    } else if let Some(notice) = app.config_warning_notice() {
+        // A config-load problem (spec 07 Unit 1): dismissible (`!`) and
+        // non-blocking — it never covers the diff/panel content above, only
+        // this footer row — and, like every other footer message, never
+        // written to stdout (stdout is reserved for the annotation
+        // markdown). Outranks a transient status message so it survives the
+        // ordinary idle gaps between them; `!` clears it for the session.
+        let footer = Line::from(Span::styled(
+            format!(" {notice} (! to dismiss)"),
             Style::default().fg(app.theme.status_message),
         ));
         frame.render_widget(footer, footer_area);
@@ -745,7 +786,12 @@ fn event_loop(
         // see `footer::footer_height`'s doc comment).
         let footer_h = footer::footer_height(full_area.width, app, keymap, pending_prefix);
         let (main_area, _) = split_footer(full_area, footer_h);
-        let (_, right_area) = split_layout(main_area, app.git_panel_focused());
+        let (_, right_area) = split_layout(
+            main_area,
+            app.git_panel_focused(),
+            app.config.layout.sidebar_side,
+            app.config.layout.sidebar_width,
+        );
         let (diff_area, _) = split_right(right_area, bottom_open(app));
         app.view.set_viewport_height(diff_view::viewport_height(
             diff_area,

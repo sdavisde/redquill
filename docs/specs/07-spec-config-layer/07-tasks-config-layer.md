@@ -36,7 +36,7 @@ Each task's **User demo** is the acceptance ritual between stages: run it as wri
 
 ## Tasks
 
-### [ ] 1.0 Config file moves the sidebar (loading infrastructure + layout + search defaults)
+### [~] 1.0 Config file moves the sidebar (loading infrastructure + layout + search defaults)
 
 Establish the end-to-end config pipeline — path discovery (`$XDG_CONFIG_HOME`/`~/.config/redquill/config.toml`, `~/.config` on macOS too), one-shot startup load, serde-default partial-override `Config` struct, the documented degradation contract (missing = silent; syntax error = defaults + visible warning; invalid key/value = partial apply + warning), the dismissible non-blocking warning surface — proven through its first visible consumers: `[layout]` (sidebar side/width) and `[search]` (case/whole-word/literal startup defaults). Starts the annotated `docs/example-config.toml` with the `[layout]` and `[search]` sections.
 
@@ -52,16 +52,16 @@ Establish the end-to-end config pipeline — path discovery (`$XDG_CONFIG_HOME`/
 
 #### 1.0 Tasks
 
-- [ ] 1.1 Add the `toml` dependency (`default-features = false` if workable) and decide the path-discovery approach: evaluate `etcetera` vs a small hand-rolled resolver; requirement either way is `$XDG_CONFIG_HOME/redquill/config.toml` else `~/.config/redquill/config.toml` on Linux **and macOS**, platform config dir on Windows (`directories` is ruled out — wrong macOS answer). Record the justification for the commit message.
-- [ ] 1.2 TDD: write failing tests, then implement config-path discovery as a pure function taking injected env/home values (cases: XDG set, XDG unset → `~/.config`, missing home → no path, explicit test-override hook used by integration tests). Location: `src/config/load.rs`.
-- [ ] 1.3 TDD: define `Config` with per-section structs (`LayoutConfig`, `SearchConfig` now; sections for editor/lsp/keys arrive in their slices) — every field `#[serde(default)]` defaulting to current shipped behavior. Tests: empty file → all defaults; partial file overrides only named keys; unknown keys are collected (not fatal); invalid value for a known key falls back to default and is collected. Location: `src/config/mod.rs`.
-- [ ] 1.4 TDD: implement `load() -> (Config, Vec<ConfigWarning>)` with typed errors (`thiserror`) internally: missing file → defaults, zero warnings; TOML syntax error → full defaults + warning carrying path and parser line info; parseable-but-invalid entries → partial apply + one warning each. Assert stdout is never written.
-- [ ] 1.5 Wire loading into `src/main.rs` before terminal/App setup, exactly once (no reload path exists); resolve the existing CLI-struct name collision (rename the clap struct to `Cli`-style or namespace the config type); hand `Config` + warnings to `App`.
-- [ ] 1.6 Implement the warning notice in the UI: dismissible, non-blocking status-line notice showing the first problem + "and N more"; renders over no content that blocks review; test render + dismiss; never printed to stdout.
-- [ ] 1.7 Apply `[layout]`: `sidebar_side = "left" | "right"` (default right) and `sidebar_width` columns override the 30%-clamp formula only when set; validate width against the documented range (out-of-range → warning + default) and clamp to available terminal width at render. Update `split_layout`/`sidebar_width` signatures; unit-test both paths including "unset preserves today's formula exactly".
-- [ ] 1.8 Apply `[search]`: `case = "smart" | "sensitive" | "insensitive"`, `whole_word`, `literal` set the Project Search startup state; in-session toggles unaffected. Unit-test mapping config → `CaseMode`/flags.
-- [ ] 1.9 Create `docs/example-config.toml` with fully annotated `[layout]` and `[search]` sections (every key, allowed values, defaults stated).
-- [ ] 1.10 Run the User demo; capture `proofs/1-sidebar-left.png`, `proofs/1-malformed-warning.png`, `proofs/1-no-config-identical.txt`; run all four gates; commit (deps commit may precede feature commit).
+- [x] 1.1 Add the `toml` dependency (`default-features = false` if workable) and decide the path-discovery approach: evaluate `etcetera` vs a small hand-rolled resolver; requirement either way is `$XDG_CONFIG_HOME/redquill/config.toml` else `~/.config/redquill/config.toml` on Linux **and macOS**, platform config dir on Windows (`directories` is ruled out — wrong macOS answer). Record the justification for the commit message.
+- [x] 1.2 TDD: write failing tests, then implement config-path discovery as a pure function taking injected env/home values (cases: XDG set, XDG unset → `~/.config`, missing home → no path, explicit test-override hook used by integration tests). Location: `src/config/load.rs`.
+- [x] 1.3 TDD: define `Config` with per-section structs (`LayoutConfig`, `SearchConfig` now; sections for editor/lsp/keys arrive in their slices) — every field `#[serde(default)]` defaulting to current shipped behavior. Tests: empty file → all defaults; partial file overrides only named keys; unknown keys are collected (not fatal); invalid value for a known key falls back to default and is collected. Location: `src/config/mod.rs`.
+- [x] 1.4 TDD: implement `load() -> (Config, Vec<ConfigWarning>)` with typed errors (`thiserror`) internally: missing file → defaults, zero warnings; TOML syntax error → full defaults + warning carrying path and parser line info; parseable-but-invalid entries → partial apply + one warning each. Assert stdout is never written.
+- [x] 1.5 Wire loading into `src/main.rs` before terminal/App setup, exactly once (no reload path exists); resolve the existing CLI-struct name collision (rename the clap struct to `Cli`-style or namespace the config type); hand `Config` + warnings to `App`.
+- [x] 1.6 Implement the warning notice in the UI: dismissible, non-blocking status-line notice showing the first problem + "and N more"; renders over no content that blocks review; test render + dismiss; never printed to stdout.
+- [x] 1.7 Apply `[layout]`: `sidebar_side = "left" | "right"` (default right) and `sidebar_width` columns override the 30%-clamp formula only when set; validate width against the documented range (out-of-range → warning + default) and clamp to available terminal width at render. Update `split_layout`/`sidebar_width` signatures; unit-test both paths including "unset preserves today's formula exactly".
+- [x] 1.8 Apply `[search]`: `case = "smart" | "sensitive" | "insensitive"`, `whole_word`, `literal` set the Project Search startup state; in-session toggles unaffected. Unit-test mapping config → `CaseMode`/flags.
+- [x] 1.9 Create `docs/example-config.toml` with fully annotated `[layout]` and `[search]` sections (every key, allowed values, defaults stated).
+- [x] 1.10 Run the User demo; capture `proofs/1-sidebar-left.png`, `proofs/1-malformed-warning.png`, `proofs/1-no-config-identical.txt`; run all four gates; commit (deps commit may precede feature commit).
 
 ### [ ] 2.0 Config file picks your editor (`[editor]` templating + presets)
 

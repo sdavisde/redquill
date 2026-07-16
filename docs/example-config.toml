@@ -1,0 +1,78 @@
+# redquill example config
+#
+# This file documents every key redquill's config layer currently
+# understands (spec 07, docs/specs/07-spec-config-layer/). Copy the sections
+# you want into your own config and delete the rest — every key is optional
+# and defaults to today's shipped behavior, so an empty file (or no file at
+# all) behaves identically to this example with everything commented out.
+#
+# Location: redquill looks for this file at
+#   $XDG_CONFIG_HOME/redquill/config.toml
+# falling back to
+#   ~/.config/redquill/config.toml
+# on both Linux and macOS (deliberately not macOS's
+# ~/Library/Application Support, matching helix/yazi). On Windows, the
+# platform config directory is used instead.
+#
+# The file is read exactly once, at startup — there is no reload keybind or
+# file watcher. Restart redquill after editing this file for changes to take
+# effect.
+#
+# A missing file is completely silent (no notice, no behavior change). A
+# file that fails to parse as TOML is ignored in its entirety (every section
+# falls back to its default) and a dismissible status-line notice names the
+# file path and the parser's error. A file that parses but has an unknown
+# key, or an invalid value for a known key, applies every other valid
+# setting and shows one warning per ignored entry — never write to stdout
+# (stdout is reserved for the annotation markdown redquill emits on `q`).
+
+# -----------------------------------------------------------------------
+# [layout] — sidebar placement and width
+# -----------------------------------------------------------------------
+[layout]
+
+# Which edge of the terminal the git panel sidebar renders against, once
+# opened (`` ` ``). Allowed values: "left", "right".
+# Default: "right"
+sidebar_side = "right"
+
+# The sidebar's width, in terminal columns. Must be an integer between 20
+# and 200 inclusive; a value outside that range is treated as invalid (a
+# warning is shown and the default formula below is used instead). The
+# configured width is further clamped to whatever width the terminal
+# actually has each frame, so it can never push the diff pane off-screen.
+#
+# Leaving this key unset (or commenting it out) preserves redquill's
+# built-in formula exactly: 30% of the terminal's width, clamped to the
+# range [40, 72] columns. There is no way to spell "use the formula" other
+# than omitting the key.
+#
+# sidebar_width = 60
+
+# -----------------------------------------------------------------------
+# [search] — Project Search (`g/`) startup defaults
+# -----------------------------------------------------------------------
+[search]
+
+# The case-sensitivity mode Project Search opens with. Allowed values:
+#   "smart"       — case-insensitive unless the pattern contains an
+#                   uppercase letter (vim's smartcase)
+#   "sensitive"   — always case-sensitive
+#   "insensitive" — always case-insensitive
+# Default: "smart"
+#
+# This only seeds a *fresh* Project Search session — pressing `Alt-c` during
+# an open session still cycles the mode as usual, and closing/reopening
+# reseeds from this config again rather than remembering the prior
+# session's toggle.
+case = "smart"
+
+# Whether Project Search opens with whole-word matching on. In-session
+# toggle: `Alt-w`.
+# Default: false
+whole_word = false
+
+# Whether Project Search opens treating the pattern as a fixed string
+# rather than a regex. In-session toggle: `Alt-r`.
+# Default: false
+literal = false

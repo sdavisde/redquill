@@ -12,6 +12,7 @@ use crate::annotate::{AnnotationStore, Source, Target};
 // import in the production build.
 #[cfg(test)]
 use crate::annotate::Side;
+use crate::config::{Config, ConfigWarning};
 use crate::diff::FileDiff;
 use crate::git::{
     BranchStatus, CommitLogEntry, CommitSummary, DiffTarget, RawFilePatch, RemoteOp, StagingMode,
@@ -183,6 +184,19 @@ pub struct App {
     /// A transient one-line message for the status footer (errors, no-op
     /// explanations, success echoes). Cleared on the next keypress.
     pub status_message: Option<String>,
+    /// The config loaded once at startup (`docs/specs/07-spec-config-layer`,
+    /// Unit 1: `[layout]`/`[search]` so far), via [`App::set_config`].
+    /// Defaults to [`Config::default()`] — today's shipped behavior — for
+    /// every `App` built without that call (every pre-existing unit test).
+    pub config: Config,
+    /// Problems encountered loading `config`, shown in the dismissible
+    /// status-line notice (see [`App::config_warning_notice`]) and never
+    /// printed to stdout (stdout is reserved for the annotation markdown).
+    pub config_warnings: Vec<ConfigWarning>,
+    /// Whether the user has dismissed the config-warning notice this
+    /// session (`!`, [`Action::DismissConfigWarning`]). Config loads exactly
+    /// once at startup, so this never needs to reset mid-session.
+    pub config_warning_dismissed: bool,
     /// The git backend staging and refresh run through. `None` in
     /// git-less contexts (e.g. pure-navigation unit tests), where staging
     /// degrades to a footer message.
@@ -432,6 +446,9 @@ impl App {
             staged_states: HashMap::new(),
             staging_cursor: 0,
             status_message: None,
+            config: Config::default(),
+            config_warnings: Vec::new(),
+            config_warning_dismissed: false,
             stage_ops: None,
             theme: Theme::default(),
             editor: "nvim".into(),
@@ -544,6 +561,48 @@ impl App {
     /// then `$EDITOR`, then `"nvim"`).
     pub fn set_editor(&mut self, editor: String) {
         self.editor = editor;
+    }
+
+    /// Sets the loaded config and any warnings collected while loading it
+    /// (`main`'s one-shot call, before the first render — see
+    /// `crate::config::load`; there is no reload path). `config.search`
+    /// seeds the *next* Project Search session's startup toggles (see
+    /// [`super::project_search::ProjectSearchState::seeded`]); an
+    /// already-open session is untouched, per the FR.
+    pub fn set_config(&mut self, config: Config, warnings: Vec<ConfigWarning>) {
+        self.config = config;
+        self.config_warnings = warnings;
+        self.config_warning_dismissed = false;
+    }
+
+    /// Dismisses the config-warning notice (`!`,
+    /// [`Action::DismissConfigWarning`]). A no-op once already dismissed or
+    /// when there was nothing to show.
+    pub fn dismiss_config_warning(&mut self) {
+        self.config_warning_dismissed = true;
+    }
+
+    /// Whether the config-warning notice should currently render: at least
+    /// one warning was collected and the user hasn't dismissed it this
+    /// session.
+    pub fn config_warning_visible(&self) -> bool {
+        !self.config_warning_dismissed && !self.config_warnings.is_empty()
+    }
+
+    /// The notice text for the status line: the first warning's message,
+    /// plus `"(and N more)"` when there is more than one. `None` when
+    /// [`App::config_warning_visible`] is `false`.
+    pub fn config_warning_notice(&self) -> Option<String> {
+        if !self.config_warning_visible() {
+            return None;
+        }
+        let first = self.config_warnings.first()?;
+        let rest = self.config_warnings.len() - 1;
+        Some(if rest > 0 {
+            format!("config: {first} (and {rest} more)")
+        } else {
+            format!("config: {first}")
+        })
     }
 
     /// Whether a keyboard-capturing overlay is currently up: the help overlay
@@ -680,6 +739,7 @@ impl App {
             Action::OpenProjectSearch => self.open_project_search(),
             Action::ToggleCommandLog => self.toggle_command_log(),
             Action::Refresh => self.manual_refresh(),
+            Action::DismissConfigWarning => self.dismiss_config_warning(),
             // `Quit`/`QuitDiscard` end the session; `OpenEditor` suspends the
             // TUI to spawn the configured editor. Both are intercepted by
             // `super::dispatch_key` before reaching here (see `Action::Quit`'s

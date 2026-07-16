@@ -445,6 +445,7 @@ pub(super) fn footer_height(
 ) -> u16 {
     if matches!(app.mode, Mode::Search)
         || app.running_op_label().is_some()
+        || app.config_warning_visible()
         || app.status_message.is_some()
     {
         return 1;

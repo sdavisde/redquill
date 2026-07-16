@@ -143,6 +143,73 @@ fn close_project_search_without_opening_is_a_no_op() {
     assert_eq!(app.mode, Mode::Normal);
 }
 
+// -- `[search]` startup defaults (spec 07 task 1.8) --------------------------
+
+#[test]
+fn seeded_maps_search_config_onto_startup_toggle_state() {
+    let defaults = SearchConfig {
+        case: CaseMode::Insensitive,
+        whole_word: true,
+        literal: true,
+    };
+    let state = ProjectSearchState::seeded(Mode::Normal, defaults);
+    assert_eq!(state.case, CaseMode::Insensitive);
+    assert!(state.whole_word);
+    assert!(state.literal);
+    // Everything else still starts fresh, exactly like `new`.
+    assert_eq!(state.query, "");
+    assert_eq!(state.cursor, 0);
+}
+
+#[test]
+fn new_still_defaults_to_smart_case_and_both_toggles_off() {
+    // `new` is the no-config convenience every other test in this module
+    // uses; pinning its defaults here guards against `seeded` accidentally
+    // changing what `new` resolves to.
+    let state = ProjectSearchState::new(Mode::Normal);
+    assert_eq!(state.case, CaseMode::Smart);
+    assert!(!state.whole_word);
+    assert!(!state.literal);
+}
+
+#[test]
+fn open_project_search_seeds_from_the_apps_loaded_config() {
+    let mut app = App::new(vec![sample_file()]);
+    app.config.search = SearchConfig {
+        case: CaseMode::Sensitive,
+        whole_word: true,
+        literal: false,
+    };
+    app.open_project_search();
+    let state = app.project_search.as_ref().expect("opened");
+    assert_eq!(state.case, CaseMode::Sensitive);
+    assert!(state.whole_word);
+    assert!(!state.literal);
+}
+
+#[test]
+fn open_project_search_after_a_toggle_change_still_reflects_config_on_reopen() {
+    // In-session toggles never write back to config, and a *fresh* open
+    // reseeds from `[search]` rather than remembering the prior session's
+    // toggled state.
+    let mut app = App::new(vec![sample_file()]);
+    app.config.search = SearchConfig {
+        case: CaseMode::Insensitive,
+        whole_word: false,
+        literal: false,
+    };
+    app.open_project_search();
+    app.project_search_toggle_whole_word();
+    assert!(app.project_search.as_ref().unwrap().whole_word);
+    app.close_project_search();
+
+    app.open_project_search();
+    assert!(
+        !app.project_search.as_ref().unwrap().whole_word,
+        "a fresh open reseeds from config rather than remembering the closed session's toggle"
+    );
+}
+
 // -- focus model (round-1 UX fix: Esc/Tab/`/` two-focus split) --------------
 
 #[test]

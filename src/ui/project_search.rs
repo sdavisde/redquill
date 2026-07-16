@@ -44,6 +44,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
+use crate::config::SearchConfig;
 use crate::search::{
     CaseMode, ScanMessage, ScanOptions, ScanSummary, SearchHit, SearchQuery, spawn_scan,
 };
@@ -144,12 +145,29 @@ pub(super) struct ProjectSearchState {
 }
 
 impl ProjectSearchState {
+    /// Builds fresh state with the built-in defaults (`CaseMode::Smart`,
+    /// both toggles off) — used directly by every test that doesn't care
+    /// about `[search]` startup defaults (spec 07 task 1.8); production
+    /// code opens through [`ProjectSearchState::seeded`] instead, via
+    /// [`super::App::open_project_search`], so this convenience is
+    /// test-only.
+    #[cfg(test)]
     pub(super) fn new(return_mode: Mode) -> ProjectSearchState {
+        ProjectSearchState::seeded(return_mode, SearchConfig::default())
+    }
+
+    /// Builds fresh state seeded from `defaults` (`[search]`'s
+    /// `case`/`whole_word`/`literal`, spec 07 task 1.8): only the *startup*
+    /// toggle state a fresh session opens with — an already-open session's
+    /// in-session toggles (`Alt-c`/`Alt-w`/`Alt-r`) are never touched by a
+    /// config reload, since there is none (config loads exactly once, at
+    /// startup).
+    pub(super) fn seeded(return_mode: Mode, defaults: SearchConfig) -> ProjectSearchState {
         ProjectSearchState {
             query: String::new(),
-            case: CaseMode::default(),
-            whole_word: false,
-            literal: false,
+            case: defaults.case,
+            whole_word: defaults.whole_word,
+            literal: defaults.literal,
             groups: Vec::new(),
             cursor: 0,
             generation: 0,
@@ -216,7 +234,7 @@ impl App {
     /// `target` — see the module doc.
     pub(super) fn open_project_search(&mut self) {
         let return_mode = self.mode;
-        self.project_search = Some(ProjectSearchState::new(return_mode));
+        self.project_search = Some(ProjectSearchState::seeded(return_mode, self.config.search));
         self.mode = Mode::ProjectSearch;
     }
 

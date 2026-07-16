@@ -152,6 +152,10 @@ pub enum Action {
     Quit,
     /// Quit, discarding annotations.
     QuitDiscard,
+    /// Dismiss the config-warning status-line notice (spec 07 Unit 1),
+    /// if one is showing. Bound in both scopes since the notice can be
+    /// visible whether or not the git panel is focused.
+    DismissConfigWarning,
 }
 
 /// One key chord: a code plus its required modifiers, matched against an
@@ -475,6 +479,11 @@ impl Keymap {
                     "Toggle command log pane",
                 ),
                 d(
+                    KeySeq::one(Char('!'), none),
+                    DismissConfigWarning,
+                    "Dismiss config warning notice",
+                ),
+                d(
                     KeySeq::one(Char('R'), none),
                     Refresh,
                     "Refresh diff from working tree",
@@ -609,6 +618,11 @@ impl Keymap {
                     KeySeq::one(Char('@'), none),
                     ToggleCommandLog,
                     "Toggle command log pane",
+                ),
+                p(
+                    KeySeq::one(Char('!'), none),
+                    DismissConfigWarning,
+                    "Dismiss config warning notice",
                 ),
                 // The focused git panel is a first-class view, not an overlay,
                 // so the quit family works here exactly as in the diff view.
