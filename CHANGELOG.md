@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.10.0](https://github.com/sdavisde/redquill/compare/v0.9.0...v0.10.0) (2026-07-16)
+
+
+### Features
+
+* config layer — TOML config for layout, search, editor, LSP, and keymaps (spec 07) ([e9c7804](https://github.com/sdavisde/redquill/commit/e9c7804e876e795a541bd4bb532fd7ab03f699c1))
+* **config:** [keys.&lt;mode&gt;] modal-panel remapping (spec 07 unit 4, task 5) ([613bd35](https://github.com/sdavisde/redquill/commit/613bd3596c890101670d106e9420d7d7cf77ed29))
+* **config:** [keys.diff]/[keys.panel] main-keymap remapping (spec 07 unit 4) ([e5656ea](https://github.com/sdavisde/redquill/commit/e5656eadef3f9a93a2ff5dd38255e82718bca31d))
+* **config:** [lsp] per-language server overrides (spec 07 unit 3) ([a91f11b](https://github.com/sdavisde/redquill/commit/a91f11bca558ab5d0be5c67431008b71fd08b1c9))
+* **config:** config loading infrastructure + [layout]/[search] (spec 07 unit 1) ([a6cf0e1](https://github.com/sdavisde/redquill/commit/a6cf0e1e3fc8ecdea294d5b8bd1dbdba42b768cd))
+* **config:** editor templating and presets ([editor] section) ([c02d833](https://github.com/sdavisde/redquill/commit/c02d833435d0391adae104b4565dc63220d6c1b9))
+
+
+### Bug Fixes
+
+* resolve release workflow issue ([be56bda](https://github.com/sdavisde/redquill/commit/be56bdac089e5a7a5b24954514e64a345d317212))
+
 ## [0.9.0](https://github.com/sdavisde/redquill/compare/v0.8.0...v0.9.0) (2026-07-15)
 
 
