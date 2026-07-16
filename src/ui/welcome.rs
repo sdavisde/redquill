@@ -51,6 +51,7 @@ pub(super) fn situation(target: &DiffTarget, active_commit: Option<&CommitLogEnt
         // this welcome copy is never actually shown in practice — kept as a
         // real, sensible fallback rather than `unreachable!()`.
         DiffTarget::File(path) => format!("{path} is empty"),
+        DiffTarget::Review { base, branch } => format!("Empty diff for {base}...{branch}"),
     }
 }
 

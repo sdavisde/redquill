@@ -921,6 +921,15 @@ impl App {
             // working-tree diff annotations — see the `markdown` module
             // doc's "`(=)` marker" section.
             DiffTarget::File(_) => Source::WorkingTree,
+            // No dedicated `Source` variant: a review's three-dot range is
+            // exactly the shape `Source::Range` already models (an
+            // explicit ref expression), so this produces the same
+            // `Reviewing: base...branch` metadata line the `Range` source
+            // would for that literal range string — zero changes to the
+            // stdout annotation format itself (spec 08 Unit 2 wires the
+            // rest of the review lifecycle on top of this unchanged
+            // grouping).
+            DiffTarget::Review { base, branch } => Source::Range(format!("{base}...{branch}")),
         }
     }
 

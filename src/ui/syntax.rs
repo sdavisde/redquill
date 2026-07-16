@@ -74,6 +74,13 @@ pub(super) fn content_source(
                 _ => ContentSource::Worktree(path.to_string()),
             },
             DiffTarget::Commit(rev) => ContentSource::Show(format!("{rev}:{path}")),
+            // Same shape as `Range` with a non-empty right side: the
+            // branch's blob at its tip. In practice this is byte-identical
+            // to the review worktree's on-disk file (that's the whole point
+            // of the dedicated worktree), but sourcing the git blob keeps
+            // this function's contract uniform with every other historical
+            // target rather than special-casing review to read off disk.
+            DiffTarget::Review { branch, .. } => ContentSource::Show(format!("{branch}:{path}")),
             // The read-only file view's whole-file body is always
             // synthesized with a `None` patch entry (see `ui::file_view`),
             // which routes `rebuild_rows`'s `synthetic` flag to
@@ -95,6 +102,9 @@ pub(super) fn content_source(
                     None => ContentSource::Show(format!("{r}:{src}")),
                 },
                 DiffTarget::Commit(rev) => ContentSource::Show(format!("{rev}^:{src}")),
+                // The base ref's blob — the three-dot diff's "old" side,
+                // mirroring `Range`'s left-side handling.
+                DiffTarget::Review { base, .. } => ContentSource::Show(format!("{base}:{src}")),
                 // A whole-file view has no old side at all (see the New-side
                 // arm's doc above) — never reached, since the synthesized
                 // file has zero `Removed` lines, so `side_in_use` never asks

@@ -123,6 +123,12 @@ impl GitRunner {
             DiffTarget::WorkingTree => {}
             DiffTarget::Staged => args.push("--staged".to_string()),
             DiffTarget::Range(range) => args.push(range.clone()),
+            DiffTarget::Review { base, branch } => {
+                // Merge-base (three-dot) semantics, as a single argv
+                // element — never two separate revs interpolated with a
+                // shell-level `...`, so this is exactly as safe as `Range`.
+                args.push(format!("{base}...{branch}"));
+            }
             DiffTarget::Commit(rev) => {
                 let parent = format!("{rev}^");
                 let base = if self.rev_exists(&parent) {
@@ -211,6 +217,68 @@ impl GitRunner {
     pub fn worktree_list(&self) -> Result<Vec<WorktreeEntry>, GitError> {
         let out = self.run_utf8(&["worktree", "list", "--porcelain"])?;
         parse_worktree_list(&out)
+    }
+
+    /// Returns the repository's common git directory (`git rev-parse
+    /// --git-common-dir`), canonicalized to an absolute path. This is the
+    /// *shared* administrative directory — the same for every linked
+    /// worktree of a repository — unlike [`GitRunner::root`], which returns
+    /// the current worktree's toplevel and would silently diverge per
+    /// worktree. Review-session paths (the managed worktrees themselves,
+    /// and later the persisted review state) must resolve through this
+    /// method so a review started from any worktree shares the same state.
+    pub fn git_common_dir(&self) -> Result<PathBuf, GitError> {
+        let out = self.run_utf8(&["rev-parse", "--git-common-dir"])?;
+        let raw = PathBuf::from(out.trim());
+        let joined = if raw.is_absolute() {
+            raw
+        } else {
+            self.root.join(raw)
+        };
+        std::fs::canonicalize(&joined).map_err(GitError::Io)
+    }
+
+    /// Resolves `--review`'s default base ref when `--base` isn't given:
+    /// the branch `origin/HEAD` points to, else local `main`, else local
+    /// `master`. Returns [`GitError::NoDefaultBase`] (naming the `--base`
+    /// flag in its `Display`) when none of the three resolve.
+    pub fn default_base(&self) -> Result<String, GitError> {
+        if let Ok(out) = self.run_utf8(&["symbolic-ref", "refs/remotes/origin/HEAD"])
+            && let Some(name) = out.trim().strip_prefix("refs/remotes/origin/")
+            && !name.is_empty()
+        {
+            return Ok(name.to_string());
+        }
+        if self.rev_exists("refs/heads/main") {
+            return Ok("main".to_string());
+        }
+        if self.rev_exists("refs/heads/master") {
+            return Ok("master".to_string());
+        }
+        Err(GitError::NoDefaultBase)
+    }
+
+    /// Creates a new worktree at `path`, checked out to `branch`
+    /// (`git worktree add <path> <branch>`, fixed argv, never `--force`).
+    /// `path`'s parent directories are created by `git` itself if missing.
+    /// Fails with [`GitError::Command`] (carrying git's own stderr verbatim)
+    /// when the branch doesn't exist, is already checked out in another
+    /// worktree, or `path` already exists — the caller decides how to
+    /// surface it; nothing is retried or forced.
+    pub fn worktree_add(&self, path: &Path, branch: &str) -> Result<(), GitError> {
+        let path_str = path.to_string_lossy().into_owned();
+        let args = ["worktree", "add", path_str.as_str(), branch];
+        let output = Command::new("git")
+            .current_dir(&self.root)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(map_spawn_err)?;
+
+        if !output.status.success() {
+            return Err(command_error(&args, &output.status, &output.stderr));
+        }
+        Ok(())
     }
 
     /// Switches the working tree to branch `name` (`git switch -- <name>`).

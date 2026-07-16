@@ -35,7 +35,7 @@ Tasks for `08-spec-branch-review-mode.md`. Each parent task is a thin vertical s
 
 ## Tasks
 
-### [ ] 1.0 Start a review from the CLI: `redquill --review <branch>` opens the branch in its own worktree
+### [x] 1.0 Start a review from the CLI: `redquill --review <branch>` opens the branch in its own worktree
 
 **User can verify:** run `redquill --review <branch>` in any repo → the `base...branch` diff opens, `git worktree list` shows the new worktree under `.git/redquill/worktrees/`, and `git status`/HEAD in their own checkout are untouched. `gd` on a symbol lands in the worktree's file, proving LSP is truthful. Bad inputs (unknown branch, branch checked out elsewhere) produce a readable error, not a crash.
 
@@ -51,13 +51,13 @@ Covers: spec Unit 1 (CLI path), `DiffTarget::Review` variant, base resolution (`
 
 #### 1.0 Tasks
 
-- [ ] 1.1 TDD new `GitRunner` methods against tempdir fixture repos: `git_common_dir()` (`rev-parse --git-common-dir`, canonicalized absolute path), `default_base()` (`symbolic-ref refs/remotes/origin/HEAD` → `main` → `master`, typed error naming `--base` when none resolve), `worktree_add(path, branch)` (fixed argv `worktree add <path> <branch>`, never `--force`, typed error carrying git's stderr). Follow the `verify_rev`/`switch_branch` precedents; `GIT_TERMINAL_PROMPT=0`.
-- [ ] 1.2 TDD a pure sanitization helper: branch name → worktree directory name (keep `[A-Za-z0-9._-]`, others → `-`, append short std-hash suffix of the original name). Collision test: `feat/x` vs `feat-x` map to different directories.
-- [ ] 1.3 Add `DiffTarget::Review { base, branch }` in `src/git/diff.rs`; the compiler forces decisions at the three capability matches — `is_live() == false`, `staging_mode() == ReadOnly`, `supports_code_intel() == true` — plus diff argv in the runner using three-dot `base...branch`. Unit-test all four sites.
-- [ ] 1.4 CLI wiring in `src/main.rs`: `--review <branch>` (conflicts with `--staged` and the positional range) and `--base <ref>`; flow = resolve base → ensure worktree (create, or reuse a paused review's) → `discover_in(worktree_path)` → review snapshot → `App` with the `Review` target so LSP and `g<Space>` root in the worktree. Every failure exits with a readable message and zero side effects.
-- [ ] 1.5 Tempdir integration tests for the full CLI flow per the isolation notes: creation at the sanitized path, reuse on second launch, unknown-branch and already-checked-out failures — plus the shared isolation-assertion helper, introduced here and used by every mutating test in this spec.
-- [ ] 1.6 Amend CLAUDE.md: product write ceiling gains `git worktree add <path> <branch>`, `git worktree remove <path>` (never `--force`), `git worktree prune`, with forced removal explicitly forbidden; agent ceiling unchanged; architecture map gains the `review/` module line (landed in 3.1 but documented once here).
-- [ ] 1.7 Run gates; capture the transcripts + `gd` screenshot into `proofs/`; commit.
+- [x] 1.1 TDD new `GitRunner` methods against tempdir fixture repos: `git_common_dir()` (`rev-parse --git-common-dir`, canonicalized absolute path), `default_base()` (`symbolic-ref refs/remotes/origin/HEAD` → `main` → `master`, typed error naming `--base` when none resolve), `worktree_add(path, branch)` (fixed argv `worktree add <path> <branch>`, never `--force`, typed error carrying git's stderr). Follow the `verify_rev`/`switch_branch` precedents; `GIT_TERMINAL_PROMPT=0`.
+- [x] 1.2 TDD a pure sanitization helper: branch name → worktree directory name (keep `[A-Za-z0-9._-]`, others → `-`, append short std-hash suffix of the original name). Collision test: `feat/x` vs `feat-x` map to different directories.
+- [x] 1.3 Add `DiffTarget::Review { base, branch }` in `src/git/diff.rs`; the compiler forces decisions at the three capability matches — `is_live() == false`, `staging_mode() == ReadOnly`, `supports_code_intel() == true` — plus diff argv in the runner using three-dot `base...branch`. Unit-test all four sites.
+- [x] 1.4 CLI wiring in `src/main.rs`: `--review <branch>` (conflicts with `--staged` and the positional range) and `--base <ref>`; flow = resolve base → ensure worktree (create, or reuse a paused review's) → `discover_in(worktree_path)` → review snapshot → `App` with the `Review` target so LSP and `g<Space>` root in the worktree. Every failure exits with a readable message and zero side effects.
+- [x] 1.5 Tempdir integration tests for the full CLI flow per the isolation notes: creation at the sanitized path, reuse on second launch, unknown-branch and already-checked-out failures — plus the shared isolation-assertion helper, introduced here and used by every mutating test in this spec.
+- [x] 1.6 Amend CLAUDE.md: product write ceiling gains `git worktree add <path> <branch>`, `git worktree remove <path>` (never `--force`), `git worktree prune`, with forced removal explicitly forbidden; agent ceiling unchanged; architecture map gains the `review/` module line (landed in 3.1 but documented once here).
+- [x] 1.7 Run gates; capture the transcripts + `gd` screenshot into `proofs/`; commit.
 
 ### [ ] 2.0 Review banner and ending a review: `q` → pause or finish
 

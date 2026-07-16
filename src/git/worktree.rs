@@ -5,6 +5,8 @@
 //! [`WorktreeEntry`] records, in the order git lists them (the main worktree
 //! first).
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 use super::error::GitError;
@@ -104,6 +106,36 @@ pub fn parse_worktree_list(input: &str) -> Result<Vec<WorktreeEntry>, GitError> 
     }
 
     Ok(out)
+}
+
+/// Maps a branch name to a filesystem-safe worktree directory name (spec 08
+/// Unit 1): every character outside `[A-Za-z0-9._-]` becomes `-`, then a
+/// short (8 hex digit) hash of the *original* branch name is appended.
+///
+/// The hash suffix is what makes this collision-safe: `feat/x` and
+/// `feat-x` both sanitize their body to `feat-x`, but hash to different
+/// suffixes (they're different original strings), so they land in distinct
+/// directories rather than one silently clobbering the other's worktree.
+/// [`DefaultHasher::new`] is a fixed (not per-process-randomized) starting
+/// state, so this is deterministic across runs — required for "reuse the
+/// existing worktree on relaunch" to find the same path every time.
+pub fn sanitize_branch_dir_name(branch: &str) -> String {
+    let sanitized: String = branch
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+
+    let mut hasher = DefaultHasher::new();
+    branch.hash(&mut hasher);
+    let short_hash = hasher.finish() as u32;
+
+    format!("{sanitized}-{short_hash:08x}")
 }
 
 #[cfg(test)]
@@ -231,5 +263,44 @@ mod tests {
         );
         let entries = parse_worktree_list(input).unwrap();
         assert_eq!(entries[0].branch.as_deref(), Some("feature/nested"));
+    }
+
+    // -- sanitize_branch_dir_name -------------------------------------------
+
+    #[test]
+    fn keeps_simple_names_unchanged_up_to_the_hash_suffix() {
+        let name = sanitize_branch_dir_name("feature");
+        assert!(name.starts_with("feature-"));
+        // 8 hex digits after the separating dash.
+        assert_eq!(name.len(), "feature-".len() + 8);
+    }
+
+    #[test]
+    fn replaces_characters_outside_the_allowed_set() {
+        let name = sanitize_branch_dir_name("feat/awesome thing!");
+        assert!(name.starts_with("feat-awesome-thing--"));
+    }
+
+    #[test]
+    fn keeps_dots_underscores_and_hyphens_as_is() {
+        let name = sanitize_branch_dir_name("release/v1.2.3_rc-1");
+        assert!(name.starts_with("release-v1.2.3_rc-1-"));
+    }
+
+    #[test]
+    fn is_deterministic_across_calls() {
+        assert_eq!(
+            sanitize_branch_dir_name("feature/x"),
+            sanitize_branch_dir_name("feature/x")
+        );
+    }
+
+    #[test]
+    fn colliding_sanitized_bodies_still_get_distinct_directories() {
+        // Both sanitize their body to "feat-x", but are different original
+        // branch names, so the hash suffix must disambiguate them.
+        let a = sanitize_branch_dir_name("feat/x");
+        let b = sanitize_branch_dir_name("feat-x");
+        assert_ne!(a, b);
     }
 }

@@ -40,6 +40,18 @@ pub enum DiffTarget {
     /// Staging, commit, and code-intelligence are all unavailable against
     /// it (see the capability methods below).
     File(String),
+    /// A branch review session (spec 08 Unit 1): the merge-base (three-dot)
+    /// diff between `base` and `branch`, computed and rendered from inside
+    /// the branch's dedicated review worktree. Code intelligence is
+    /// truthful here — unlike every other non-live target — precisely
+    /// because that worktree's on-disk files match the diff's post-state.
+    Review {
+        /// The base ref the branch is compared against (`origin/HEAD`,
+        /// `main`, `master`, or an explicit `--base`).
+        base: String,
+        /// The branch under review.
+        branch: String,
+    },
 }
 
 /// Which staging action (if any) a diff target supports — the direction
@@ -78,6 +90,11 @@ impl DiffTarget {
             // try to `build_review` against a target that isn't a
             // comparison at all.
             DiffTarget::File(_) => false,
+            // A review's diff range is a fixed historical comparison (`base`
+            // and `branch` are both resolved refs, not the working tree),
+            // so it never needs the working-tree auto-refresh poll either —
+            // same reasoning as `Range`/`Commit`, not `WorkingTree`.
+            DiffTarget::Review { .. } => false,
         }
     }
 
@@ -90,13 +107,19 @@ impl DiffTarget {
             DiffTarget::Range(_) => StagingMode::ReadOnly,
             DiffTarget::Commit(_) => StagingMode::ReadOnly,
             DiffTarget::File(_) => StagingMode::ReadOnly,
+            // A review has its own accept/defer tri-state (spec 08 Unit 3),
+            // not the index staging gesture: there's no working-tree/index
+            // comparison to stage into or out of here.
+            DiffTarget::Review { .. } => StagingMode::ReadOnly,
         }
     }
 
     /// Whether LSP code-intelligence requests (`gd`/`gr`/`K`) are valid
-    /// against this target: true only when the diff's new side is the live
-    /// working tree on disk, since that's the only content an LSP server can
-    /// be asked about with on-disk-accurate positions.
+    /// against this target: true when the diff's new side is the live
+    /// working tree on disk (on-disk-accurate positions), or — the one
+    /// other case — a review session, whose worktree's on-disk files match
+    /// the diff's post-state exactly (that's the whole point of the
+    /// dedicated worktree: code intel is truthful during a review).
     pub fn supports_code_intel(&self) -> bool {
         match self {
             DiffTarget::WorkingTree => true,
@@ -104,6 +127,7 @@ impl DiffTarget {
             DiffTarget::Range(_) => false,
             DiffTarget::Commit(_) => false,
             DiffTarget::File(_) => false,
+            DiffTarget::Review { .. } => true,
         }
     }
 }
@@ -276,6 +300,19 @@ mod tests {
         assert!(!target.is_live());
         assert_eq!(target.staging_mode(), StagingMode::ReadOnly);
         assert!(!target.supports_code_intel());
+    }
+
+    #[test]
+    fn review_capability_triple() {
+        let target = DiffTarget::Review {
+            base: "main".to_string(),
+            branch: "feature".to_string(),
+        };
+        assert!(!target.is_live());
+        assert_eq!(target.staging_mode(), StagingMode::ReadOnly);
+        // The one target besides `WorkingTree` where code intel is
+        // truthful: the review worktree's files match the diff's post-state.
+        assert!(target.supports_code_intel());
     }
 
     #[test]
