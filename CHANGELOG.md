@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.12.0](https://github.com/sdavisde/redquill/compare/v0.11.1...v0.12.0) (2026-07-17)
+
+
+### Features
+
+* copy annotations to clipboard on quit ([4322f5a](https://github.com/sdavisde/redquill/commit/4322f5a21418e23dfe69b2cc94a9e3d4ae6469b8))
+* file-tree git panel with icons, guides, bottom-pinned stashes ([53ee171](https://github.com/sdavisde/redquill/commit/53ee171e8da7640af9f7f1fde415d359ffdd132d))
+* git-log-style graph rail and right-aligned sha on History tab ([056f188](https://github.com/sdavisde/redquill/commit/056f188517bb8efa22a099782b810dc4056b0445))
+
 ## [0.11.1](https://github.com/sdavisde/redquill/compare/v0.11.0...v0.11.1) (2026-07-17)
 
 
