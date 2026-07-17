@@ -370,35 +370,50 @@ fn panel_title(branch: Option<&BranchStatus>, tab: PanelTab, theme: &Theme) -> L
     ])
 }
 
-/// A History-tab row: two lines (subject + unpushed marker; dimmed `author ·
-/// relative-time · short-sha`), matching Zed's row anatomy. `now` is the
-/// caller's wall-clock read (kept a parameter
-/// so [`super::time_format::relative_time`] stays pure and independently
-/// testable). Long subjects/meta lines are left to ratatui's own line
-/// clipping to the panel width, the same way file paths elsewhere in this
-/// panel are never manually truncated.
+/// A History-tab row: two lines echoing the Changes tab's visual language. A
+/// `git log --graph`-style rail runs down the left — a commit dot (`●`) on the
+/// subject line, bright when the commit is unpushed and dim otherwise, and a
+/// connector bar (`│`) on the meta line flowing to the next commit, mirroring
+/// the file tree's box-drawing guides. The short sha is right-aligned into the
+/// panel's inner edge (the same right gutter the file rows use for their
+/// change letter), and the dimmed meta line carries `author · relative-time`.
+/// `now` is the caller's wall-clock read (kept a parameter so
+/// [`super::time_format::relative_time`] stays pure and independently
+/// testable); `content_width` is the list's inner width in cells. Long
+/// subjects are left to ratatui's own clipping.
 fn history_item(
     entry: &CommitLogEntry,
     unpushed: bool,
     now: i64,
     theme: &Theme,
+    content_width: usize,
 ) -> ListItem<'static> {
-    let mut subject_spans = Vec::new();
-    if unpushed {
-        subject_spans.push(Span::styled(
-            "\u{25cf} ",
-            Style::default().fg(theme.staged_indicator),
-        ));
-    }
-    subject_spans.push(Span::raw(entry.subject.clone()));
+    let dot_color = if unpushed {
+        theme.staged_indicator
+    } else {
+        theme.dir_prefix
+    };
+    let mut subject_line = Line::from(vec![
+        Span::styled("\u{25cf} ", Style::default().fg(dot_color)),
+        Span::raw(entry.subject.clone()),
+    ]);
+    // Right-align the short sha, leaving one trailing cell of margin.
+    let sha_w = entry.short_sha.chars().count();
+    let used = subject_line.width() as usize;
+    let pad = content_width.saturating_sub(used + sha_w + 1).max(1);
+    subject_line.spans.push(Span::raw(" ".repeat(pad)));
+    subject_line.spans.push(Span::styled(
+        entry.short_sha.clone(),
+        Style::default().fg(theme.dir_prefix),
+    ));
+
     let meta = format!(
-        "  {} \u{b7} {} \u{b7} {}",
+        "\u{2502} {} \u{b7} {}",
         entry.author_name,
         relative_time(now, entry.timestamp),
-        entry.short_sha
     );
     ListItem::new(vec![
-        Line::from(subject_spans),
+        subject_line,
         Line::from(Span::styled(meta, Style::default().fg(theme.dir_prefix))),
     ])
 }
@@ -524,7 +539,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
                 let now = now_unix();
                 for (i, entry) in app.history.iter().enumerate() {
                     nav_item_indices.push(items.len());
-                    items.push(history_item(entry, i < ahead, now, theme));
+                    items.push(history_item(entry, i < ahead, now, theme, content_width));
                 }
             }
         }

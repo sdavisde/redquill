@@ -588,10 +588,13 @@ fn history_tab_renders_commit_rows_with_subject_meta_and_unpushed_marker() {
     let content = render_panel(&app);
     assert!(content.contains("feat: new thing"));
     assert!(content.contains("fix: old bug"));
-    // The unpushed marker (●) decorates only the first `ahead` (1) row.
-    assert!(content.contains("\u{25cf}"));
+    // The graph rail draws a commit dot (●) per row and a connector bar (│)
+    // running between them; the first `ahead` (1) row's dot is the bright
+    // (unpushed) variant, the rest dim.
+    assert!(content.contains("\u{25cf}")); // commit dot
+    assert!(content.contains("\u{2502}")); // graph connector bar
     assert!(content.contains("Jane Dev"));
-    assert!(content.contains("abc1234"));
+    assert!(content.contains("abc1234")); // right-aligned short sha
 }
 
 #[test]
