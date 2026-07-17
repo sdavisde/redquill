@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.0](https://github.com/sdavisde/redquill/compare/v0.10.0...v0.11.0) (2026-07-17)
+
+
+### Features
+
+* **review:** accept/defer tri-state for review sessions ([df102c3](https://github.com/sdavisde/redquill/commit/df102c3126939bc62b1ffe615b60694366875c1f))
+* **review:** in-app review-branch modal ([9bc8ba4](https://github.com/sdavisde/redquill/commit/9bc8ba4010121bdd37811e6145d553d1b0426be2))
+* **review:** persist annotations across pause/resume, emit once on finish ([94caeca](https://github.com/sdavisde/redquill/commit/94caeca6965ce8e7f4195f406964d4b98814f17d))
+* **review:** persist review progress across sessions, self-invalidate on change ([425cbd1](https://github.com/sdavisde/redquill/commit/425cbd1fec019ceacf0ef0fd2d65e7025311e408))
+* **review:** S toggle parity, accepted-files panel, guarded remote writes ([1d9d188](https://github.com/sdavisde/redquill/commit/1d9d188d8fd193f14ab20670da2f4c8609138125))
+* **ui:** polish review banner and end-review modal (dogfood feedback) ([e7d83dd](https://github.com/sdavisde/redquill/commit/e7d83dd5287ad1d2fb9c655852b283782eac9d34))
+
 ## [0.10.0](https://github.com/sdavisde/redquill/compare/v0.9.0...v0.10.0) (2026-07-16)
 
 
