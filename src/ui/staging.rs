@@ -222,10 +222,12 @@ fn visual_stage_selection(
 /// and unstaging the focused file. Split out of `app.rs` alongside the `space`
 /// gesture above so all staging-panel logic lives in one module.
 impl App {
-    /// Toggles the staging panel: opens it (refreshing the staged list from
-    /// `git status` first, so it's current even if nothing was staged this
-    /// session) from Normal/Visual, closes it from Staging. A no-op while
-    /// Compose or the annotation list is open.
+    /// Toggles the staging panel: opens it from Normal/Visual, closes it
+    /// from Staging. Opening refreshes its list first, so it's current even
+    /// if nothing changed this session — from `git status` in a plain
+    /// session, or from `review_states` (the accepted-files panel, spec 08
+    /// Unit 5) during a review session, via [`App::refresh_accepted_list`].
+    /// A no-op while Compose or the annotation list is open.
     pub(super) fn toggle_staging_panel(&mut self) {
         match self.mode {
             Mode::Staging => self.mode = Mode::Normal,
@@ -235,11 +237,18 @@ impl App {
             | Mode::Search
             | Mode::Peek
             | Mode::Switcher
+            | Mode::ReviewBranch
             | Mode::CommitMessage
             | Mode::Finder
-            | Mode::ProjectSearch => {}
+            | Mode::ProjectSearch
+            | Mode::EndReview { .. }
+            | Mode::ConfirmRemoteOp { .. } => {}
             Mode::Normal | Mode::Visual { .. } => {
-                self.refresh_staged_list();
+                if self.in_review_session() {
+                    self.refresh_accepted_list();
+                } else {
+                    self.refresh_staged_list();
+                }
                 self.staging_cursor = self.staging_cursor.min(self.staged.len().saturating_sub(1));
                 self.mode = Mode::Staging;
             }
@@ -313,7 +322,7 @@ mod tests {
     use crate::annotate::AnnotationStore;
     use crate::diff::FileDiff;
     use crate::git::RawFilePatch;
-    use crate::ui::rows::{StagedMarker, SyntaxSpans, build_multibuffer};
+    use crate::ui::rows::{ReviewMarker, StagedMarker, SyntaxSpans, build_multibuffer};
 
     fn file_from_raw(path: &str, raw: &str) -> FileDiff {
         FileDiff::from_patch(&RawFilePatch {
@@ -334,6 +343,7 @@ mod tests {
             &view.files,
             &vec![false; n],
             &vec![StagedMarker::None; n],
+            &vec![ReviewMarker::None; n],
             &AnnotationStore::new(),
             &vec![SyntaxSpans::default(); n],
         );

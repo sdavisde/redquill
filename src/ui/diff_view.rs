@@ -20,7 +20,7 @@ use crate::highlight::TokenKind;
 
 use super::app::App;
 use super::keymap::Keymap;
-use super::rows::{LineRow, Row, StagedMarker};
+use super::rows::{LineRow, ReviewMarker, Row, StagedMarker};
 use super::theme::{Theme, blend};
 use super::time_format::absolute_date;
 use super::welcome;
@@ -248,6 +248,29 @@ fn staged_marker_span(marker: StagedMarker, theme: &Theme) -> Span<'static> {
     }
 }
 
+/// The review-status glyph shown in a section header's marker slot (spec 08
+/// Unit 3), rendered right after [`staged_marker_span`] — the two slots
+/// never both carry a glyph for the same file (a review target's
+/// [`StagedMarker`] is always [`StagedMarker::None`]). `Accepted` reuses
+/// [`staged_marker_span`]'s exact `●` glyph and [`Theme::staged_indicator`]
+/// color (deliberate exception — see [`super::rows::ReviewMarker`]'s doc);
+/// `Deferred`/`Changed` use their own colors and stay visually distinct from
+/// staging's `±`/`●`.
+fn review_marker_span(marker: ReviewMarker, theme: &Theme) -> Span<'static> {
+    match marker {
+        ReviewMarker::Accepted => {
+            Span::styled(" \u{25cf}", Style::default().fg(theme.staged_indicator))
+        }
+        ReviewMarker::Deferred => {
+            Span::styled(" ~", Style::default().fg(theme.review_deferred_marker))
+        }
+        ReviewMarker::Changed => {
+            Span::styled(" !", Style::default().fg(theme.review_changed_marker))
+        }
+        ReviewMarker::None => Span::raw("  "),
+    }
+}
+
 /// Same trailing-space padding as [`annotation_row_line`] (see its doc for
 /// why): without it, `Paragraph` only paints `file_header_bg` (or the
 /// selected/search-match bg) onto the header's own text, leaving the rest
@@ -262,6 +285,7 @@ fn file_header_line(
     annotated: bool,
     collapsed: bool,
     staged_marker: StagedMarker,
+    review_marker: ReviewMarker,
     width: usize,
     theme: &Theme,
 ) -> Line<'static> {
@@ -291,6 +315,7 @@ fn file_header_line(
         ));
     }
     spans.push(staged_marker_span(staged_marker, theme));
+    spans.push(review_marker_span(review_marker, theme));
     let mut line = Line::from(spans);
     let pad = width.saturating_sub(line.width());
     if pad > 0 {
@@ -458,6 +483,7 @@ pub(super) fn row_line(
             annotated,
             collapsed,
             staged_marker,
+            review_marker,
             ..
         } => file_header_line(
             path,
@@ -468,6 +494,7 @@ pub(super) fn row_line(
             *annotated,
             *collapsed,
             *staged_marker,
+            *review_marker,
             width,
             theme,
         ),
@@ -803,6 +830,7 @@ mod tests {
             false,
             false,
             StagedMarker::None,
+            ReviewMarker::None,
             40,
             &theme,
         );
@@ -821,6 +849,7 @@ mod tests {
             false,
             true,
             StagedMarker::None,
+            ReviewMarker::None,
             40,
             &theme,
         );
@@ -839,6 +868,7 @@ mod tests {
             false,
             false,
             StagedMarker::None,
+            ReviewMarker::None,
             60,
             &theme,
         );
@@ -857,6 +887,7 @@ mod tests {
             false,
             false,
             StagedMarker::None,
+            ReviewMarker::None,
             0,
             &theme,
         );
@@ -870,6 +901,7 @@ mod tests {
             false,
             false,
             StagedMarker::None,
+            ReviewMarker::None,
             content_width,
             &theme,
         );
@@ -888,6 +920,7 @@ mod tests {
             false,
             false,
             StagedMarker::None,
+            ReviewMarker::None,
             40,
             &theme,
         );
@@ -895,6 +928,73 @@ mod tests {
             line.style.bg,
             Some(blend(theme.selected_row_bg, theme.file_header_bg))
         );
+    }
+
+    // -- Review-status markers (spec 08 Unit 3) -----------------------------
+
+    #[test]
+    fn review_marker_accepted_reuses_the_staged_glyph_and_color() {
+        // Deliberate exception (user decision 2026-07-16): accepted must be
+        // byte-identical to the staged `●` — same glyph, same color — so an
+        // accepted-and-collapsed file reads exactly like a staged one.
+        let theme = Theme::default();
+        let staged = staged_marker_span(StagedMarker::Staged, &theme);
+        let accepted = review_marker_span(ReviewMarker::Accepted, &theme);
+        assert_eq!(accepted.content, staged.content);
+        assert_eq!(accepted.style.fg, staged.style.fg);
+        assert_eq!(accepted.style.fg, Some(theme.staged_indicator));
+    }
+
+    #[test]
+    fn review_marker_deferred_and_changed_are_distinct_from_staging_glyphs() {
+        let theme = Theme::default();
+        let deferred = review_marker_span(ReviewMarker::Deferred, &theme);
+        let changed = review_marker_span(ReviewMarker::Changed, &theme);
+        let staged = staged_marker_span(StagedMarker::Staged, &theme);
+        let partial = staged_marker_span(StagedMarker::Partial, &theme);
+        for staging_glyph in [&staged, &partial] {
+            assert_ne!(deferred.content, staging_glyph.content);
+            assert_ne!(changed.content, staging_glyph.content);
+        }
+        assert_ne!(deferred.content, changed.content);
+    }
+
+    #[test]
+    fn review_marker_none_is_blank_and_width_stable() {
+        let theme = Theme::default();
+        let none = review_marker_span(ReviewMarker::None, &theme);
+        let accepted = review_marker_span(ReviewMarker::Accepted, &theme);
+        assert_eq!(
+            none.content.chars().count(),
+            accepted.content.chars().count()
+        );
+        assert!(none.content.chars().all(|c| c == ' '));
+    }
+
+    #[test]
+    fn file_header_line_renders_both_marker_slots_when_both_present() {
+        // A local-mode section can be staged; a review-mode section can be
+        // accepted/deferred/changed — but never both on the same row (a
+        // review target's staging is always read-only). Still, the two
+        // slots must compose without one clobbering the other when directly
+        // exercised together.
+        let theme = Theme::default();
+        let line = file_header_line(
+            "src/main.rs",
+            &None,
+            FileChangeKind::Modified,
+            false,
+            false,
+            false,
+            false,
+            StagedMarker::Staged,
+            ReviewMarker::Deferred,
+            60,
+            &theme,
+        );
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains('\u{25cf}'), "staged dot present: {text:?}");
+        assert!(text.contains('~'), "deferred marker present: {text:?}");
     }
 
     #[test]

@@ -24,9 +24,13 @@ mod commit_message;
 mod commit_modal;
 mod compose;
 mod compose_modal;
+mod confirm_remote_op;
+mod confirm_remote_op_modal;
 mod diff_view;
 mod diff_view_state;
 mod editor;
+mod end_review;
+mod end_review_modal;
 mod file_finder;
 mod file_finder_modal;
 mod file_view;
@@ -48,6 +52,11 @@ mod project_search;
 mod project_search_view;
 mod refresh;
 mod render_glue;
+mod review_banner;
+mod review_branch;
+mod review_branch_modal;
+mod review_ops;
+mod review_session;
 mod rows;
 mod search;
 mod stage_ops;
@@ -67,6 +76,10 @@ pub use diff_view_state::DiffViewState;
 pub use editor::{EditorConfigTier, EditorLaunch, resolve_editor_config_tier};
 pub use keymap::{Action, Binding, Keymap};
 pub use lsp_ops::LspClient;
+pub use review_session::{
+    ReconciledReviewState, ensure_review_worktree, load_reconciled_review_state,
+    resolve_review_base,
+};
 pub use rows::{Row, build_rows};
 pub use stage_ops::{ReviewError, ReviewSnapshot, StageOps, StagedFile, build_review};
 pub use theme::Theme;
@@ -107,12 +120,36 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// actually changing, so idle ticks are cheap.
 const AUTO_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
-/// How a TUI session ended.
+/// How a TUI session ended: governs only the one stdout side effect (`main`'s
+/// `render_markdown(&app.annotations)` call on quit) — never what's kept in
+/// `app.annotations` itself or on disk, both of which are already settled by
+/// the time either variant is produced. Reached from more than one gesture
+/// each, since spec 08 Unit 6 (review annotation persistence) repurposed the
+/// existing two-variant quit gate for the end-review modal rather than
+/// adding a third:
+///
+/// - [`QuitOutcome::Emit`]: a plain session's `q`, or a review session's
+///   `f` (finish, [`super::app::App::finish_review`]) — finish emits the
+///   *complete* annotation set (restored-from-earlier-sessions and this
+///   session's own, together) exactly once, in the unchanged markdown
+///   format, since restore-on-resume (task 7.2) already merged both into
+///   `app.annotations` well before this point is ever reached.
+/// - [`QuitOutcome::Discard`]: a plain session's `Q`/Ctrl-C (unchanged), or
+///   — amended 2026-07-16, spec 08 Unit 6, reversing Unit 2's original
+///   "pause emits" contract — a review session's `p` (pause). Pause still
+///   keeps the worktree, the review state, and every annotation (persisted
+///   via the same save-on-change path every add/edit/delete already
+///   triggers, spec 08 Unit 6 task 7.2); only the stdout emission is
+///   suppressed, so a consumer piping redquill's output sees each
+///   annotation exactly once, on finish, rather than once per pause plus
+///   once more on finish.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuitOutcome {
-    /// The user pressed `q`: emit `app.annotations` to stdout.
+    /// Emit `app.annotations` to stdout on the way out.
     Emit,
-    /// The user pressed `Q` or Ctrl-C: discard annotations, emit nothing.
+    /// Emit nothing; annotations already in `app.annotations` are simply
+    /// dropped from memory (not from disk — a review session's are already
+    /// persisted by this point).
     Discard,
 }
 
@@ -200,6 +237,24 @@ fn split_right(area: Rect, show_panel: bool) -> (Rect, Option<Rect>) {
     (chunks[0], Some(chunks[1]))
 }
 
+/// Splits off the full-width, single-row review banner band (spec 08 Unit 2)
+/// from the top of `area` when `show_banner` is true (an active review
+/// session — see [`App::in_review_session`]), leaving the rest for
+/// everything else (footer, sidebar, diff pane). Mirrors [`split_footer`]'s
+/// `(Some/None, rest)` shape. This split runs in *both* [`draw`] and the
+/// event loop's viewport-measurement mirror — see that mirror's doc comment
+/// for why the two call sites must never disagree.
+fn split_banner(area: Rect, show_banner: bool) -> (Option<Rect>, Rect) {
+    if !show_banner {
+        return (None, area);
+    }
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(area);
+    (Some(chunks[0]), chunks[1])
+}
+
 /// Whether the current mode shows a bottom panel next frame.
 fn panel_open(mode: Mode) -> bool {
     matches!(mode, Mode::List | Mode::Staging)
@@ -214,6 +269,7 @@ fn bottom_open(app: &App) -> bool {
 }
 
 /// What the event loop should do after dispatching one key.
+#[derive(Debug)]
 enum Flow {
     /// Keep looping.
     Continue,
@@ -224,6 +280,22 @@ enum Flow {
     /// have already been resolved and guard-checked by
     /// [`resolve_editor_target`] by the time this variant is produced.
     OpenEditor { path: PathBuf, line: u32 },
+}
+
+/// What `Action::Quit` (`q`) does, shared by both interception sites
+/// (diff-scope [`dispatch_key`] and [`modes::handle_panel_key`]) so review
+/// mode's `q` can't drift between them (spec 08 Unit 2): during a review
+/// session it opens the end-review modal instead of quitting; otherwise it
+/// quits exactly as before, emitting annotations. `Action::QuitDiscard`
+/// (`Q`) is untouched by this — its global "quit immediately, emit nothing"
+/// meaning holds in every mode, review session or not.
+fn quit_action(app: &mut App) -> Flow {
+    if app.in_review_session() {
+        app.open_end_review_modal();
+        Flow::Continue
+    } else {
+        Flow::Quit(QuitOutcome::Emit)
+    }
 }
 
 /// The largest numeric prefix [`dispatch_key`]'s digit interception will
@@ -303,9 +375,12 @@ fn dispatch_key(
         Mode::Search => modes::handle_search_key(app, key),
         Mode::Peek => modes::handle_peek_key(app, key),
         Mode::Switcher => modes::handle_switcher_key(app, key),
+        Mode::ReviewBranch => modes::handle_review_branch_key(app, key),
         Mode::CommitMessage => modes::handle_commit_message_key(app, key),
         Mode::Finder => modes::handle_finder_key(app, key),
         Mode::ProjectSearch => modes::handle_project_search_key(app, key),
+        Mode::EndReview { .. } => return modes::handle_end_review_key(app, key),
+        Mode::ConfirmRemoteOp { .. } => modes::handle_confirm_remote_op_key(app, key),
         Mode::Normal | Mode::Visual { .. } => {
             // While an overlay is open it captures keys — here that overlay
             // can only be the help overlay, since Compose and Peek have their
@@ -389,13 +464,27 @@ fn dispatch_key(
             };
             let count = pending_count.take();
             match action {
-                Action::Quit => return Flow::Quit(QuitOutcome::Emit),
+                Action::Quit => return quit_action(app),
                 Action::QuitDiscard => return Flow::Quit(QuitOutcome::Discard),
                 Action::OpenEditor => {
                     return match resolve_editor_target(app) {
                         Some((path, line)) => Flow::OpenEditor { path, line },
                         None => Flow::Continue,
                     };
+                }
+                // Review-session accept translation (spec 08 Unit 3): `Space`/
+                // `S` resolve through the keymap to `ToggleStage`/`StageFile`
+                // exactly as they always have (see `Action::ToggleAccept`'s
+                // doc) — this is the one place their *meaning* changes while
+                // reviewing, mirroring `quit_action`'s identical pattern for
+                // `q`. Every other target's `Space`/`S` handling is untouched:
+                // this arm is a no-op outside a review session, so it falls
+                // straight through to the generic dispatch below.
+                Action::ToggleStage if app.in_review_session() => {
+                    app.apply(Action::ToggleAccept);
+                }
+                Action::StageFile if app.in_review_session() => {
+                    app.apply(Action::AcceptFile);
                 }
                 other => {
                     for _ in 0..repeat_count(other, count) {
@@ -568,6 +657,31 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// The diff pane's rect for `full_area`: the same split chain [`draw`] runs
+/// (banner, gated on [`App::in_review_session`] — [`split_banner`] — then
+/// [`footer::footer_height`]/[`split_footer`], [`split_layout`],
+/// [`split_right`]), reduced to just the one rect the event loop's
+/// viewport-measurement mirror needs. `draw` and [`event_loop`] both end up
+/// depending on this one function for the banner-aware measurement (`draw`
+/// via the `debug_assert_eq!` below, which fails fast in a debug build if its
+/// own inline chain ever drifts from this one), so the banner row can't be
+/// subtracted in one call site and forgotten in the other — exactly the
+/// failure mode this pair of call sites has needed a standing warning about
+/// (see the module doc's note on the mirror).
+fn diff_pane_rect(full_area: Rect, app: &App, keymap: &Keymap, pending: Option<KeyEvent>) -> Rect {
+    let (_, area) = split_banner(full_area, app.in_review_session());
+    let footer_h = footer::footer_height(area.width, app, keymap, pending);
+    let (main_area, _) = split_footer(area, footer_h);
+    let (_, right_area) = split_layout(
+        main_area,
+        app.git_panel_focused(),
+        app.config.layout.sidebar_side,
+        app.config.layout.sidebar_width,
+    );
+    let (diff_area, _) = split_right(right_area, bottom_open(app));
+    diff_area
+}
+
 /// Draws one frame: git panel, diff pane, bottom panel (annotation list or
 /// staging panel, if open), status footer, help overlay (if open), and the
 /// Compose modal (if open). `pending` mirrors the event loop's pending
@@ -575,7 +689,8 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
 /// strip (`za`, `gd`/`gr`/...) matches what the next keystroke will actually
 /// resolve.
 fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<KeyEvent>) {
-    let area = frame.area();
+    let full_area = frame.area();
+    let (banner_area, area) = split_banner(full_area, app.in_review_session());
     let footer_h = footer::footer_height(area.width, app, keymap, pending);
     let (main_area, footer_area) = split_footer(area, footer_h);
     let (sidebar_area, right_area) = split_layout(
@@ -585,7 +700,20 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
         app.config.layout.sidebar_width,
     );
     let (diff_area, panel_area) = split_right(right_area, bottom_open(app));
+    debug_assert_eq!(
+        diff_area,
+        diff_pane_rect(full_area, app, keymap, pending),
+        "draw()'s inline split chain must agree with the event loop's \
+         viewport-measurement mirror (diff_pane_rect) — a review-session \
+         banner row subtracted in only one of the two would desync cursor/\
+         scroll math from what actually renders"
+    );
 
+    if let Some(banner_area) = banner_area {
+        let (accepted, total) = app.review_progress();
+        let branch = app.review_branch().unwrap_or_default();
+        review_banner::render(frame, banner_area, &app.theme, branch, accepted, total);
+    }
     if let Some(sidebar_area) = sidebar_area {
         git_panel::render(frame, sidebar_area, app, keymap);
     }
@@ -664,6 +792,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
                 viewing_commit: app.viewing_commit(),
                 help_open: app.help_open,
                 project_search_focus: app.project_search_focus(),
+                review_session: app.in_review_session(),
             },
             pending,
             keymap,
@@ -694,6 +823,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
             &app.theme,
             staging_allowed,
             code_intel_allowed,
+            app.in_review_session(),
             &state,
         );
     }
@@ -706,11 +836,20 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     if matches!(app.mode, Mode::Switcher) {
         switcher_modal::render(frame, area, app);
     }
+    if matches!(app.mode, Mode::ReviewBranch) {
+        review_branch_modal::render(frame, area, app);
+    }
     if matches!(app.mode, Mode::CommitMessage) {
         commit_modal::render(frame, area, app);
     }
     if matches!(app.mode, Mode::Finder) {
         file_finder_modal::render(frame, area, app);
+    }
+    if matches!(app.mode, Mode::EndReview { .. }) {
+        end_review_modal::render(frame, area, app);
+    }
+    if matches!(app.mode, Mode::ConfirmRemoteOp { .. }) {
+        confirm_remote_op_modal::render(frame, area, app);
     }
 }
 
@@ -828,19 +967,14 @@ fn event_loop(
     loop {
         let size = terminal.size()?;
         let full_area = Rect::new(0, 0, size.width, size.height);
-        // Mirrors `draw`'s own `footer::footer_height` call so the viewport
-        // height measured here for the diff pane matches what actually
-        // renders this frame (same `app`/`pending` state, same computation —
-        // see `footer::footer_height`'s doc comment).
-        let footer_h = footer::footer_height(full_area.width, app, keymap, pending_prefix);
-        let (main_area, _) = split_footer(full_area, footer_h);
-        let (_, right_area) = split_layout(
-            main_area,
-            app.git_panel_focused(),
-            app.config.layout.sidebar_side,
-            app.config.layout.sidebar_width,
-        );
-        let (diff_area, _) = split_right(right_area, bottom_open(app));
+        // Delegates to `diff_pane_rect` — the same split chain `draw` itself
+        // runs, including the review-session banner split (spec 08 Unit 2) and
+        // the `[layout]` sidebar config (spec 07) — so the viewport height
+        // measured here for the diff pane matches what actually renders this
+        // frame (same `app`/`pending` state, same computation). See
+        // `diff_pane_rect`'s doc for why this indirection exists rather than
+        // each site re-deriving the splits inline.
+        let diff_area = diff_pane_rect(full_area, app, keymap, pending_prefix);
         app.view.set_viewport_height(diff_view::viewport_height(
             diff_area,
             app.active_commit.is_some(),
@@ -909,6 +1043,10 @@ fn event_loop(
         // (see `project_search`'s module doc) — so results keep streaming
         // in behind it.
         app.poll_project_search();
+        // Drain any completed review-state save (spec 08 Unit 4), same
+        // cadence as the other pollers — the write itself runs off this
+        // loop entirely (see `App::persist_review_state`).
+        app.poll_review_save();
 
         // Spawn a working-tree read on a fixed cadence (independent of
         // keypresses) so external edits appear without the user asking. The
@@ -944,3 +1082,15 @@ mod file_finder_integration_tests;
 #[cfg(test)]
 #[path = "project_search_integration_tests.rs"]
 mod project_search_integration_tests;
+
+#[cfg(test)]
+#[path = "review_guard_integration_tests.rs"]
+mod review_guard_integration_tests;
+
+#[cfg(test)]
+#[path = "review_persistence_integration_tests.rs"]
+mod review_persistence_integration_tests;
+
+#[cfg(test)]
+#[path = "review_branch_integration_tests.rs"]
+mod review_branch_integration_tests;

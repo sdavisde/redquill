@@ -9,6 +9,7 @@
 //! stderr is not a terminal — e.g. piped, or running under a test harness —
 //! falls back to the plain-text summary so redquill stays scriptable.
 
+use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
@@ -18,9 +19,10 @@ use redquill::annotate::render_markdown;
 use redquill::config;
 use redquill::diff::FileDiff;
 use redquill::git::{ChangeKind, DiffTarget, GitRunner};
+use redquill::review::store;
 use redquill::ui::{
-    self, App, EditorConfigTier, EditorLaunch, QuitOutcome, build_review,
-    resolve_editor_config_tier,
+    self, App, EditorConfigTier, EditorLaunch, QuitOutcome, build_review, ensure_review_worktree,
+    load_reconciled_review_state, resolve_editor_config_tier, resolve_review_base,
 };
 
 /// redquill: a terminal UI for reviewing agentic code changes.
@@ -31,13 +33,28 @@ use redquill::ui::{
 #[command(name = "redquill", version, about, long_about = None)]
 struct Cli {
     /// Ref range to review (e.g. `main..HEAD`). Defaults to the working
-    /// tree when omitted. Mutually exclusive with `--staged`.
-    #[arg(conflicts_with = "staged")]
+    /// tree when omitted. Mutually exclusive with `--staged` and `--review`.
+    #[arg(conflicts_with_all = ["staged", "review"])]
     range: Option<String>,
 
-    /// Review the staged index instead of the working tree.
-    #[arg(long)]
+    /// Review the staged index instead of the working tree. Mutually
+    /// exclusive with `--review`.
+    #[arg(long, conflicts_with = "review")]
     staged: bool,
+
+    /// Review a local branch (spec 08 Unit 1) inside its own managed
+    /// worktree instead of the working tree. redquill creates (or reuses) a
+    /// worktree at `<git-common-dir>/redquill/worktrees/<sanitized-branch>`,
+    /// then shows the `base...branch` (three-dot) diff rooted there, so LSP
+    /// navigation and `g<Space>` operate on the branch's real files.
+    /// Mutually exclusive with the positional range and `--staged`.
+    #[arg(long, value_name = "BRANCH", conflicts_with_all = ["staged", "range"])]
+    review: Option<String>,
+
+    /// Base ref for `--review`'s three-dot diff. Defaults to the branch
+    /// `origin/HEAD` points to, else `main`, else `master`.
+    #[arg(long, value_name = "REF", requires = "review")]
+    base: Option<String>,
 
     /// Also write emitted annotations to this file, in addition to stdout.
     #[arg(short = 'o', long = "output", value_name = "FILE")]
@@ -56,6 +73,12 @@ struct RunConfig {
     range: Option<String>,
     /// Whether to review the staged index instead of the working tree.
     staged: bool,
+    /// `--review <branch>`, if passed: start a branch review session
+    /// instead of any of the above (see [`Cli::review`]).
+    review: Option<String>,
+    /// `--base <ref>`, if passed: overrides `--review`'s default base
+    /// resolution (see [`GitRunner::default_base`]).
+    base: Option<String>,
     /// Optional file to additionally write annotations to, alongside stdout.
     output: Option<PathBuf>,
     /// The `--editor` flag, if passed; highest-precedence tier of
@@ -68,6 +91,8 @@ impl From<Cli> for RunConfig {
         RunConfig {
             range: cli.range,
             staged: cli.staged,
+            review: cli.review,
+            base: cli.base,
             output: cli.output,
             editor: cli.editor,
         }
@@ -75,7 +100,11 @@ impl From<Cli> for RunConfig {
 }
 
 impl RunConfig {
-    /// Resolves the CLI flags into the diff target to inspect.
+    /// Resolves the non-review CLI flags into the diff target to inspect.
+    /// Never called when `--review` is set — [`resolve_session`] branches
+    /// on that before this is reached, since a review target additionally
+    /// requires resolving a base ref and ensuring a worktree exists (I/O
+    /// this pure function deliberately doesn't do).
     fn diff_target(&self) -> DiffTarget {
         match &self.range {
             Some(range) => DiffTarget::Range(range.clone()),
@@ -85,10 +114,78 @@ impl RunConfig {
     }
 }
 
+/// Resolves the git runner and diff target this invocation should operate
+/// against, from the repo `discovered` at the caller's cwd. Ordinary flags
+/// (working tree / `--staged` / a range) resolve immediately, reusing
+/// `discovered` as-is. `--review <branch>` additionally: resolves the base
+/// ref (`--base`, else [`GitRunner::default_base`]'s fallback chain),
+/// ensures the branch's managed worktree exists (creating it via
+/// [`GitRunner::worktree_add`], or reusing one a paused review already
+/// created), and returns a runner *discovered inside that worktree* — so
+/// every subsequent git call this session makes (diff, LSP root, `g<Space>`)
+/// is truthfully rooted there rather than in the user's own checkout.
+///
+/// Every failure path (unresolved base, unknown branch, branch already
+/// checked out elsewhere) returns before any worktree is created, and
+/// `worktree_add` itself never retries with `--force` — so a failure here
+/// leaves the user's checkout, index, and HEAD, and the filesystem, exactly
+/// as they were.
+fn resolve_session(
+    discovered: GitRunner,
+    config: &RunConfig,
+) -> anyhow::Result<(GitRunner, DiffTarget)> {
+    let Some(branch) = &config.review else {
+        return Ok((discovered, config.diff_target()));
+    };
+
+    let base = resolve_review_base(&discovered, config.base.as_deref())?;
+    let worktree_path = ensure_review_worktree(&discovered, branch)?;
+    let session_runner = GitRunner::discover_in(&worktree_path)?;
+
+    Ok((
+        session_runner,
+        DiffTarget::Review {
+            base,
+            branch: branch.clone(),
+        },
+    ))
+}
+
+/// Resolves `<git-common-dir>/redquill/review-state.json`'s path for this
+/// repository and garbage-collects entries whose branch no longer exists
+/// (spec 08 Unit 4, "on every launch") before returning it. Runs
+/// unconditionally — even outside a review session — since another,
+/// already-paused review's entry should still get cleaned up
+/// opportunistically the next time redquill runs at all, not only the next
+/// time that specific branch is reviewed again. Best-effort throughout: a
+/// `git_common_dir`/`branch_list` failure degrades to skipping GC for this
+/// launch (never fails the launch itself — this is housekeeping, not
+/// something worth blocking a session over), and a GC save failure is
+/// silently retried on the next launch the same way.
+fn gc_review_state(discovered: &GitRunner) -> Option<PathBuf> {
+    let common_dir = discovered.git_common_dir().ok()?;
+    let path = common_dir.join("redquill").join("review-state.json");
+    let Ok(branches) = discovered.branch_list() else {
+        return Some(path);
+    };
+    let existing: HashSet<String> = branches.into_iter().map(|b| b.name).collect();
+    let mut state = store::load(&path);
+    if store::gc(&mut state, &existing) {
+        let _ = store::save(&path, &state);
+        // Best-effort: clears stale worktree admin records for any managed
+        // worktree whose branch just got GC'd (spec 08 Unit 4: "GC... and
+        // prune their worktree records"). A failure here is not worth
+        // surfacing — it's the same harmless-clutter case
+        // `App::finish_review`'s own prune call already treats this way.
+        let _ = discovered.worktree_prune();
+    }
+    Some(path)
+}
+
 /// Prints a one-line summary per changed file for the resolved diff target.
 fn run(config: &RunConfig) -> anyhow::Result<()> {
-    let runner = GitRunner::discover()?;
-    let target = config.diff_target();
+    let discovered = GitRunner::discover()?;
+    let (runner, target) = resolve_session(discovered, config)?;
     let patches = runner.diff(&target)?;
 
     let mut printed = 0usize;
@@ -158,11 +255,40 @@ fn resolve_editor(
 /// Runs the interactive TUI and, on quit, emits annotations per the
 /// resolved [`QuitOutcome`].
 fn run_tui(config: &RunConfig) -> anyhow::Result<()> {
-    let runner = GitRunner::discover()?;
-    let target = config.diff_target();
+    let discovered = GitRunner::discover()?;
+    // Runs on every launch, review session or not (spec 08 Unit 4) — GC'ing
+    // *other* paused reviews' stale entries shouldn't wait for the next time
+    // that specific branch happens to be reviewed again. Must happen before
+    // `discovered` is potentially moved into `app.set_review_origin_ops`
+    // below.
+    let review_state_path = gc_review_state(&discovered);
+    // `discovered` is rooted at the caller's cwd (the user's own checkout),
+    // *outside* any managed review worktree `resolve_session` might create —
+    // kept alive (cloned into `resolve_session`) so a review session's
+    // finish gesture (spec 08 Unit 2) can remove that worktree through a
+    // backend that isn't rooted inside the very directory being removed.
+    let (runner, target) = resolve_session(discovered.clone(), config)?;
     let snapshot = build_review(&runner, &target)?;
 
-    let mut app = App::with_git(snapshot, target, Box::new(runner.clone()));
+    let mut app = App::with_git(snapshot, target.clone(), Box::new(runner.clone()));
+    if let DiffTarget::Review { branch, .. } = &target {
+        // Load + reconcile this branch's persisted progress (spec 08 Unit
+        // 4) before the first render, so `Accepted`/`Deferred` files start
+        // collapsed and a stale `Accepted` file starts marked
+        // `ChangedSinceAccepted` and un-collapsed from the very first frame.
+        if let Some(state_path) = &review_state_path {
+            let (states, blob_shas, annotations) =
+                load_reconciled_review_state(&runner, state_path, branch);
+            app.set_review_states(states, blob_shas);
+            app.set_review_state_path(state_path.clone());
+            // Restore before the first render (spec 08 Unit 6, task 7.2):
+            // annotations reattach to their recorded anchors verbatim, so a
+            // resumed session's annotation list and in-diff markers already
+            // reflect them on the very first frame.
+            app.restore_review_annotations(annotations);
+        }
+        app.set_review_origin_ops(Box::new(discovered));
+    }
     app.set_repo_root(runner.root().to_path_buf());
     // Config loads exactly once, here, before the first render — there is no
     // reload path (docs/specs/07-spec-config-layer). Warnings (missing file
@@ -222,8 +348,63 @@ fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_editor;
+    use super::{Cli, resolve_editor};
+    use clap::Parser;
     use redquill::ui::{EditorConfigTier, EditorLaunch};
+
+    // -- Cli parsing: `--review` conflicts and `--base` gating --------------
+
+    #[test]
+    fn review_is_accepted_alone() {
+        let cli = Cli::try_parse_from(["redquill", "--review", "feature"]).unwrap();
+        assert_eq!(cli.review.as_deref(), Some("feature"));
+        assert_eq!(cli.range, None);
+        assert!(!cli.staged);
+    }
+
+    #[test]
+    fn review_conflicts_with_staged() {
+        let err = Cli::try_parse_from(["redquill", "--review", "feature", "--staged"])
+            .expect_err("--review and --staged must conflict");
+        assert_eq!(
+            err.kind(),
+            clap::error::ErrorKind::ArgumentConflict,
+            "unexpected error kind: {err}"
+        );
+    }
+
+    #[test]
+    fn review_conflicts_with_positional_range() {
+        let err = Cli::try_parse_from(["redquill", "main..HEAD", "--review", "feature"])
+            .expect_err("--review and the positional range must conflict");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn staged_still_conflicts_with_range_without_review() {
+        let err = Cli::try_parse_from(["redquill", "main..HEAD", "--staged"])
+            .expect_err("--staged and a positional range must still conflict");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn base_requires_review() {
+        let err = Cli::try_parse_from(["redquill", "--base", "main"])
+            .expect_err("--base without --review must be rejected");
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn base_is_accepted_alongside_review() {
+        let cli =
+            Cli::try_parse_from(["redquill", "--review", "feature", "--base", "trunk"]).unwrap();
+        assert_eq!(cli.review.as_deref(), Some("feature"));
+        assert_eq!(cli.base.as_deref(), Some("trunk"));
+    }
+
+    // `paths_match` moved to `redquill::ui::review_session` (spec 08 task
+    // 5.2, shared entry-point core) along with `ensure_review_worktree`;
+    // its own tests moved with it.
 
     #[test]
     fn flag_wins_over_everything() {
@@ -330,5 +511,143 @@ mod tests {
             ),
             EditorLaunch::Command("nvim".to_string())
         );
+    }
+
+    // -- gc_review_state (spec 08 Unit 4) --------------------------------------
+    //
+    // Real-git tempdir tests: `gc_review_state` is private to the binary
+    // crate (not part of `redquill::ui`'s public surface), so — like
+    // `commit_integration_tests.rs`'s identical reasoning for `dispatch_key`
+    // — it can only be exercised from *this* crate's own `#[cfg(test)]`
+    // module, which is exactly where `cargo test`'s `unittests src/main.rs`
+    // binary already runs from. `load_reconciled_review_state`'s own tests
+    // moved to `redquill::ui::review_session` alongside the function itself
+    // (spec 08 task 5.2).
+
+    use super::gc_review_state;
+    use redquill::git::GitRunner;
+    use redquill::review::store;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let output = Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .output()
+            .expect("failed to spawn git");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn write(dir: &std::path::Path, rel: &str, contents: &str) {
+        std::fs::write(dir.join(rel), contents).unwrap();
+    }
+
+    fn canon(path: &std::path::Path) -> std::path::PathBuf {
+        std::fs::canonicalize(path).unwrap_or_else(|e| panic!("canonicalize {path:?}: {e}"))
+    }
+
+    /// The shared isolation guard every mutating git call in this section
+    /// runs before touching disk — mirrors `tests/git_review_integration.rs`'s
+    /// `assert_inside_tempdir` (task 1.5), duplicated here per this repo's
+    /// established one-copy-per-file convention (this module can't share
+    /// code with the `tests/*.rs` binaries).
+    fn assert_inside_tempdir(path: &std::path::Path, tmp: &TempDir) {
+        let tmp_root = canon(tmp.path());
+        let mut probe = path.to_path_buf();
+        while !probe.exists() {
+            match probe.parent() {
+                Some(parent) => probe = parent.to_path_buf(),
+                None => panic!("path {path:?} has no existing ancestor to canonicalize"),
+            }
+        }
+        assert!(
+            canon(&probe).starts_with(&tmp_root),
+            "refusing to run a mutating git call outside the tempdir: {path:?}"
+        );
+    }
+
+    fn repo_with_branch(name: &str) -> TempDir {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        assert_inside_tempdir(dir, &tmp);
+        git(dir, &["init", "-q", "-b", name]);
+        git(dir, &["config", "user.email", "test@redquill.invalid"]);
+        git(dir, &["config", "user.name", "redquill test"]);
+        git(dir, &["config", "commit.gpgsign", "false"]);
+        write(dir, "base.txt", "line one\n");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "initial"]);
+        tmp
+    }
+
+    #[test]
+    fn gc_review_state_drops_entries_for_deleted_branches_and_keeps_live_ones() {
+        let repo = repo_with_branch("main");
+        git(repo.path(), &["branch", "feature-live"]);
+        // `feature-gone` is deliberately never created as a real branch —
+        // simulating a previously-reviewed branch the author (or the user)
+        // has since deleted.
+        let runner = GitRunner::discover_in(repo.path()).unwrap();
+        let common_dir = runner.git_common_dir().unwrap();
+        let state_path = common_dir.join("redquill").join("review-state.json");
+        assert_inside_tempdir(&state_path, &repo);
+
+        for branch in ["feature-live", "feature-gone"] {
+            store::save_review(
+                &state_path,
+                branch,
+                store::PersistedReview {
+                    base: "main".to_string(),
+                    worktree_path: repo.path().join("wt").join(branch),
+                    files: Default::default(),
+                    annotations: Default::default(),
+                },
+            )
+            .unwrap();
+        }
+
+        let resolved = gc_review_state(&runner);
+
+        assert_eq!(resolved, Some(state_path.clone()));
+        let state = store::load(&state_path);
+        assert!(
+            state.reviews.contains_key("feature-live"),
+            "GC must never touch an entry for a branch that still exists"
+        );
+        assert!(
+            !state.reviews.contains_key("feature-gone"),
+            "GC must drop an entry for a branch that no longer exists"
+        );
+    }
+
+    #[test]
+    fn gc_review_state_is_a_no_op_when_every_branch_still_exists() {
+        let repo = repo_with_branch("main");
+        git(repo.path(), &["branch", "feature"]);
+        let runner = GitRunner::discover_in(repo.path()).unwrap();
+        let common_dir = runner.git_common_dir().unwrap();
+        let state_path = common_dir.join("redquill").join("review-state.json");
+        assert_inside_tempdir(&state_path, &repo);
+        store::save_review(
+            &state_path,
+            "feature",
+            store::PersistedReview {
+                base: "main".to_string(),
+                worktree_path: repo.path().join("wt"),
+                files: Default::default(),
+                annotations: Default::default(),
+            },
+        )
+        .unwrap();
+        let before = store::load(&state_path);
+
+        gc_review_state(&runner);
+
+        assert_eq!(store::load(&state_path), before);
     }
 }

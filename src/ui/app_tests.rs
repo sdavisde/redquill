@@ -584,6 +584,39 @@ fn submit_compose_with_body_adds_annotation_and_refreshes_rows() {
     ));
 }
 
+/// A review session's annotations map to `Source::Range("base...branch")`
+/// (spec 08 Unit 2 — see `App::annotation_source`'s doc), so they group
+/// under the existing `Reviewing: <spec>` metadata line unchanged. Pinned
+/// byte-exactly against the real stdout serializer (`render_markdown`),
+/// since no prior test exercised the three-dot review spec specifically
+/// (only a plain two-dot `Source::Range` was covered in
+/// `annotate::markdown`'s test module).
+#[test]
+fn a_review_sessions_annotation_groups_under_the_three_dot_reviewing_line() {
+    let mut app = App::new(vec![file("a.rs", 1)]);
+    app.target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+    app.apply(Action::Compose);
+    for c in "looks good".chars() {
+        app.compose.as_mut().unwrap().buffer.insert_char(c);
+    }
+    app.submit_compose();
+
+    let annotation = app.annotations.iter().next().unwrap();
+    assert_eq!(
+        annotation.source,
+        crate::annotate::Source::Range("main...feature".to_string())
+    );
+
+    let markdown = crate::annotate::render_markdown(&app.annotations);
+    assert_eq!(
+        markdown,
+        "Reviewing: main...feature\n\n## a.rs\n\n[issue] looks good\n"
+    );
+}
+
 #[test]
 fn submit_compose_with_empty_body_cancels_without_error() {
     let mut app = App::new(vec![file("a.rs", 1)]);
@@ -611,6 +644,133 @@ fn submit_compose_while_editing_updates_body_and_classification() {
     let annotation = app.annotations.iter().find(|a| a.id == id).unwrap();
     assert_eq!(annotation.body, "new body");
     assert_eq!(annotation.classification, Classification::Praise);
+}
+
+// -- Save-on-change: annotations persist in a review session (spec 08 Unit
+// 6, task 7.2) --------------------------------------------------------
+
+/// A review-session `App` with a tempdir-backed state path, ready to
+/// exercise the real (backgrounded) `persist_review_state` write —
+/// mirrors `review_ops::tests::persisting_review_app`, but annotation
+/// mutations never need a `StageOps` backend (only accept/defer's blob-SHA
+/// capture does), so this fixture skips it entirely.
+fn persisting_review_app_for_annotations() -> (App, tempfile::TempDir) {
+    let mut app = App::new(vec![file("a.rs", 1)]);
+    app.target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+    app.set_repo_root(std::path::PathBuf::from("/tmp/redquill-worktrees/feature"));
+    let tmp = tempfile::TempDir::new().unwrap();
+    let state_path = tmp.path().join("review-state.json");
+    app.set_review_state_path(state_path);
+    (app, tmp)
+}
+
+fn wait_for_review_save(app: &mut App) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.review_saves_pending > 0 && std::time::Instant::now() < deadline {
+        app.poll_review_save();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(
+        app.review_saves_pending, 0,
+        "review save did not complete in time"
+    );
+}
+
+#[test]
+fn submit_compose_in_a_review_session_persists_the_new_annotation() {
+    let (mut app, _tmp) = persisting_review_app_for_annotations();
+    let path = app.review_state_path.clone().unwrap();
+
+    app.apply(Action::Compose);
+    for c in "looks good".chars() {
+        app.compose.as_mut().unwrap().buffer.insert_char(c);
+    }
+    app.submit_compose();
+    wait_for_review_save(&mut app);
+
+    let state = crate::review::store::load(&path);
+    let review = state.reviews.get("feature").expect("branch entry saved");
+    assert_eq!(review.annotations.len(), 1);
+    assert_eq!(review.annotations[0].body, "looks good");
+}
+
+#[test]
+fn editing_an_annotation_in_a_review_session_persists_the_edit() {
+    let (mut app, _tmp) = persisting_review_app_for_annotations();
+    let path = app.review_state_path.clone().unwrap();
+
+    app.apply(Action::Compose);
+    for c in "first".chars() {
+        app.compose.as_mut().unwrap().buffer.insert_char(c);
+    }
+    app.submit_compose();
+    wait_for_review_save(&mut app);
+
+    app.edit_focused_annotation();
+    app.compose.as_mut().unwrap().buffer = TextBuffer::new();
+    for c in "edited".chars() {
+        app.compose.as_mut().unwrap().buffer.insert_char(c);
+    }
+    app.submit_compose();
+    wait_for_review_save(&mut app);
+
+    let state = crate::review::store::load(&path);
+    let review = &state.reviews["feature"];
+    assert_eq!(review.annotations.len(), 1);
+    assert_eq!(review.annotations[0].body, "edited");
+}
+
+#[test]
+fn deleting_the_focused_annotation_in_a_review_session_persists_the_removal() {
+    let (mut app, _tmp) = persisting_review_app_for_annotations();
+    let path = app.review_state_path.clone().unwrap();
+
+    app.apply(Action::Compose);
+    for c in "to be deleted".chars() {
+        app.compose.as_mut().unwrap().buffer.insert_char(c);
+    }
+    app.submit_compose();
+    wait_for_review_save(&mut app);
+    assert!(
+        !crate::review::store::load(&path).reviews["feature"]
+            .annotations
+            .is_empty()
+    );
+
+    app.delete_focused_annotation();
+    wait_for_review_save(&mut app);
+
+    let state = crate::review::store::load(&path);
+    let review = &state.reviews["feature"];
+    assert!(
+        review.annotations.is_empty(),
+        "a deleted annotation must not linger in the saved state"
+    );
+}
+
+/// Regression pin (spec 08 Unit 6's explicit requirement): outside a review
+/// session, `submit_compose`/`delete_focused_annotation`'s new
+/// `persist_review_state` call is a total no-op — no background task is
+/// ever spawned, exactly as if the call weren't there at all.
+#[test]
+fn submit_compose_and_delete_outside_a_review_session_spawn_no_background_save() {
+    let mut app = App::new(vec![file("a.rs", 1)]);
+    assert_eq!(app.target, DiffTarget::WorkingTree);
+
+    app.apply(Action::Compose);
+    for c in "note".chars() {
+        app.compose.as_mut().unwrap().buffer.insert_char(c);
+    }
+    app.submit_compose();
+    assert!(app.review_save_tasks.poll().is_empty());
+    assert_eq!(app.review_saves_pending, 0);
+
+    app.delete_focused_annotation();
+    assert!(app.review_save_tasks.poll().is_empty());
+    assert_eq!(app.review_saves_pending, 0);
 }
 
 // -- Annotation list panel ---------------------------------------------

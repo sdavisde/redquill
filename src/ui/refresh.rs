@@ -118,6 +118,7 @@ impl App {
                 | Mode::Search
                 | Mode::Visual { .. }
                 | Mode::Switcher
+                | Mode::ReviewBranch
                 | Mode::CommitMessage
         ) {
             return;
@@ -183,6 +184,7 @@ impl App {
                     | Mode::Search
                     | Mode::Visual { .. }
                     | Mode::Switcher
+                    | Mode::ReviewBranch
                     | Mode::CommitMessage
             ) {
                 continue;

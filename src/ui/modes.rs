@@ -13,9 +13,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::App;
 use super::modal_keys::{
-    self, CommitMessageAction, ComposeAction, FinderAction, ListAction, PeekAction,
-    ProjectSearchInputAction, ProjectSearchResultsAction, SearchAction, StagingAction,
-    SwitcherAction,
+    self, AcceptedPanelAction, CommitMessageAction, ComposeAction, ConfirmRemoteOpAction,
+    EndReviewAction, FinderAction, ListAction, PeekAction, ProjectSearchInputAction,
+    ProjectSearchResultsAction, ReviewBranchAction, SearchAction, StagingAction, SwitcherAction,
 };
 
 /// Handles one key event while [`super::Mode::Compose`] is active. Resolves
@@ -112,6 +112,23 @@ pub(super) fn handle_list_key(app: &mut App, key: KeyEvent) {
 /// `app.modal_keys.staging` — the same table the help overlay renders.
 /// Bypasses the [`super::Keymap`] table entirely.
 pub(super) fn handle_staging_key(app: &mut App, key: KeyEvent) {
+    // Review sessions repurpose `Mode::Staging` as the accepted-files panel
+    // (spec 08 Unit 5): resolve against its own table instead of the local
+    // staging panel's, so the two never cross-dispatch (`unstage_focused_file`
+    // would be untruthful during a review — there is nothing staged to
+    // unstage — and `un_accept_focused_file` would be meaningless locally).
+    if app.in_review_session() {
+        let Some(action) = modal_keys::resolve(&app.modal_keys.accepted_panel, key) else {
+            return;
+        };
+        match action {
+            AcceptedPanelAction::MoveDown => app.staging_move_down(),
+            AcceptedPanelAction::MoveUp => app.staging_move_up(),
+            AcceptedPanelAction::UnAccept => app.un_accept_focused_file(),
+            AcceptedPanelAction::Close => app.close_staging(),
+        }
+        return;
+    }
     let Some(action) = modal_keys::resolve(&app.modal_keys.staging, key) else {
         return;
     };
@@ -157,6 +174,12 @@ pub(super) fn handle_search_key(app: &mut App, key: KeyEvent) {
 /// The focused git panel is a first-class view rather than an overlay, so the
 /// quit family (`q`/`Q`/Ctrl-C) quits from it just as from the diff view —
 /// hence the [`super::Flow`] return, letting the event loop end the session.
+///
+/// `p`/`P` (pull/push) additionally open the confirm modal instead of
+/// running immediately whenever [`super::app::App::in_review_session`] holds
+/// (spec 08 Unit 5) — `f` (fetch) is untouched, since reviewers are expected
+/// to fetch freely. Every other action still runs through the unchanged
+/// generic `app.apply(action)` path.
 pub(super) fn handle_panel_key(
     app: &mut App,
     key: KeyEvent,
@@ -165,13 +188,36 @@ pub(super) fn handle_panel_key(
     use super::keymap::Scope;
     use super::{Action, Flow, QuitOutcome};
     match keymap.lookup_in(Scope::Panel, key) {
-        Some(Action::Quit) => Flow::Quit(QuitOutcome::Emit),
+        Some(Action::Quit) => super::quit_action(app),
         Some(Action::QuitDiscard) => Flow::Quit(QuitOutcome::Discard),
+        Some(Action::RemotePull) if app.in_review_session() => {
+            app.open_confirm_remote_op_modal(crate::git::RemoteOp::Pull);
+            Flow::Continue
+        }
+        Some(Action::RemotePush) if app.in_review_session() => {
+            app.open_confirm_remote_op_modal(app.remote_push_op());
+            Flow::Continue
+        }
         Some(action) => {
             app.apply(action);
             Flow::Continue
         }
         None => Flow::Continue,
+    }
+}
+
+/// Handles one key event while [`super::Mode::ConfirmRemoteOp`] is active
+/// (spec 08 Unit 5): resolves against `app.modal_keys.confirm_remote_op`,
+/// dispatching confirm/cancel through [`App`]'s state-transition methods
+/// (`src/ui/confirm_remote_op.rs`). Bypasses the [`super::Keymap`] table
+/// entirely, like every other modal mode.
+pub(super) fn handle_confirm_remote_op_key(app: &mut App, key: KeyEvent) {
+    let Some(action) = modal_keys::resolve(&app.modal_keys.confirm_remote_op, key) else {
+        return;
+    };
+    match action {
+        ConfirmRemoteOpAction::Confirm => app.confirm_remote_op(),
+        ConfirmRemoteOpAction::Cancel => app.cancel_confirm_remote_op(),
     }
 }
 
@@ -328,6 +374,98 @@ pub(super) fn handle_switcher_key(app: &mut App, key: KeyEvent) {
         SwitcherAction::MoveUp => app.switcher_move_up(),
         SwitcherAction::Confirm => app.switcher_confirm(),
         SwitcherAction::Close => app.close_switcher(),
+    }
+}
+
+/// Handles one key event while [`super::Mode::ReviewBranch`] is active (the
+/// review-branch modal, `R` panel scope, spec 08 Unit 1 in-app path / Unit
+/// 5): `j`/`k`/arrows move the cursor, `Enter` starts a review session on
+/// the highlighted branch (see
+/// [`super::review_branch::App::confirm_review_branch`]), `Esc` closes the
+/// modal. Dispatch is driven by [`modal_keys::REVIEW_BRANCH_KEYS`] — the
+/// same table the help overlay renders. Bypasses the [`super::Keymap`] table
+/// entirely, mirroring [`handle_switcher_key`].
+pub(super) fn handle_review_branch_key(app: &mut App, key: KeyEvent) {
+    let Some(action) = modal_keys::resolve(&app.modal_keys.review_branch, key) else {
+        return;
+    };
+    match action {
+        ReviewBranchAction::MoveDown => app.review_branch_move_down(),
+        ReviewBranchAction::MoveUp => app.review_branch_move_up(),
+        ReviewBranchAction::Confirm => app.confirm_review_branch(),
+        ReviewBranchAction::Close => app.close_review_branch_modal(),
+    }
+}
+
+/// Handles one key event while [`super::Mode::EndReview`] is active (spec 08
+/// Unit 2: `q` in a review session opens this modal instead of quitting —
+/// see [`super::quit_action`]): `p` pauses (quits, emitting annotations
+/// through the ordinary on-quit path — the worktree and review state are
+/// untouched), `f` finishes (removes the worktree via
+/// [`super::App::finish_review`], quitting on success or surfacing the
+/// failure and staying open), `c`/`Esc` cancel back to the mode `q` was
+/// pressed from — plus, since the dogfood polish pass, `j`/`k`/arrows move a
+/// highlighted selection across the three options and `Enter` confirms
+/// whichever one is highlighted (acting exactly like its mnemonic; see
+/// [`EndReviewAction::from_cursor`]). Dispatch is driven by
+/// [`modal_keys::END_REVIEW_KEYS`] — the same table the help overlay
+/// renders. Unlike most modal handlers this one returns [`super::Flow`]
+/// (like [`handle_panel_key`]): pause/a successful finish end the session,
+/// so the event loop must see the quit rather than this function looping it
+/// internally.
+pub(super) fn handle_end_review_key(app: &mut App, key: KeyEvent) -> super::Flow {
+    use super::Flow;
+    let Some(action) = modal_keys::resolve(&app.modal_keys.end_review, key) else {
+        return Flow::Continue;
+    };
+    match action {
+        EndReviewAction::Pause | EndReviewAction::Finish | EndReviewAction::Cancel => {
+            end_review_choice(app, action)
+        }
+        EndReviewAction::MoveDown => {
+            app.end_review_move_down();
+            Flow::Continue
+        }
+        EndReviewAction::MoveUp => {
+            app.end_review_move_up();
+            Flow::Continue
+        }
+        EndReviewAction::Confirm => {
+            let cursor = app.end_review_cursor().unwrap_or(0);
+            end_review_choice(app, EndReviewAction::from_cursor(cursor))
+        }
+    }
+}
+
+/// Runs one of the end-review modal's three exits — shared by the direct
+/// mnemonic keys (`p`/`f`/`c`/`Esc`) and by `Enter`'s confirm-the-highlighted-
+/// option path (via [`EndReviewAction::from_cursor`]), so the two paths can
+/// never drift apart on what pressing "Finish" actually does. `choice` is
+/// always `Pause`/`Finish`/`Cancel` in practice; `MoveDown`/`MoveUp`/
+/// `Confirm` fall back to a no-op continue rather than panicking (`from_cursor`
+/// never produces them, and [`handle_end_review_key`]'s own match never
+/// passes them here — this is a defensive fallback, not a reachable path).
+fn end_review_choice(app: &mut App, choice: EndReviewAction) -> super::Flow {
+    use super::{Flow, QuitOutcome};
+    match choice {
+        // Amended 2026-07-16, spec 08 Unit 6 (reversing Unit 2's original
+        // "pause emits" contract): pause discards rather than emits, so a
+        // consumer sees each annotation exactly once — on finish. The
+        // worktree, review state, and every annotation made this session
+        // are still kept; only the stdout side effect changes (see
+        // `QuitOutcome`'s doc).
+        EndReviewAction::Pause => Flow::Quit(QuitOutcome::Discard),
+        EndReviewAction::Finish => match app.finish_review() {
+            Some(outcome) => Flow::Quit(outcome),
+            None => Flow::Continue,
+        },
+        EndReviewAction::Cancel => {
+            app.cancel_end_review();
+            Flow::Continue
+        }
+        EndReviewAction::MoveDown | EndReviewAction::MoveUp | EndReviewAction::Confirm => {
+            Flow::Continue
+        }
     }
 }
 

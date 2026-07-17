@@ -35,6 +35,20 @@ pub enum GitError {
     /// `git` output did not match the expected porcelain format.
     #[error("failed to parse git output: {0}")]
     Parse(String),
+
+    /// A filesystem operation needed to resolve a git path (e.g.
+    /// canonicalizing `--git-common-dir`'s output) failed.
+    #[error("filesystem error: {0}")]
+    Io(#[source] std::io::Error),
+
+    /// No default base ref could be resolved for `--review`: `origin/HEAD`
+    /// is unset, and neither a local `main` nor `master` branch exists.
+    /// Named in `Display` so the CLI's own error message tells the user
+    /// exactly which flag closes the gap.
+    #[error(
+        "could not resolve a default base branch (tried origin/HEAD, main, master); pass --base <ref>"
+    )]
+    NoDefaultBase,
 }
 
 /// Maps a spawn `io::Error` to a `GitNotFound` when git is absent, else `Spawn`.

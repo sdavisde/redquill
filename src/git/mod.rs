@@ -16,11 +16,17 @@
 //! - [`stash`] parses `git stash list --format=<STASH_LIST_FORMAT>` into
 //!   [`StashEntry`] records.
 //! - [`worktree`] parses `git worktree list --porcelain` into
-//!   [`WorktreeEntry`] records.
+//!   [`WorktreeEntry`] records, and provides
+//!   [`sanitize_branch_dir_name`] — a branch name to collision-safe
+//!   worktree directory name mapping (spec 08 Unit 1).
 //! - [`diff`] splits `git diff` output into raw per-file [`RawFilePatch`]es
 //!   (no hunk parsing — see [`crate::diff::parse_hunks`] for that); its
 //!   [`DiffTarget::Commit`] variant is a single commit's own changes (first
-//!   -parent diff, root commit against the empty tree).
+//!   -parent diff, root commit against the empty tree); its
+//!   [`DiffTarget::Review`] variant (spec 08 Unit 1) is a branch review
+//!   session's merge-base (`base...branch`) diff, the one non-live target
+//!   where [`DiffTarget::supports_code_intel`] is true, since it runs from
+//!   inside that branch's dedicated worktree.
 //! - [`log`] parses `git log --format=<log::COMMIT_LOG_FORMAT>` into
 //!   [`CommitLogEntry`] records (full/short SHA, subject, author, timestamp)
 //!   for the git panel's commit-history read model; pagination (count/skip)
@@ -65,4 +71,4 @@ pub use stash::{STASH_LIST_FORMAT, StashEntry, parse_stash_list};
 pub use status::{
     ChangeKind, FileStatus, StatusCode, StatusSnapshot, parse_porcelain_v2, parse_porcelain_v2_full,
 };
-pub use worktree::{WorktreeEntry, parse_worktree_list};
+pub use worktree::{WorktreeEntry, parse_worktree_list, sanitize_branch_dir_name};

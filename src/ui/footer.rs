@@ -56,20 +56,27 @@ fn sort_for_display(mut entries: Vec<FooterEntry>) -> Vec<FooterEntry> {
 /// Groups `km`'s bindings in `scope` that carry a [`FooterHint`], merging
 /// rows that share an identical hint (same rank *and* label) into one entry
 /// whose key text joins both rows' key labels with `/` (the `j`/`k` "move"
-/// pairing). `staging_allowed`/`code_intel_allowed` hide the same
-/// capability-gated rows the help overlay hides (see
+/// pairing). `staging_allowed`/`code_intel_allowed`/`review_session` hide the
+/// same capability-gated rows the help overlay hides (see
 /// [`super::help::binding_hidden`]) — `staging_allowed` is `false` on a
 /// read-only diff range, `code_intel_allowed` is `false` whenever the
-/// target's new side isn't the live working tree.
+/// target's new side isn't the live working tree, `review_session` is
+/// `false` outside a review session (spec 08 Unit 3).
 fn keymap_hints(
     km: &Keymap,
     scope: Scope,
     staging_allowed: bool,
     code_intel_allowed: bool,
+    review_session: bool,
 ) -> Vec<FooterEntry> {
     let mut grouped: Vec<(FooterHint, Vec<String>)> = Vec::new();
     for b in km.bindings().iter().filter(|b| b.scope == scope) {
-        if super::help::binding_hidden(b.action, staging_allowed, code_intel_allowed) {
+        if super::help::binding_hidden(
+            b.action,
+            staging_allowed,
+            code_intel_allowed,
+            review_session,
+        ) {
             continue;
         }
         let Some(hint) = b.footer else { continue };
@@ -142,14 +149,37 @@ fn normal_hints(
     staging_allowed: bool,
     code_intel_allowed: bool,
     viewing_commit: bool,
+    review_session: bool,
 ) -> Vec<FooterEntry> {
-    let mut entries = keymap_hints(km, Scope::Diff, staging_allowed, code_intel_allowed);
+    let mut entries = keymap_hints(
+        km,
+        Scope::Diff,
+        staging_allowed,
+        code_intel_allowed,
+        review_session,
+    );
     if viewing_commit {
         entries.push(FooterEntry {
             rank: 6,
             key: "Esc".to_string(),
             label: "return",
         });
+    }
+    if review_session && let Some(key) = find_key(km, Scope::Diff, Action::Quit, "q") {
+        // `q`'s table row has no `FooterHint` of its own (see the doc on
+        // `Action::Quit`'s binding in `keymap.rs`), since outside a review
+        // session it isn't promoted into the idle strip at all — this
+        // synthetic entry only exists while reviewing, when `q`'s *meaning*
+        // changes (opens the end-review modal rather than quitting), which
+        // is worth surfacing here rather than leaving to the always-visible
+        // banner text alone.
+        entries.push(FooterEntry {
+            rank: 9,
+            key,
+            label: "end review",
+        });
+    }
+    if viewing_commit || review_session {
         entries = sort_for_display(entries);
     }
     entries
@@ -164,8 +194,11 @@ fn normal_hints(
 /// presentation-side relabel in the [`visual_hints`] mold, because the static
 /// table can't carry a state-dependent label; the key and its promotion still
 /// come from the table.
-fn panel_hints(km: &Keymap, push_publishes: bool) -> Vec<FooterEntry> {
-    let mut entries = keymap_hints(km, Scope::Panel, true, true);
+fn panel_hints(km: &Keymap, push_publishes: bool, review_session: bool) -> Vec<FooterEntry> {
+    // Review-status bindings (spec 08 Unit 3) are diff-scope only, so
+    // `review_session` never actually changes what this call returns; passed
+    // through for signature consistency with `normal_hints`.
+    let mut entries = keymap_hints(km, Scope::Panel, true, true, review_session);
     if push_publishes
         && let Some(hint) = km
             .bindings()
@@ -177,6 +210,16 @@ fn panel_hints(km: &Keymap, push_publishes: bool) -> Vec<FooterEntry> {
             .find(|e| e.rank == hint.rank && e.label == hint.label)
     {
         entry.label = "publish";
+    }
+    // See `normal_hints`'s identical synthetic entry for why this exists
+    // only during a review session.
+    if review_session && let Some(key) = find_key(km, Scope::Panel, Action::Quit, "q") {
+        entries.push(FooterEntry {
+            rank: 9,
+            key,
+            label: "end review",
+        });
+        entries = sort_for_display(entries);
     }
     entries
 }
@@ -266,10 +309,14 @@ fn fallback_pending_label(action: Action) -> &'static str {
 /// `gd`/`gr` the same way [`super::help::binding_hidden`] hides them from the
 /// help overlay, so a pending `g` never advertises an inert code-intel jump.
 fn pending_hints(km: &Keymap, prefix: KeyEvent, code_intel_allowed: bool) -> Vec<FooterEntry> {
+    // No two-key sequence is a review action (spec 08 Unit 3's bindings are
+    // all single-key), so `review_session` is passed as `true` here — a
+    // fixed, always-permissive value, not a real flag — purely to satisfy
+    // `binding_hidden`'s signature; it can never actually hide a completion.
     let mut entries: Vec<FooterEntry> = km
         .completions_for(Scope::Diff, prefix)
         .into_iter()
-        .filter(|b| !super::help::binding_hidden(b.action, true, code_intel_allowed))
+        .filter(|b| !super::help::binding_hidden(b.action, true, code_intel_allowed, true))
         .map(|b| FooterEntry {
             rank: 1,
             key: b.key_label(),
@@ -318,6 +365,13 @@ pub(super) struct FooterFlags {
     /// between `modal_keys.project_search_input` and
     /// `modal_keys.project_search_results` (spec 06 round-1 UX fix).
     pub(super) project_search_focus: SearchFocus,
+    /// Whether a review session is active (spec 08 Unit 2,
+    /// [`super::app::App::in_review_session`]); adds a synthetic `q end
+    /// review` entry to the Normal/Panel idle strips (see
+    /// [`normal_hints`]/[`panel_hints`]) — `q`'s *meaning* changes while
+    /// reviewing, so its hint changes too, even though outside a review
+    /// session `q` carries no footer hint at all.
+    pub(super) review_session: bool,
 }
 
 /// Builds the footer strip's hints for the current app state — the pure core
@@ -342,6 +396,7 @@ pub(super) fn build_hints(
         viewing_commit,
         help_open,
         project_search_focus,
+        review_session,
     } = flags;
     if help_open {
         return help_open_hints(modal_keys);
@@ -352,10 +407,20 @@ pub(super) fn build_hints(
         return pending_hints(km, prefix, code_intel_allowed);
     }
     match mode {
-        Mode::Normal => normal_hints(km, staging_allowed, code_intel_allowed, viewing_commit),
+        Mode::Normal => normal_hints(
+            km,
+            staging_allowed,
+            code_intel_allowed,
+            viewing_commit,
+            review_session,
+        ),
         Mode::Visual { .. } => visual_hints(km, staging_allowed),
-        Mode::Panel { .. } => panel_hints(km, push_publishes),
+        Mode::Panel { .. } => panel_hints(km, push_publishes, review_session),
         Mode::List => modal_hints(&modal_keys.list),
+        // Review sessions repurpose `Mode::Staging` as the accepted-files
+        // panel (spec 08 Unit 5) — see `super::help::modal_sections`'s
+        // identical swap for the `?` overlay.
+        Mode::Staging if review_session => modal_hints(&modal_keys.accepted_panel),
         Mode::Staging => modal_hints(&modal_keys.staging),
         Mode::Peek => modal_hints(&modal_keys.peek),
         Mode::Switcher => modal_hints(&modal_keys.switcher),
@@ -368,6 +433,9 @@ pub(super) fn build_hints(
         },
         // The search input occupies the footer itself; no hint strip.
         Mode::Search => Vec::new(),
+        Mode::EndReview { .. } => modal_hints(&modal_keys.end_review),
+        Mode::ConfirmRemoteOp { .. } => modal_hints(&modal_keys.confirm_remote_op),
+        Mode::ReviewBranch => modal_hints(&modal_keys.review_branch),
     }
 }
 
@@ -463,6 +531,7 @@ pub(super) fn footer_height(
             viewing_commit: app.viewing_commit(),
             help_open: app.help_open,
             project_search_focus: app.project_search_focus(),
+            review_session: app.in_review_session(),
         },
         pending,
         keymap,

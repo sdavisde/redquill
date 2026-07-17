@@ -2,6 +2,10 @@
 //! its focus, and acting on the focused annotation (jump / edit / delete).
 //! Kept out of `app.rs` so the coordinator stays thin; these methods drive
 //! the annotation store and the diff view purely through `App`'s own state.
+//!
+//! [`App::delete_focused_annotation`] additionally saves-on-change (spec 08
+//! Unit 6, task 7.2) via `App::persist_review_state`, a no-op outside a
+//! review session — see `super::review_ops`'s module doc.
 
 use super::App;
 use super::Mode;
@@ -18,9 +22,12 @@ impl App {
             | Mode::Search
             | Mode::Peek
             | Mode::Switcher
+            | Mode::ReviewBranch
             | Mode::CommitMessage
             | Mode::Finder
-            | Mode::ProjectSearch => {}
+            | Mode::ProjectSearch
+            | Mode::EndReview { .. }
+            | Mode::ConfirmRemoteOp { .. } => {}
             Mode::Normal | Mode::Visual { .. } => {
                 if !self.annotations.is_empty() {
                     self.list_cursor = self.list_cursor.min(self.annotations.len() - 1);
@@ -125,5 +132,9 @@ impl App {
             self.list_cursor = self.list_cursor.min(self.annotations.len() - 1);
         }
         self.refresh_rows();
+        // Save-on-change (spec 08 Unit 6, task 7.2) — see `review_ops`'s
+        // module doc for why this is safe to call unconditionally outside a
+        // review session.
+        self.persist_review_state();
     }
 }

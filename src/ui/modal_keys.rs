@@ -397,6 +397,81 @@ pub(super) static STAGING_KEYS: LazyLock<Vec<ModalBinding<StagingAction>>> = Laz
     ]
 });
 
+// -- Accepted-files panel (spec 08 Unit 5) ----------------------------------
+
+/// What a key does in the accepted-files panel — the review-session
+/// analogue of the staging panel (`Mode::Staging` is shared between the two;
+/// `super::modes::handle_staging_key` resolves against this table instead of
+/// [`STAGING_KEYS`] whenever `App::in_review_session()` holds, so the two
+/// panels' key handling can never cross-contaminate). Same physical keys as
+/// [`StagingAction`] (`j`/`k` move, `Space`/`Enter` act on the focused entry,
+/// `s`/`Esc` close) but review-appropriate descriptions, since "Unstage
+/// file" would be untruthful here — a review session's `git status` is
+/// always clean, there is nothing to unstage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AcceptedPanelAction {
+    MoveDown,
+    MoveUp,
+    /// Un-accepts the focused entry (see [`super::app::App::un_accept_focused_file`]).
+    UnAccept,
+    Close,
+}
+
+/// The accepted-files panel's key table, for the help overlay, footer strip,
+/// and [`super::modes::handle_staging_key`]'s review-session dispatch. Like
+/// [`END_REVIEW_KEYS`], this carries no `[keys.accepted-panel]` override
+/// plumbing yet — it's absent from the `MODAL_MODE_NAMES` cross-checked
+/// list, so it always renders its compiled-in defaults; wiring config
+/// remapping is a follow-up, mirroring that table's own documented
+/// follow-up note.
+pub(super) static ACCEPTED_PANEL_KEYS: LazyLock<Vec<ModalBinding<AcceptedPanelAction>>> =
+    LazyLock::new(|| {
+        vec![
+            ModalBinding {
+                description: "Move focus down",
+                keys: vec![ModalKey::plain(KeyCode::Char('j'))],
+                action: AcceptedPanelAction::MoveDown,
+                footer: Some(FooterHint {
+                    rank: 1,
+                    label: "move",
+                }),
+            },
+            ModalBinding {
+                description: "Move focus up",
+                keys: vec![ModalKey::plain(KeyCode::Char('k'))],
+                action: AcceptedPanelAction::MoveUp,
+                footer: Some(FooterHint {
+                    rank: 1,
+                    label: "move",
+                }),
+            },
+            ModalBinding {
+                description: "Un-accept file (re-expands its section)",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char(' ')),
+                    ModalKey::plain(KeyCode::Enter),
+                ],
+                action: AcceptedPanelAction::UnAccept,
+                footer: Some(FooterHint {
+                    rank: 2,
+                    label: "un-accept",
+                }),
+            },
+            ModalBinding {
+                description: "Close panel",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('s')),
+                    ModalKey::plain(KeyCode::Esc),
+                ],
+                action: AcceptedPanelAction::Close,
+                footer: Some(FooterHint {
+                    rank: 3,
+                    label: "close",
+                }),
+            },
+        ]
+    });
+
 // -- Peek overlay ----------------------------------------------------------
 
 /// What a key does in the LSP peek overlay.
@@ -560,6 +635,269 @@ pub(super) static SWITCHER_KEYS: LazyLock<Vec<ModalBinding<SwitcherAction>>> =
                 action: SwitcherAction::Close,
                 footer: Some(FooterHint {
                     rank: 4,
+                    label: "close",
+                }),
+            },
+        ]
+    });
+
+// -- End-review modal (spec 08 Unit 2) --------------------------------------
+
+/// What a key does in the end-review modal (`q` in a review session): the
+/// three exits, each labeled with its consequence in [`END_REVIEW_KEYS`]'s
+/// `description` rather than just "pause"/"finish" (per the spec's design
+/// note that the modal must name what happens to the worktree) — plus,
+/// since the dogfood polish pass (spec 08, follow-up to Unit 2), a
+/// lazygit-style highlighted-selection pair (`MoveDown`/`MoveUp`) and
+/// `Confirm` (`Enter`, acting on whichever of the three exits is
+/// highlighted). The mnemonics (`p`/`f`/`c`/`Esc`) keep dispatching
+/// immediately regardless of the highlight, unchanged from before this pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EndReviewAction {
+    /// Quit emitting nothing; the worktree, review state, and every
+    /// annotation (already durable via save-on-change, spec 08 Unit 6) are
+    /// kept. Amended 2026-07-16, spec 08 Unit 6, reversing this variant's
+    /// original "emit and quit" contract.
+    Pause,
+    /// Emit the complete annotation set (restored-from-earlier-sessions and
+    /// this session's own, together, exactly once), remove the worktree
+    /// (and, spec 08 Unit 4/6, delete the persisted review-state entry —
+    /// statuses and annotations together), then quit. On removal failure
+    /// the modal closes with the git error surfaced instead of quitting.
+    Finish,
+    /// Close the modal and keep reviewing; nothing happens.
+    Cancel,
+    /// Move the highlighted option down (see [`super::app::App::end_review_move_down`]).
+    MoveDown,
+    /// Move the highlighted option up (see [`super::app::App::end_review_move_up`]).
+    MoveUp,
+    /// Act on whichever option is currently highlighted — resolved via
+    /// [`EndReviewAction::from_cursor`] and then dispatched exactly like the
+    /// matching mnemonic (see [`super::modes::handle_end_review_key`]).
+    Confirm,
+}
+
+impl EndReviewAction {
+    /// The highest valid cursor value (Cancel, the last of the three
+    /// options in the modal's display order) — the clamp
+    /// [`super::app::App::end_review_move_down`] moves against.
+    pub(super) const LAST_CURSOR: usize = 2;
+
+    /// Maps a highlighted-option cursor (0/1/2, the modal's display order)
+    /// to the mnemonic action it stands in for, so `Confirm` (`Enter`) acts
+    /// on whichever option is highlighted. Any out-of-range cursor
+    /// (defensively, since nothing should ever produce one — see
+    /// [`super::app::App::end_review_move_down`]'s clamp) falls back to
+    /// `Cancel`, the least destructive option, rather than panicking.
+    pub(super) fn from_cursor(cursor: usize) -> EndReviewAction {
+        match cursor {
+            0 => EndReviewAction::Pause,
+            1 => EndReviewAction::Finish,
+            _ => EndReviewAction::Cancel,
+        }
+    }
+}
+
+/// End-review modal control keys (spec 08 Unit 2, extended by the dogfood
+/// polish pass with `j`/`k`/arrow selection and `Enter` confirm), for the
+/// help overlay, footer strip, [`super::modes::handle_end_review_key`]'s
+/// dispatch, and the modal's own body ([`super::end_review_modal`]).
+/// Registered on [`ModalKeymaps`] as the effective table like every other
+/// modal mode, but not (yet) exposed to `[keys.<mode>]` config remapping —
+/// it is absent from the `MODAL_MODE_NAMES` cross-checked lists, so it
+/// always renders its compiled-in defaults. Wiring `[keys.end-review]`
+/// remapping is a follow-up (spec 08 later units): it would add
+/// `end_review` to both name lists, an `end_review_action_name`/`_from_name`
+/// pair, and an `apply_modal_overrides` call in `super::modal_keys_config`,
+/// mirroring the sibling modes above.
+pub(super) static END_REVIEW_KEYS: LazyLock<Vec<ModalBinding<EndReviewAction>>> =
+    LazyLock::new(|| {
+        vec![
+            ModalBinding {
+                description: "Pause — quit, emit nothing (keep worktree)",
+                keys: vec![ModalKey::plain(KeyCode::Char('p'))],
+                action: EndReviewAction::Pause,
+                footer: Some(FooterHint {
+                    rank: 1,
+                    label: "pause",
+                }),
+            },
+            ModalBinding {
+                description: "Finish — emit annotations once, remove worktree, quit",
+                keys: vec![ModalKey::plain(KeyCode::Char('f'))],
+                action: EndReviewAction::Finish,
+                footer: Some(FooterHint {
+                    rank: 2,
+                    label: "finish",
+                }),
+            },
+            ModalBinding {
+                description: "Cancel — close this modal, keep reviewing",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('c')),
+                    ModalKey::plain(KeyCode::Esc),
+                ],
+                action: EndReviewAction::Cancel,
+                footer: Some(FooterHint {
+                    rank: 3,
+                    label: "cancel",
+                }),
+            },
+            ModalBinding {
+                description: "Move highlighted option down",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('j')),
+                    ModalKey::plain(KeyCode::Down),
+                ],
+                action: EndReviewAction::MoveDown,
+                footer: Some(FooterHint {
+                    rank: 4,
+                    label: "move",
+                }),
+            },
+            ModalBinding {
+                description: "Move highlighted option up",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('k')),
+                    ModalKey::plain(KeyCode::Up),
+                ],
+                action: EndReviewAction::MoveUp,
+                // Not also tagged: its label ("k / Up") is already a
+                // compound key display, so merging it with MoveDown's would
+                // double up the " / " separators — see the identical note
+                // on SWITCHER_KEYS's MoveUp row.
+                footer: None,
+            },
+            ModalBinding {
+                description: "Confirm the highlighted option",
+                keys: vec![ModalKey::plain(KeyCode::Enter)],
+                action: EndReviewAction::Confirm,
+                footer: Some(FooterHint {
+                    rank: 5,
+                    label: "confirm",
+                }),
+            },
+        ]
+    });
+
+// -- Pull/push confirm modal (spec 08 Unit 5) --------------------------------
+
+/// What a key does in the pull/push confirm modal (`p`/`P` in a review
+/// session, spec 08 Unit 5): a plain confirm/cancel gate naming the branch
+/// under review, opened by [`super::modes::handle_panel_key`] in place of
+/// running [`crate::git::RemoteOp::Pull`]/[`crate::git::RemoteOp::Push`]
+/// immediately (`f` fetch is unaffected — reviewers are expected to fetch).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ConfirmRemoteOpAction {
+    /// Runs the pending op (see [`super::app::App::confirm_remote_op`]).
+    Confirm,
+    /// Closes the modal, running nothing (see
+    /// [`super::app::App::cancel_confirm_remote_op`]).
+    Cancel,
+}
+
+/// The pull/push confirm modal's key table, for the help overlay, footer
+/// strip, and [`super::modes::handle_confirm_remote_op_key`]'s dispatch.
+/// Same no-`[keys.<mode>]`-plumbing-yet status as [`END_REVIEW_KEYS`]/
+/// [`ACCEPTED_PANEL_KEYS`] — absent from the cross-checked `MODAL_MODE_NAMES`
+/// list, so it always renders its compiled-in defaults.
+pub(super) static CONFIRM_REMOTE_OP_KEYS: LazyLock<Vec<ModalBinding<ConfirmRemoteOpAction>>> =
+    LazyLock::new(|| {
+        vec![
+            ModalBinding {
+                description: "Confirm — run the op against the branch under review",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Enter),
+                    ModalKey::plain(KeyCode::Char('y')),
+                ],
+                action: ConfirmRemoteOpAction::Confirm,
+                footer: Some(FooterHint {
+                    rank: 1,
+                    label: "confirm",
+                }),
+            },
+            ModalBinding {
+                description: "Cancel — close this modal, run nothing",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Esc),
+                    ModalKey::plain(KeyCode::Char('n')),
+                ],
+                action: ConfirmRemoteOpAction::Cancel,
+                footer: Some(FooterHint {
+                    rank: 2,
+                    label: "cancel",
+                }),
+            },
+        ]
+    });
+
+// -- Review-branch modal (spec 08 Unit 1 in-app path / Unit 5) --------------
+
+/// What a key does in the review-branch modal (`R`, panel scope — opens
+/// [`super::app::Mode::ReviewBranch`]): `j`/`k`/arrows move the cursor,
+/// `Enter` starts a review session on the highlighted branch (see
+/// [`super::review_branch::App::confirm_review_branch`]), `Esc` closes the
+/// modal. Same shape as [`SwitcherAction`] minus `ToggleTab` — this modal
+/// has one flat branch list, no tabs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReviewBranchAction {
+    MoveDown,
+    MoveUp,
+    /// Starts reviewing the highlighted branch (see
+    /// [`super::review_branch::App::confirm_review_branch`]).
+    Confirm,
+    Close,
+}
+
+/// The review-branch modal's key table, for the help overlay, footer strip,
+/// and [`super::modes::handle_review_branch_key`]'s dispatch. Like
+/// [`END_REVIEW_KEYS`]/[`ACCEPTED_PANEL_KEYS`]/[`CONFIRM_REMOTE_OP_KEYS`], no
+/// `[keys.review-branch]` override plumbing yet — absent from the
+/// `MODAL_MODE_NAMES` cross-checked list, so it always renders its
+/// compiled-in defaults.
+pub(super) static REVIEW_BRANCH_KEYS: LazyLock<Vec<ModalBinding<ReviewBranchAction>>> =
+    LazyLock::new(|| {
+        vec![
+            ModalBinding {
+                description: "Move selection down",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('j')),
+                    ModalKey::plain(KeyCode::Down),
+                ],
+                action: ReviewBranchAction::MoveDown,
+                footer: Some(FooterHint {
+                    rank: 1,
+                    label: "move",
+                }),
+            },
+            ModalBinding {
+                description: "Move selection up",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('k')),
+                    ModalKey::plain(KeyCode::Up),
+                ],
+                action: ReviewBranchAction::MoveUp,
+                // Not also tagged: mirrors SWITCHER_KEYS's own MoveUp row —
+                // its label ("k / Up") is already a compound key display, so
+                // merging it with MoveDown's would double up the " / "
+                // separators.
+                footer: None,
+            },
+            ModalBinding {
+                description: "Start reviewing the selected branch",
+                keys: vec![ModalKey::plain(KeyCode::Enter)],
+                action: ReviewBranchAction::Confirm,
+                footer: Some(FooterHint {
+                    rank: 2,
+                    label: "review",
+                }),
+            },
+            ModalBinding {
+                description: "Close",
+                keys: vec![ModalKey::plain(KeyCode::Esc)],
+                action: ReviewBranchAction::Close,
+                footer: Some(FooterHint {
+                    rank: 3,
                     label: "close",
                 }),
             },
@@ -1711,6 +2049,23 @@ pub struct ModalKeymaps {
     pub(super) finder: Vec<ModalBinding<FinderAction>>,
     pub(super) project_search_input: Vec<ModalBinding<ProjectSearchInputAction>>,
     pub(super) project_search_results: Vec<ModalBinding<ProjectSearchResultsAction>>,
+    /// The end-review modal (spec 08 Unit 2). Unlike the twelve modes above
+    /// it carries no `[keys.end-review]` override plumbing yet (see
+    /// [`END_REVIEW_KEYS`]), so this is always the compiled-in default table
+    /// — [`Default`] and the effective-keymaps builder both clone it verbatim.
+    pub(super) end_review: Vec<ModalBinding<EndReviewAction>>,
+    /// The accepted-files panel (spec 08 Unit 5, review sessions' analogue
+    /// of `staging`). Same no-config-plumbing-yet status as `end_review` —
+    /// see [`ACCEPTED_PANEL_KEYS`].
+    pub(super) accepted_panel: Vec<ModalBinding<AcceptedPanelAction>>,
+    /// The pull/push confirm modal (spec 08 Unit 5). Same
+    /// no-config-plumbing-yet status as `end_review`/`accepted_panel` — see
+    /// [`CONFIRM_REMOTE_OP_KEYS`].
+    pub(super) confirm_remote_op: Vec<ModalBinding<ConfirmRemoteOpAction>>,
+    /// The review-branch modal (spec 08 Unit 1 in-app path / Unit 5). Same
+    /// no-config-plumbing-yet status as `end_review`/`accepted_panel`/
+    /// `confirm_remote_op` — see [`REVIEW_BRANCH_KEYS`].
+    pub(super) review_branch: Vec<ModalBinding<ReviewBranchAction>>,
 }
 
 impl Default for ModalKeymaps {
@@ -1728,6 +2083,10 @@ impl Default for ModalKeymaps {
             finder: FINDER_HINTS.clone(),
             project_search_input: PROJECT_SEARCH_INPUT_HINTS.clone(),
             project_search_results: PROJECT_SEARCH_RESULTS_HINTS.clone(),
+            end_review: END_REVIEW_KEYS.clone(),
+            accepted_panel: ACCEPTED_PANEL_KEYS.clone(),
+            confirm_remote_op: CONFIRM_REMOTE_OP_KEYS.clone(),
+            review_branch: REVIEW_BRANCH_KEYS.clone(),
         }
     }
 }
@@ -1737,7 +2096,7 @@ mod tests {
     use super::*;
     use crate::annotate::{Classification, Target};
     use crate::diff::FileDiff;
-    use crate::git::RawFilePatch;
+    use crate::git::{DiffTarget, RawFilePatch};
     use crate::lsp::SourceLocation;
     use crate::ui::modes::{
         handle_compose_key, handle_list_key, handle_peek_key, handle_search_key, handle_staging_key,
@@ -2025,6 +2384,112 @@ index 111..222 100644
         }
     }
 
+    /// A two-file `FileDiff` fixture (path parameterized) for the
+    /// accepted-panel tests below, mirroring `sample_file()`'s shape.
+    fn named_file(path: &str) -> FileDiff {
+        let raw = format!(
+            "diff --git a/{path} b/{path}\nindex 1..2 100644\n--- a/{path}\n+++ b/{path}\n@@ -1,1 +1,1 @@\n-old\n+new\n"
+        );
+        FileDiff::from_patch(&RawFilePatch {
+            path: path.to_string(),
+            old_path: None,
+            raw,
+            is_binary: false,
+        })
+        .unwrap()
+    }
+
+    /// An `App` in a review session (`Mode::Staging`, both `a.rs`/`b.rs`
+    /// accepted) with the accepted-files panel populated the way
+    /// `App::toggle_staging_panel` would — via the real
+    /// `App::refresh_accepted_list`, not a hand-built `staged` list, so
+    /// these tests exercise the actual production wiring (spec 08 Unit 5).
+    fn accepted_panel_app() -> App {
+        let mut app = App::new(vec![named_file("a.rs"), named_file("b.rs")]);
+        app.target = DiffTarget::Review {
+            base: "main".to_string(),
+            branch: "feature".to_string(),
+        };
+        app.review_states
+            .insert("a.rs".to_string(), crate::review::ReviewStatus::Accepted);
+        app.review_states
+            .insert("b.rs".to_string(), crate::review::ReviewStatus::Accepted);
+        app.view.set_collapsed("a.rs", true);
+        app.view.set_collapsed("b.rs", true);
+        app.refresh_accepted_list();
+        app.mode = Mode::Staging;
+        app
+    }
+
+    /// Every `ACCEPTED_PANEL_KEYS` entry, fed through the *real* handler as
+    /// the key event it documents, must perform the action it documents —
+    /// the review-session mirror of `every_staging_table_entry_drives_its_documented_action`.
+    #[test]
+    fn every_accepted_panel_table_entry_drives_its_documented_action() {
+        for binding in ACCEPTED_PANEL_KEYS.iter() {
+            for key in &binding.keys {
+                let mut app = accepted_panel_app();
+                let label = binding.key_label();
+                match binding.action {
+                    AcceptedPanelAction::MoveDown => {
+                        handle_staging_key(&mut app, key.event());
+                        assert_eq!(
+                            app.staging_cursor, 1,
+                            "Accepted panel {label}: focus moves down"
+                        );
+                    }
+                    AcceptedPanelAction::MoveUp => {
+                        app.staging_cursor = 1;
+                        handle_staging_key(&mut app, key.event());
+                        assert_eq!(
+                            app.staging_cursor, 0,
+                            "Accepted panel {label}: focus moves up"
+                        );
+                    }
+                    AcceptedPanelAction::UnAccept => {
+                        handle_staging_key(&mut app, key.event());
+                        assert_eq!(
+                            app.review_status("a.rs"),
+                            crate::review::ReviewStatus::Unreviewed,
+                            "Accepted panel {label}: un-accept must act"
+                        );
+                        assert!(
+                            !app.view.is_collapsed("a.rs"),
+                            "Accepted panel {label}: un-accept must re-expand"
+                        );
+                    }
+                    AcceptedPanelAction::Close => {
+                        handle_staging_key(&mut app, key.event());
+                        assert_eq!(app.mode, Mode::Normal, "Accepted panel {label}: must close");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The mirror-image half of the drift test: outside a review session,
+    /// `ACCEPTED_PANEL_KEYS`' own keys still reach `handle_staging_key`, but
+    /// resolve through the *local* `STAGING_KEYS` table instead — proving
+    /// the two tables never both apply at once for the same `Mode::Staging`
+    /// session, and that the local behavior is genuinely untouched (not
+    /// merely coincidentally identical).
+    #[test]
+    fn accepted_panel_keys_do_not_apply_outside_a_review_session() {
+        let mut app = staging_app();
+        assert_eq!(app.target, DiffTarget::WorkingTree);
+        let space = ACCEPTED_PANEL_KEYS
+            .iter()
+            .find(|b| b.action == AcceptedPanelAction::UnAccept)
+            .expect("UnAccept row exists")
+            .keys[0];
+        handle_staging_key(&mut app, space.event());
+        // Resolves as `StagingAction::Unstage` (no git backend -> a footer
+        // message), never `AcceptedPanelAction::UnAccept`'s review-status
+        // mutation — there is no `review_states` entry to have touched.
+        assert!(app.status_message.is_some());
+        assert!(app.review_states.is_empty());
+    }
+
     /// An `App` in Peek mode over two canned References locations whose paths
     /// aren't in the diff (so Enter degrades to a footer message — still an
     /// observable effect).
@@ -2182,6 +2647,222 @@ index 111..222 100644
                         assert!(
                             matches!(app.mode, Mode::Panel { .. }),
                             "Switcher {label}: must close back to the panel"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// An `App` mid-review, with `Mode::EndReview` already open (`origin:
+    /// Normal`), so every end-review action has an observable effect.
+    fn end_review_app() -> App {
+        let mut app = app();
+        app.target = crate::git::DiffTarget::Review {
+            base: "main".to_string(),
+            branch: "feature".to_string(),
+        };
+        app.open_end_review_modal();
+        app
+    }
+
+    #[test]
+    fn every_end_review_table_entry_drives_its_documented_action() {
+        use crate::ui::{Flow, QuitOutcome, modes::handle_end_review_key};
+
+        for binding in END_REVIEW_KEYS.iter() {
+            for key in &binding.keys {
+                let mut app = end_review_app();
+                let label = binding.key_label();
+                match binding.action {
+                    EndReviewAction::Pause => {
+                        let flow = handle_end_review_key(&mut app, key.event());
+                        assert!(
+                            matches!(flow, Flow::Quit(QuitOutcome::Discard)),
+                            "End review {label}: pause must quit emitting nothing (spec 08 Unit 6)"
+                        );
+                    }
+                    EndReviewAction::Finish => {
+                        // No `review_origin_ops` attached here (no git
+                        // backend in this fixture), so finish degrades to a
+                        // footer message and stays open rather than quitting
+                        // — still proving `f` reaches `App::finish_review`.
+                        let _ = handle_end_review_key(&mut app, key.event());
+                        assert_eq!(
+                            app.mode,
+                            Mode::Normal,
+                            "End review {label}: a failed finish closes back to the origin mode"
+                        );
+                        assert!(app.status_message.is_some());
+                    }
+                    EndReviewAction::Cancel => {
+                        let _ = handle_end_review_key(&mut app, key.event());
+                        assert_eq!(
+                            app.mode,
+                            Mode::Normal,
+                            "End review {label}: cancel returns to the origin mode"
+                        );
+                    }
+                    EndReviewAction::MoveDown => {
+                        let _ = handle_end_review_key(&mut app, key.event());
+                        assert_eq!(
+                            app.end_review_cursor(),
+                            Some(1),
+                            "End review {label}: move-down highlights the next option"
+                        );
+                    }
+                    EndReviewAction::MoveUp => {
+                        // Start one row down so the up-motion has an
+                        // observable effect (the fixture opens at cursor 0,
+                        // already clamped).
+                        app.end_review_move_down();
+                        let _ = handle_end_review_key(&mut app, key.event());
+                        assert_eq!(
+                            app.end_review_cursor(),
+                            Some(0),
+                            "End review {label}: move-up highlights the prior option"
+                        );
+                    }
+                    EndReviewAction::Confirm => {
+                        // The fixture opens with Pause (cursor 0)
+                        // highlighted, so Enter must behave exactly like
+                        // the `p` mnemonic.
+                        let flow = handle_end_review_key(&mut app, key.event());
+                        assert!(
+                            matches!(flow, Flow::Quit(QuitOutcome::Discard)),
+                            "End review {label}: confirm on the highlighted Pause option must quit emitting nothing"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// An `App` mid-review, with `Mode::ConfirmRemoteOp { op: Pull, .. }`
+    /// already open, so every confirm/cancel action has an observable
+    /// effect.
+    fn confirm_remote_op_app() -> App {
+        let mut app = app();
+        app.target = crate::git::DiffTarget::Review {
+            base: "main".to_string(),
+            branch: "feature".to_string(),
+        };
+        app.set_repo_root(PathBuf::from("/tmp/review-worktree"));
+        app.mode = Mode::Panel {
+            cursor: 0,
+            tab: crate::ui::app::PanelTab::Changes,
+        };
+        app.open_confirm_remote_op_modal(crate::git::RemoteOp::Pull);
+        app
+    }
+
+    #[test]
+    fn every_confirm_remote_op_table_entry_drives_its_documented_action() {
+        use crate::ui::modes::handle_confirm_remote_op_key;
+
+        for binding in CONFIRM_REMOTE_OP_KEYS.iter() {
+            for key in &binding.keys {
+                let mut app = confirm_remote_op_app();
+                let label = binding.key_label();
+                match binding.action {
+                    ConfirmRemoteOpAction::Confirm => {
+                        handle_confirm_remote_op_key(&mut app, key.event());
+                        assert!(
+                            matches!(app.mode, Mode::Panel { .. }),
+                            "Confirm remote op {label}: confirm returns to the panel"
+                        );
+                        assert_eq!(
+                            app.running_op_label(),
+                            Some("pull"),
+                            "Confirm remote op {label}: confirm must spawn the pending op"
+                        );
+                    }
+                    ConfirmRemoteOpAction::Cancel => {
+                        handle_confirm_remote_op_key(&mut app, key.event());
+                        assert!(
+                            matches!(app.mode, Mode::Panel { .. }),
+                            "Confirm remote op {label}: cancel returns to the panel"
+                        );
+                        assert_eq!(
+                            app.running_op_label(),
+                            None,
+                            "Confirm remote op {label}: cancel must run nothing"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// An `App` with the review-branch modal already open over two
+    /// candidate branches, so every review-branch action has an observable
+    /// effect. No git backend is attached — `Confirm` degrades to a footer
+    /// message (see [`super::super::review_branch::App::confirm_review_branch`]'s
+    /// no-backend guard) rather than actually starting a review, which is
+    /// exactly what proves `Enter` reaches that method at all; the real
+    /// end-to-end path is covered by
+    /// `review_branch_integration_tests.rs`'s real-git dispatch test.
+    fn review_branch_app() -> App {
+        let mut app = app();
+        let branches = vec![
+            crate::git::LocalBranch {
+                name: "feature-a".to_string(),
+                is_current: false,
+                worktree: None,
+            },
+            crate::git::LocalBranch {
+                name: "feature-b".to_string(),
+                is_current: false,
+                worktree: None,
+            },
+        ];
+        app.review_branch_modal = Some(crate::ui::review_branch::ReviewBranchState::new(
+            branches, 0,
+        ));
+        app.mode = Mode::ReviewBranch;
+        app
+    }
+
+    #[test]
+    fn every_review_branch_table_entry_drives_its_documented_action() {
+        use crate::ui::modes::handle_review_branch_key;
+
+        for binding in REVIEW_BRANCH_KEYS.iter() {
+            for key in &binding.keys {
+                let mut app = review_branch_app();
+                let label = binding.key_label();
+                match binding.action {
+                    ReviewBranchAction::MoveDown => {
+                        handle_review_branch_key(&mut app, key.event());
+                        assert_eq!(
+                            app.review_branch_modal.as_ref().unwrap().cursor,
+                            1,
+                            "Review branch {label}: cursor moves down"
+                        );
+                    }
+                    ReviewBranchAction::MoveUp => {
+                        app.review_branch_modal.as_mut().unwrap().cursor = 1;
+                        handle_review_branch_key(&mut app, key.event());
+                        assert_eq!(
+                            app.review_branch_modal.as_ref().unwrap().cursor,
+                            0,
+                            "Review branch {label}: cursor moves up"
+                        );
+                    }
+                    ReviewBranchAction::Confirm => {
+                        handle_review_branch_key(&mut app, key.event());
+                        assert_eq!(
+                            app.mode,
+                            Mode::ReviewBranch,
+                            "Review branch {label}: modal stays open without a git backend"
+                        );
+                        assert!(app.status_message.is_some());
+                    }
+                    ReviewBranchAction::Close => {
+                        handle_review_branch_key(&mut app, key.event());
+                        assert!(
+                            matches!(app.mode, Mode::Panel { .. }),
+                            "Review branch {label}: must close back to the panel"
                         );
                     }
                 }

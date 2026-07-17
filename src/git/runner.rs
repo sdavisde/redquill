@@ -123,6 +123,12 @@ impl GitRunner {
             DiffTarget::WorkingTree => {}
             DiffTarget::Staged => args.push("--staged".to_string()),
             DiffTarget::Range(range) => args.push(range.clone()),
+            DiffTarget::Review { base, branch } => {
+                // Merge-base (three-dot) semantics, as a single argv
+                // element — never two separate revs interpolated with a
+                // shell-level `...`, so this is exactly as safe as `Range`.
+                args.push(format!("{base}...{branch}"));
+            }
             DiffTarget::Commit(rev) => {
                 let parent = format!("{rev}^");
                 let base = if self.rev_exists(&parent) {
@@ -213,6 +219,98 @@ impl GitRunner {
         parse_worktree_list(&out)
     }
 
+    /// Returns the repository's common git directory (`git rev-parse
+    /// --git-common-dir`), canonicalized to an absolute path. This is the
+    /// *shared* administrative directory — the same for every linked
+    /// worktree of a repository — unlike [`GitRunner::root`], which returns
+    /// the current worktree's toplevel and would silently diverge per
+    /// worktree. Review-session paths (the managed worktrees themselves,
+    /// and later the persisted review state) must resolve through this
+    /// method so a review started from any worktree shares the same state.
+    pub fn git_common_dir(&self) -> Result<PathBuf, GitError> {
+        let out = self.run_utf8(&["rev-parse", "--git-common-dir"])?;
+        let raw = PathBuf::from(out.trim());
+        let joined = if raw.is_absolute() {
+            raw
+        } else {
+            self.root.join(raw)
+        };
+        std::fs::canonicalize(&joined).map_err(GitError::Io)
+    }
+
+    /// Resolves `--review`'s default base ref when `--base` isn't given:
+    /// the branch `origin/HEAD` points to, else local `main`, else local
+    /// `master`. Returns [`GitError::NoDefaultBase`] (naming the `--base`
+    /// flag in its `Display`) when none of the three resolve.
+    pub fn default_base(&self) -> Result<String, GitError> {
+        if let Ok(out) = self.run_utf8(&["symbolic-ref", "refs/remotes/origin/HEAD"])
+            && let Some(name) = out.trim().strip_prefix("refs/remotes/origin/")
+            && !name.is_empty()
+        {
+            return Ok(name.to_string());
+        }
+        if self.rev_exists("refs/heads/main") {
+            return Ok("main".to_string());
+        }
+        if self.rev_exists("refs/heads/master") {
+            return Ok("master".to_string());
+        }
+        Err(GitError::NoDefaultBase)
+    }
+
+    /// Creates a new worktree at `path`, checked out to `branch`
+    /// (`git worktree add <path> <branch>`, fixed argv, never `--force`).
+    /// `path`'s parent directories are created by `git` itself if missing.
+    /// Fails with [`GitError::Command`] (carrying git's own stderr verbatim)
+    /// when the branch doesn't exist, is already checked out in another
+    /// worktree, or `path` already exists — the caller decides how to
+    /// surface it; nothing is retried or forced.
+    pub fn worktree_add(&self, path: &Path, branch: &str) -> Result<(), GitError> {
+        let path_str = path.to_string_lossy().into_owned();
+        let args = ["worktree", "add", path_str.as_str(), branch];
+        let output = Command::new("git")
+            .current_dir(&self.root)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(map_spawn_err)?;
+
+        if !output.status.success() {
+            return Err(command_error(&args, &output.status, &output.stderr));
+        }
+        Ok(())
+    }
+
+    /// Removes a worktree at `path` (`git worktree remove <path>`, fixed
+    /// argv, never `--force`, spec 08 Unit 2). Fails with
+    /// [`GitError::Command`] (git's own stderr — e.g. a dirty tree) rather
+    /// than retrying with force; the caller decides how to surface it and
+    /// must leave the worktree and any persisted review state untouched on
+    /// failure.
+    pub fn worktree_remove(&self, path: &Path) -> Result<(), GitError> {
+        let path_str = path.to_string_lossy().into_owned();
+        let args = ["worktree", "remove", path_str.as_str()];
+        let output = Command::new("git")
+            .current_dir(&self.root)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(map_spawn_err)?;
+
+        if !output.status.success() {
+            return Err(command_error(&args, &output.status, &output.stderr));
+        }
+        Ok(())
+    }
+
+    /// Prunes stale worktree administrative records (`git worktree prune`,
+    /// fixed argv, spec 08 Unit 2). Run only after a successful
+    /// [`GitRunner::worktree_remove`], to clear now-stale admin entries.
+    pub fn worktree_prune(&self) -> Result<(), GitError> {
+        self.run_raw(&["worktree", "prune"])?;
+        Ok(())
+    }
+
     /// Switches the working tree to branch `name` (`git switch -- <name>`).
     /// Never forces: a dirty tree that would be overwritten, or a branch
     /// already checked out in another worktree, surfaces as
@@ -264,5 +362,35 @@ impl GitRunner {
     pub fn ls_files_untracked(&self) -> Result<Vec<String>, GitError> {
         let out = self.run_utf8(&["ls-files", "-z", "--others", "--exclude-standard"])?;
         Ok(parse_ls_files_z(&out))
+    }
+
+    /// Returns `path`'s blob SHA on `branch` (`git rev-parse --verify -q
+    /// <branch>:<path>`, full SHA — spec 08 Unit 4), for capturing at accept
+    /// time and comparing again at reconciliation time to detect staleness.
+    /// `Ok(None)` — never an error — whenever the spec doesn't resolve to a
+    /// blob: the path doesn't exist at `branch` (an accepted deletion
+    /// records its absence, not a SHA — the caller's job, not this
+    /// method's, to decide what that *means*), or `branch` itself doesn't
+    /// resolve (a deleted/renamed branch degrades the same way, matching
+    /// this module's "expected, not an error" treatment for `rev_exists`/
+    /// [`GitRunner::last_commit`]). `-q` suppresses git's `fatal:` stderr
+    /// noise for the ordinary "doesn't resolve" case, mirroring
+    /// [`GitRunner::rev_exists`]'s `--verify` precedent. A genuine failure
+    /// to run `git` at all (not found, spawn error, non-UTF8 output) still
+    /// surfaces as `Err`.
+    pub fn blob_sha(&self, branch: &str, path: &str) -> Result<Option<String>, GitError> {
+        let spec = format!("{branch}:{path}");
+        let args = ["rev-parse", "--verify", "-q", spec.as_str()];
+        let output = Command::new("git")
+            .current_dir(&self.root)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(map_spawn_err)?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let out = String::from_utf8(output.stdout).map_err(GitError::Utf8)?;
+        Ok(Some(out.trim().to_string()))
     }
 }

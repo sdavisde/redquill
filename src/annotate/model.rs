@@ -1,7 +1,17 @@
 //! The annotation data model: what an annotation is attached to
 //! ([`Target`]), how it's classified ([`Classification`]), and the
 //! annotation record itself ([`Annotation`]).
+//!
+//! [`Classification`], [`Side`], [`Source`], and [`Target`] additionally
+//! derive `Serialize`/`Deserialize` (spec 08 Unit 6) so
+//! [`super::persist::PersistedAnnotation`] can compose them directly rather
+//! than defining a shadow copy of each shape that could drift from the
+//! domain type it mirrors. `Annotation` itself does not derive them — its
+//! `id` is a store-assigned ordinal (see [`super::store::AnnotationStore`]),
+//! not persistable data; [`super::persist::PersistedAnnotation`] carries
+//! everything else.
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Errors produced while constructing or mutating annotation data.
@@ -28,7 +38,8 @@ pub enum AnnotateError {
 }
 
 /// The reviewer's classification of an annotation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Classification {
     /// Something that must change before this is acceptable.
     Issue,
@@ -76,7 +87,8 @@ impl Classification {
 }
 
 /// Which side of the diff a line-anchored annotation refers to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Side {
     /// The old (removed, `-`) side of the diff.
     Old,
@@ -98,7 +110,8 @@ pub enum Side {
 /// already-resolved display string for the non-worktree variants. The `ui`
 /// layer (which already depends on both `git` and `annotate`) is responsible
 /// for deriving a `Source` from the live `DiffTarget` at annotation time.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Source {
     /// The working tree vs. the index — the default, and the only source
     /// that produces no `Reviewing:` metadata line.
@@ -129,7 +142,8 @@ impl Source {
 }
 
 /// What an [`Annotation`] is attached to.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Target {
     /// A single line in a file.
     Line {

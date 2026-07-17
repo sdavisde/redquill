@@ -7,9 +7,10 @@
 //! through, so their signatures are unchanged.
 
 use crate::annotate::Side;
+use crate::review::ReviewStatus;
 
 use super::App;
-use super::rows::{StagedMarker, SyntaxSpans, build_multibuffer};
+use super::rows::{ReviewMarker, StagedMarker, SyntaxSpans, build_multibuffer};
 use super::stage_ops::StagedState;
 use super::syntax;
 
@@ -107,6 +108,20 @@ impl App {
                 },
             )
             .collect();
+        // `review_states` is only ever non-empty during a review session
+        // (see its doc on `App`), so this is `ReviewMarker::None` for every
+        // file outside one — no `in_review_session()` check needed here.
+        let review_markers: Vec<ReviewMarker> = self
+            .view
+            .files
+            .iter()
+            .map(|f| match self.review_status(&f.path) {
+                ReviewStatus::Unreviewed => ReviewMarker::None,
+                ReviewStatus::Accepted => ReviewMarker::Accepted,
+                ReviewStatus::Deferred => ReviewMarker::Deferred,
+                ReviewStatus::ChangedSinceAccepted => ReviewMarker::Changed,
+            })
+            .collect();
         let syntax: Vec<SyntaxSpans> = self
             .view
             .files
@@ -121,6 +136,7 @@ impl App {
             &self.view.files,
             &collapsed,
             &markers,
+            &review_markers,
             &self.annotations,
             &syntax,
         );

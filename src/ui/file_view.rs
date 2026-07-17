@@ -362,6 +362,7 @@ mod tests {
                 viewing_commit: false,
                 help_open: false,
                 project_search_focus: app.project_search_focus(),
+                review_session: app.in_review_session(),
             },
             None,
             &keymap,
@@ -376,7 +377,8 @@ mod tests {
             assert!(help::binding_hidden(
                 action,
                 staging_allowed,
-                code_intel_allowed
+                code_intel_allowed,
+                false
             ));
         }
         for action in [
@@ -387,7 +389,8 @@ mod tests {
             assert!(help::binding_hidden(
                 action,
                 staging_allowed,
-                code_intel_allowed
+                code_intel_allowed,
+                false
             ));
         }
     }

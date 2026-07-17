@@ -80,6 +80,36 @@ pub enum StagedMarker {
     Partial,
 }
 
+/// A file section's review-status marker (spec 08 Unit 3), shown in its
+/// section header alongside (never instead of) [`StagedMarker`]. `None`
+/// covers both "not a review session" and `ReviewStatus::Unreviewed` — a
+/// review session's [`StagedMarker`] is always [`StagedMarker::None`]
+/// ([`crate::git::DiffTarget::Review`]'s staging mode is read-only), so the
+/// two marker slots never compete for the same file.
+///
+/// `Accepted` renders as the *same* green `●` [`StagedMarker::Staged`] uses
+/// (deliberate exception, user decision 2026-07-16 — see
+/// `super::theme::Theme::staged_indicator`'s doc): since staging markers
+/// never render inside a review session, reusing that exact glyph/color is
+/// unambiguous in context and makes "accepted" as instantly legible as
+/// "staged" is in local mode — an accepted-and-collapsed file must read
+/// clearly differently from a merely-collapsed one. `Deferred`/`Changed`
+/// stay visually distinct from staging's `±`/`●` per the spec.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReviewMarker {
+    /// No review marker for this file.
+    #[default]
+    None,
+    /// The file has been accepted — renders as the staged-file `●`, reusing
+    /// [`super::theme::Theme::staged_indicator`].
+    Accepted,
+    /// The file has been deferred (`~`).
+    Deferred,
+    /// The file was accepted in a previous review session but its content
+    /// has since changed (`!`) — spec 08 Unit 4 reconciliation.
+    Changed,
+}
+
 /// The concatenated multi-file row buffer: every file's rows in display
 /// order, plus two index maps giving each row its owning file and each file
 /// its section-header row. A collapsed file contributes exactly its
@@ -157,6 +187,9 @@ pub enum Row {
         file_index: usize,
         /// The file's staged-state marker.
         staged_marker: StagedMarker,
+        /// The file's review-status marker (spec 08 Unit 3), `None` outside
+        /// a review session.
+        review_marker: ReviewMarker,
         /// Whether this section is collapsed (header-only).
         collapsed: bool,
     },
@@ -340,6 +373,7 @@ pub fn build_rows(file: &FileDiff, annotations: &AnnotationStore, syntax: Syntax
         file,
         0,
         StagedMarker::None,
+        ReviewMarker::None,
         false,
         annotations,
         syntax,
@@ -351,14 +385,15 @@ pub fn build_rows(file: &FileDiff, annotations: &AnnotationStore, syntax: Syntax
 /// header followed by (unless collapsed) its full row model, with per-row
 /// file identity and per-file header-row indices recorded, plus one gutter
 /// digit width (see [`gutter_width`]) shared by the whole buffer. The
-/// `collapsed`/`staged_markers`/`syntax` slices are index-aligned with
-/// `files`; collapsed files contribute exactly their header row, and
-/// synthetic untracked files (built via [`FileDiff::synthetic_added`]) enter
-/// as ordinary sections.
+/// `collapsed`/`staged_markers`/`review_markers`/`syntax` slices are
+/// index-aligned with `files`; collapsed files contribute exactly their
+/// header row, and synthetic untracked files (built via
+/// [`FileDiff::synthetic_added`]) enter as ordinary sections.
 pub fn build_multibuffer(
     files: &[FileDiff],
     collapsed: &[bool],
     staged_markers: &[StagedMarker],
+    review_markers: &[ReviewMarker],
     annotations: &AnnotationStore,
     syntax: &[SyntaxSpans],
 ) -> MultibufferRows {
@@ -373,6 +408,7 @@ pub fn build_multibuffer(
             file,
             i,
             staged_markers.get(i).copied().unwrap_or_default(),
+            review_markers.get(i).copied().unwrap_or_default(),
             collapsed.get(i).copied().unwrap_or(false),
             annotations,
             syntax.get(i).copied().unwrap_or_default(),
@@ -400,6 +436,7 @@ fn append_file_rows(
     file: &FileDiff,
     file_index: usize,
     staged_marker: StagedMarker,
+    review_marker: ReviewMarker,
     collapsed: bool,
     annotations: &AnnotationStore,
     syntax: SyntaxSpans,
@@ -418,6 +455,7 @@ fn append_file_rows(
         annotated: !file_targeted.is_empty(),
         file_index,
         staged_marker,
+        review_marker,
         collapsed,
     });
     if collapsed {
@@ -612,6 +650,7 @@ index 1..2 100644
                 annotated: false,
                 file_index: 0,
                 staged_marker: StagedMarker::None,
+                review_marker: ReviewMarker::None,
                 collapsed: false,
             }
         );
@@ -1247,8 +1286,16 @@ index 1..2 100644
     fn two_file_buffer(files: &[FileDiff]) -> MultibufferRows {
         let collapsed = vec![false; files.len()];
         let markers = vec![StagedMarker::None; files.len()];
+        let review_markers = vec![ReviewMarker::None; files.len()];
         let syntax = vec![SyntaxSpans::default(); files.len()];
-        build_multibuffer(files, &collapsed, &markers, &no_notes(), &syntax)
+        build_multibuffer(
+            files,
+            &collapsed,
+            &markers,
+            &review_markers,
+            &no_notes(),
+            &syntax,
+        )
     }
 
     #[test]
@@ -1298,8 +1345,16 @@ index 1..2 100644
         ];
         let collapsed = vec![true, false];
         let markers = vec![StagedMarker::None; 2];
+        let review_markers = vec![ReviewMarker::None; 2];
         let syntax = vec![SyntaxSpans::default(); 2];
-        let mb = build_multibuffer(&files, &collapsed, &markers, &no_notes(), &syntax);
+        let mb = build_multibuffer(
+            &files,
+            &collapsed,
+            &markers,
+            &review_markers,
+            &no_notes(),
+            &syntax,
+        );
         // a.rs collapsed -> 1 row; b.rs expanded -> 4 rows.
         assert_eq!(mb.rows.len(), 5);
         assert_eq!(mb.header_row_of_file, vec![0, 1]);
@@ -1315,12 +1370,41 @@ index 1..2 100644
         let files = vec![file_diff(&multi_raw("a.rs"), "a.rs", false)];
         let collapsed = vec![false];
         let markers = vec![StagedMarker::Staged];
+        let review_markers = vec![ReviewMarker::None];
         let syntax = vec![SyntaxSpans::default()];
-        let mb = build_multibuffer(&files, &collapsed, &markers, &no_notes(), &syntax);
+        let mb = build_multibuffer(
+            &files,
+            &collapsed,
+            &markers,
+            &review_markers,
+            &no_notes(),
+            &syntax,
+        );
         let Row::FileHeader { staged_marker, .. } = &mb.rows[0] else {
             panic!("expected file header");
         };
         assert_eq!(*staged_marker, StagedMarker::Staged);
+    }
+
+    #[test]
+    fn multibuffer_header_carries_review_marker() {
+        let files = vec![file_diff(&multi_raw("a.rs"), "a.rs", false)];
+        let collapsed = vec![false];
+        let markers = vec![StagedMarker::None];
+        let review_markers = vec![ReviewMarker::Accepted];
+        let syntax = vec![SyntaxSpans::default()];
+        let mb = build_multibuffer(
+            &files,
+            &collapsed,
+            &markers,
+            &review_markers,
+            &no_notes(),
+            &syntax,
+        );
+        let Row::FileHeader { review_marker, .. } = &mb.rows[0] else {
+            panic!("expected file header");
+        };
+        assert_eq!(*review_marker, ReviewMarker::Accepted);
     }
 
     #[test]
@@ -1332,8 +1416,16 @@ index 1..2 100644
             .unwrap();
         let collapsed = vec![false];
         let markers = vec![StagedMarker::None];
+        let review_markers = vec![ReviewMarker::None];
         let syntax = vec![SyntaxSpans::default()];
-        let mb = build_multibuffer(&files, &collapsed, &markers, &store, &syntax);
+        let mb = build_multibuffer(
+            &files,
+            &collapsed,
+            &markers,
+            &review_markers,
+            &store,
+            &syntax,
+        );
         // FileHeader(0) AnnotationBorder top(1) Annotation(2)
         // AnnotationBorder bottom(3) HunkHeader(4) ...
         assert!(mb.rows[0].is_addressable()); // header
@@ -1397,8 +1489,16 @@ index 1..2 100644
             .unwrap();
         let collapsed = vec![false; files.len()];
         let markers = vec![StagedMarker::None; files.len()];
+        let review_markers = vec![ReviewMarker::None; files.len()];
         let syntax = vec![SyntaxSpans::default(); files.len()];
-        let mb = build_multibuffer(&files, &collapsed, &markers, &store, &syntax);
+        let mb = build_multibuffer(
+            &files,
+            &collapsed,
+            &markers,
+            &review_markers,
+            &store,
+            &syntax,
+        );
 
         // The a.rs annotation splices inside a.rs's section span.
         let (a_start, a_end) = (mb.header_row_of_file[0], mb.header_row_of_file[1]);

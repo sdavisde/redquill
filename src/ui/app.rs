@@ -20,6 +20,7 @@ use crate::git::{
 };
 use crate::highlight::Highlighter;
 use crate::lsp::RequestId;
+use crate::review::ReviewStatus;
 
 use super::background::{BackgroundTasks, CommandOutcome, TaskId, run_command};
 use super::command_log::{CommandLog, CommandLogEntry};
@@ -34,6 +35,7 @@ use super::lsp_ops::LspClient;
 use super::peek::{PeekKind, PeekState};
 use super::project_search::ProjectSearchState;
 use super::refresh::InFlightRefresh;
+use super::review_branch::ReviewBranchState;
 use super::rows::Row;
 use super::search::SearchState;
 use super::stage_ops::{ReviewSnapshot, StageOps, StagedFile, StagedState};
@@ -89,6 +91,15 @@ pub enum Mode {
     Peek,
     /// The branch/worktree switcher modal (`b`, panel scope) is open.
     Switcher,
+    /// The review-branch modal (`R`, panel scope, spec 08 Unit 1's in-app
+    /// entry path / Unit 5) is open: lists local branches (excluding the one
+    /// currently checked out) so the user can start a review session in
+    /// place, styled and behaved like [`Mode::Switcher`]'s Branches tab (see
+    /// [`super::review_branch::ReviewBranchState`]). Its own mode rather
+    /// than a third switcher tab, since confirming here resolves a base ref
+    /// and ensures a managed worktree exists (spec 08 Unit 1) instead of
+    /// switching onto an already-checked-out ref.
+    ReviewBranch,
     /// The commit-message modal (`c`, panel scope, spec 04) is open.
     CommitMessage,
     /// The fuzzy file finder overlay (`gp`, spec 06 Unit 1) is open. The
@@ -107,6 +118,53 @@ pub enum Mode {
     /// query/toggles/results/selection survive the round trip (see
     /// [`App::file_view_return_mode`]).
     ProjectSearch,
+    /// The end-review modal (`q` in a review session, spec 08 Unit 2) is
+    /// open: pause / finish / cancel. `origin` is where `q` was pressed
+    /// from — `Cancel` restores it exactly. This is the state-design
+    /// exception documented on [`EndReviewOrigin`]: it would ordinarily be a
+    /// struct field ("must survive mode exit"), but since it only matters
+    /// for *this* mode's lifetime, carrying it as the variant's own payload
+    /// keeps it from going stale as a field while every other mode is
+    /// active. `cursor` is the `j`/`k`-highlighted option (0 = Pause, 1 =
+    /// Finish, 2 = Cancel — the modal's display order), reset to `0` on
+    /// open (spec 08 Unit 2 dogfood polish pass: lazygit-style menu
+    /// selection alongside the pre-existing `p`/`f`/`c` mnemonics, which
+    /// dispatch immediately regardless of `cursor`).
+    EndReview {
+        origin: EndReviewOrigin,
+        cursor: usize,
+    },
+    /// The pull/push confirm modal (`p`/`P` in a review session, spec 08
+    /// Unit 5) is open: confirming this specific remote-writing op against
+    /// the branch under review is the confirm-first guard `p`/`P` gain
+    /// during a review (`f` fetch stays unprompted — see
+    /// [`super::modes::handle_panel_key`]). Only ever opened from the
+    /// focused git panel (`p`/`P` are panel-scope bindings — see
+    /// [`RemoteOp`]'s import), so `cursor`/`tab` are exactly what `Esc` or a
+    /// confirmed op restores [`Mode::Panel`] to; `op` is the operation a
+    /// confirm actually runs — resolved once at open time (mirroring
+    /// [`App::remote_push_op`]'s own resolution point), not re-derived at
+    /// confirm time, so the modal's own question text and the op it runs
+    /// can never disagree.
+    ConfirmRemoteOp {
+        op: RemoteOp,
+        cursor: usize,
+        tab: PanelTab,
+    },
+}
+
+/// Where `q` was pressed from, carried by [`Mode::EndReview`] so its Cancel
+/// gesture can restore the exact prior mode. A dedicated small enum rather
+/// than `Box<Mode>` recursion: [`Mode`] derives `Copy` (every call site that
+/// matches `app.mode` by value depends on that), and a `Box` field would
+/// remove it crate-wide. `q` is only ever intercepted from these three
+/// contexts (see [`super::quit_action`]/[`super::modes::handle_panel_key`]),
+/// so this closed enum covers every case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndReviewOrigin {
+    Normal,
+    Visual { anchor: usize },
+    Panel { cursor: usize, tab: PanelTab },
 }
 
 /// The TUI's full state: the per-view diff state (files, selection, rows,
@@ -159,7 +217,17 @@ pub struct App {
     /// The diff target being reviewed; decides whether `space` stages
     /// (working tree), unstages (staged), or is read-only (range).
     pub target: DiffTarget,
-    /// Files with staged changes, per the latest `git status` refresh.
+    /// Files with staged changes, per the latest `git status` refresh —
+    /// the local staging panel's list. During a review session (spec 08
+    /// Unit 5) this field is dual-purposed for the **accepted-files panel**
+    /// instead: `App::refresh_accepted_list` (see `super::review_ops`)
+    /// repopulates it from `review_states` (accepted files only, diff
+    /// order) whenever [`Mode::Staging`] opens, and `staging_cursor` indexes
+    /// it the same way either way. Safe to share because the two panels are
+    /// mutually exclusive by session — a plain local session never touches
+    /// `review_states`, and a review session's `git status` is always clean
+    /// (review targets are read-only for staging), so nothing here ever
+    /// needs to hold both meanings at once.
     pub staged: Vec<StagedFile>,
     /// Current branch / upstream / ahead-behind state, read at startup and
     /// on every [`App::refresh`]. `None` in git-less contexts, or until the
@@ -180,6 +248,16 @@ pub struct App {
     /// panel markers, refreshed alongside `staged`. Missing entries are
     /// [`StagedState::Unstaged`].
     pub staged_states: HashMap<String, StagedState>,
+    /// Per-path [`ReviewStatus`] driving the accept/defer markers and the
+    /// review banner's progress count (spec 08 Unit 3, see
+    /// [`super::review_ops`]), mirroring how `staged_states` drives the
+    /// `●`/`±` markers. Missing entries are [`ReviewStatus::Unreviewed`].
+    /// Only ever grows outside its default empty state during a review
+    /// session — `Space`/`S`/`d` only ever produce a review-status change
+    /// while [`App::in_review_session`] holds (see `super::review_ops`'s
+    /// self-guards), so a plain working-tree/staged/range session leaves
+    /// this permanently empty.
+    pub review_states: HashMap<String, ReviewStatus>,
     /// The focused row index into `staged` in the staging panel.
     pub staging_cursor: usize,
     /// A transient one-line message for the status footer (errors, no-op
@@ -246,6 +324,14 @@ pub struct App {
     /// [`Mode::Switcher`] is active (see [`App::open_switcher`] /
     /// [`App::close_switcher`]).
     pub switcher: Option<SwitcherState>,
+    /// The review-branch modal's state (spec 08 Unit 5), `Some` only while
+    /// [`Mode::ReviewBranch`] is active (see
+    /// [`super::review_branch::App::open_review_branch_modal`] /
+    /// [`super::review_branch::App::close_review_branch_modal`]). Named
+    /// distinctly from [`App::review_branch`] (the *existing* method naming
+    /// the branch under review) so the field and the predicate can never be
+    /// confused at a call site.
+    pub review_branch_modal: Option<ReviewBranchState>,
     /// The LSP client backing `gd`/`gr`/`K`, created lazily on first use
     /// against `repo_root`. `None` until then. `pub(super)` for the
     /// code-intelligence module.
@@ -365,6 +451,74 @@ pub struct App {
     /// — kept alive (and untouched) while a hit's file view is showing on
     /// top, so `Esc` from that file view resumes with everything intact.
     pub(super) project_search: Option<ProjectSearchState>,
+    /// A git backend rooted *outside* the managed review worktree, used only
+    /// for `git worktree remove`/`prune` at finish time (spec 08 Unit 2).
+    /// `stage_ops` is rooted *inside* the worktree for a review session (so
+    /// diff/LSP/staging-panel reads are truthful against it) — but git may
+    /// refuse to remove a worktree the calling process/runner sits in, so
+    /// finish must run through a separate handle rooted at the original
+    /// repository instead. `None` outside a review session, or in
+    /// git-less/test contexts that never call finish.
+    pub(super) review_origin_ops: Option<Box<dyn StageOps>>,
+    /// The path `<git-common-dir>/redquill/review-state.json` resolves to
+    /// for this session (spec 08 Unit 4), set once at startup by
+    /// [`App::set_review_state_path`]. `None` outside a review session (or
+    /// in git-less/test contexts), in which case every persistence gesture
+    /// degrades to a no-op — see [`App::persist_review_state`].
+    pub(super) review_state_path: Option<PathBuf>,
+    /// The blob SHA (`git rev-parse <branch>:<path>`) each currently
+    /// `Accepted`/`ChangedSinceAccepted` path in `review_states` was
+    /// accepted at, mirrored 1:1 alongside `review_states` so
+    /// [`App::persist_review_state`] can write it back out and
+    /// reconciliation on the *next* session can compare against it. Missing
+    /// entries mean "no blob to record" (an accepted deletion), not
+    /// "unknown" — the same optional-value convention
+    /// [`crate::review::store::PersistedFile::blob_sha`] itself uses.
+    /// Never holds an entry for a `Deferred`/`Unreviewed` path (see
+    /// [`super::review_ops::App::set_review_status`]'s cleanup).
+    pub(super) review_blob_shas: HashMap<String, Option<String>>,
+    /// The background-task poller [`App::persist_review_state`] spawns each
+    /// save on (spec 08 Unit 4's "off the render loop" requirement — the
+    /// same non-blocking pattern [`App::request_remote_op`] uses for remote
+    /// ops, generalized here to a plain disk write via
+    /// [`crate::review::store::save_review`]). Drained once per tick by
+    /// [`App::poll_review_save`]; a failed save surfaces as a status
+    /// message rather than blocking or losing the in-memory state — the
+    /// next status change retries with fresh data regardless.
+    pub(super) review_save_tasks: BackgroundTasks<Result<(), String>>,
+    /// The count of review-state saves spawned but not yet drained by
+    /// [`App::poll_review_save`] — incremented on every actual spawn (i.e.
+    /// on [`App::review_save_in_flight`] transitioning false→true),
+    /// decremented as each result drains; exists so a "did every in-flight
+    /// save land" check has somewhere to read, both for a future
+    /// quit-safety wait and for tests that need to await a save
+    /// deterministically rather than sleeping a fixed guess.
+    pub(super) review_saves_pending: u32,
+    /// Single-flight guard for review-state saves (spec 08 Unit 6/task 7.2
+    /// hardening): whether a [`App::review_save_tasks`] write is currently
+    /// running. `App::persist_review_state` used to spawn a new background
+    /// writer unconditionally on every call, reasoning that each save is an
+    /// idempotent full overwrite so a race couldn't lose data — that
+    /// reasoning missed that two *out-of-order-completing* writers each
+    /// racing a `save_review` read-modify-write on the same file can still
+    /// land the *older* snapshot last, silently reverting the newer one
+    /// (observed directly: `review_persistence_integration_tests.rs`'s
+    /// rapid accept/accept/defer sequence intermittently lost the defer).
+    /// This flag turns every burst of rapid gestures (or annotation
+    /// add/edit/delete now that Unit 6 wires those into the same path too)
+    /// into at most one in-flight write plus one coalesced follow-up (see
+    /// [`App::review_save_dirty`]), which is both correct (writes always
+    /// land in submission order) and cheaper (a burst of five gestures
+    /// before the first save lands does one write, not five).
+    pub(super) review_save_in_flight: bool,
+    /// Set by `App::persist_review_state` when it's asked to save again
+    /// while [`App::review_save_in_flight`] is already true; cleared by
+    /// [`App::poll_review_save`], which immediately spawns exactly one more
+    /// save (capturing whatever `review_states`/`review_blob_shas`/
+    /// `annotations` look like *at drain time*, i.e. already reflecting
+    /// every gesture made during the in-flight save) whenever it drains a
+    /// result and finds this set.
+    pub(super) review_save_dirty: bool,
 }
 
 /// The prior view state suspended while a commit view (opened from the git
@@ -456,6 +610,7 @@ impl App {
             last_commit: None,
             untracked_paths: Vec::new(),
             staged_states: HashMap::new(),
+            review_states: HashMap::new(),
             staging_cursor: 0,
             status_message: None,
             config: Config::default(),
@@ -472,6 +627,7 @@ impl App {
             repo_root: None,
             peek: None,
             switcher: None,
+            review_branch_modal: None,
             lsp: None,
             pending_lsp: None,
             background: BackgroundTasks::new(),
@@ -496,6 +652,13 @@ impl App {
             suspended_file_view: None,
             file_view_return_mode: Mode::Normal,
             project_search: None,
+            review_origin_ops: None,
+            review_state_path: None,
+            review_blob_shas: HashMap::new(),
+            review_save_tasks: BackgroundTasks::new(),
+            review_saves_pending: 0,
+            review_save_in_flight: false,
+            review_save_dirty: false,
         };
         app.rebuild_rows();
         app
@@ -574,6 +737,117 @@ impl App {
     /// `[editor]` config, then `$VISUAL`, then `$EDITOR`, then `"nvim"`).
     pub fn set_editor(&mut self, editor: EditorLaunch) {
         self.editor = editor;
+    }
+
+    /// Whether the active diff target is a branch review session (spec 08
+    /// Unit 2): gates the banner, `q`'s end-review-modal behavior, and (spec
+    /// 08 Unit 3) the accept/defer keys. One named predicate so "is this a
+    /// review?" can't be answered inconsistently across call sites.
+    pub(super) fn in_review_session(&self) -> bool {
+        matches!(self.target, DiffTarget::Review { .. })
+    }
+
+    /// The branch under review, when [`App::in_review_session`] is true.
+    pub(super) fn review_branch(&self) -> Option<&str> {
+        match &self.target {
+            DiffTarget::Review { branch, .. } => Some(branch.as_str()),
+            _ => None,
+        }
+    }
+
+    /// The review banner's `(accepted, total)` progress count (spec 08 Unit
+    /// 3): `accepted` counts files whose [`App::review_status`] is
+    /// [`ReviewStatus::Accepted`]; `total` is the file count. `review_states`
+    /// is only ever non-empty during a review session (see its doc), so this
+    /// is naturally `(0, len)` everywhere else.
+    pub(super) fn review_progress(&self) -> (usize, usize) {
+        let accepted = self
+            .view
+            .files
+            .iter()
+            .filter(|f| self.review_status(&f.path) == ReviewStatus::Accepted)
+            .count();
+        (accepted, self.view.files.len())
+    }
+
+    /// Attaches the origin-rooted backend [`App::finish_review`] runs
+    /// `worktree_remove`/`worktree_prune` through (see
+    /// [`App::review_origin_ops`]'s doc for why it must be a separate handle
+    /// from `stage_ops`). Only meaningful for a review session; callers
+    /// outside one simply never call `finish_review`.
+    pub fn set_review_origin_ops(&mut self, ops: Box<dyn StageOps>) {
+        self.review_origin_ops = Some(ops);
+    }
+
+    /// Sets the path this session persists review progress to (spec 08
+    /// Unit 4, `<git-common-dir>/redquill/review-state.json`), resolved once
+    /// by `main`'s review-session bootstrap before the first render. Every
+    /// persistence gesture ([`App::persist_review_state`]) is a no-op
+    /// without this — outside a review session, or in a git-less/test
+    /// context, nothing is ever written.
+    pub fn set_review_state_path(&mut self, path: PathBuf) {
+        self.review_state_path = Some(path);
+    }
+
+    /// Seeds `review_states`/`review_blob_shas` from a freshly loaded and
+    /// reconciled persisted review (spec 08 Unit 4), applying the matching
+    /// initial collapse state the same way [`App::with_git`] seeds it for
+    /// staged files: `Accepted`/`Deferred` start collapsed (nothing new to
+    /// review there yet); `ChangedSinceAccepted` starts **expanded** — the
+    /// spec's explicit "visibly marked, not collapsed" requirement, since
+    /// the whole point is drawing the reviewer's eye back to what changed;
+    /// `Unreviewed` (no entry) is unaffected, matching every other file's
+    /// default expanded state. Called once at session start, before the
+    /// first render, by `main`'s review-session bootstrap; meaningless (and
+    /// never called) for any other target.
+    pub fn set_review_states(
+        &mut self,
+        states: HashMap<String, ReviewStatus>,
+        blob_shas: HashMap<String, Option<String>>,
+    ) {
+        for (path, status) in &states {
+            let collapse = matches!(status, ReviewStatus::Accepted | ReviewStatus::Deferred);
+            self.view.set_collapsed(path, collapse);
+        }
+        self.review_states = states;
+        self.review_blob_shas = blob_shas;
+        self.rebuild_rows();
+    }
+
+    /// Drains completed background review-state saves (spec 08 Unit 4, once
+    /// per event-loop tick alongside [`App::poll_git_ops`]). A failed save —
+    /// a disk error, or the background task panicking — surfaces as a
+    /// status message; the in-memory `review_states`/`review_blob_shas`/
+    /// `annotations` are never rolled back on a failed save, so the very
+    /// next status change's save simply retries with current data.
+    ///
+    /// Clears [`App::review_save_in_flight`] on every drain and, if
+    /// [`App::review_save_dirty`] was set while that save was running,
+    /// immediately spawns exactly one follow-up via
+    /// [`App::persist_review_state`] — the single-flight-plus-coalesce
+    /// pattern that field's doc explains. At most one task is ever in
+    /// flight under this invariant, so this loop drains at most one review
+    /// save per tick in practice; it still loops (rather than assuming
+    /// exactly one) purely to stay correct if that invariant is ever
+    /// relaxed, mirroring every other poller in this module.
+    pub(super) fn poll_review_save(&mut self) {
+        for (_, result) in self.review_save_tasks.poll() {
+            self.review_saves_pending = self.review_saves_pending.saturating_sub(1);
+            self.review_save_in_flight = false;
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    self.set_status_message(format!("review state save failed: {e}"));
+                }
+                Err(panic) => {
+                    self.set_status_message(format!("review state save failed: {}", panic.message));
+                }
+            }
+        }
+        if !self.review_save_in_flight && self.review_save_dirty {
+            self.review_save_dirty = false;
+            self.persist_review_state();
+        }
     }
 
     /// Sets the loaded config and any warnings collected while loading it
@@ -748,11 +1022,15 @@ impl App {
             Action::RemotePush => self.request_remote_op(self.remote_push_op()),
             Action::CommitStaged => self.open_commit_message(),
             Action::OpenSwitcher => self.open_switcher(),
+            Action::OpenReviewBranch => self.open_review_branch_modal(),
             Action::OpenFileFinder => self.open_finder(),
             Action::OpenProjectSearch => self.open_project_search(),
             Action::ToggleCommandLog => self.toggle_command_log(),
             Action::Refresh => self.manual_refresh(),
             Action::DismissConfigWarning => self.dismiss_config_warning(),
+            Action::ToggleAccept => self.toggle_accept_file(),
+            Action::AcceptFile => self.accept_file(),
+            Action::ToggleDefer => self.toggle_defer_file(),
             // `Quit`/`QuitDiscard` end the session; `OpenEditor` suspends the
             // TUI to spawn the configured editor. Both are intercepted by
             // `super::dispatch_key` before reaching here (see `Action::Quit`'s
@@ -956,6 +1234,11 @@ impl App {
         }
         self.mode = Mode::Normal;
         self.refresh_rows();
+        // Save-on-change (spec 08 Unit 6, task 7.2): a no-op outside a
+        // review session (no `review_state_path` set) — see
+        // `review_ops`'s module doc for why this is safe to call
+        // unconditionally.
+        self.persist_review_state();
     }
 
     /// Derives the [`Source`] to record for an annotation composed against
@@ -994,6 +1277,15 @@ impl App {
             // working-tree diff annotations — see the `markdown` module
             // doc's "`(=)` marker" section.
             DiffTarget::File(_) => Source::WorkingTree,
+            // No dedicated `Source` variant: a review's three-dot range is
+            // exactly the shape `Source::Range` already models (an
+            // explicit ref expression), so this produces the same
+            // `Reviewing: base...branch` metadata line the `Range` source
+            // would for that literal range string — zero changes to the
+            // stdout annotation format itself (spec 08 Unit 2 wires the
+            // rest of the review lifecycle on top of this unchanged
+            // grouping).
+            DiffTarget::Review { base, branch } => Source::Range(format!("{base}...{branch}")),
         }
     }
 

@@ -140,6 +140,22 @@ pub(super) fn effective_modal_keys(
             modal_keys::project_search_results_action_from_name,
             &mut warnings,
         ),
+        // The end-review modal (spec 08 Unit 2) isn't `[keys.end-review]`
+        // remappable yet — it's absent from the cross-checked
+        // `MODAL_MODE_NAMES` lists — so it always takes its compiled-in
+        // defaults verbatim, with no override lookup. See
+        // `modal_keys::END_REVIEW_KEYS`'s doc for what wiring remapping later
+        // would entail.
+        end_review: modal_keys::END_REVIEW_KEYS.clone(),
+        // The accepted-files panel (spec 08 Unit 5) is the same
+        // no-remapping-yet shape as `end_review` above — see
+        // `modal_keys::ACCEPTED_PANEL_KEYS`'s doc.
+        accepted_panel: modal_keys::ACCEPTED_PANEL_KEYS.clone(),
+        // The pull/push confirm modal (spec 08 Unit 5) — same shape again.
+        confirm_remote_op: modal_keys::CONFIRM_REMOTE_OP_KEYS.clone(),
+        // The review-branch modal (spec 08 Unit 1 in-app path / Unit 5) —
+        // same shape again.
+        review_branch: modal_keys::REVIEW_BRANCH_KEYS.clone(),
     };
 
     // Every mode name the config actually provided a table for that isn't

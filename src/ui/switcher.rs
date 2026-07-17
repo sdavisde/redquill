@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use crate::git::{GitError, GitRunner, LocalBranch, WorktreeEntry};
+use crate::git::{DiffTarget, GitError, GitRunner, LocalBranch, WorktreeEntry};
 
 use super::app::{App, Mode};
 use super::command_log::CommandLogEntry;
@@ -292,8 +292,21 @@ impl App {
             return;
         }
         let path = wt.path.clone();
-        match GitRunner::discover_in(&path) {
-            Ok(runner) => self.reroot(runner),
+        let runner = match GitRunner::discover_in(&path) {
+            Ok(runner) => runner,
+            Err(e) => {
+                self.close_switcher();
+                self.set_status_message(format!("re-root failed: {e}"));
+                return;
+            }
+        };
+        let target = self.target.clone();
+        match self.reroot(runner, target) {
+            Ok(()) => {
+                self.close_switcher();
+                self.after_panel_coherence();
+                self.set_status_message("re-rooted (annotations kept)");
+            }
             Err(e) => {
                 self.close_switcher();
                 self.set_status_message(format!("re-root failed: {e}"));
@@ -301,11 +314,25 @@ impl App {
         }
     }
 
-    /// Re-roots the app onto `runner`'s repository: builds the new review
-    /// snapshot *before* touching any state (spec 03 Unit 3's build-first
-    /// requirement), so a failed rebuild leaves the current worktree's
-    /// session fully intact — only on success does the backend, repo root,
-    /// and LSP state actually swap.
+    /// Re-roots the app onto `runner`'s repository, reviewing `target`:
+    /// builds the new review snapshot *before* touching any state (spec 03
+    /// Unit 3's build-first requirement), so a failed rebuild leaves the
+    /// current session fully intact — only on success does the backend, repo
+    /// root, target, and LSP state actually swap. Returns `Err(message)` on a
+    /// failed rebuild and does nothing else — pulled out of this way
+    /// (originally hardcoded to reuse `self.target` unchanged, and to close
+    /// the switcher modal itself on both outcomes) so both
+    /// [`App::confirm_worktree_switch`] (spec 03, re-roots onto the *same*
+    /// target) and the review-branch modal's confirm gesture
+    /// ([`super::review_branch::App::confirm_review_branch`], spec 08 Unit
+    /// 5 task 5.2, re-roots onto a *new* [`DiffTarget::Review`] target) share
+    /// this one build-before-swap path rather than duplicating it — the
+    /// spec's explicit "one ensure-review-session code path" requirement,
+    /// generalized here to the pre-existing switcher rebuild too. Each caller
+    /// now owns its own post-outcome UI wiring (closing whatever modal was
+    /// open, the status message, `after_panel_coherence`), since the two
+    /// callers' success paths diverge (the review-branch modal additionally
+    /// attaches review-session state that has no switcher equivalent).
     ///
     /// Once the swap commits, bumps `refresh_generation` and clears
     /// `refresh_in_flight`: any working-tree poll still in flight against the
@@ -323,16 +350,9 @@ impl App {
     /// Annotations are untouched by this swap (spec 03 Unit 4): they're
     /// keyed by path/line, not by backend identity, so they keep applying to
     /// the newly-rooted review as-is.
-    fn reroot(&mut self, runner: GitRunner) {
+    pub(super) fn reroot(&mut self, runner: GitRunner, target: DiffTarget) -> Result<(), String> {
         let new_root = runner.root().to_path_buf();
-        let snapshot = match build_review(&runner, &self.target) {
-            Ok(snapshot) => snapshot,
-            Err(e) => {
-                self.close_switcher();
-                self.set_status_message(format!("re-root failed: {e}"));
-                return;
-            }
-        };
+        let snapshot = build_review(&runner, &target).map_err(|e| e.to_string())?;
 
         self.refresh_generation = self.refresh_generation.wrapping_add(1);
         self.refresh_in_flight = None;
@@ -346,10 +366,9 @@ impl App {
 
         self.repo_root = Some(new_root);
         self.stage_ops = Some(Box::new(runner));
+        self.target = target;
         self.apply_snapshot(snapshot);
-        self.close_switcher();
-        self.after_panel_coherence();
-        self.set_status_message("re-rooted (annotations kept)");
+        Ok(())
     }
 
     /// After a branch switch or worktree re-root closes the modal back to
@@ -358,7 +377,7 @@ impl App {
     /// it, so this keeps the diff pointed at whatever the panel cursor now
     /// rests on rather than a stale selection. A no-op when the panel isn't
     /// focused (e.g. the switcher was opened some other way in the future).
-    fn after_panel_coherence(&mut self) {
+    pub(super) fn after_panel_coherence(&mut self) {
         if matches!(self.mode, Mode::Panel { .. }) {
             self.panel_follow();
         }

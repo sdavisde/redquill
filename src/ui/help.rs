@@ -37,10 +37,11 @@ use super::theme::Theme;
 /// The help overlay's group sections, in render order. Every [`Action`]'s
 /// [`group_of`] must be one of these, or its binding would never render — the
 /// `help_overlay_covers_every_keymap_binding` test pins that invariant.
-const GROUP_ORDER: [&str; 8] = [
+const GROUP_ORDER: [&str; 9] = [
     "Navigation",
     "Annotate",
     "Stage",
+    "Review",
     "Search",
     "Panels",
     "Code intelligence",
@@ -58,12 +59,13 @@ fn group_of(action: Action) -> &'static str {
         | RecenterCursor | ScrollCursorTop | ScrollCursorBottom => "Navigation",
         EnterVisual | Compose => "Annotate",
         ToggleStage | StageFile | ToggleStagingPanel => "Stage",
+        ToggleAccept | AcceptFile | ToggleDefer => "Review",
         Search | SearchNext | SearchPrev | SearchWordForward | SearchWordBackward => "Search",
         ToggleList | ToggleHelp | FocusGitPanel | ToggleCommandLog | Refresh | OpenFileFinder
         | OpenProjectSearch | OpenEditor | DismissConfigWarning => "Panels",
         GotoDefinition | GotoReferences | Hover => "Code intelligence",
         PanelCursorDown | PanelCursorUp | PanelSelect | TogglePanelTab | RemoteFetch
-        | RemotePull | RemotePush | CommitStaged | OpenSwitcher => "Git panel",
+        | RemotePull | RemotePush | CommitStaged | OpenSwitcher | OpenReviewBranch => "Git panel",
         Quit | QuitDiscard => "Quit",
     }
 }
@@ -104,9 +106,10 @@ fn key_line(key: &str, description: &str, key_width: usize, theme: &Theme) -> Li
     ])
 }
 
-/// Whether `action` is a capability the current diff target can't perform,
-/// so it must be hidden from the help overlay (and, via the same predicate,
-/// the footer strip — see `super::footer`'s `keymap_hints`/`pending_hints`).
+/// Whether `action` is a capability the current diff target/session can't
+/// perform, so it must be hidden from the help overlay (and, via the same
+/// predicate, the footer strip — see `super::footer`'s
+/// `keymap_hints`/`pending_hints`).
 ///
 /// - On a read-only range target the file/hunk/line stage gestures are inert
 ///   no-ops (see [`super::app::App::stage_file`] / [`super::staging::toggle_stage`]),
@@ -117,16 +120,29 @@ fn key_line(key: &str, description: &str, key_width: usize, theme: &Theme) -> Li
 ///   are inert no-ops too (see [`super::code_intel::request`], gated on
 ///   [`crate::git::DiffTarget::supports_code_intel`]), so they're hidden the
 ///   same way.
+/// - Outside a review session, the accept/defer actions (spec 08 Unit 3) are
+///   hidden entirely — per the "inapplicable keys are omitted, not
+///   inert-but-listed" convention this repo follows for capability gating —
+///   and, since [`crate::git::DiffTarget::Review`]'s [`crate::git::StagingMode`]
+///   is always [`crate::git::StagingMode::ReadOnly`], `staging_allowed`
+///   already hides `ToggleStage`/`StageFile` during a review session, so the
+///   two families of rows never both show for the same key at once.
 pub(super) fn binding_hidden(
     action: Action,
     staging_allowed: bool,
     code_intel_allowed: bool,
+    review_session: bool,
 ) -> bool {
     (!staging_allowed && matches!(action, Action::ToggleStage | Action::StageFile))
         || (!code_intel_allowed
             && matches!(
                 action,
                 Action::GotoDefinition | Action::GotoReferences | Action::Hover
+            ))
+        || (!review_session
+            && matches!(
+                action,
+                Action::ToggleAccept | Action::AcceptFile | Action::ToggleDefer
             ))
 }
 
@@ -151,16 +167,39 @@ fn modal_hints<A: Clone>(table: &[ModalBinding<A>]) -> Vec<(String, &'static str
 /// input like Compose/Search) gets a section here for the same reason those
 /// do; `help` doesn't, since it's the enum-dispatch table for the overlay's
 /// own scroll/close keys, already documented on the footer.
-fn modal_sections(modal_keys: &ModalKeymaps) -> [(&'static str, Vec<(String, &'static str)>); 11] {
+///
+/// `review_session` swaps the "Staging panel" slot for the accepted-files
+/// panel's own table/title during a review session (spec 08 Unit 5) —
+/// `Mode::Staging` is one mode shared by both panels
+/// (`super::modes::handle_staging_key` dispatches to whichever table
+/// applies), so only one of the two ever documents itself here at a time,
+/// exactly like `Action::ToggleStage`/`Action::ToggleAccept`'s mutual
+/// exclusion in [`binding_hidden`].
+fn modal_sections(
+    modal_keys: &ModalKeymaps,
+    review_session: bool,
+) -> [(&'static str, Vec<(String, &'static str)>); 14] {
+    let staging_section = if review_session {
+        (
+            "Accepted files panel (s, review sessions)",
+            modal_hints(&modal_keys.accepted_panel),
+        )
+    } else {
+        ("Staging panel", modal_hints(&modal_keys.staging))
+    };
     [
         ("Compose mode", modal_hints(&modal_keys.compose)),
         ("List mode", modal_hints(&modal_keys.list)),
-        ("Staging panel", modal_hints(&modal_keys.staging)),
+        staging_section,
         ("Search input", modal_hints(&modal_keys.search)),
         ("Peek mode", modal_hints(&modal_keys.peek)),
         (
             "Branch/worktree switcher",
             modal_hints(&modal_keys.switcher),
+        ),
+        (
+            "Review branch (R, git panel)",
+            modal_hints(&modal_keys.review_branch),
         ),
         (
             "Commit message (c, git panel)",
@@ -175,6 +214,14 @@ fn modal_sections(modal_keys: &ModalKeymaps) -> [(&'static str, Vec<(String, &'s
         (
             "Project search — results focus",
             modal_hints(&modal_keys.project_search_results),
+        ),
+        (
+            "End review modal (q, review session)",
+            modal_hints(&modal_keys.end_review),
+        ),
+        (
+            "Pull/push confirm (p/P, review session)",
+            modal_hints(&modal_keys.confirm_remote_op),
         ),
     ]
 }
@@ -219,16 +266,19 @@ pub struct HelpTables<'a> {
 }
 
 /// Renders the help overlay, centered over `area`. Bindings from the
-/// [`Keymap`] table are grouped Navigation / Annotate / Panels / Quit, with
-/// Compose-mode and List-mode hints appended below (those modes bypass the
-/// table entirely, so they aren't in it). `staging_allowed` is `false` on a
-/// read-only range target, hiding the inert file/hunk staging gestures;
-/// `code_intel_allowed` is `false` whenever the target's new side isn't the
-/// live working tree, hiding the inert `gd`/`gr`/`K` gestures the same way
-/// (see [`binding_hidden`]).
+/// [`Keymap`] table are grouped Navigation / Annotate / Stage / Review /
+/// Panels / Quit, with Compose-mode and List-mode hints appended below
+/// (those modes bypass the table entirely, so they aren't in it).
+/// `staging_allowed` is `false` on a read-only range target, hiding the
+/// inert file/hunk staging gestures; `code_intel_allowed` is `false`
+/// whenever the target's new side isn't the live working tree, hiding the
+/// inert `gd`/`gr`/`K` gestures; `review_session` is `false` outside a
+/// review session, hiding the accept/defer gestures (spec 08 Unit 3) — see
+/// [`binding_hidden`] for how the three combine.
 ///
 /// The box caps its height to ~4/5 of `area` and scrolls the overflow; see
 /// [`HelpViewState`] for the scroll/filter fields `state` carries.
+#[allow(clippy::too_many_arguments)]
 pub fn render(
     frame: &mut Frame,
     area: Rect,
@@ -236,6 +286,7 @@ pub fn render(
     theme: &Theme,
     staging_allowed: bool,
     code_intel_allowed: bool,
+    review_session: bool,
     state: &HelpViewState,
 ) {
     let scroll = state.scroll;
@@ -244,7 +295,7 @@ pub fn render(
     let query = search.map_or("", |(q, _)| q);
     let editing = search.is_some_and(|(_, editing)| editing);
 
-    let sections = modal_sections(tables.modal_keys);
+    let sections = modal_sections(tables.modal_keys, review_session);
     let bindings = tables.keymap.bindings();
     // Column width is computed from the unfiltered rows, so it never jumps
     // around as the query narrows what's actually shown.
@@ -265,7 +316,14 @@ pub fn render(
         let group_bindings: Vec<&Binding> = bindings
             .iter()
             .filter(|b| b.scope == Scope::Diff && group_of(b.action) == group)
-            .filter(|b| !binding_hidden(b.action, staging_allowed, code_intel_allowed))
+            .filter(|b| {
+                !binding_hidden(
+                    b.action,
+                    staging_allowed,
+                    code_intel_allowed,
+                    review_session,
+                )
+            })
             .filter(|b| row_matches(&b.key_label(), b.description, query))
             .collect();
         if group_bindings.is_empty() {
@@ -493,11 +551,11 @@ mod tests {
             Action::Hover,
         ] {
             assert!(
-                binding_hidden(action, true, false),
+                binding_hidden(action, true, false, false),
                 "{action:?} must be hidden when code-intel is unsupported"
             );
             assert!(
-                !binding_hidden(action, true, true),
+                !binding_hidden(action, true, true, false),
                 "{action:?} must be shown when code-intel is supported"
             );
         }
@@ -506,14 +564,57 @@ mod tests {
     #[test]
     fn staging_actions_are_unaffected_by_code_intel_allowed() {
         for action in [Action::ToggleStage, Action::StageFile] {
-            assert!(binding_hidden(action, false, true));
-            assert!(!binding_hidden(action, true, true));
+            assert!(binding_hidden(action, false, true, false));
+            assert!(!binding_hidden(action, true, true, false));
         }
     }
 
     #[test]
     fn unrelated_actions_are_never_hidden_by_either_flag() {
-        assert!(!binding_hidden(Action::CursorDown, false, false));
-        assert!(!binding_hidden(Action::Quit, false, false));
+        assert!(!binding_hidden(Action::CursorDown, false, false, false));
+        assert!(!binding_hidden(Action::Quit, false, false, false));
+    }
+
+    // -- Capability gating: review-session actions (spec 08 Unit 3) ---------
+
+    #[test]
+    fn review_actions_hidden_only_outside_a_review_session() {
+        for action in [
+            Action::ToggleAccept,
+            Action::AcceptFile,
+            Action::ToggleDefer,
+        ] {
+            assert!(
+                binding_hidden(action, true, true, false),
+                "{action:?} must be hidden outside a review session"
+            );
+            assert!(
+                !binding_hidden(action, true, true, true),
+                "{action:?} must be shown during a review session"
+            );
+        }
+    }
+
+    #[test]
+    fn staging_actions_are_hidden_during_a_review_session() {
+        // A review target's `staging_mode()` is always `ReadOnly`, so
+        // `staging_allowed` is always `false` there — this pins that the two
+        // families of bindings (staging vs. review) never both show for the
+        // same physical key at once.
+        for action in [Action::ToggleStage, Action::StageFile] {
+            assert!(binding_hidden(action, false, true, true));
+        }
+    }
+
+    #[test]
+    fn review_actions_are_unaffected_by_code_intel_allowed() {
+        for action in [
+            Action::ToggleAccept,
+            Action::AcceptFile,
+            Action::ToggleDefer,
+        ] {
+            assert!(binding_hidden(action, true, false, false));
+            assert!(!binding_hidden(action, true, false, true));
+        }
     }
 }

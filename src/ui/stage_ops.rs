@@ -116,12 +116,47 @@ pub trait StageOps {
     fn worktree_list(&self) -> Result<Vec<WorktreeEntry>, GitError> {
         Err(GitError::Parse("worktree list unavailable".into()))
     }
+    /// Removes a managed review worktree (see [`GitRunner::worktree_remove`],
+    /// spec 08 Unit 2). Must be called through a backend rooted *outside*
+    /// the worktree being removed (see
+    /// [`super::app::App::review_origin_ops`]'s doc). The default errors,
+    /// mirroring [`StageOps::branch_list`].
+    fn worktree_remove(&self, path: &std::path::Path) -> Result<(), GitError> {
+        let _ = path;
+        Err(GitError::Parse("worktree remove unavailable".into()))
+    }
+    /// Prunes stale worktree administrative records (see
+    /// [`GitRunner::worktree_prune`], spec 08 Unit 2). The default errors,
+    /// mirroring [`StageOps::branch_list`].
+    fn worktree_prune(&self) -> Result<(), GitError> {
+        Err(GitError::Parse("worktree prune unavailable".into()))
+    }
     /// Switches the working tree to branch `name` (see
     /// [`GitRunner::switch_branch`]). The default errors, mirroring
     /// [`StageOps::branch_list`].
     fn switch_branch(&self, name: &str) -> Result<(), GitError> {
         let _ = name;
         Err(GitError::Parse("branch switch unavailable".into()))
+    }
+    /// The repository's common git directory (see
+    /// [`GitRunner::git_common_dir`], spec 08 Units 1/5) — the shared
+    /// administrative directory every linked worktree resolves review paths
+    /// through. The default errors, mirroring [`StageOps::branch_list`].
+    fn git_common_dir(&self) -> Result<std::path::PathBuf, GitError> {
+        Err(GitError::Parse("git common dir unavailable".into()))
+    }
+    /// Resolves `--review`'s default base ref (see [`GitRunner::default_base`],
+    /// spec 08 Units 1/5): the branch `origin/HEAD` points to, else `main`,
+    /// else `master`. The default errors, mirroring [`StageOps::branch_list`].
+    fn default_base(&self) -> Result<String, GitError> {
+        Err(GitError::Parse("default base unavailable".into()))
+    }
+    /// Creates a managed review worktree at `path`, checked out to `branch`
+    /// (see [`GitRunner::worktree_add`], spec 08 Units 1/5). The default
+    /// errors, mirroring [`StageOps::branch_list`].
+    fn worktree_add(&self, path: &std::path::Path, branch: &str) -> Result<(), GitError> {
+        let _ = (path, branch);
+        Err(GitError::Parse("worktree add unavailable".into()))
     }
     /// Builds the `git commit -m <message>` [`Command`] the commit gesture
     /// (spec 04) spawns on the background poller — returned as a `Command`
@@ -169,6 +204,16 @@ pub trait StageOps {
     fn async_file_candidates_fetcher(&self) -> Option<AsyncFileCandidatesFetcher> {
         None
     }
+    /// Reads `path`'s blob SHA on `branch` (see [`GitRunner::blob_sha`],
+    /// spec 08 Unit 4), for capturing at accept time and re-checking at
+    /// reconciliation time. The default errors, mirroring
+    /// [`StageOps::branch_list`], so backend-less or navigation-only fakes
+    /// need not implement it — accept/reconcile then degrade to recording no
+    /// blob SHA rather than crashing.
+    fn blob_sha(&self, branch: &str, path: &str) -> Result<Option<String>, GitError> {
+        let _ = (branch, path);
+        Err(GitError::Parse("blob sha unavailable".into()))
+    }
 }
 
 impl StageOps for GitRunner {
@@ -194,6 +239,10 @@ impl StageOps for GitRunner {
 
     fn unapply_cached(&self, patch: &str) -> Result<(), GitError> {
         GitRunner::unapply_cached(self, patch)
+    }
+
+    fn blob_sha(&self, branch: &str, path: &str) -> Result<Option<String>, GitError> {
+        GitRunner::blob_sha(self, branch, path)
     }
 
     fn read_worktree_file(&self, path: &str) -> Option<Vec<u8>> {
@@ -224,8 +273,28 @@ impl StageOps for GitRunner {
         GitRunner::worktree_list(self)
     }
 
+    fn worktree_remove(&self, path: &std::path::Path) -> Result<(), GitError> {
+        GitRunner::worktree_remove(self, path)
+    }
+
+    fn worktree_prune(&self) -> Result<(), GitError> {
+        GitRunner::worktree_prune(self)
+    }
+
     fn switch_branch(&self, name: &str) -> Result<(), GitError> {
         GitRunner::switch_branch(self, name)
+    }
+
+    fn git_common_dir(&self) -> Result<std::path::PathBuf, GitError> {
+        GitRunner::git_common_dir(self)
+    }
+
+    fn default_base(&self) -> Result<String, GitError> {
+        GitRunner::default_base(self)
+    }
+
+    fn worktree_add(&self, path: &std::path::Path, branch: &str) -> Result<(), GitError> {
+        GitRunner::worktree_add(self, path, branch)
     }
 
     fn commit_command(&self, message: &str) -> Option<Command> {
