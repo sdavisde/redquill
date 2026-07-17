@@ -11,7 +11,7 @@ fn env(xdg: Option<&Path>, home: Option<&Path>) -> PathEnv {
     }
 }
 
-// -- Path discovery (task 1.2) -----------------------------------------------
+// -- Path discovery -----------------------------------------------------------
 
 #[test]
 fn xdg_set_wins_over_home_fallback() {
@@ -36,10 +36,9 @@ fn missing_home_and_xdg_yields_no_path() {
 
 #[test]
 fn explicit_test_override_hook_is_just_a_pathenv_pointed_at_a_tempdir() {
-    // The "test-override hook" the task list asks for: any test can point
-    // discovery at a tempdir directly via `PathEnv`, bypassing the real
-    // environment entirely (see the `load_from` tests below, which do
-    // exactly this with a real file on disk).
+    // Any test can point discovery at a tempdir directly via `PathEnv`,
+    // bypassing the real environment entirely (see the `load_from` tests
+    // below, which do exactly this with a real file on disk).
     let dir = tempfile::tempdir().expect("tempdir");
     let dir = dir
         .path()
@@ -49,7 +48,7 @@ fn explicit_test_override_hook_is_just_a_pathenv_pointed_at_a_tempdir() {
     assert_eq!(path, Some(dir.join("redquill").join("config.toml")));
 }
 
-// -- load_from (task 1.4: the degradation contract) --------------------------
+// -- load_from (the degradation contract) ------------------------------------
 
 #[test]
 fn missing_file_is_silent_defaults() {
@@ -149,7 +148,7 @@ fn unreadable_path_degrades_like_a_missing_file() {
     assert!(warnings.is_empty());
 }
 
-// -- stdout contract (task 1.4) ----------------------------------------------
+// -- stdout contract ----------------------------------------------------------
 
 #[test]
 fn config_loading_source_never_writes_to_stdout() {
@@ -172,11 +171,11 @@ fn load_reads_the_real_environment_without_panicking() {
     let (_config, _warnings) = load();
 }
 
-// -- Example config drift guard (task 1.9; the full version lands in 6.1) ---
+// -- Example config drift guard ----------------------------------------------
 
 #[test]
 fn example_config_toml_parses_with_zero_warnings() {
-    // A lightweight version of task 6.1's drift test, scoped to the
+    // A lightweight drift test, scoped to the
     // sections this slice ships (`[layout]`/`[search]`): every key and
     // value in `docs/example-config.toml` must actually be recognized, so
     // the shipped example can't silently rot as the code evolves.

@@ -1,14 +1,11 @@
-//! The review-branch modal ([`super::app::Mode::ReviewBranch`], spec 08 Unit
-//! 1's in-app entry path / Unit 5): a centered overlay listing local
-//! branches (the currently checked-out one already excluded by
-//! [`super::review_branch::App::open_review_branch_modal`]), styled like
-//! [`super::switcher_modal`]'s Branches tab — a bordered, `Clear`-ed [`List`]
-//! with the cursor row reverse-highlighted, sized as a percentage of the
-//! screen the same way. A failed `worktree_add`/reroot (spec 08 Unit 5 task
-//! 5.3) surfaces as a message line inside the modal rather than closing it,
-//! mirroring [`super::end_review_modal`]'s own status-message row — the
-//! modal stays open so the reviewer can see the failure and retry or pick a
-//! different branch.
+//! The review-branch modal ([`super::app::Mode::ReviewBranch`]): a centered
+//! overlay listing local branches (the currently checked-out one already
+//! excluded by [`super::review_branch::App::open_review_branch_modal`]),
+//! styled like [`super::switcher_modal`]'s Branches tab. A failed
+//! `worktree_add`/reroot surfaces as a message line inside the modal rather
+//! than closing it (mirrors [`super::end_review_modal`]'s status-message
+//! row) — the modal stays open so the reviewer can see the failure and
+//! retry or pick a different branch.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};

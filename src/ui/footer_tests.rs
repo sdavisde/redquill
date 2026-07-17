@@ -74,8 +74,8 @@ fn normal_mode_hints_match_the_curated_list_in_order() {
     );
 }
 
-/// While a commit view (opened from the git panel's History tab, spec 05
-/// Unit 3) is displayed, the Normal strip gains a synthetic `Esc return`
+/// While a commit view (opened from the git panel's History tab) is
+/// displayed, the Normal strip gains a synthetic `Esc return`
 /// hint — `Esc`'s table row is generic ("Close help / cancel selection /
 /// return from a commit view"), so this situational label comes from the
 /// `viewing_commit` flag rather than the static table.
@@ -101,7 +101,7 @@ fn normal_mode_hints_exclude_staging_when_not_allowed() {
     assert_eq!(labels(&entries).last(), Some(&"help"), "help stays last");
 }
 
-/// While a review session is active (spec 08 Unit 2), the Normal strip gains
+/// While a review session is active, the Normal strip gains
 /// a synthetic `q end review` hint — `q`'s table row carries no
 /// `FooterHint` at all outside a review (see `Action::Quit`'s binding in
 /// `keymap.rs`), so this entry only exists here, driven by the
@@ -118,7 +118,7 @@ fn normal_mode_hints_gain_q_end_review_during_a_review_session() {
     assert!(!labels(&without).contains(&"end review"));
 }
 
-/// During a review session (spec 08 Unit 3), `Space`/`S`/`d`'s footer hints
+/// During a review session, `Space`/`S`/`d`'s footer hints
 /// swap from staging's to review's: `staging_allowed` is always `false` for
 /// a review target (read-only), so "stage hunk"/"stage file" are gone, and
 /// "accept"/"accept file"/"defer" take their place — the footer-strip half
@@ -274,9 +274,8 @@ fn switcher_mode_hints() {
     // "move" must stay MoveDown's own compound label ("j / Down") alone —
     // merging it with MoveUp's ("k / Up") would double up the " / "
     // separators into "j / Down/k / Up". ToggleTab's label lists every bound
-    // key (computed from `ModalBinding::key_label`, spec 07 Unit 4 task 5.3 —
-    // no longer a hand-curated shorthand), including `Shift-Tab`/`Left`/
-    // `Right`, which the old static `"Tab / h / l"` text omitted.
+    // key (computed from `ModalBinding::key_label`), including
+    // `Shift-Tab`/`Left`/`Right`.
     assert_eq!(
         keys(&entries),
         vec![

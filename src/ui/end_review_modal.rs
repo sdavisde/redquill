@@ -1,21 +1,10 @@
-//! The end-review modal ([`super::app::Mode::EndReview`], spec 08 Unit 2): a
-//! compact overlay, sized to its content rather than stretched, listing the
-//! three exits — pause / finish / cancel — as a `j`/`k`/arrow-navigable,
-//! `Enter`-confirmable selection list (dogfood polish pass, lazygit-style),
-//! alongside the pre-existing `p`/`f`/`c`/`Esc` mnemonics, which keep
-//! dispatching immediately regardless of the highlight. Rendered from the
-//! app's effective end-review table (`app.modal_keys.end_review`, the
-//! default [`super::modal_keys::END_REVIEW_KEYS`]) so the modal's own key
-//! labels can never drift from the table
-//! [`super::modes::handle_end_review_key`] dispatches through — only the
-//! per-option short label/caption text below is hand-tuned prose, kept
-//! separate from the table's (necessarily longer, help-overlay-facing)
-//! `description` strings. Modeled on [`super::switcher_modal`] (a
-//! `Clear`-ed, bordered block with a reverse-highlighted [`List`] selection)
-//! and [`super::help`]'s content-sized `centered` helper, reused directly
-//! rather than switcher_modal's percentage-of-screen sizing — a
-//! three-option confirmation reads as a floating dialog, not a panel that
-//! should track the terminal size.
+//! The end-review modal ([`super::app::Mode::EndReview`]): a compact
+//! overlay, sized to its content rather than stretched — a three-option
+//! confirmation reads as a floating dialog, not a panel that should track
+//! the terminal size. Lists the three exits — pause / finish / cancel — as
+//! a `j`/`k`/arrow-navigable, `Enter`-confirmable selection list, alongside
+//! the pre-existing `p`/`f`/`c`/`Esc` mnemonics, which keep dispatching
+//! immediately regardless of the highlight.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -37,11 +26,9 @@ use super::modal_keys::EndReviewAction;
 const CONTENT_WIDTH: u16 = 48;
 /// Total modal width: content + 2 columns of padding + 2 columns of border.
 const MODAL_WIDTH: u16 = CONTENT_WIDTH + 2 + 2;
-/// The caption under the three options, naming the annotations-emit detail
-/// the spec asks to keep out of the per-option lines. Amended 2026-07-16,
-/// spec 08 Unit 6: pause no longer emits — annotations print to stdout
-/// exactly once, on finish, whether they were made this session or restored
-/// from an earlier one.
+/// The caption under the three options: annotations print to stdout exactly
+/// once, on finish, whether they were made this session or restored from an
+/// earlier one — pause never emits.
 const CAPTION: &str = "annotations print to stdout once, on finish";
 
 /// The three exits' display order, short label, and short description —
@@ -278,9 +265,8 @@ index 111..222 100644
             branch: "feature/thing".to_string(),
         };
         app.open_end_review_modal();
-        // The 24-row test backend is far taller than the modal needs; a
-        // stretched modal (the pre-polish-pass bug) would fill most of it.
-        // The compact modal must leave the bulk of the screen untouched.
+        // The 24-row test backend is far taller than the modal needs; the
+        // compact modal must leave the bulk of the screen untouched.
         let height = modal_height(&app);
         assert!(
             height < 12,

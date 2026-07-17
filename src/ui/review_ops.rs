@@ -1,42 +1,12 @@
-//! Accept/defer gestures for review sessions (spec 08 Unit 3): `Space`
-//! toggles `Accepted`, `S` accepts unconditionally, `d` toggles `Deferred` —
-//! thin `App`-side wiring around the pure transitions in `crate::review`,
-//! mirroring `staging.rs`'s stage-auto-collapse gesture for the review
-//! target (accept auto-collapses the section, un-accept expands it; defer
-//! collapses too).
+//! Accept/defer gestures for review sessions (`Space` toggles `Accepted`,
+//! `S` accepts unconditionally, `d` toggles `Deferred`) plus the persistence
+//! wiring that saves review state and annotations to disk on every
+//! status-changing gesture and every annotation add/edit/delete.
 //!
-//! `super::dispatch_key` is what routes the resolved `Action::ToggleStage`/
-//! `Action::StageFile` here (as `Action::ToggleAccept`/`Action::AcceptFile`)
-//! instead of `staging.rs`'s `toggle_stage`/`stage_file`, only while
-//! [`App::in_review_session`] is true (see its doc). Every handler here is
-//! additionally self-guarded on the same predicate, so calling one directly
-//! — from a test, or a future caller that forgets the dispatch-time
-//! translation — can never produce review state outside a review session.
-//!
-//! Also owns persistence (spec 08 Unit 4, extended by Unit 6/task 7.2 to
-//! also cover annotations): every status-changing gesture below, plus every
-//! annotation add/edit/delete (wired from `super::app`'s `submit_compose`
-//! and `super::annotation_list`'s `delete_focused_annotation`), ends with
-//! [`App::persist_review_state`], which spawns the actual disk write on a
-//! background thread (never the render loop, mirroring
-//! `App::request_remote_op`'s pattern) via
-//! [`crate::review::store::save_review`]. Blob-SHA capture
-//! ([`App::maybe_capture_blob_sha`]) is the one exception kept synchronous:
-//! a single local `git rev-parse` is exactly the class of quick git call
-//! `App::stage_file`'s own synchronous `ops.stage_file` already makes
-//! directly from a key handler, so this follows that shipped precedent
-//! rather than introducing a second, inconsistent threading story for one
-//! more fast local read.
-//!
-//! [`App::persist_review_state`] is deliberately a no-op without a resolved
-//! [`App::review_state_path`]/live [`crate::git::DiffTarget::Review`]
-//! target/`repo_root` — the same three-way guard it already had before
-//! annotations joined it — which is exactly what keeps calling it
-//! unconditionally from `submit_compose`/`delete_focused_annotation` safe
-//! for a plain (non-review) session: outside a review, the call falls
-//! straight through and nothing is spawned, so local sessions stay
-//! byte-for-byte unchanged (spec 08 Unit 6's explicit regression
-//! requirement).
+//! [`App::persist_review_state`] is a no-op outside a live review session
+//! (no resolved state path, review target, or repo root), so calling it
+//! unconditionally from a plain session's annotation handlers is safe —
+//! nothing is spawned and local sessions are unaffected.
 
 use std::collections::BTreeMap;
 
@@ -80,15 +50,13 @@ impl App {
     }
 
     /// Captures `path`'s current blob SHA on the branch under review
-    /// (`git rev-parse <branch>:<path>`, spec 08 Unit 4) whenever `next` is
-    /// `Accepted` — the moment-of-acceptance capture the spec calls for,
-    /// including the re-accept case (`ChangedSinceAccepted -> Accepted`,
-    /// which fetches the *fresh* SHA, superseding the stale one this
-    /// overwrites). A no-op for every other status (nothing to capture) and
-    /// degrades silently (records no SHA rather than erroring) without a
-    /// git backend or outside a review session — the caller is always
-    /// already inside `apply_review_transition`, which only ever runs while
-    /// `in_review_session()` holds.
+    /// (`git rev-parse <branch>:<path>`) at the moment of acceptance,
+    /// including on re-accept (`ChangedSinceAccepted -> Accepted` fetches
+    /// the fresh SHA, superseding the stale one). A no-op for every other
+    /// status, and degrades silently (records no SHA) without a git
+    /// backend. Kept synchronous rather than backgrounded: a single local
+    /// `git rev-parse` is the same class of quick call `App::stage_file`
+    /// already makes directly from a key handler.
     fn maybe_capture_blob_sha(&mut self, path: &str, next: ReviewStatus) {
         if next != ReviewStatus::Accepted {
             return;
@@ -105,36 +73,24 @@ impl App {
     }
 
     /// Builds this review's current [`PersistedReview`] from
-    /// `review_states`/`review_blob_shas` and spawns the atomic disk write
-    /// on a background thread (spec 08 Unit 4's "off the render loop"
-    /// requirement — mirrors [`App::request_remote_op`]'s pattern). A no-op
-    /// without a resolved [`App::review_state_path`] (outside a review
-    /// session, or a git-less/test context) or without a live
+    /// `review_states`/`review_blob_shas`, snapshots `self.annotations` into
+    /// the same record via [`crate::annotate::snapshot`] (one entry, one
+    /// write, so a later delete removes both together), and spawns the
+    /// atomic disk write on a background thread, never the render loop. A
+    /// no-op without a resolved [`App::review_state_path`] or a live
     /// [`crate::git::DiffTarget::Review`] target/repo root.
     ///
     /// `ChangedSinceAccepted` files persist as `PersistedStatus::Accepted`
-    /// with their **preserved** (stale) blob SHA, not a fresh one — this is
-    /// deliberate: the status itself is never set by a live gesture (only
-    /// [`App::set_review_states`]'s load-time reconciliation ever produces
-    /// it), so by construction the only way this function ever sees one is
-    /// "still hasn't been re-accepted since it went stale", and persisting
-    /// its original SHA unchanged is exactly what keeps the *next* session's
-    /// reconciliation re-deriving `ChangedSinceAccepted` again rather than
-    /// silently "fixing" the staleness by accident.
+    /// with their preserved (stale) blob SHA: `ChangedSinceAccepted` only
+    /// arises at load-time reconciliation (see [`crate::review::reconcile`]),
+    /// so a live persist only ever sees `Accepted`/`Deferred`, and keeping
+    /// the stale SHA is what lets the next session's reconciliation
+    /// re-derive `ChangedSinceAccepted` rather than silently losing it.
     ///
-    /// Also snapshots `self.annotations` (spec 08 Unit 6, task 7.2) via
-    /// [`crate::annotate::snapshot`] into the same [`PersistedReview`] —
-    /// annotations and file statuses share one entry and one write, so a
-    /// save always captures both together and a later delete
-    /// ([`App::finish_review`]) or GC removes both together too, with no
-    /// extra bookkeeping needed for that guarantee.
-    ///
-    /// Single-flight (see [`App::review_save_in_flight`]'s doc for the
-    /// out-of-order-completion bug this closes): a call arriving while a
-    /// save is already running only sets [`App::review_save_dirty`], so
-    /// [`App::poll_review_save`] can spawn one correctly-ordered follow-up
-    /// once the in-flight one lands, rather than racing it with a second
-    /// concurrent writer.
+    /// Single-flight: a call arriving while a save is already running only
+    /// sets [`App::review_save_dirty`], so [`App::poll_review_save`] spawns
+    /// one correctly-ordered follow-up once the in-flight one lands, rather
+    /// than racing it with a second concurrent writer.
     pub(super) fn persist_review_state(&mut self) {
         let Some(state_path) = self.review_state_path.clone() else {
             return;
@@ -182,15 +138,13 @@ impl App {
         self.review_saves_pending += 1;
     }
 
-    /// Replays `persisted` into `self.annotations` (spec 08 Unit 6, task
-    /// 7.2), reattaching each to its recorded anchor verbatim, then rebuilds
-    /// the diff rows so their in-line markers show up immediately. Called
-    /// once by `main`'s review-session bootstrap, right after
-    /// [`App::set_review_states`] and before the first render — mirroring
-    /// that method's "seeds state, meaningless outside a review session,
-    /// never called for any other target" contract. A no-op for an empty
-    /// `persisted` (the ordinary case: a first-ever review of a branch, or
-    /// one with no annotations left from an earlier session).
+    /// Replays `persisted` into `self.annotations`, reattaching each to its
+    /// recorded anchor verbatim, then rebuilds the diff rows so their
+    /// in-line markers show up immediately. Called once during a review
+    /// session's bootstrap, right after [`App::set_review_states`] and
+    /// before the first render. A no-op for an empty `persisted` (the
+    /// ordinary case: a first-ever review, or one with no annotations left
+    /// from an earlier session).
     pub fn restore_review_annotations(&mut self, persisted: Vec<PersistedAnnotation>) {
         if persisted.is_empty() {
             return;
@@ -248,15 +202,10 @@ impl App {
 
     /// `S` in a review session: toggles the cursor file between `Accepted`
     /// and `Unreviewed` from anywhere inside it (see
-    /// [`crate::review::toggle_accept`]) — the full `StageFile` toggle
-    /// analogue (spec 08 Unit 5, amending Unit 3's originally
-    /// one-directional `S`): an already-`Accepted` file un-accepts and
-    /// re-expands, exactly like [`App::toggle_accept_file`]/`Space`. The two
-    /// handlers apply the identical transition and differ only in which key
-    /// resolves to them — review has no hunk/line-level granularity for
-    /// `Space` to differentiate on (a deliberate omission, spec 08 Unit 5),
-    /// so unlike `ToggleStage`/`StageFile`'s granularity split, `Space`/`S`
-    /// are now behavioral synonyms by design. Same reachability guard as
+    /// [`crate::review::toggle_accept`]). `Space` and `S` are behavioral
+    /// synonyms — review has no hunk/line-level granularity for `Space` to
+    /// differentiate on, so both apply the identical transition and differ
+    /// only in which key resolves to them. Same reachability guard as
     /// [`App::toggle_accept_file`].
     pub(super) fn accept_file(&mut self) {
         if !self.in_review_session() {
@@ -278,7 +227,7 @@ impl App {
         self.apply_review_transition(toggle_defer, ReviewStatus::Deferred);
     }
 
-    // -- Accepted-files panel (spec 08 Unit 5) -------------------------------
+    // -- Accepted-files panel -------------------------------------------------
 
     /// Rebuilds `App::staged` (and, transitively, what the staging panel
     /// renders and indexes via `staging_cursor`) from `review_states` for
@@ -301,8 +250,8 @@ impl App {
             .collect();
     }
 
-    /// Un-accepts the accepted-files panel's focused entry (`Space`/`Enter`,
-    /// spec 08 Unit 5): sets its status back to `Unreviewed`, re-expands its
+    /// Un-accepts the accepted-files panel's focused entry (`Space`/`Enter`):
+    /// sets its status back to `Unreviewed`, re-expands its
     /// diff section, rebuilds rows, then refreshes the panel list (which
     /// shrinks by one) and re-clamps the cursor — the review analogue of
     /// `App::unstage_focused_file`. A no-op on an empty list. The banner's
@@ -405,10 +354,8 @@ mod tests {
         assert!(app.view.is_collapsed("a.rs"));
     }
 
-    /// Spec 08 Unit 5 parity fix: `S` on an already-`Accepted` file
-    /// un-accepts it back to `Unreviewed` and re-expands its section — the
-    /// full `StageFile` toggle analogue, not the one-directional accept
-    /// Unit 3 originally shipped.
+    /// `S` on an already-`Accepted` file un-accepts it back to `Unreviewed`
+    /// and re-expands its section — the full `StageFile` toggle analogue.
     #[test]
     fn accept_file_toggles_an_already_accepted_file_back_to_unreviewed_and_expands() {
         let mut app = review_app(&["a.rs"]);
@@ -445,7 +392,7 @@ mod tests {
 
     /// `Space`'s own toggle is untouched by the `S` parity fix — same
     /// transition, same reachability guard, regression-pinned independently
-    /// of `S`'s tests above (spec 08 Unit 5 amends only `S`'s direction).
+    /// of `S`'s tests above.
     #[test]
     fn toggle_accept_space_behavior_is_unchanged_by_the_s_parity_fix() {
         let mut app = review_app(&["a.rs"]);
@@ -528,7 +475,7 @@ mod tests {
         assert_eq!(app.review_progress(), (0, 2));
     }
 
-    // -- Persistence wiring (spec 08 Unit 4) -----------------------------------
+    // -- Persistence wiring ---------------------------------------------------
 
     use crate::git::GitError;
     use crate::review::store;
@@ -701,8 +648,8 @@ mod tests {
     #[test]
     fn accepted_panel_un_accept_persists_too() {
         // A distinct call site from `apply_review_transition` (the panel's
-        // `Space`/`Enter` un-accept, spec 08 Unit 5) — must persist on its
-        // own, not just Space/S's shared path.
+        // `Space`/`Enter` un-accept) — must persist on its own, not just
+        // Space/S's shared path.
         let (mut app, _tmp) = persisting_review_app(&[("feature", "a.rs", "sha-a-1")]);
         let path = app.review_state_path.clone().unwrap();
 
@@ -731,15 +678,12 @@ mod tests {
         assert!(app.review_save_tasks.poll().is_empty());
     }
 
-    // -- Single-flight save coalescing (spec 08 Unit 6 hardening) -----------
+    // -- Single-flight save coalescing ---------------------------------------
     //
-    // `persist_review_state` used to spawn a new background writer on every
-    // call unconditionally; a burst of rapid gestures (now more likely with
-    // annotation add/edit/delete also triggering a save, task 7.2) could
-    // race several concurrent `save_review` read-modify-writes on the same
-    // file, and an out-of-order completion could silently revert an earlier
-    // writer's snapshot back onto disk. These tests pin the single-flight
-    // guard directly, without depending on real background-thread timing.
+    // These tests pin the single-flight guard directly, without depending on
+    // real background-thread timing: a burst of rapid gestures (including
+    // annotation add/edit/delete, which also trigger a save) coalesces to
+    // exactly one in-flight write plus one correctly-ordered follow-up.
 
     #[test]
     fn a_call_while_a_save_is_in_flight_sets_dirty_instead_of_spawning_a_second_writer() {
@@ -799,7 +743,7 @@ mod tests {
         );
     }
 
-    // -- restore_review_annotations (spec 08 Unit 6, task 7.2) --------------
+    // -- restore_review_annotations ------------------------------------------
 
     #[test]
     fn restore_review_annotations_replays_into_the_store_and_rebuilds_rows() {
@@ -818,11 +762,10 @@ mod tests {
         assert_eq!(app.annotations.len(), 1);
         assert_eq!(app.annotations.iter().next().unwrap().body, "restored?");
         // Rows were rebuilt against the restored annotation, exactly like a
-        // live `submit_compose` would leave them — the "before first
-        // render" contract (task 7.2) means this must already be true
-        // without any key ever being pressed: the restored line annotation
-        // shows up as its own spliced-in `Row::Annotation` body row, right
-        // after its anchor.
+        // live `submit_compose` would leave them: this must already be true
+        // before any key is pressed, so the restored line annotation shows
+        // up as its own spliced-in `Row::Annotation` body row, right after
+        // its anchor.
         assert!(
             app.view
                 .rows

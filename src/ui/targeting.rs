@@ -132,8 +132,8 @@ pub(super) fn editor_target_for_cursor(
 }
 
 /// Converts a target derived by [`target_for_cursor`]/[`target_for_visual`]
-/// against the read-only file view's synthesized all-context body (spec 06
-/// Unit 3) into the "current worktree file content, not a diff side" target
+/// against the read-only file view's synthesized all-context body into the
+/// "current worktree file content, not a diff side" target
 /// forms: `Line` -> [`Target::WorktreeLine`], `Range` ->
 /// [`Target::WorktreeRange`]. A `Hunk` target -- reachable if the cursor
 /// lands on the file view's single synthetic hunk header, which spans the
@@ -411,7 +411,7 @@ index 1..2 100644
         assert_eq!(editor_target_for_cursor(&file, &rows, rows.len()), None);
     }
 
-    // -- as_worktree_target (task 4.3) ---------------------------------------
+    // -- as_worktree_target ---------------------------------------------------
 
     #[test]
     fn as_worktree_target_converts_line_to_worktree_line() {

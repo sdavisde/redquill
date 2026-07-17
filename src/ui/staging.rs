@@ -166,7 +166,7 @@ fn visual_stage_selection(
     // A visual span may cross section boundaries freely while navigating,
     // but staging one requires a single owning file: `hunk_index` is only
     // meaningful within a file, so a cross-file span could stage the wrong
-    // hunk. Reject it before anything else (see decision B, task 3.0).
+    // hunk. Reject it before anything else.
     let files_in_span: HashSet<usize> = view.rows[lo..=hi]
         .iter()
         .enumerate()
@@ -225,8 +225,8 @@ impl App {
     /// Toggles the staging panel: opens it from Normal/Visual, closes it
     /// from Staging. Opening refreshes its list first, so it's current even
     /// if nothing changed this session — from `git status` in a plain
-    /// session, or from `review_states` (the accepted-files panel, spec 08
-    /// Unit 5) during a review session, via [`App::refresh_accepted_list`].
+    /// session, or from `review_states` (the accepted-files panel) during a
+    /// review session, via [`App::refresh_accepted_list`].
     /// A no-op while Compose or the annotation list is open.
     pub(super) fn toggle_staging_panel(&mut self) {
         match self.mode {
@@ -404,7 +404,7 @@ index 1..2 100644
         // Two single-hunk files: a.rs occupies rows 0..4, b.rs rows 4..8.
         // A span from a.rs's addition (row 3) into b.rs's removal (row 6)
         // crosses the section boundary and must be rejected before the
-        // per-file hunk index is trusted (decision B).
+        // per-file hunk index is trusted.
         let one = "\
 diff --git a/x b/x
 index 1..2 100644

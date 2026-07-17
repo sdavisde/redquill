@@ -1,10 +1,10 @@
-//! Real-git, real-worktree integration tests for spec 08 Unit 4 (review
-//! progress survives sessions and self-invalidates when files change),
-//! task 4.6: a two-"session" scenario (resume → staleness → re-accept →
-//! finish) plus a GC-of-a-deleted-branch scenario. Also spec 08 Unit 6
-//! (review annotations survive pause), task 7.4: a second two-"session"
-//! scenario — annotate, pause (silent), resume (restored), annotate again,
-//! finish (emits the complete set exactly once, byte-exact).
+//! Real-git, real-worktree integration tests: review progress survives
+//! sessions and self-invalidates when files change (a two-"session"
+//! scenario — resume → staleness → re-accept → finish — plus a
+//! GC-of-a-deleted-branch scenario), and review annotations survive pause
+//! (a second two-"session" scenario: annotate, pause (silent), resume
+//! (restored), annotate again, finish — emits the complete set exactly
+//! once, byte-exact).
 //!
 //! Lives beside `commit_integration_tests.rs`/`review_guard_integration_tests.rs`
 //! for the identical reason those files document: `dispatch_key`,
@@ -74,7 +74,7 @@ fn canon(path: &Path) -> std::path::PathBuf {
 }
 
 /// The shared isolation guard every mutating git call in this file runs
-/// before touching disk (task 1.5's convention).
+/// before touching disk.
 fn assert_inside_tempdir(path: &Path, tmp: &TempDir) {
     let tmp_root = canon(tmp.path());
     let mut probe = path.to_path_buf();
@@ -93,8 +93,8 @@ fn assert_inside_tempdir(path: &Path, tmp: &TempDir) {
 
 /// A repo on `main` with one commit, plus a `feature` branch (not checked
 /// out — main stays the primary checkout's active branch throughout, the
-/// "user's own checkout" spec 08 promises stays untouched) three commits
-/// ahead, each touching one of `a.rs`/`b.rs`/`c.rs`.
+/// "user's own checkout stays untouched" promise) three commits ahead, each
+/// touching one of `a.rs`/`b.rs`/`c.rs`.
 fn repo_with_feature_branch_three_files() -> TempDir {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path();
@@ -341,8 +341,7 @@ fn resume_staleness_re_accept_and_finish_round_trip_against_real_git() {
 }
 
 // -- Two-session scenario: annotate -> pause (silent) -> resume (restored)
-// -> annotate again -> finish (emits once, byte-exact) — spec 08 Unit 6,
-// task 7.4 -------------------------------------------------------------
+// -> annotate again -> finish (emits once, byte-exact) ---------------------
 
 /// Opens Compose on `path`'s file-header target (real key dispatch, `c`),
 /// types `body` directly into the draft buffer (matching every other test
@@ -509,7 +508,7 @@ fn annotate_pause_resume_restores_and_finish_emits_the_complete_set_once() {
     assert_eq!(git_out(repo.path(), &["status", "--porcelain"]), "");
 }
 
-/// Regression pin (spec 08 Unit 6's explicit requirement): a plain
+/// Regression pin: a plain
 /// (non-review) session's `q` still emits in-memory annotations exactly as
 /// before, and nothing about it touches disk — no state file is ever
 /// created for a session that never had `set_review_state_path` called.
@@ -548,7 +547,7 @@ fn a_local_sessions_annotations_are_never_persisted_and_q_still_emits_them_uncha
     assert!(markdown.contains("local note"));
 }
 
-// -- GC of a deleted branch (task 4.5, exercised end-to-end here too) -------
+// -- GC of a deleted branch (exercised end-to-end here too) -----------------
 
 /// A plain repo on `main` only — deliberately *without* a `feature`
 /// branch, so a persisted entry naming one simulates a branch the author

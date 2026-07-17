@@ -1,12 +1,12 @@
 //! The git panel: a branch header (name plus `↑N↓M` ahead/behind against the
 //! upstream), then CHANGES / UNTRACKED / STASHES sections, then a bottom
 //! section carrying file/staged/note counts, the tip commit's summary, and
-//! the fetch/pull/push keybind hints — all in the same fixed-width slot the
-//! passive file sidebar used to occupy.
+//! the fetch/pull/push keybind hints — all in a fixed-width slot alongside
+//! the diff view.
 //!
-//! CHANGES preserves the old sidebar's rows exactly: a green `●` staged
-//! marker, a colored change-kind letter, and a dimmed-directory / normal
-//! basename path split. UNTRACKED lists working-tree files git isn't
+//! CHANGES rows show a green `●` staged marker, a colored change-kind
+//! letter, and a dimmed-directory / normal basename path split. UNTRACKED
+//! lists working-tree files git isn't
 //! tracking yet; STASHES lists `git stash list` entries view-only. The panel
 //! is passive in this task — the currently selected diff file is highlighted,
 //! but there is no independent cursor or focus yet.
@@ -98,13 +98,11 @@ fn staged_span(state: StagedState, theme: &Theme) -> Span<'static> {
     }
 }
 
-/// The review-status indicator column (spec 08 Unit 3), rendered right after
-/// [`staged_span`] — the two slots never both carry a glyph for the same row
-/// (a review session's [`StagedState`] is always [`StagedState::Unstaged`]).
-/// `Accepted` reuses [`staged_span`]'s exact `●` glyph/color (deliberate
-/// exception — see [`super::rows::ReviewMarker`]'s doc); `Deferred`/
-/// `ChangedSinceAccepted` use their own colors and stay visually distinct
-/// from staging's `±`/`●`.
+/// The review-status indicator column, rendered right after [`staged_span`]
+/// — the two slots never both carry a glyph for the same row (a review
+/// session's [`StagedState`] is always [`StagedState::Unstaged`]).
+/// `Accepted` renders as the staged ● — see theme.rs's staged_indicator
+/// rationale; `Deferred`/`ChangedSinceAccepted` use their own colors.
 fn review_span(status: ReviewStatus, theme: &Theme) -> Span<'static> {
     match status {
         ReviewStatus::Accepted => {
@@ -195,9 +193,9 @@ fn commit_line(commit: Option<&CommitSummary>, theme: &Theme) -> Line<'static> {
 /// each key emphasized in the help-key color and its label dimmed. Keys are
 /// resolved from `keymap` (panel scope) rather than hardcoded, so a
 /// `[keys.panel]` remap or unbind of `remote-fetch`/`remote-pull`/
-/// `remote-push` can't leave this line showing a stale key (spec 07 Unit 4,
-/// task 4.6) — an unbound action's segment is simply omitted, the same
-/// graceful-degradation convention `super::welcome`'s hints use.
+/// `remote-push` can't leave this line showing a stale key — an unbound
+/// action's segment is simply omitted, the same graceful-degradation
+/// convention `super::welcome`'s hints use.
 fn remote_keys_line(theme: &Theme, keymap: &Keymap, push_publishes: bool) -> Line<'static> {
     let key = |k: String| {
         Span::styled(
@@ -251,10 +249,10 @@ fn branch_title(branch: Option<&BranchStatus>) -> String {
     title
 }
 
-/// One tab label in the panel's title (`Changes` / `History`, spec 05 Unit
-/// 3): underlined and bold when `active`, dimmed otherwise — a Zed-style tab
-/// strip rendered as part of the border title rather than a separate row, so
-/// it stays "inside the existing panel chrome" per the spec's design notes.
+/// One tab label in the panel's title (`Changes` / `History`): underlined
+/// and bold when `active`, dimmed otherwise — a Zed-style tab strip
+/// rendered as part of the border title rather than a separate row, so it
+/// stays inside the existing panel chrome.
 fn tab_span(label: &'static str, active: bool, theme: &Theme) -> Span<'static> {
     if active {
         Span::styled(
@@ -281,8 +279,8 @@ fn panel_title(branch: Option<&BranchStatus>, tab: PanelTab, theme: &Theme) -> L
 }
 
 /// A History-tab row: two lines (subject + unpushed marker; dimmed `author ·
-/// relative-time · short-sha`), matching Zed's row anatomy (spec 05 Design
-/// Considerations). `now` is the caller's wall-clock read (kept a parameter
+/// relative-time · short-sha`), matching Zed's row anatomy. `now` is the
+/// caller's wall-clock read (kept a parameter
 /// so [`super::time_format::relative_time`] stays pure and independently
 /// testable). Long subjects/meta lines are left to ratatui's own line
 /// clipping to the panel width, the same way file paths elsewhere in this
@@ -562,7 +560,7 @@ impl App {
     }
 
     /// Switches the git panel between its Changes and History tabs (`Tab`,
-    /// panel scope, spec 05 Unit 3): resets the cursor to the top (mirrors
+    /// panel scope): resets the cursor to the top (mirrors
     /// focusing the panel), remembers the new tab in `last_panel_tab` so
     /// re-focusing the panel later lands back here, and kicks off the
     /// History tab's first page fetch the first time it's opened. A no-op
@@ -780,8 +778,8 @@ mod tests {
     }
 
     /// [`render_panel`], but over an explicit keymap — used to prove the
-    /// remote-op hint line resolves keys dynamically (spec 07 Unit 4, task
-    /// 4.6) rather than hardcoding `f`/`p`/`P`.
+    /// remote-op hint line resolves keys dynamically rather than hardcoding
+    /// `f`/`p`/`P`.
     fn render_panel_with_keymap(app: &App, keymap: &Keymap) -> String {
         let backend = TestBackend::new(32, 24);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -868,9 +866,7 @@ mod tests {
 
     #[test]
     fn changes_section_shows_accepted_file_with_the_staged_dot() {
-        // Deliberate exception (spec 08 Unit 3, user decision 2026-07-16):
-        // an accepted file's sidebar marker must be the *same* green `●` a
-        // staged file gets, not a distinct glyph.
+        // Renders as the staged ● — see theme.rs's staged_indicator rationale.
         let mut app = App::new(vec![sample_file("session.rs")]);
         app.target = crate::git::DiffTarget::Review {
             base: "main".to_string(),
@@ -984,10 +980,9 @@ mod tests {
     }
 
     /// The remote-op hint line resolves its keys from the keymap rather than
-    /// hardcoding `f`/`p`/`P` (spec 07 Unit 4, task 4.6): a `[keys.panel]`
-    /// remap of `remote-fetch` must show up here with no code change, and an
-    /// unbind must drop that segment entirely rather than showing a stale
-    /// key.
+    /// hardcoding `f`/`p`/`P`: a `[keys.panel]` remap of `remote-fetch` must
+    /// show up here with no code change, and an unbind must drop that
+    /// segment entirely rather than showing a stale key.
     #[test]
     fn remote_keys_line_reflects_a_remapped_and_an_unbound_action() {
         let mut app = App::new(vec![sample_file("session.rs")]);
@@ -1239,12 +1234,9 @@ mod tests {
         assert!(matches!(app.mode, Mode::Panel { .. }));
     }
 
-    // -- History tab (spec 05 Unit 3) ---------------------------------------
+    // -- History tab ---------------------------------------------------------
     //
-    // These are UI-state/TestBackend-buffer proofs, not real-terminal
-    // screenshots (this sandbox has no controlling TTY — see
-    // `05-task-03-proofs.md`'s TTY-deferred section); they exercise the same
-    // rendering code path a real terminal would.
+    // TestBackend buffer assertions (no real TTY in CI).
 
     use super::super::background::TaskId;
     use super::super::history::InFlightHistory;

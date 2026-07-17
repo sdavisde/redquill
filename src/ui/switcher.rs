@@ -1,5 +1,5 @@
-//! State for the branch/worktree switcher modal ([`super::app::Mode::Switcher`],
-//! spec 03 Unit 1): which tab is active, the branch/worktree lists read once
+//! State for the branch/worktree switcher modal ([`super::app::Mode::Switcher`]):
+//! which tab is active, the branch/worktree lists read once
 //! when the modal opened, a per-tab cursor, and the git panel's cursor row to
 //! restore when the modal closes. Also carries the `App` handlers that open
 //! and close the modal and drive its cursor, split out of `app.rs` alongside
@@ -197,8 +197,8 @@ impl App {
         }
     }
 
-    /// The `Enter` gesture inside the switcher modal (spec 03 Units 2/3):
-    /// dispatches on the active tab to [`App::confirm_branch_switch`] or
+    /// The `Enter` gesture inside the switcher modal: dispatches on the
+    /// active tab to [`App::confirm_branch_switch`] or
     /// [`App::confirm_worktree_switch`]. Guarded up front by the same
     /// single-in-flight rule [`App::request_remote_op`] enforces: a running
     /// fetch/pull/push blocks a switch attempt (both mutate the working tree
@@ -218,7 +218,7 @@ impl App {
         }
     }
 
-    /// Branches-tab `Enter` (spec 03 Unit 2): switches to the selected
+    /// Branches-tab `Enter`: switches to the selected
     /// branch via `git switch -- <name>`, records the attempt in the
     /// command log either way, and reports the outcome in the footer.
     ///
@@ -228,8 +228,8 @@ impl App {
     /// themselves are untouched, so they keep pointing at the same
     /// paths/lines) and the git-panel cursor re-follows the diff. On failure
     /// (dirty tree, branch checked out in another worktree, ...) the modal
-    /// stays open per spec so the reviewer can see the failure and retry or
-    /// pick something else; the footer points at the command log (`@`) for
+    /// stays open so the reviewer can see the failure and retry or pick
+    /// something else; the footer points at the command log (`@`) for
     /// git's stderr.
     ///
     /// Race-safe for free: [`App::refresh`] bumps `refresh_generation`, so
@@ -268,7 +268,7 @@ impl App {
         }
     }
 
-    /// Worktrees-tab `Enter` (spec 03 Unit 3): re-roots the whole review
+    /// Worktrees-tab `Enter`: re-roots the whole review
     /// session onto the selected worktree.
     ///
     /// Guards a bare worktree (nothing to review there) and the already-current
@@ -314,42 +314,19 @@ impl App {
         }
     }
 
-    /// Re-roots the app onto `runner`'s repository, reviewing `target`:
-    /// builds the new review snapshot *before* touching any state (spec 03
-    /// Unit 3's build-first requirement), so a failed rebuild leaves the
-    /// current session fully intact — only on success does the backend, repo
-    /// root, target, and LSP state actually swap. Returns `Err(message)` on a
-    /// failed rebuild and does nothing else — pulled out of this way
-    /// (originally hardcoded to reuse `self.target` unchanged, and to close
-    /// the switcher modal itself on both outcomes) so both
-    /// [`App::confirm_worktree_switch`] (spec 03, re-roots onto the *same*
-    /// target) and the review-branch modal's confirm gesture
-    /// ([`super::review_branch::App::confirm_review_branch`], spec 08 Unit
-    /// 5 task 5.2, re-roots onto a *new* [`DiffTarget::Review`] target) share
-    /// this one build-before-swap path rather than duplicating it — the
-    /// spec's explicit "one ensure-review-session code path" requirement,
-    /// generalized here to the pre-existing switcher rebuild too. Each caller
-    /// now owns its own post-outcome UI wiring (closing whatever modal was
-    /// open, the status message, `after_panel_coherence`), since the two
-    /// callers' success paths diverge (the review-branch modal additionally
-    /// attaches review-session state that has no switcher equivalent).
-    ///
-    /// Once the swap commits, bumps `refresh_generation` and clears
-    /// `refresh_in_flight`: any working-tree poll still in flight against the
-    /// *old* root was captured (by [`super::stage_ops::StageOps::async_review_builder`])
-    /// as a clone of the old [`GitRunner`], so it keeps running to completion
-    /// against the old repo — but its result is now orphaned twice over:
-    /// [`super::App::poll_refresh`] drops anything whose spawn-time
-    /// generation no longer matches (the bump), and even if that raced back
-    /// to matching, `refresh_in_flight` being `None` means there's no
-    /// tracked task for its id to match at all. Clearing it also frees
-    /// `spawn_auto_refresh`'s single-flight gate immediately, rather than
-    /// waiting for the orphaned old-root read to naturally drain, so the very
-    /// next poll tick can spawn a fresh read against the *new* backend.
-    ///
-    /// Annotations are untouched by this swap (spec 03 Unit 4): they're
-    /// keyed by path/line, not by backend identity, so they keep applying to
-    /// the newly-rooted review as-is.
+    /// Re-roots the app onto `runner`'s repository, reviewing `target`.
+    /// Builds the new review snapshot before swapping any state, so a
+    /// failed rebuild leaves the current session fully intact; only on
+    /// success does the backend, repo root, target, and LSP state actually
+    /// swap. Bumps `refresh_generation` and clears `refresh_in_flight` on
+    /// success so any working-tree poll still in flight against the old
+    /// root is dropped on arrival rather than applied, and the next poll
+    /// tick can spawn a fresh read against the new backend. Shared by
+    /// [`App::confirm_worktree_switch`] (re-roots onto the same target) and
+    /// the review-branch modal's confirm gesture (re-roots onto a new
+    /// [`DiffTarget::Review`] target); each caller owns its own
+    /// post-outcome UI wiring. Annotations are untouched by the swap —
+    /// they're keyed by path/line, not by backend identity.
     pub(super) fn reroot(&mut self, runner: GitRunner, target: DiffTarget) -> Result<(), String> {
         let new_root = runner.root().to_path_buf();
         let snapshot = build_review(&runner, &target).map_err(|e| e.to_string())?;

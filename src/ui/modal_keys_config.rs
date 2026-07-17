@@ -1,11 +1,10 @@
-//! Merges every `[keys.<mode>]` config table (`crate::config::KeysConfig::modal`,
-//! plus its two named fields' modal counterparts don't exist — `diff`/`panel`
-//! stay `crate::ui::keymap_config`'s job) onto `crate::ui::modal_keys`'s
-//! compiled-in default tables, producing the effective
-//! [`super::modal_keys::ModalKeymaps`] every modal handler and render call
-//! reads (spec 07 Unit 4 task 5.3/5.4). Built exactly once, from
-//! [`super::run`] alongside [`super::keymap_config::effective_keymap`], then
-//! stored on [`super::app::App`] — no per-keystroke parsing.
+//! Merges every `[keys.<mode>]` config table (`crate::config::KeysConfig::modal`;
+//! `diff`/`panel` stay `crate::ui::keymap_config`'s job) onto
+//! `crate::ui::modal_keys`'s compiled-in default tables, producing the
+//! effective [`super::modal_keys::ModalKeymaps`] every modal handler and
+//! render call reads. Built exactly once, from [`super::run`] alongside
+//! [`super::keymap_config::effective_keymap`], then stored on
+//! [`super::app::App`] — no per-keystroke parsing.
 //!
 //! **Layering**: like `super::keymap_config`/`super::lsp_config`/
 //! `super::editor`'s preset table, this is an edge module allowed to import
@@ -13,16 +12,15 @@
 //! `crate::config` itself must never import `crate::ui` (see that module's
 //! doc).
 //!
-//! **Merge semantics** (spec 07 Unit 4 FR, reused verbatim from the main
-//! keymap's task 4 contract): an action named in a `[keys.<mode>]` table
-//! gets *exactly* the listed keys — its default keys for that action are
-//! dropped, not appended to; an action not named keeps its defaults
-//! untouched; an empty list (`= []`) unbinds the action entirely; a
-//! same-table collision (a user-provided key sequence already claimed by
-//! another row, default or an earlier-applied override) is resolved
-//! user-wins, with one [`ConfigWarning`] recorded. An unknown action name,
-//! or a two-chord key sequence (modal tables never supported `gd`-style
-//! sequences), is itself an invalid value.
+//! **Merge semantics** (mirrors the main keymap's merge contract): an action
+//! named in a `[keys.<mode>]` table gets *exactly* the listed keys — its
+//! default keys for that action are dropped, not appended to; an action not
+//! named keeps its defaults untouched; an empty list (`= []`) unbinds the
+//! action entirely; a same-table collision (a user-provided key sequence
+//! already claimed by another row, default or an earlier-applied override)
+//! is resolved user-wins, with one [`ConfigWarning`] recorded. An unknown
+//! action name, or a two-chord key sequence (modal tables never supported
+//! `gd`-style sequences), is itself an invalid value.
 
 use std::collections::BTreeMap;
 
@@ -140,21 +138,12 @@ pub(super) fn effective_modal_keys(
             modal_keys::project_search_results_action_from_name,
             &mut warnings,
         ),
-        // The end-review modal (spec 08 Unit 2) isn't `[keys.end-review]`
-        // remappable yet — it's absent from the cross-checked
-        // `MODAL_MODE_NAMES` lists — so it always takes its compiled-in
-        // defaults verbatim, with no override lookup. See
-        // `modal_keys::END_REVIEW_KEYS`'s doc for what wiring remapping later
-        // would entail.
+        // Not `[keys.<mode>]` remappable yet — always the compiled-in
+        // defaults verbatim, with no override lookup. See each table's own
+        // doc in `modal_keys`.
         end_review: modal_keys::END_REVIEW_KEYS.clone(),
-        // The accepted-files panel (spec 08 Unit 5) is the same
-        // no-remapping-yet shape as `end_review` above — see
-        // `modal_keys::ACCEPTED_PANEL_KEYS`'s doc.
         accepted_panel: modal_keys::ACCEPTED_PANEL_KEYS.clone(),
-        // The pull/push confirm modal (spec 08 Unit 5) — same shape again.
         confirm_remote_op: modal_keys::CONFIRM_REMOTE_OP_KEYS.clone(),
-        // The review-branch modal (spec 08 Unit 1 in-app path / Unit 5) —
-        // same shape again.
         review_branch: modal_keys::REVIEW_BRANCH_KEYS.clone(),
     };
 

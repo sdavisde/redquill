@@ -1,28 +1,17 @@
-//! `review-state.json` schema, atomic persistence, and garbage collection
-//! (spec 08 Unit 4). Pure serialization/parsing plus plain filesystem I/O —
-//! no TUI types, no git subprocess calls (the presentation layer,
-//! `src/ui/review_ops.rs`/`main.rs`, supplies every git-derived value —
-//! blob SHAs via [`crate::git::GitRunner::blob_sha`], branch existence via
-//! [`crate::git::GitRunner::branch_list`] — as plain data).
+//! `review-state.json` schema, atomic persistence, and garbage collection.
+//! Pure serialization/parsing plus plain filesystem I/O — no TUI types, no
+//! git subprocess calls; the presentation layer supplies every git-derived
+//! value (blob SHAs, branch existence) as plain data.
 //!
-//! **Silent-degradation contract** (this module's documented policy, per
-//! `docs/rust-best-practices.md`'s "decide deliberately what degrades
-//! silently" rule): [`load`] never returns an error. A missing file behaves
-//! as an empty [`ReviewStateFile`] (nothing has ever been persisted yet — an
-//! entirely ordinary first run). A file that exists but fails to parse
-//! (corrupt — hand-edited, truncated by a crash mid-write before atomic
-//! rename was in place, etc.) is best-effort renamed aside to
-//! `<path>.corrupt` so the bad bytes aren't silently discarded, a one-line
-//! diagnostic is printed to **stderr** (never stdout — reserved for the
-//! annotation markdown emitted on quit), and the load still proceeds as
-//! empty. Every review then degrades to fully `Unreviewed` rather than the
-//! session crashing or refusing to start — a lost cache is an inconvenience,
-//! not a correctness problem, and the next successful save rebuilds it from
-//! whatever the user re-marks. [`save`]/[`save_review`]/[`delete_review`],
-//! by contrast, return typed [`StoreError`]s: a write is something the
-//! caller chose to do right now and can meaningfully react to (e.g. a
-//! status message), unlike a load at startup with no interactive context to
-//! surface into yet.
+//! **Silent-degradation contract:** [`load`] never errors. A missing file
+//! is treated as an empty [`ReviewStateFile`]. A file that exists but fails
+//! to parse is best-effort renamed aside to `<path>.corrupt` so the bad
+//! bytes aren't silently discarded, a one-line diagnostic is printed to
+//! **stderr** (never stdout — reserved for the annotation markdown emitted
+//! on quit), and the load proceeds as empty either way.
+//! [`save`]/[`save_review`]/[`delete_review`], by contrast, return typed
+//! [`StoreError`]s: a write is something the caller chose to do right now
+//! and can meaningfully react to.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -31,27 +20,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// The schema version written to every state file. Bumped whenever the
-/// on-disk shape changes incompatibly; [`load`]'s corrupt-file handling
-/// covers an unreadable *future* version the same way it covers hand-edited
-/// garbage — both fail to deserialize into the current [`ReviewStateFile`]
-/// shape and degrade to empty, per this module's silent-degradation
-/// contract.
-///
-/// Bumped to `2` by spec 08 Unit 6 (task 7.1), which added
-/// [`PersistedReview::annotations`]. This particular bump needed no actual
-/// migration code: `annotations` is `#[serde(default)]`, so a v1 file (no
-/// `annotations` key anywhere) still deserializes cleanly into the current
-/// shape with an empty annotation list — `load` never even notices the
-/// version number changed, since (as this doc already noted before the
-/// bump) `load` doesn't gate on `version` at all, it only ever fails via a
-/// structural deserialize error. `version` on disk is closer to an
-/// informational marker than an enforced contract; see this module's test
-/// `v1_file_without_annotations_loads_as_empty_not_corrupt` for the explicit
-/// regression pin proving a v1 file is not treated as corrupt. A *future*
-/// bump only needs real migration code if a later spec changes the
-/// schema in a way `#[serde(default)]` fields can't absorb (e.g. renaming or
-/// restructuring an existing field rather than adding a new one).
+/// The schema version written to every state file. An unreadable or
+/// version-mismatched file degrades to empty per this module's
+/// silent-degradation contract, the same as any other corrupt file.
 pub const SCHEMA_VERSION: u32 = 2;
 
 /// A file's persisted review status. Only the two statuses a user gesture
@@ -77,10 +48,10 @@ pub struct PersistedFile {
     /// (`git rev-parse <branch>:<path>`, full SHA), used to detect staleness
     /// on the next load. `None` when the path didn't exist on the branch at
     /// acceptance time (an accepted deletion has no blob to record) or when
-    /// `status` is `Deferred` (deferred files carry over unconditionally —
-    /// spec 08 Unit 4 — so no blob SHA is ever meaningful for them).
-    /// Omitted from the JSON entirely when absent, rather than written as
-    /// `null`, so a plain `Deferred` entry reads as `{"status":"deferred"}`.
+    /// `status` is `Deferred` (deferred files carry over unconditionally, so
+    /// no blob SHA is ever meaningful for them). Omitted from the JSON
+    /// entirely when absent, rather than written as `null`, so a plain
+    /// `Deferred` entry reads as `{"status":"deferred"}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blob_sha: Option<String>,
 }
@@ -98,22 +69,13 @@ pub struct PersistedReview {
     /// side effect for anyone reading the file by hand.
     #[serde(default)]
     pub files: BTreeMap<String, PersistedFile>,
-    /// This review's annotations, in insertion order (spec 08 Unit 6): the
-    /// same entry annotations and file statuses live in together, so
-    /// deleting or GC'ing a branch's [`PersistedReview`]
-    /// ([`delete_review`]/[`gc`]) removes both in one write — "one
-    /// lifecycle, no orphaned data" by construction, with no extra code
-    /// needed here for that guarantee. Snapshotted via
-    /// [`crate::annotate::snapshot`] on every save-on-change and replayed
-    /// via [`crate::annotate::restore_all`] at session start, before the
-    /// first render. `#[serde(default, skip_serializing_if = "Vec::is_empty")]`
-    /// mirrors [`PersistedFile::blob_sha`]'s "omit rather than write empty"
-    /// convention and, as a side effect, keeps every pre-existing
-    /// annotation-free fixture in this module's tests byte-identical to
-    /// before this field existed — only a session with annotations ever
-    /// gets an `"annotations"` key at all. `#[serde(default)]` alone is what
-    /// lets a v1 file (written before this field existed) still parse as
-    /// empty rather than corrupt; see [`SCHEMA_VERSION`]'s doc.
+    /// This review's annotations, in insertion order. The same entry
+    /// annotations and file statuses live in together, so deleting or
+    /// GC'ing a branch's [`PersistedReview`] ([`delete_review`]/[`gc`])
+    /// removes both in one write. Snapshotted via [`crate::annotate::snapshot`]
+    /// on every save-on-change and replayed via [`crate::annotate::restore_all`]
+    /// at session start. Omitted from the JSON entirely when empty, mirroring
+    /// [`PersistedFile::blob_sha`]'s "omit rather than write empty" convention.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub annotations: Vec<crate::annotate::PersistedAnnotation>,
 }
@@ -146,32 +108,19 @@ fn corrupt_sibling_path(path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// Per-process counter mixed into every temp file name (see [`save`]'s
-/// doc): `std::process::id()` alone only guarantees uniqueness *across*
-/// redquill processes, not across the several background threads the UI
-/// layer's `App::persist_review_state` can have in flight concurrently
-/// *within* one process (spec 08 Unit 6 made this the common
-/// case — three quick accept/defer gestures, or an annotation add right
-/// after one, each spawn their own save). Two threads racing on the exact
-/// same tmp path is a real, observed bug (task 7.0's full-suite gate run
-/// hit a "trailing characters" corrupt-file read from it before this
-/// counter was added) — one thread's `std::fs::write` can truncate the
-/// path out from under another thread's still-in-flight write, producing
-/// bytes that are neither writer's complete output. `Relaxed` ordering is
-/// enough: the only property needed is that two concurrent `fetch_add`
-/// calls never observe the same value, not any particular visibility order
-/// relative to other memory operations.
+/// Per-process counter so concurrent saves within one process never
+/// collide on the temp filename. `Relaxed` ordering is enough: the only
+/// property needed is that two concurrent `fetch_add` calls never observe
+/// the same value.
 static SAVE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Writes `state` to `path` atomically: serialize to a temp file in the
-/// same directory, then `rename` over the final path (rename is atomic
-/// within one filesystem, so a crash or a concurrent read never observes a
-/// half-written file — spec 08 Unit 4's "a crash or `Q` loses nothing"
-/// requirement). Creates `path`'s parent directory if it doesn't exist yet
-/// (the first save of a session). The temp file name includes both the
-/// process id (two redquill processes saving concurrently, e.g. reviewing
-/// different branches, never collide) and [`SAVE_SEQ`] (two background
-/// threads *within* the same process never collide either — see its doc).
+/// same directory, then `rename` over the final path, so a crash or a
+/// concurrent read never observes a half-written file. Creates `path`'s
+/// parent directory if it doesn't exist yet. The temp file name includes
+/// both the process id (two redquill processes saving concurrently never
+/// collide) and [`SAVE_SEQ`] (two background threads within the same
+/// process never collide either).
 pub fn save(path: &Path, state: &ReviewStateFile) -> Result<(), StoreError> {
     let json = serde_json::to_string_pretty(state).map_err(StoreError::Serialize)?;
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
@@ -224,11 +173,10 @@ pub fn load(path: &Path) -> ReviewStateFile {
 }
 
 /// Loads the full state file, upserts `branch`'s entry to `review`, and
-/// saves atomically — the read-modify-write [`super::App`] drives after
-/// every status change (spec 08 Unit 4) and finish's cleanup both use. A
-/// corrupt file self-heals here too (`load`'s recovery runs first, so the
-/// save that follows starts from an empty file rather than propagating the
-/// corruption).
+/// saves atomically — the read-modify-write pattern every status change and
+/// finish's cleanup use. A corrupt file self-heals here too (`load`'s
+/// recovery runs first, so the save that follows starts from an empty file
+/// rather than propagating the corruption).
 pub fn save_review(path: &Path, branch: &str, review: PersistedReview) -> Result<(), StoreError> {
     let mut state = load(path);
     state.version = SCHEMA_VERSION;
@@ -237,8 +185,8 @@ pub fn save_review(path: &Path, branch: &str, review: PersistedReview) -> Result
 }
 
 /// Loads the full state file, removes `branch`'s entry (a no-op if absent),
-/// and saves atomically — used by finish (spec 08 Unit 2/4) to delete a
-/// completed review's persisted state.
+/// and saves atomically — used by finish to delete a completed review's
+/// persisted state.
 pub fn delete_review(path: &Path, branch: &str) -> Result<(), StoreError> {
     let mut state = load(path);
     if state.reviews.remove(branch).is_none() {
@@ -247,9 +195,8 @@ pub fn delete_review(path: &Path, branch: &str) -> Result<(), StoreError> {
     save(path, &state)
 }
 
-/// Removes every entry whose branch is not in `existing_branches` (spec 08
-/// Unit 4's launch-time GC — "drop entries whose branch no longer exists...
-/// GC shall never touch entries for existing branches"). Pure: takes the
+/// Removes every entry whose branch is not in `existing_branches`, and
+/// never touches an entry whose branch still exists. Pure: takes the
 /// branch set as plain data rather than reading git itself, so it's
 /// unit-testable without a repository; the caller resolves
 /// `existing_branches` via [`crate::git::GitRunner::branch_list`]. Returns
@@ -362,14 +309,13 @@ mod tests {
         assert!(review.annotations.is_empty());
     }
 
-    // -- Schema v2: annotations field (task 7.1) -------------------------------
+    // -- Schema v2: annotations field -------------------------------------------
 
-    /// The explicit v1→v2 compat regression pin the task calls for: a v1
-    /// file (`"version": 1`, no `annotations` key anywhere — exactly what
-    /// every pre-7.1 save wrote) must load as a normal, non-corrupt review
-    /// with an empty annotation list, going through the real [`load`]
-    /// entry point (not just a bare `serde_json::from_str`) so the
-    /// corrupt-file side path is proven *not* taken.
+    /// A v1 file (`"version": 1`, no `annotations` key anywhere) must load
+    /// as a normal, non-corrupt review with an empty annotation list, going
+    /// through the real [`load`] entry point (not just a bare
+    /// `serde_json::from_str`) so the corrupt-file side path is proven
+    /// *not* taken.
     #[test]
     fn v1_file_without_annotations_loads_as_empty_not_corrupt() {
         let tmp = TempDir::new().unwrap();
@@ -405,10 +351,10 @@ mod tests {
         );
     }
 
-    /// The v1 file's own `version: 1` survives the read verbatim (`load`
-    /// never rewrites it in place) — the *next* save is what actually
-    /// upgrades it on disk, via [`save_review`]'s `state.version =
-    /// SCHEMA_VERSION` assignment.
+    /// A v1 file's own `version: 1` survives the read verbatim (`load`
+    /// never rewrites it in place) — the *next* save is what upgrades it on
+    /// disk, via [`save_review`]'s `state.version = SCHEMA_VERSION`
+    /// assignment.
     #[test]
     fn v1_file_upgrades_to_v2_on_the_next_save() {
         let tmp = TempDir::new().unwrap();
@@ -435,12 +381,10 @@ mod tests {
         assert_eq!(state.version, SCHEMA_VERSION);
     }
 
-    /// Byte-exact round-trip for the `annotations` field itself, locking the
-    /// exact shape a review's saved annotations take inside
-    /// `review-state.json` — the array sits directly under the review
-    /// entry, each element in [`crate::annotate::PersistedAnnotation`]'s own
-    /// stable shape (see `annotate::persist`'s own byte-exact test for that
-    /// shape in isolation).
+    /// Byte-exact round-trip for the `annotations` field, locking the exact
+    /// shape a review's saved annotations take inside `review-state.json` —
+    /// the array sits directly under the review entry, each element in
+    /// [`crate::annotate::PersistedAnnotation`]'s own stable shape.
     #[test]
     fn annotations_field_round_trips_byte_exact() {
         use crate::annotate::{Classification, PersistedAnnotation, Side, Source, Target};
@@ -495,15 +439,11 @@ mod tests {
     }
 
     /// An empty `files` map still serializes as `"files": {}` (no
-    /// `skip_serializing_if` on that field — unchanged from before this
-    /// task) while an empty `annotations` list is omitted entirely — the
-    /// two fields deliberately have different emptiness conventions
-    /// (`files` predates this task and every existing fixture already
-    /// depends on it always appearing; `annotations` is new, so it gets the
-    /// leaner "omit when empty" treatment `PersistedFile::blob_sha` set the
-    /// precedent for). This test exists so a future edit that "fixes" one
-    /// to match the other fails loudly instead of silently changing the
-    /// on-disk shape.
+    /// `skip_serializing_if` on that field) while an empty `annotations`
+    /// list is omitted entirely — the two fields deliberately have
+    /// different emptiness conventions. This test exists so a future edit
+    /// that "fixes" one to match the other fails loudly instead of silently
+    /// changing the on-disk shape.
     #[test]
     fn empty_annotations_are_omitted_but_empty_files_still_serialize_as_object() {
         let review = PersistedReview {
@@ -517,7 +457,7 @@ mod tests {
         assert!(!json.contains("annotations"));
     }
 
-    // -- Atomic write (task 4.1) -----------------------------------------------
+    // -- Atomic write -------------------------------------------------------
 
     #[test]
     fn save_then_load_round_trips_through_disk() {
@@ -576,7 +516,7 @@ mod tests {
         assert_eq!(load(&path), ReviewStateFile::default());
     }
 
-    // -- load: corrupt file recovery (task 4.5) --------------------------------
+    // -- load: corrupt file recovery ----------------------------------------
 
     #[test]
     fn load_corrupt_file_is_moved_aside_and_treated_as_empty() {
@@ -711,7 +651,7 @@ mod tests {
         assert!(!path.exists());
     }
 
-    // -- gc (task 4.5) ----------------------------------------------------------
+    // -- gc -------------------------------------------------------------------
 
     #[test]
     fn gc_drops_entries_for_branches_that_no_longer_exist() {

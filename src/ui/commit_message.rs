@@ -1,11 +1,10 @@
-//! State for the commit-message modal ([`super::app::Mode::CommitMessage`],
-//! spec 04, `docs/specs/04-spec-commit-staged.md`): the multi-line message
-//! being typed (reusing Compose's [`TextBuffer`] — it is a plain text buffer,
-//! not annotation-specific) and the git panel's cursor row to restore when
-//! the modal closes. Also carries the `App` handlers that open, close, and
-//! submit the modal, split out of `app.rs` alongside this state so all
-//! commit-modal logic lives in one module (mirrors [`super::switcher`]'s
-//! state-plus-handlers split).
+//! State for the commit-message modal ([`super::app::Mode::CommitMessage`]):
+//! the multi-line message being typed (reusing Compose's [`TextBuffer`] — it
+//! is a plain text buffer, not annotation-specific) and the git panel's
+//! cursor row to restore when the modal closes. Also carries the `App`
+//! handlers that open, close, and submit the modal, split out of `app.rs`
+//! alongside this state so all commit-modal logic lives in one module
+//! (mirrors [`super::switcher`]'s state-plus-handlers split).
 
 use super::app::{App, Mode};
 use super::compose::TextBuffer;
@@ -35,15 +34,15 @@ impl CommitMessageState {
 }
 
 /// Whether `message` is empty or whitespace-only — the reject condition for
-/// `Enter` in the modal (spec 04 Unit 1). A pure predicate so the rule is
-/// unit-testable without an `App`.
+/// `Enter` in the modal. A pure predicate so the rule is unit-testable
+/// without an `App`.
 pub(super) fn message_is_blank(message: &str) -> bool {
     message.trim().is_empty()
 }
 
 impl App {
-    /// Opens the commit-message modal (`c`, panel scope, spec 04 Unit 1) —
-    /// but only when at least one change is staged; with nothing staged it
+    /// Opens the commit-message modal (`c`, panel scope) — but only when at
+    /// least one change is staged; with nothing staged it
     /// degrades to a footer message ("nothing staged to commit") and the
     /// panel keeps focus. Captures the panel's current cursor row so
     /// [`App::close_commit_message`] can restore it; `self.mode` and
@@ -76,8 +75,8 @@ impl App {
         };
     }
 
-    /// The `Enter` gesture inside the commit-message modal (spec 04 Unit 2):
-    /// an empty or whitespace-only message is rejected with a footer message
+    /// The `Enter` gesture inside the commit-message modal: an empty or
+    /// whitespace-only message is rejected with a footer message
     /// and the modal stays open; otherwise the commit is requested on the
     /// background poller (see [`App::request_commit`]) and — only if it was
     /// actually spawned — the modal closes back to the panel. A rejected

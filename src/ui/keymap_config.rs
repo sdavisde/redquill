@@ -1,6 +1,6 @@
 //! Merges the `[keys.diff]`/`[keys.panel]` config section
 //! (`crate::config::KeysConfig`) onto `Keymap::default_map()` to produce the
-//! effective startup keymap (spec 07 Unit 4). Built exactly once, from
+//! effective startup keymap. Built exactly once, from
 //! [`super::run`], before the event loop starts — the keymap is then
 //! threaded by reference through the whole session, so there is no
 //! per-keystroke parsing (see `super::perf_tests`'s dispatch tripwires).
@@ -10,7 +10,7 @@
 //! `crate::ui::keymap` runtime types — `crate::config` itself must never
 //! import `crate::ui` (see that module's doc).
 //!
-//! **Merge semantics** (FR, spec 07 Unit 4): an action named in
+//! **Merge semantics**: an action named in
 //! `[keys.diff]`/`[keys.panel]` gets *exactly* the listed keys — its
 //! default keys for that action in that scope are dropped, not appended to;
 //! an action not named keeps its defaults untouched; an empty list

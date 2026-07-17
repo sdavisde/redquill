@@ -1,43 +1,19 @@
-//! The full-screen Project Search view ([`Mode::ProjectSearch`], spec 06
-//! Unit 2): a live, debounced project-wide grep over the worktree on disk,
-//! streaming results from [`crate::search::spawn_scan`] into
-//! [`ProjectSearchState`], grouped by file for [`super::project_search_view`]
-//! to render.
+//! The full-screen Project Search view ([`Mode::ProjectSearch`]): a live,
+//! debounced project-wide grep over the worktree on disk, streaming results
+//! from [`crate::search::spawn_scan`] into [`ProjectSearchState`], grouped by
+//! file for [`super::project_search_view`] to render.
 //!
-//! Unlike the commit view / file view, opening this view never touches
-//! `App::view`/`App::target` — it has its own dedicated state here — so
-//! `Esc` back to the diff needs no [`super::app::SuspendedView`]-style
-//! suspend/restore: [`ProjectSearchState::return_mode`] (captured at open,
-//! mirroring [`super::file_finder::FinderState::return_mode`]) is all that's
-//! needed. The read-only file view a hit's `Enter` opens *is* a nested
-//! suspension (the existing spec 06 Unit 1 mechanism), landing back in
-//! `Mode::ProjectSearch` rather than `Mode::Normal` — see
-//! [`super::App::file_view_return_mode`] — so the query/toggles/results/
-//! selection all survive that round trip untouched, and this state is only
-//! ever dropped by [`App::close_project_search`] (the final `Esc`), which is
-//! also the only place the in-flight scan is aborted for "leaving the
-//! feature" (as opposed to a query/toggle change, which aborts and
-//! re-debounces via [`App::note_project_search_change`]). Opening a hit does
-//! *not* abort the scan — it keeps streaming in the background and is still
-//! there (possibly further along, or finished) when `Esc` returns.
-//!
-//! ## Debounce and generations
-//!
-//! Every query-affecting change (a typed char, backspace, or toggle) calls
-//! [`App::note_project_search_change`]: it aborts whatever scan is currently
-//! in flight, bumps `generation`, and (re)starts a
-//! [`DEBOUNCE`]-length window. This happens on *every* keystroke, not just
-//! once the debounce settles — "results from a superseded query generation
-//! shall be dropped, and the in-flight scan shall be cancelled promptly" per
-//! spec, independent of whether a new scan has even spawned yet. Only once
-//! the debounce elapses (checked once per tick via
-//! [`App::maybe_fire_project_search`]) does [`App::fire_project_search`]
-//! actually call [`spawn_scan`], tagging the new scan with whatever
-//! `generation` is current at that moment.
-//!
-//! An invalid regex never wipes prior good results: [`spawn_scan`] fails
-//! synchronously before touching anything, so [`App::fire_project_search`]
-//! only clears `groups`/`summary` in the success branch.
+//! Opening this view never touches `App::view`/`App::target` — it has its own
+//! dedicated state here — so `Esc` back to the diff just restores
+//! [`ProjectSearchState::return_mode`]. The read-only file view a hit's
+//! `Enter` opens is a nested suspension landing back in `Mode::ProjectSearch`
+//! rather than `Mode::Normal`, so the query/toggles/results/selection survive
+//! that round trip; the in-flight scan keeps streaming in the background
+//! regardless. Every query-affecting change aborts the in-flight scan and
+//! (re)starts a [`DEBOUNCE`]-length window via
+//! [`App::note_project_search_change`]; once it elapses,
+//! [`App::fire_project_search`] spawns a new scan tagged with the current
+//! `generation`, so stale results are dropped on arrival.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -52,18 +28,17 @@ use crate::search::{
 use super::app::{App, Mode};
 
 /// How long after the last query-affecting change to wait before firing a
-/// new scan (spec 06 Unit 2: "~120-150ms"). Long enough to coalesce a fast
-/// typist's burst into one scan; short enough to feel live.
+/// new scan. Long enough to coalesce a fast typist's burst into one scan;
+/// short enough to feel live.
 pub(super) const DEBOUNCE: Duration = Duration::from_millis(140);
 
 /// Minimum query length (in `char`s) that fires a scan. Shorter queries show
 /// no results and no error — not "invalid", just "too short to search yet".
 pub(super) const MIN_QUERY_LEN: usize = 2;
 
-/// Which half of the Project Search view is receiving keystrokes (spec 06
-/// round-1 UX fix: "vim motions don't work" in the results list because
-/// every key fell through to the query buffer). `Input` types into the query
-/// buffer and live-searches as before; `Results` routes `j`/`k`/`Up`/`Down`
+/// Which half of the Project Search view is receiving keystrokes. `Input`
+/// types into the query buffer and live-searches as before; `Results` routes
+/// `j`/`k`/`Up`/`Down`
 /// to result navigation instead, freeing those letters up (the same reason
 /// the finder/search tables only bind `Up`/`Down`, not `j`/`k`, still
 /// applies while `Input` is active). `Esc` moves `Input` -> `Results`
@@ -147,7 +122,7 @@ pub(super) struct ProjectSearchState {
 impl ProjectSearchState {
     /// Builds fresh state with the built-in defaults (`CaseMode::Smart`,
     /// both toggles off) — used directly by every test that doesn't care
-    /// about `[search]` startup defaults (spec 07 task 1.8); production
+    /// about `[search]` startup defaults; production
     /// code opens through [`ProjectSearchState::seeded`] instead, via
     /// [`super::App::open_project_search`], so this convenience is
     /// test-only.
@@ -157,7 +132,7 @@ impl ProjectSearchState {
     }
 
     /// Builds fresh state seeded from `defaults` (`[search]`'s
-    /// `case`/`whole_word`/`literal`, spec 07 task 1.8): only the *startup*
+    /// `case`/`whole_word`/`literal`): only the *startup*
     /// toggle state a fresh session opens with — an already-open session's
     /// in-session toggles (`Alt-c`/`Alt-w`/`Alt-r`) are never touched by a
     /// config reload, since there is none (config loads exactly once, at
@@ -252,8 +227,8 @@ impl App {
         self.mode = state.return_mode;
     }
 
-    /// The Project Search view's `Esc` gesture (spec 06 round-1 UX fix): a
-    /// two-step unwind rather than an immediate exit. From [`SearchFocus::Input`]
+    /// The Project Search view's `Esc` gesture: a two-step unwind rather
+    /// than an immediate exit. From [`SearchFocus::Input`]
     /// it only moves focus to [`SearchFocus::Results`] (the view stays open,
     /// vim motions become live) — from [`SearchFocus::Results`] it's the
     /// final "leave the feature" gesture, delegating to
@@ -380,8 +355,8 @@ impl App {
     }
 
     /// The Project Search view's `Enter` gesture: opens the selected hit's
-    /// file in the read-only file view (task 1.0), cursor on the hit line,
-    /// landing back in `Mode::ProjectSearch` (not `Mode::Normal`) on `Esc` —
+    /// file in the read-only file view, cursor on the hit line, landing
+    /// back in `Mode::ProjectSearch` (not `Mode::Normal`) on `Esc` —
     /// see [`App::open_file_view_with_return_mode`]. Leaves
     /// `self.project_search` untouched (query/toggles/results/selection all
     /// survive the round trip). A no-op (view stays open) if nothing is
@@ -431,9 +406,9 @@ impl App {
     /// — nothing to show for a too-short query, and any prior scan was
     /// already aborted by [`App::note_project_search_change`]). On an
     /// invalid pattern, only `error` is set — `groups`/`summary` are left
-    /// exactly as they were, so a bad keystroke never wipes good results
-    /// (spec 06 Unit 2). On success, clears `groups`/`summary`/`error` and
-    /// starts accumulating the fresh scan's batches.
+    /// exactly as they were, so a bad keystroke never wipes good results. On
+    /// success, clears `groups`/`summary`/`error` and starts accumulating
+    /// the fresh scan's batches.
     fn fire_project_search(&mut self) {
         let Some(state) = self.project_search.as_mut() else {
             return;

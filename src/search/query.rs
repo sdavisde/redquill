@@ -1,4 +1,4 @@
-//! Search query model (spec 06 Unit 2): [`SearchQuery`] plus `grep-regex`
+//! Search query model: [`SearchQuery`] plus `grep-regex`
 //! matcher construction (regex by default, smartcase, whole-word, literal).
 //! Pure — no I/O, no TUI types; [`crate::search::engine`] uses
 //! [`build_matcher`] to compile the matcher it hands to `grep-searcher`.
@@ -7,7 +7,7 @@ use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use thiserror::Error;
 
 /// Case-sensitivity behavior for a [`SearchQuery`] — the three states the
-/// Project Search view's case toggle (task 3.0, `Alt-c`) cycles through.
+/// Project Search view's case toggle (`Alt-c`) cycles through.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CaseMode {
     /// Case-insensitive unless the pattern contains an uppercase letter —
@@ -27,7 +27,7 @@ pub enum CaseMode {
 }
 
 /// A user-entered search query: pattern text plus the toggle states the
-/// Project Search view (task 3.0) exposes and cycles.
+/// Project Search view exposes and cycles.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchQuery {
     /// The pattern text — a regex unless `literal` is set.

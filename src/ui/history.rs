@@ -1,5 +1,5 @@
-//! History-tab background loading (spec 05 Unit 3): fetches commit-log pages
-//! off the render thread via the same single-flight + generation-counter
+//! History-tab background loading: fetches commit-log pages off the render
+//! thread via the same single-flight + generation-counter
 //! pattern [`super::refresh`] uses for the working-tree poll, so scrolling
 //! the git panel's History tab never blocks on `git log`.
 //!
@@ -17,8 +17,8 @@ use crate::git::CommitLogEntry;
 use super::App;
 use super::background::TaskId;
 
-/// Commits requested per background page fetch. A tuning choice (spec 05
-/// Open Question 3), not a contract.
+/// Commits requested per background page fetch. A tuning choice, not a
+/// contract.
 pub(super) const HISTORY_PAGE_SIZE: u32 = 100;
 
 /// How close to the end of what's loaded the panel cursor must get (rows

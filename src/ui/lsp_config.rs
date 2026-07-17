@@ -2,7 +2,7 @@
 //! built-in per-language server table
 //! (`crate::lsp::config::default_commands`) to produce the effective
 //! `HashMap<ServerLang, LangServerCmd>` that `LspManager` is constructed
-//! with (docs/specs/07-spec-config-layer, Unit 3).
+//! with.
 //!
 //! **Layering**: `crate::lsp` must never import `crate::config`, and
 //! `crate::config` must never import `crate::lsp` — [`LspConfig`]'s fields

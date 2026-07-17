@@ -51,8 +51,8 @@ impl ServerLang {
 
 /// How to launch a language server: the executable and its arguments.
 ///
-/// v1 is a hardcoded default table; a later change may replace this with a
-/// user-configurable table in the style of Helix's `languages.toml`.
+/// Hardcoded default table; user-configurable tables are a possible future
+/// extension.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LangServerCmd {
     pub command: String,

@@ -3,8 +3,8 @@
 //! flattened row model for that file, the cursor (row and column), the
 //! scroll offset, and the viewport height.
 //!
-//! This is the seam the multi-file collapsible diff buffer (spec 03) will
-//! generalize: everything here is expressed in terms of "rows for the
+//! This is the seam the multi-file collapsible diff buffer generalizes:
+//! everything here is expressed in terms of "rows for the
 //! selected file", and every motion/clamp/visibility operation is a pure
 //! transform over that state. Row *building* (which needs syntax
 //! highlighting, the annotation store, and the git backend) stays in

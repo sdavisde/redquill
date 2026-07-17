@@ -40,21 +40,23 @@ pub type AsyncReviewBuilder =
 
 /// A `Send` closure fetching one page of the commit-log read model
 /// (`count` commits starting `skip` back from the tip) off the render
-/// thread, for the git panel's History tab (spec 05 Unit 3). The same
-/// indirection as [`AsyncReviewBuilder`] and for the same reason: `App`
-/// itself is not `Send`, but a cloned [`GitRunner`] handle is.
+/// thread, for the git panel's History tab. The same indirection as
+/// [`AsyncReviewBuilder`] and for the same reason: `App` itself is not
+/// `Send`, but a cloned [`GitRunner`] handle is.
 pub type AsyncCommitLogFetcher =
     Box<dyn Fn(u32, u32) -> Result<Vec<CommitLogEntry>, GitError> + Send>;
 
-/// A `Send` closure fetching the fuzzy file finder's candidate list (spec 06
-/// Unit 1) off the render thread, for the finder's single-flight background
-/// load. Same indirection as [`AsyncReviewBuilder`]/[`AsyncCommitLogFetcher`]
-/// and for the same reason.
+/// A `Send` closure fetching the fuzzy file finder's candidate list off the
+/// render thread, for the finder's single-flight background load. Same
+/// indirection as [`AsyncReviewBuilder`]/[`AsyncCommitLogFetcher`] and for
+/// the same reason.
 pub type AsyncFileCandidatesFetcher = Box<dyn Fn() -> Result<Vec<FileCandidate>, GitError> + Send>;
 
 /// The git operations the TUI needs for staging and refresh, kept behind a
 /// trait so [`super::App`]'s staging logic is unit-testable without a real
-/// repository. [`GitRunner`] is the production implementation.
+/// repository. [`GitRunner`] is the production implementation. Read-model
+/// methods default to erroring (or returning empty/`None`) so navigation-only
+/// fakes need not implement them.
 pub trait StageOps {
     /// Raw per-file patches for `target` (see [`GitRunner::diff`]).
     fn diff(&self, target: &DiffTarget) -> Result<Vec<RawFilePatch>, GitError>;
@@ -86,9 +88,8 @@ pub trait StageOps {
     /// pane highlights syntactically. `None` on any failure.
     fn show_file(&self, spec: &str) -> Option<String>;
     /// Reads the current branch / upstream / ahead-behind state (see
-    /// [`GitRunner::status_with_branch`]). The default errors, so
-    /// backend-less or navigation-only fakes need not implement it; the
-    /// panel treats branch state as best-effort.
+    /// [`GitRunner::status_with_branch`]); the panel treats this as
+    /// best-effort.
     fn branch_status(&self) -> Result<BranchStatus, GitError> {
         Err(GitError::Parse("branch status unavailable".into()))
     }
@@ -98,74 +99,61 @@ pub trait StageOps {
         Ok(Vec::new())
     }
     /// Reads a one-line summary of the tip commit (see
-    /// [`GitRunner::last_commit`]). The default returns `None`, so
-    /// backend-less or navigation-only fakes need not implement it; the panel
-    /// treats the last commit as best-effort.
+    /// [`GitRunner::last_commit`]).
     fn last_commit(&self) -> Result<Option<CommitSummary>, GitError> {
         Ok(None)
     }
-    /// Reads the local branches (see [`GitRunner::branch_list`]). The
-    /// default errors, so backend-less or navigation-only fakes need not
-    /// implement it; the switcher treats this as unavailable rather than
-    /// crashing.
+    /// Reads the local branches (see [`GitRunner::branch_list`]); the
+    /// switcher treats this as unavailable rather than crashing.
     fn branch_list(&self) -> Result<Vec<LocalBranch>, GitError> {
         Err(GitError::Parse("branch list unavailable".into()))
     }
-    /// Reads every worktree (see [`GitRunner::worktree_list`]). The default
-    /// errors, mirroring [`StageOps::branch_list`].
+    /// Reads every worktree (see [`GitRunner::worktree_list`]).
     fn worktree_list(&self) -> Result<Vec<WorktreeEntry>, GitError> {
         Err(GitError::Parse("worktree list unavailable".into()))
     }
-    /// Removes a managed review worktree (see [`GitRunner::worktree_remove`],
-    /// spec 08 Unit 2). Must be called through a backend rooted *outside*
-    /// the worktree being removed (see
-    /// [`super::app::App::review_origin_ops`]'s doc). The default errors,
-    /// mirroring [`StageOps::branch_list`].
+    /// Removes a managed review worktree (see [`GitRunner::worktree_remove`]).
+    /// Must be called through a backend rooted *outside* the worktree being
+    /// removed (see [`super::app::App::review_origin_ops`]'s doc).
     fn worktree_remove(&self, path: &std::path::Path) -> Result<(), GitError> {
         let _ = path;
         Err(GitError::Parse("worktree remove unavailable".into()))
     }
     /// Prunes stale worktree administrative records (see
-    /// [`GitRunner::worktree_prune`], spec 08 Unit 2). The default errors,
-    /// mirroring [`StageOps::branch_list`].
+    /// [`GitRunner::worktree_prune`]).
     fn worktree_prune(&self) -> Result<(), GitError> {
         Err(GitError::Parse("worktree prune unavailable".into()))
     }
     /// Switches the working tree to branch `name` (see
-    /// [`GitRunner::switch_branch`]). The default errors, mirroring
-    /// [`StageOps::branch_list`].
+    /// [`GitRunner::switch_branch`]).
     fn switch_branch(&self, name: &str) -> Result<(), GitError> {
         let _ = name;
         Err(GitError::Parse("branch switch unavailable".into()))
     }
     /// The repository's common git directory (see
-    /// [`GitRunner::git_common_dir`], spec 08 Units 1/5) — the shared
-    /// administrative directory every linked worktree resolves review paths
-    /// through. The default errors, mirroring [`StageOps::branch_list`].
+    /// [`GitRunner::git_common_dir`]) — the shared administrative directory
+    /// every linked worktree resolves review paths through.
     fn git_common_dir(&self) -> Result<std::path::PathBuf, GitError> {
         Err(GitError::Parse("git common dir unavailable".into()))
     }
-    /// Resolves `--review`'s default base ref (see [`GitRunner::default_base`],
-    /// spec 08 Units 1/5): the branch `origin/HEAD` points to, else `main`,
-    /// else `master`. The default errors, mirroring [`StageOps::branch_list`].
+    /// Resolves `--review`'s default base ref (see [`GitRunner::default_base`]):
+    /// the branch `origin/HEAD` points to, else `main`, else `master`.
     fn default_base(&self) -> Result<String, GitError> {
         Err(GitError::Parse("default base unavailable".into()))
     }
     /// Creates a managed review worktree at `path`, checked out to `branch`
-    /// (see [`GitRunner::worktree_add`], spec 08 Units 1/5). The default
-    /// errors, mirroring [`StageOps::branch_list`].
+    /// (see [`GitRunner::worktree_add`]).
     fn worktree_add(&self, path: &std::path::Path, branch: &str) -> Result<(), GitError> {
         let _ = (path, branch);
         Err(GitError::Parse("worktree add unavailable".into()))
     }
     /// Builds the `git commit -m <message>` [`Command`] the commit gesture
-    /// (spec 04) spawns on the background poller — returned as a `Command`
-    /// rather than run here so the caller can execute it off the render
-    /// thread (see [`crate::git::commit_command`] for the fixed-argv
-    /// contract). The default returns `None`: backend-less contexts and
-    /// fakes that don't opt in degrade to a footer message, and a fake *can*
-    /// opt in with a synthetic command (e.g. `true`/`false`) to drive the
-    /// full spawn → poll → command-log pipeline without git.
+    /// spawns on the background poller — returned as a `Command` rather
+    /// than run here so the caller can execute it off the render thread
+    /// (see [`crate::git::commit_command`] for the fixed-argv contract). The
+    /// default returns `None`: backend-less contexts degrade to a footer
+    /// message, and a fake *can* opt in with a synthetic command to drive
+    /// the full spawn → poll → command-log pipeline without git.
     fn commit_command(&self, message: &str) -> Option<Command> {
         let _ = message;
         None
@@ -173,8 +161,7 @@ pub trait StageOps {
     /// Reads one page of the commit-log read model (see
     /// [`GitRunner::commit_log`]), synchronously — the fallback the History
     /// tab's fetch takes when [`StageOps::async_commit_log_fetcher`] returns
-    /// `None`. The default errors, mirroring [`StageOps::branch_list`], so
-    /// backend-less or navigation-only fakes need not implement it.
+    /// `None`.
     fn commit_log(&self, count: u32, skip: u32) -> Result<Vec<CommitLogEntry>, GitError> {
         let _ = (count, skip);
         Err(GitError::Parse("commit log unavailable".into()))
@@ -187,12 +174,10 @@ pub trait StageOps {
     fn async_commit_log_fetcher(&self) -> Option<AsyncCommitLogFetcher> {
         None
     }
-    /// Reads the fuzzy file finder's candidate list (spec 06 Unit 1):
-    /// tracked (`git ls-files`) plus untracked-but-unignored files, merged
-    /// via [`crate::search::merge_candidates`]. The default errors,
-    /// mirroring [`StageOps::branch_list`], so backend-less or
-    /// navigation-only fakes need not implement it — the finder treats this
-    /// as unavailable rather than crashing.
+    /// Reads the fuzzy file finder's candidate list: tracked (`git
+    /// ls-files`) plus untracked-but-unignored files, merged via
+    /// [`crate::search::merge_candidates`]; the finder treats this as
+    /// unavailable rather than crashing.
     fn list_files(&self) -> Result<Vec<FileCandidate>, GitError> {
         Err(GitError::Parse("file list unavailable".into()))
     }
@@ -204,12 +189,10 @@ pub trait StageOps {
     fn async_file_candidates_fetcher(&self) -> Option<AsyncFileCandidatesFetcher> {
         None
     }
-    /// Reads `path`'s blob SHA on `branch` (see [`GitRunner::blob_sha`],
-    /// spec 08 Unit 4), for capturing at accept time and re-checking at
-    /// reconciliation time. The default errors, mirroring
-    /// [`StageOps::branch_list`], so backend-less or navigation-only fakes
-    /// need not implement it — accept/reconcile then degrade to recording no
-    /// blob SHA rather than crashing.
+    /// Reads `path`'s blob SHA on `branch` (see [`GitRunner::blob_sha`]),
+    /// for capturing at accept time and re-checking at reconciliation time;
+    /// accept/reconcile degrade to recording no blob SHA rather than
+    /// crashing.
     fn blob_sha(&self, branch: &str, path: &str) -> Result<Option<String>, GitError> {
         let _ = (branch, path);
         Err(GitError::Parse("blob sha unavailable".into()))
@@ -495,12 +478,10 @@ pub fn build_review(
         // Fully-staged files never appear in the working-tree diff (their
         // changes are all in the index), yet the review must keep them as
         // sections so unstaging is one `S` on a header, and expanding shows
-        // their (staged) content rather than nothing (spec Unit 2 —
-        // "nothing hides"). Union them in from the staged diff fetched
-        // above, falling back to a header-only placeholder when there's no
-        // textual staged patch; the path sort below places them, like
-        // every other entry, by path. See 03-task-03-proofs.md for the
-        // design note on this choice.
+        // their (staged) content rather than nothing. Union them in from
+        // the staged diff fetched above, falling back to a header-only
+        // placeholder when there's no textual staged patch; the path sort
+        // below places them, like every other entry, by path.
         for entry in &status {
             if staged_state(entry) != StagedState::Full {
                 continue;
@@ -799,10 +780,9 @@ mod tests {
     #[test]
     fn fully_staged_file_gets_hunks_from_the_staged_diff() {
         // `x.rs` is fully staged: it has no working-tree diff (its changes
-        // are all in the index), but it does have a staged one. Before the
-        // fix, `build_review` synthesized an empty, header-only `FileDiff`
-        // for it here; now it should carry the real staged hunks so the
-        // file stays expandable.
+        // are all in the index), but it does have a staged one.
+        // `build_review` should carry the real staged hunks so the file
+        // stays expandable.
         let fake = Fake {
             working_tree_diff: Vec::new(),
             staged_diff: vec![one_hunk_patch("x.rs")],

@@ -4,8 +4,8 @@
 //! thread + `mpsc` channel + non-blocking `poll()` design, but generalized
 //! to run arbitrary closures (or commands) rather than LSP requests.
 //!
-//! This is the seam for the git-panel workstream (spec 02), which needs
-//! non-blocking fetch/pull/push: those run as closures whose result type the
+//! This is the seam for the git-panel workstream, which needs non-blocking
+//! fetch/pull/push: those run as closures whose result type the
 //! caller chooses, so no git-specific (or LSP-specific) types leak in here.
 //! Its first production caller is [`super::App::request_remote_op`].
 

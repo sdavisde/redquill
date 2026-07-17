@@ -1,9 +1,9 @@
 //! Public event types produced by the LSP layer.
 //!
-//! These types are the boundary between the (not-yet-written) async
-//! transport/manager machinery and the rest of the application: they carry
-//! no process handles, sockets, or `lsp_types` wire types, so they can be
-//! constructed and compared in pure unit tests.
+//! These types are the boundary between the async transport/manager
+//! machinery and the rest of the application: they carry no process
+//! handles, sockets, or `lsp_types` wire types, so they can be constructed
+//! and compared in pure unit tests.
 
 use std::path::PathBuf;
 
@@ -12,8 +12,7 @@ use std::path::PathBuf;
 ///
 /// Callers mint these (typically from a monotonically increasing counter)
 /// when issuing a request, then match them against the `id` field on the
-/// event that comes back out of `LspManager::poll` (added in a later
-/// change).
+/// event that comes back out of `LspManager::poll`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RequestId(pub u64);
 
@@ -29,8 +28,7 @@ pub struct SourceLocation {
     pub character: u32,
 }
 
-/// Events drained from `LspManager::poll` (manager added in a later
-/// change).
+/// Events drained from `LspManager::poll`.
 ///
 /// Every request-shaped event carries the [`RequestId`] of the request it
 /// answers so the caller can correlate it back to the UI action that

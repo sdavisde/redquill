@@ -1,5 +1,5 @@
-//! Real-git integration tests for spec 03 Task 4 (branch switch + worktree
-//! re-root), driven through the actual key-dispatch pipeline
+//! Real-git integration tests for branch switch + worktree
+//! re-root, driven through the actual key-dispatch pipeline
 //! (`` ` `` -> `b` -> `j`/`k`/`Tab` -> `Enter`) against throwaway repositories
 //! built in tempdirs via `std::process::Command`, per this repo's testing
 //! convention (see CLAUDE.md/`docs/rust-best-practices.md`) — never the host

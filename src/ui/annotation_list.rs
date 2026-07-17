@@ -3,9 +3,9 @@
 //! Kept out of `app.rs` so the coordinator stays thin; these methods drive
 //! the annotation store and the diff view purely through `App`'s own state.
 //!
-//! [`App::delete_focused_annotation`] additionally saves-on-change (spec 08
-//! Unit 6, task 7.2) via `App::persist_review_state`, a no-op outside a
-//! review session — see `super::review_ops`'s module doc.
+//! [`App::delete_focused_annotation`] additionally saves-on-change via
+//! `App::persist_review_state`, a no-op outside a review session — see
+//! `super::review_ops`'s module doc.
 
 use super::App;
 use super::Mode;
@@ -91,19 +91,12 @@ impl App {
             self.mode = Mode::Normal;
             return;
         }
-        // Not in the currently-loaded buffer (the common case for a `(=)`
-        // annotation: the file view that made it is rarely still open) --
-        // if it's a worktree-file-content target (spec 06 Unit 3),
-        // `open_file_view` re-opens (or replaces, if a file view is already
-        // showing a different file) that file at its anchor line, exactly
-        // the "navigate back to its file-view location" behavior the
-        // annotation list panel owes these entries. `open_file_view` sets
-        // `Mode::Normal` itself. Every other target shape whose path isn't
-        // loaded (e.g. a commit-authored annotation while a different diff
-        // target is active) has no reliable file-view equivalent -- opening
-        // the *live* worktree file for a historical target's line numbers
-        // would show misleading content -- so it degrades to the existing
-        // no-op-but-close-the-list behavior.
+        // Not in the currently-loaded buffer: a worktree-file-content target
+        // re-opens via `open_file_view` at its anchor line; every other
+        // target shape whose path isn't loaded has no reliable file-view
+        // equivalent (a historical target's line numbers over the live
+        // worktree file would be misleading), so it degrades to the
+        // existing no-op-but-close-the-list behavior.
         if let Some(line) = target.worktree_anchor_line() {
             self.open_file_view(path, Some(line));
             return;
@@ -132,9 +125,8 @@ impl App {
             self.list_cursor = self.list_cursor.min(self.annotations.len() - 1);
         }
         self.refresh_rows();
-        // Save-on-change (spec 08 Unit 6, task 7.2) — see `review_ops`'s
-        // module doc for why this is safe to call unconditionally outside a
-        // review session.
+        // Save-on-change — see `review_ops`'s module doc for why this is
+        // safe to call unconditionally outside a review session.
         self.persist_review_state();
     }
 }

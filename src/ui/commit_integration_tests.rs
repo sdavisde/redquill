@@ -1,5 +1,5 @@
-//! Real-git integration tests for spec 04 (commit staged changes from the
-//! git panel), driven through the actual key-dispatch pipeline
+//! Real-git integration tests for committing staged changes from the
+//! git panel, driven through the actual key-dispatch pipeline
 //! (`` ` `` -> `c` -> typed message -> `Enter`/`Esc`) against throwaway
 //! repositories built in tempdirs, per this repo's testing convention (see
 //! CLAUDE.md / `docs/rust-best-practices.md`) — never the host repo.
@@ -205,7 +205,7 @@ fn multiline_message_reaches_git_verbatim() {
     );
 }
 
-/// A rejecting pre-commit hook (spec Unit 2): the failure lands in the
+/// A rejecting pre-commit hook: the failure lands in the
 /// command log with git's stderr, the footer points at the log, nothing
 /// crashes, and the staged changes stay staged for a retry.
 #[test]
@@ -251,7 +251,7 @@ fn rejected_pre_commit_hook_lands_in_the_command_log() {
 }
 
 /// With nothing staged, `c` never opens the modal — a footer message and
-/// the panel keeps focus (spec Unit 1).
+/// the panel keeps focus.
 #[test]
 fn c_with_nothing_staged_is_a_footer_message() {
     let tmp = repo_with_staged_change();
@@ -276,7 +276,7 @@ fn c_with_nothing_staged_is_a_footer_message() {
 
 /// `Enter` on an empty (or whitespace-only) message is rejected with a
 /// footer message and the modal stays open; `Esc` then cancels back to the
-/// panel at its prior cursor row with no commit made (spec Unit 1).
+/// panel at its prior cursor row with no commit made.
 #[test]
 fn empty_message_is_rejected_and_esc_cancels_back_to_the_panel() {
     let tmp = repo_with_staged_change();

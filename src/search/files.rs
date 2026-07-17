@@ -1,4 +1,4 @@
-//! File-candidate model for the fuzzy file finder (spec 06 Unit 1): merges
+//! File-candidate model for the fuzzy file finder: merges
 //! git's tracked (`git ls-files`) and untracked-but-unignored
 //! (`git ls-files --others --exclude-standard`) path lists into one
 //! deduplicated, deterministically-ordered candidate list.

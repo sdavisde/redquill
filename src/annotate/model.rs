@@ -3,7 +3,7 @@
 //! annotation record itself ([`Annotation`]).
 //!
 //! [`Classification`], [`Side`], [`Source`], and [`Target`] additionally
-//! derive `Serialize`/`Deserialize` (spec 08 Unit 6) so
+//! derive `Serialize`/`Deserialize` so
 //! [`super::persist::PersistedAnnotation`] can compose them directly rather
 //! than defining a shadow copy of each shape that could drift from the
 //! domain type it mirrors. `Annotation` itself does not derive them — its
@@ -98,18 +98,13 @@ pub enum Side {
 
 /// Which diff source an annotation was authored against.
 ///
-/// This is a plain, `annotate`-owned snapshot of the reviewed source — not a
-/// re-export of `git::DiffTarget`. `annotate/` deliberately does not import
-/// `git::DiffTarget`: that type also carries capability methods
-/// (`is_live`/`staging_mode`/`supports_code_intel`) that are a `ui`-facing
-/// concern annotate has no business depending on, and its `Range`/`Commit`
-/// payloads are raw git rev-specs the UI layer already has to interpret
-/// (e.g. resolving a commit's short SHA via the commit-log read model). This
-/// type carries only the sliver of information [`crate::annotate::markdown`]
-/// needs to print the `Reviewing:` metadata line: the source's kind, plus an
-/// already-resolved display string for the non-worktree variants. The `ui`
-/// layer (which already depends on both `git` and `annotate`) is responsible
-/// for deriving a `Source` from the live `DiffTarget` at annotation time.
+/// This is a plain, `annotate`-owned snapshot of the reviewed source, not a
+/// re-export of `git::DiffTarget`: `annotate/` has no business depending on
+/// that type's `ui`-facing capability methods, so this carries only the
+/// sliver of information [`crate::annotate::markdown`] needs to print the
+/// `Reviewing:` metadata line — the source's kind, plus an already-resolved
+/// display string for the non-worktree variants. The `ui` layer derives a
+/// `Source` from the live `DiffTarget` at annotation time.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
@@ -180,17 +175,10 @@ pub enum Target {
         path: String,
     },
     /// A single line in a file's *current worktree content* — not anchored
-    /// to either side of a diff (spec 06 Unit 3: the read-only file view).
-    ///
-    /// The file view always synthesizes an all-context body from the live
-    /// worktree (never a historical revision — see
-    /// [`crate::annotate::model::Source::WorkingTree`]'s doc), so a
-    /// `WorktreeLine`/`WorktreeRange` annotation always composes with the
-    /// [`Source::WorkingTree`] group in [`super::markdown`]'s `Reviewing:`
-    /// grouping: it is never accompanied by its own metadata line, and it
-    /// sits in the same, always-first group as ordinary working-tree diff
-    /// annotations. Serializes with the `(=)` marker — see the `markdown`
-    /// module doc for the exact header shapes.
+    /// to either side of a diff (the read-only file view). Serializes with
+    /// the `(=)` marker; see `docs/annotation-format.md` for the full
+    /// format contract, including how this composes with `Reviewing:`
+    /// grouping.
     WorktreeLine {
         /// Path of the annotated file, relative to the repo root.
         path: String,
@@ -421,7 +409,7 @@ mod tests {
         assert_eq!(validate_body("   \n\t "), Err(AnnotateError::EmptyBody));
     }
 
-    // -- Target::WorktreeLine / Target::WorktreeRange (task 4.1) ------------
+    // -- Target::WorktreeLine / Target::WorktreeRange -----------------------
 
     #[test]
     fn worktree_line_builds_expected_variant() {

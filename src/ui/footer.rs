@@ -61,7 +61,7 @@ fn sort_for_display(mut entries: Vec<FooterEntry>) -> Vec<FooterEntry> {
 /// [`super::help::binding_hidden`]) — `staging_allowed` is `false` on a
 /// read-only diff range, `code_intel_allowed` is `false` whenever the
 /// target's new side isn't the live working tree, `review_session` is
-/// `false` outside a review session (spec 08 Unit 3).
+/// `false` outside a review session.
 fn keymap_hints(
     km: &Keymap,
     scope: Scope,
@@ -99,9 +99,9 @@ fn keymap_hints(
 
 /// Same grouping as [`keymap_hints`], for a modal-mode table
 /// ([`super::modal_keys`]) instead of the [`Keymap`]. Takes the *effective*
-/// table (`app.modal_keys.*`, spec 07 Unit 4 task 5.4 — defaults plus any
-/// `[keys.<mode>]` overrides), not the compiled-in `'static` default, so the
-/// footer strip reflects a remap with no additional wiring.
+/// table (`app.modal_keys.*` — defaults plus any `[keys.<mode>]`
+/// overrides), not the compiled-in `'static` default, so the footer strip
+/// reflects a remap with no additional wiring.
 fn modal_hints<A: Copy + Clone>(table: &[ModalBinding<A>]) -> Vec<FooterEntry> {
     let mut grouped: Vec<(FooterHint, String)> = Vec::new();
     for b in table {
@@ -140,7 +140,7 @@ fn find_key(km: &Keymap, scope: Scope, action: Action, want: &str) -> Option<Str
 /// The Normal-mode idle strip: every [`Scope::Diff`] row [`Keymap::default_map`]
 /// tags with a [`FooterHint`], merged/sorted by [`keymap_hints`], plus a
 /// synthetic `Esc return` hint while a commit view (opened from the git
-/// panel's History tab, spec 05 Unit 3) is displayed — `Esc`'s table row has
+/// panel's History tab) is displayed — `Esc`'s table row has
 /// no single fixed label (it also closes help / cancels Visual, see
 /// `keymap.rs`'s doc on that row), so this situational label is added here in
 /// the [`visual_hints`] mold rather than forced into the static table.
@@ -195,9 +195,9 @@ fn normal_hints(
 /// table can't carry a state-dependent label; the key and its promotion still
 /// come from the table.
 fn panel_hints(km: &Keymap, push_publishes: bool, review_session: bool) -> Vec<FooterEntry> {
-    // Review-status bindings (spec 08 Unit 3) are diff-scope only, so
-    // `review_session` never actually changes what this call returns; passed
-    // through for signature consistency with `normal_hints`.
+    // Review-status bindings are diff-scope only, so `review_session` never
+    // actually changes what this call returns; passed through for signature
+    // consistency with `normal_hints`.
     let mut entries = keymap_hints(km, Scope::Panel, true, true, review_session);
     if push_publishes
         && let Some(hint) = km
@@ -309,10 +309,8 @@ fn fallback_pending_label(action: Action) -> &'static str {
 /// `gd`/`gr` the same way [`super::help::binding_hidden`] hides them from the
 /// help overlay, so a pending `g` never advertises an inert code-intel jump.
 fn pending_hints(km: &Keymap, prefix: KeyEvent, code_intel_allowed: bool) -> Vec<FooterEntry> {
-    // No two-key sequence is a review action (spec 08 Unit 3's bindings are
-    // all single-key), so `review_session` is passed as `true` here — a
-    // fixed, always-permissive value, not a real flag — purely to satisfy
-    // `binding_hidden`'s signature; it can never actually hide a completion.
+    // No two-key sequence is a review action, so `review_session` is always
+    // permissive here; it can never actually hide a completion.
     let mut entries: Vec<FooterEntry> = km
         .completions_for(Scope::Diff, prefix)
         .into_iter()
@@ -341,9 +339,8 @@ fn help_open_hints(modal_keys: &ModalKeymaps) -> Vec<FooterEntry> {
 /// The capability/state flags [`build_hints`] needs, bundled into one struct
 /// so its own parameter count stays under clippy's `too_many_arguments`
 /// threshold — these are all independent booleans, not a cohesive type, but
-/// grouping them here is cheaper than growing the function signature further
-/// (see `super::mod`'s `draw` and [`super::footer_height`] for the two call
-/// sites that build one each frame).
+/// grouping them here is cheaper than growing the function signature
+/// further.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct FooterFlags {
     /// `false` on a read-only diff range, hiding the inert stage gestures.
@@ -363,9 +360,9 @@ pub(super) struct FooterFlags {
     /// Which half of the Project Search view has focus (see
     /// [`SearchFocus`]); only consulted in [`Mode::ProjectSearch`], picking
     /// between `modal_keys.project_search_input` and
-    /// `modal_keys.project_search_results` (spec 06 round-1 UX fix).
+    /// `modal_keys.project_search_results`.
     pub(super) project_search_focus: SearchFocus,
-    /// Whether a review session is active (spec 08 Unit 2,
+    /// Whether a review session is active (see
     /// [`super::app::App::in_review_session`]); adds a synthetic `q end
     /// review` entry to the Normal/Panel idle strips (see
     /// [`normal_hints`]/[`panel_hints`]) — `q`'s *meaning* changes while
@@ -380,8 +377,8 @@ pub(super) struct FooterFlags {
 /// constructing a whole app. `pending` is only consulted in
 /// [`Mode::Normal`]/[`Mode::Visual`] (the only modes that ever have a pending
 /// two-key prefix — see `super::event_loop`). `modal_keys` is `app`'s
-/// effective (post-`[keys.<mode>]`-override) tables, spec 07 Unit 4 task 5.4.
-/// See [`FooterFlags`] for the rest.
+/// effective (post-`[keys.<mode>]`-override) tables. See [`FooterFlags`] for
+/// the rest.
 pub(super) fn build_hints(
     mode: Mode,
     flags: FooterFlags,
@@ -418,8 +415,8 @@ pub(super) fn build_hints(
         Mode::Panel { .. } => panel_hints(km, push_publishes, review_session),
         Mode::List => modal_hints(&modal_keys.list),
         // Review sessions repurpose `Mode::Staging` as the accepted-files
-        // panel (spec 08 Unit 5) — see `super::help::modal_sections`'s
-        // identical swap for the `?` overlay.
+        // panel — see `super::help::modal_sections`'s identical swap for
+        // the `?` overlay.
         Mode::Staging if review_session => modal_hints(&modal_keys.accepted_panel),
         Mode::Staging => modal_hints(&modal_keys.staging),
         Mode::Peek => modal_hints(&modal_keys.peek),

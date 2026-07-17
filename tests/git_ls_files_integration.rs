@@ -1,5 +1,5 @@
-//! Integration test for `GitRunner::ls_files`/`ls_files_untracked` (spec 06
-//! Unit 1's candidate source), against a real throwaway repository — never
+//! Integration test for `GitRunner::ls_files`/`ls_files_untracked` (the
+//! fuzzy file finder's candidate source), against a real throwaway repository — never
 //! the host repo. Mirrors `tests/git_integration.rs`'s tempdir/fixture
 //! conventions.
 

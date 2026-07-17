@@ -30,7 +30,7 @@ fn overriding_an_action_replaces_its_default_keys_rather_than_appending() {
     assert_eq!(rows.len(), 1, "must have exactly one binding, not appended");
     assert_eq!(rows[0].key_label(), "J");
 
-    // The old default (Tab) no longer resolves to NextFile.
+    // Tab is unbound by default.
     assert_eq!(
         km.lookup_in(
             Scope::Diff,

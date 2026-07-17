@@ -1,5 +1,5 @@
-//! Real-git integration tests for spec 05 Unit 3 (git panel History tab and
-//! commit view), driven through the actual key-dispatch pipeline
+//! Real-git integration tests for the git panel History tab and commit
+//! view, driven through the actual key-dispatch pipeline
 //! (`` ` `` -> `Tab` -> `j`/`k` -> `Enter` -> `Esc`/`q`) against throwaway
 //! repositories built in tempdirs, per this repo's testing convention (see
 //! CLAUDE.md / `docs/rust-best-practices.md`) — never the host repo.
@@ -144,7 +144,7 @@ fn history_tab_loads_the_repos_real_commits_newest_first() {
     assert_eq!(app.history[2].subject, "first commit");
 }
 
-// -- Open-commit / return round trip (task 3.5) -----------------------------
+// -- Open-commit / return round trip -----------------------------------------
 
 /// The core navigation-correctness proof: opening a historical commit and
 /// returning restores the exact prior target, cursor, and collapse state —
@@ -234,12 +234,12 @@ fn opening_a_second_commit_without_returning_still_restores_the_original_state()
     );
 }
 
-// -- Capability gating in the commit view (task 3.6) -------------------------
+// -- Capability gating in the commit view -------------------------------------
 
 /// Staging is inert (a footer message, no git call) and its keys are absent
 /// from both the footer strip and the `?` overlay while a commit view is
-/// open — driven by the existing `staging_mode() == ReadOnly` gate (task
-/// 1.0), inherited automatically by `DiffTarget::Commit` (task 2.0).
+/// open — driven by the existing `staging_mode() == ReadOnly` gate,
+/// inherited automatically by `DiffTarget::Commit`.
 #[test]
 fn commit_view_hides_and_disarms_staging_keys() {
     let tmp = repo_with_history();
@@ -295,8 +295,7 @@ fn commit_view_hides_and_disarms_staging_keys() {
 }
 
 /// No LSP code-intel keys work or show while a commit view is open — the
-/// `supports_code_intel() == false` gate (task 1.0/2.0), automatic for a
-/// `Commit` target.
+/// `supports_code_intel() == false` gate, automatic for a `Commit` target.
 #[test]
 fn commit_view_hides_and_disarms_code_intel_keys() {
     let tmp = repo_with_history();
@@ -391,9 +390,9 @@ fn commit_view_annotations_are_fully_functional() {
     );
 }
 
-/// Spec 05 Unit 4's scripted CLI proof, run end-to-end against a real
+/// A scripted CLI proof, run end-to-end against a real
 /// throwaway repo instead of an interactive terminal (this sandbox has no
-/// controlling TTY — see the task's proof artifact for the equivalent
+/// controlling TTY — see the proof artifact for the equivalent
 /// manual steps): annotating a line in a commit view and rendering the
 /// store produces a `Reviewing: <short-sha>` metadata line naming exactly
 /// the opened commit. `repo_with_history()`'s working tree is clean (its own
@@ -470,7 +469,7 @@ fn q_from_a_commit_view_quits_and_would_emit_annotations() {
     assert!(matches!(flow, Flow::Quit(QuitOutcome::Emit)));
 }
 
-// -- Keymap/help drift: the new keys are present (task 3.7) ------------------
+// -- Keymap/help drift: the new keys are present ------------------------------
 
 /// The `?` overlay's panel-scope section documents `Tab` (switch tab); a
 /// regression here would mean a hidden feature (CLAUDE.md: no user-visible
@@ -486,13 +485,13 @@ fn panel_scope_keymap_documents_the_tab_toggle() {
     assert_eq!(row.key_label(), "Tab");
 }
 
-// -- Empty-diff welcome state, commit-view wording (spec 05 Unit 5) ---------
+// -- Empty-diff welcome state, commit-view wording ---------------------------
 
 /// A repo like `repo_with_history()` plus one more commit on top that
 /// introduces no changes (`git commit --allow-empty`) — opening this one
-/// from History yields a `DiffTarget::Commit` whose own diff has zero files,
-/// the case task 5.3 asks for explicitly ("History-opened commit with an
-/// empty diff → target-appropriate wording").
+/// from History yields a `DiffTarget::Commit` whose own diff has zero files
+/// ("History-opened commit with an empty diff → target-appropriate
+/// wording").
 fn repo_with_history_and_a_trailing_empty_commit() -> TempDir {
     let tmp = repo_with_history();
     git(
@@ -546,7 +545,7 @@ fn opening_a_commit_with_an_empty_diff_shows_commit_appropriate_welcome_wording(
 }
 
 // ==========================================================================
-// Spec 05 Unit 6 (task 6.0): user-acceptance gate — the Success Metrics
+// User-acceptance gate — the Success Metrics
 // proven from a user's point of view, driven through the real key-dispatch
 // pipeline against throwaway repos. Each test below backs a proof file under
 // docs/specs/05-spec-diff-sources/proofs/. Every test also `eprintln!`s the

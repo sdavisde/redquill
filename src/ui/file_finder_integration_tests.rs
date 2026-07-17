@@ -1,5 +1,5 @@
-//! Real-git integration tests for spec 06 Unit 1 (the `gp` fuzzy file finder
-//! and the read-only file view), driven through the actual key-dispatch
+//! Real-git integration tests for the `gp` fuzzy file finder
+//! and the read-only file view, driven through the actual key-dispatch
 //! pipeline against a throwaway repository built in a tempdir — never the
 //! host repo. Mirrors `history_integration_tests.rs`'s conventions exactly
 //! (same fixture/dispatch helpers), since this task builds directly on that
@@ -310,7 +310,7 @@ fn file_view_annotations_are_fully_functional() {
 }
 
 // -- File-view annotations serialize with `(=)` and navigate back from the
-// annotation list panel (spec 06 Unit 3) -------------------------------------
+// annotation list panel -------------------------------------------------------
 
 #[test]
 fn file_view_annotation_serializes_with_equals_marker_and_navigates_back_from_the_list() {

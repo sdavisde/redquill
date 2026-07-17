@@ -1,10 +1,8 @@
-//! The pull/push confirm modal ([`super::app::Mode::ConfirmRemoteOp`], spec
-//! 08 Unit 5): a compact, content-sized overlay naming the branch under
-//! review and the pending op, with a plain confirm/cancel hint line below —
-//! modeled on [`super::end_review_modal`]'s sizing (`centered` rather than a
-//! percentage-of-screen split; a confirmation reads as a floating dialog,
-//! not a panel that should track the terminal size) but simpler, since this
-//! is a binary gate rather than a three-option selection.
+//! The pull/push confirm modal ([`super::app::Mode::ConfirmRemoteOp`]): a
+//! compact, content-sized overlay naming the branch under review and the
+//! pending op, with a plain confirm/cancel hint line below — modeled on
+//! [`super::end_review_modal`]'s sizing but simpler, since this is a binary
+//! gate rather than a three-option selection.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};

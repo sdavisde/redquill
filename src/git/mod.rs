@@ -10,23 +10,19 @@
 //!   `git for-each-ref refs/heads` into the full [`LocalBranch`] list.
 //! - [`commit`] parses `git log -1 --format=<COMMIT_SUMMARY_FORMAT>` into a
 //!   [`CommitSummary`] (abbreviated hash + subject) for the tip commit, and
-//!   builds the spec 04 write command (`commit -m <message>`, the message
-//!   verbatim as one argv element, `GIT_TERMINAL_PROMPT=0`, never any flag
-//!   beyond `-m`).
+//!   builds the write command (`commit -m <message>`, the message verbatim
+//!   as one argv element, `GIT_TERMINAL_PROMPT=0`, never any flag beyond
+//!   `-m`).
 //! - [`stash`] parses `git stash list --format=<STASH_LIST_FORMAT>` into
 //!   [`StashEntry`] records.
 //! - [`worktree`] parses `git worktree list --porcelain` into
 //!   [`WorktreeEntry`] records, and provides
 //!   [`sanitize_branch_dir_name`] — a branch name to collision-safe
-//!   worktree directory name mapping (spec 08 Unit 1).
+//!   worktree directory name mapping.
 //! - [`diff`] splits `git diff` output into raw per-file [`RawFilePatch`]es
-//!   (no hunk parsing — see [`crate::diff::parse_hunks`] for that); its
-//!   [`DiffTarget::Commit`] variant is a single commit's own changes (first
-//!   -parent diff, root commit against the empty tree); its
-//!   [`DiffTarget::Review`] variant (spec 08 Unit 1) is a branch review
-//!   session's merge-base (`base...branch`) diff, the one non-live target
-//!   where [`DiffTarget::supports_code_intel`] is true, since it runs from
-//!   inside that branch's dedicated worktree.
+//!   (no hunk parsing — see [`crate::diff::parse_hunks`] for that); see
+//!   `diff.rs` for the [`DiffTarget`] variants, including the branch-review
+//!   [`DiffTarget::Review`] target.
 //! - [`log`] parses `git log --format=<log::COMMIT_LOG_FORMAT>` into
 //!   [`CommitLogEntry`] records (full/short SHA, subject, author, timestamp)
 //!   for the git panel's commit-history read model; pagination (count/skip)
@@ -38,8 +34,8 @@
 //!   and hunk/line-level via synthetic patches applied with `--cached`.
 //! - [`ls_files`] parses `git ls-files -z` (tracked) and `git ls-files -z
 //!   --others --exclude-standard` (untracked-but-unignored) into
-//!   repo-relative path lists — the fuzzy file finder's candidate source
-//!   (spec 06 Unit 1); [`crate::search::files`] merges the two lists.
+//!   repo-relative path lists — the fuzzy file finder's candidate source;
+//!   [`crate::search::files`] merges the two lists.
 
 mod branch;
 mod commit;

@@ -6,17 +6,15 @@
 //! and returns a typed [`CommitSummary`], or `None` when there is no commit
 //! to summarize (an empty payload — e.g. a repository with no commits yet).
 //!
-//! The write side ([`commit_command`], spec 04:
-//! `docs/specs/04-spec-commit-staged.md`) mirrors `remote.rs`: security by
+//! The write side ([`commit_command`]) mirrors `remote.rs`: security by
 //! construction, not call-site discipline. The argument vector is closed at
 //! `["commit", "-m", message]` — the message is passed verbatim (newlines
 //! preserved) as a single argv element, no shell is ever invoked, and no
-//! flag beyond `-m` can be attached, so `--amend`, `--no-verify`,
-//! `--allow-empty`, and every other flag are impossible. Every child runs
-//! with `GIT_TERMINAL_PROMPT=0` so a credential/signing prompt fails fast in
-//! the background instead of blocking a worker thread; hooks and the user's
-//! git config (signing, sign-off) apply exactly as `git` on their `PATH`
-//! would apply them.
+//! flag beyond `-m` can ever be attached. Every child runs with
+//! `GIT_TERMINAL_PROMPT=0` so a credential/signing prompt fails fast in the
+//! background instead of blocking a worker thread; hooks and the user's git
+//! config (signing, sign-off) apply exactly as `git` on their `PATH` would
+//! apply them.
 
 use std::path::Path;
 use std::process::Command;
@@ -39,15 +37,14 @@ pub struct CommitSummary {
 }
 
 /// Builds the `git commit -m <message>` [`Command`], to be run at the
-/// repository `root` (spec 04).
+/// repository `root`.
 ///
 /// The command is a fixed argument vector: exactly `["commit", "-m",
-/// message]`, the message verbatim (newlines included) as one argv element —
-/// no shell, no user-controlled interpolation, and never `--amend`,
-/// `--no-verify`, `--allow-empty`, or any flag beyond `-m`. Sets
-/// `GIT_TERMINAL_PROMPT=0` in the child environment so a credential/signing
-/// prompt fails fast in the background rather than hanging the worker
-/// thread on a blocked read.
+/// message]`, the message verbatim (newlines included) as one argv element
+/// — no shell, no user-controlled interpolation, never a flag beyond `-m`.
+/// Sets `GIT_TERMINAL_PROMPT=0` in the child environment so a
+/// credential/signing prompt fails fast in the background rather than
+/// hanging the worker thread on a blocked read.
 pub fn commit_command(message: &str, root: &Path) -> Command {
     let mut cmd = Command::new("git");
     cmd.current_dir(root);
@@ -126,7 +123,7 @@ mod tests {
         ));
     }
 
-    // -- commit_command: the spec 04 write command ---------------------------
+    // -- commit_command: the write command ------------------------------------
 
     use std::ffi::OsStr;
     use std::path::PathBuf;

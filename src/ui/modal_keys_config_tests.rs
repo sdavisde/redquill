@@ -105,7 +105,7 @@ fn overriding_a_staging_action_replaces_its_default_keys_rather_than_appending()
     assert_eq!(rows.len(), 1, "must have exactly one row, not appended");
     assert_eq!(rows[0].key_label(), "x");
 
-    // The old defaults (Space/Enter) no longer resolve to Unstage.
+    // Space/Enter are unbound for Unstage here.
     assert_eq!(
         modal_keys::resolve(
             &effective.staging,
@@ -197,10 +197,9 @@ fn colliding_override_wins_and_drops_the_default_with_a_warning() {
 #[test]
 fn multiple_keys_for_one_overridden_action_stay_one_row() {
     // A remap to two alternate keys must produce one row carrying both, not
-    // two rows repeating the description (spec 07 Unit 4 task 5.3/5.4: the
-    // help overlay/footer must show one joined label, matching how
-    // `SwitcherAction::ToggleTab`'s six default keys already render as one
-    // row).
+    // two rows repeating the description: the help overlay/footer must show
+    // one joined label, matching how `SwitcherAction::ToggleTab`'s six
+    // default keys already render as one row.
     let mut keys = KeysConfig::default();
     let mut table = BTreeMap::new();
     table.insert(
@@ -333,7 +332,7 @@ fn overriding_a_compose_control_action_leaves_the_rest_of_the_table_intact() {
     assert_eq!(effective.compose.len(), modal_keys::COMPOSE_HINTS.len());
 }
 
-// -- docs/example-config.toml completeness (spec 07 Unit 4 task 5.5) --------
+// -- docs/example-config.toml completeness -----------------------------------
 //
 // The `[keys.<mode>]` sections are entirely commented out (like
 // `[keys.diff]`/`[keys.panel]`'s precedent — an example file that "just

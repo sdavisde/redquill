@@ -1,71 +1,14 @@
 //! Markdown serialization of an [`AnnotationStore`].
 //!
-//! [`render_markdown`] is the format emitted on quit to stdout by the UI.
-//! Treat it as a public API once shipped:
+//! [`render_markdown`] emits the format written to stdout on quit — treat it
+//! as a public API once shipped. Each annotation renders as a `## <header>`
+//! line (with a `(+)`/`(-)`/`(=)` side marker, or none for a whole-file
+//! comment) followed by a blank line and a `[classification] body` line.
+//! Annotations against a non-working-tree source are grouped under a
+//! `Reviewing: <spec>` metadata line; the working-tree group, if present, is
+//! always emitted first with no metadata line of its own.
 //!
-//! ```text
-//! ## src/auth/session.rs:44 (+)
-//!
-//! [question] where does keystore get rotated?
-//! ```
-//!
-//! ## The `Reviewing:` metadata line (non-working-tree sources)
-//!
-//! Annotations authored against the default working-tree source
-//! ([`crate::annotate::model::Source::WorkingTree`]) are always emitted
-//! first, in exactly the format above, with **no** metadata line — a
-//! session that never leaves the working-tree view is byte-identical to the
-//! format before this contract existed.
-//!
-//! Annotations authored against any other source are grouped by that source
-//! (in order of first appearance, working-tree group excluded since it's
-//! always first) and each group is preceded by exactly one metadata line of
-//! the form `Reviewing: <spec>`, where `<spec>` is:
-//!
-//! - a commit: the short SHA (e.g. `Reviewing: abc1234`)
-//! - a range: the range expression exactly as typed/selected (e.g.
-//!   `Reviewing: main..feature`)
-//! - the index: the literal word `staged` (e.g. `Reviewing: staged`)
-//!
-//! Example mixed session (one working-tree annotation, then one against a
-//! historical commit):
-//!
-//! ```text
-//! ## src/lib.rs:10-20 (+)
-//!
-//! [nit] extract this into a helper
-//!
-//! Reviewing: abc1234
-//!
-//! ## src/auth/session.rs:44 (+)
-//!
-//! [question] where does keystore get rotated?
-//! ```
-//!
-//! ## The `(=)` marker (current file content, not a diff side)
-//!
-//! Annotations made in the read-only whole-file view (spec 06 Unit 3 — any
-//! file opened via the project search or fuzzy file finder, not just files
-//! with a diff) target [`crate::annotate::model::Target::WorktreeLine`] or
-//! [`crate::annotate::model::Target::WorktreeRange`] instead of
-//! [`crate::annotate::model::Target::Line`]/[`crate::annotate::model::Target::Range`],
-//! and serialize with a third marker, `(=)`, meaning "this line/range is the
-//! current worktree file content, not a diff side" — there is no `+`/`-` to
-//! report because the file view shows no diff at all:
-//!
-//! ```text
-//! ## docs/notes.md:44 (=)
-//!
-//! [question] should this doc mention the new flag?
-//! ```
-//!
-//! The file view always reads live worktree content (never a historical
-//! revision), so a `(=)` annotation always composes with the working-tree
-//! group above: it is emitted in the same always-first, metadata-line-free
-//! group as ordinary working-tree diff annotations, never its own
-//! `Reviewing:` group. A `Target::File` (whole-file) comment made from the
-//! file view is unaffected by this section — it already has no side marker
-//! at all, diffed or not.
+//! Full format contract: `docs/annotation-format.md`.
 
 use super::model::{Annotation, Classification, Side, Source, Target};
 use super::store::AnnotationStore;
@@ -352,15 +295,13 @@ mod tests {
         assert!(z_pos < a_pos);
     }
 
-    // -- Source grouping (task 4.0) -----------------------------------------
+    // -- Source grouping ------------------------------------------------------
 
     #[test]
     fn working_tree_only_session_has_no_reviewing_line() {
-        // Every existing test above already builds a working-tree-only
-        // session via `add` (which defaults to `Source::WorkingTree`) and
-        // asserts an exact expected string with no `Reviewing:` line — this
-        // is the explicit backward-compatibility assertion the task calls
-        // for, phrased as its own test.
+        // Explicit backward-compatibility assertion: a working-tree-only
+        // session (built via `add`, which defaults to `Source::WorkingTree`)
+        // never emits a `Reviewing:` line.
         let mut store = AnnotationStore::new();
         store
             .add(
@@ -515,7 +456,7 @@ mod tests {
         assert_eq!(render_markdown(&store), expected);
     }
 
-    // -- The `(=)` marker (task 4.2) -----------------------------------------
+    // -- The `(=)` marker -------------------------------------------------------
 
     #[test]
     fn worktree_line_target_header_uses_equals_marker() {

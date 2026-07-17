@@ -42,12 +42,12 @@ struct Cli {
     #[arg(long, conflicts_with = "review")]
     staged: bool,
 
-    /// Review a local branch (spec 08 Unit 1) inside its own managed
-    /// worktree instead of the working tree. redquill creates (or reuses) a
-    /// worktree at `<git-common-dir>/redquill/worktrees/<sanitized-branch>`,
-    /// then shows the `base...branch` (three-dot) diff rooted there, so LSP
-    /// navigation and `g<Space>` operate on the branch's real files.
-    /// Mutually exclusive with the positional range and `--staged`.
+    /// Review a local branch inside its own managed worktree instead of the
+    /// working tree. redquill creates (or reuses) a worktree at
+    /// `<git-common-dir>/redquill/worktrees/<sanitized-branch>`, then shows
+    /// the `base...branch` (three-dot) diff rooted there, so LSP navigation
+    /// and `g<Space>` operate on the branch's real files. Mutually exclusive
+    /// with the positional range and `--staged`.
     #[arg(long, value_name = "BRANCH", conflicts_with_all = ["staged", "range"])]
     review: Option<String>,
 
@@ -152,16 +152,15 @@ fn resolve_session(
 }
 
 /// Resolves `<git-common-dir>/redquill/review-state.json`'s path for this
-/// repository and garbage-collects entries whose branch no longer exists
-/// (spec 08 Unit 4, "on every launch") before returning it. Runs
-/// unconditionally — even outside a review session — since another,
-/// already-paused review's entry should still get cleaned up
-/// opportunistically the next time redquill runs at all, not only the next
-/// time that specific branch is reviewed again. Best-effort throughout: a
-/// `git_common_dir`/`branch_list` failure degrades to skipping GC for this
-/// launch (never fails the launch itself — this is housekeeping, not
-/// something worth blocking a session over), and a GC save failure is
-/// silently retried on the next launch the same way.
+/// repository and garbage-collects entries whose branch no longer exists,
+/// before returning it. Runs on every launch, unconditionally — even
+/// outside a review session — since another, already-paused review's entry
+/// should still get cleaned up opportunistically the next time redquill
+/// runs at all, not only the next time that specific branch is reviewed
+/// again. Best-effort throughout: a `git_common_dir`/`branch_list` failure
+/// degrades to skipping GC for this launch (never fails the launch itself —
+/// this is housekeeping, not something worth blocking a session over), and
+/// a GC save failure is silently retried on the next launch the same way.
 fn gc_review_state(discovered: &GitRunner) -> Option<PathBuf> {
     let common_dir = discovered.git_common_dir().ok()?;
     let path = common_dir.join("redquill").join("review-state.json");
@@ -173,8 +172,7 @@ fn gc_review_state(discovered: &GitRunner) -> Option<PathBuf> {
     if store::gc(&mut state, &existing) {
         let _ = store::save(&path, &state);
         // Best-effort: clears stale worktree admin records for any managed
-        // worktree whose branch just got GC'd (spec 08 Unit 4: "GC... and
-        // prune their worktree records"). A failure here is not worth
+        // worktree whose branch just got GC'd. A failure here is not worth
         // surfacing — it's the same harmless-clutter case
         // `App::finish_review`'s own prune call already treats this way.
         let _ = discovered.worktree_prune();
@@ -218,21 +216,18 @@ fn run(config: &RunConfig) -> anyhow::Result<()> {
 
 /// Resolves the editor `g<Space>` opens, in five-tier precedence order: the
 /// `--editor` flag, then `[editor]` config (`config_tier`, already resolved
-/// from `crate::config::EditorConfig` by
-/// `ui::resolve_editor_config_tier` — an `EditorConfigTier::UnknownPreset`
-/// is *not* a config-tier hit here; `run_tui` reports it as a warning and
-/// passes `EditorConfigTier::Absent` in its place instead, so this function
-/// only ever sees a real hit or a miss), then `$VISUAL`, then `$EDITOR`,
-/// then `"nvim"`. Takes every tier as an explicit arg (rather than reading
-/// `std::env::var`/resolving config itself) so precedence is unit-testable
-/// without mutating process-global env state or touching real config paths;
-/// `run_tui` reads the real env vars and config at the one call site. Empty
-/// or whitespace-only strings at the flag/`$VISUAL`/`$EDITOR` tiers are
-/// treated as unset and fall through to the next — an exported `EDITOR=""`
-/// shouldn't silently break `g<Space>` (unchanged from before this spec). A
-/// config-tier template always wins over `$VISUAL`/`$EDITOR`/`"nvim"` and
-/// carries no such "empty is unset" allowance: it's already been validated
-/// non-empty by `crate::config::EditorConfig::from_value`.
+/// from `crate::config::EditorConfig` by `ui::resolve_editor_config_tier`),
+/// then `$VISUAL`, then `$EDITOR`, then `"nvim"`. Takes every tier as an
+/// explicit arg (rather than reading `std::env::var`/resolving config
+/// itself) so precedence is unit-testable without mutating process-global
+/// env state or touching real config paths; `run_tui` reads the real env
+/// vars and config at the one call site. Empty or whitespace-only strings
+/// at the flag/`$VISUAL`/`$EDITOR` tiers are treated as unset and fall
+/// through to the next — an exported `EDITOR=""` shouldn't silently break
+/// `g<Space>`. A config-tier template always wins over
+/// `$VISUAL`/`$EDITOR`/`"nvim"` and carries no such "empty is unset"
+/// allowance: it's already been validated non-empty by
+/// `crate::config::EditorConfig::from_value`.
 fn resolve_editor(
     flag: Option<String>,
     config_tier: EditorConfigTier,
@@ -256,45 +251,43 @@ fn resolve_editor(
 /// resolved [`QuitOutcome`].
 fn run_tui(config: &RunConfig) -> anyhow::Result<()> {
     let discovered = GitRunner::discover()?;
-    // Runs on every launch, review session or not (spec 08 Unit 4) — GC'ing
-    // *other* paused reviews' stale entries shouldn't wait for the next time
-    // that specific branch happens to be reviewed again. Must happen before
-    // `discovered` is potentially moved into `app.set_review_origin_ops`
-    // below.
+    // Runs on every launch, review session or not — GC'ing *other* paused
+    // reviews' stale entries shouldn't wait for the next time that specific
+    // branch happens to be reviewed again. Must happen before `discovered`
+    // is potentially moved into `app.set_review_origin_ops` below.
     let review_state_path = gc_review_state(&discovered);
     // `discovered` is rooted at the caller's cwd (the user's own checkout),
     // *outside* any managed review worktree `resolve_session` might create —
     // kept alive (cloned into `resolve_session`) so a review session's
-    // finish gesture (spec 08 Unit 2) can remove that worktree through a
-    // backend that isn't rooted inside the very directory being removed.
+    // finish gesture can remove that worktree through a backend that isn't
+    // rooted inside the very directory being removed.
     let (runner, target) = resolve_session(discovered.clone(), config)?;
     let snapshot = build_review(&runner, &target)?;
 
     let mut app = App::with_git(snapshot, target.clone(), Box::new(runner.clone()));
     if let DiffTarget::Review { branch, .. } = &target {
-        // Load + reconcile this branch's persisted progress (spec 08 Unit
-        // 4) before the first render, so `Accepted`/`Deferred` files start
-        // collapsed and a stale `Accepted` file starts marked
-        // `ChangedSinceAccepted` and un-collapsed from the very first frame.
+        // Load + reconcile this branch's persisted progress before the
+        // first render, so `Accepted`/`Deferred` files start collapsed and a
+        // stale `Accepted` file starts marked `ChangedSinceAccepted` and
+        // un-collapsed from the very first frame.
         if let Some(state_path) = &review_state_path {
             let (states, blob_shas, annotations) =
                 load_reconciled_review_state(&runner, state_path, branch);
             app.set_review_states(states, blob_shas);
             app.set_review_state_path(state_path.clone());
-            // Restore before the first render (spec 08 Unit 6, task 7.2):
-            // annotations reattach to their recorded anchors verbatim, so a
-            // resumed session's annotation list and in-diff markers already
-            // reflect them on the very first frame.
+            // Restored before the first render: annotations reattach to
+            // their recorded anchors verbatim, so a resumed session's
+            // annotation list and in-diff markers already reflect them on
+            // the very first frame.
             app.restore_review_annotations(annotations);
         }
         app.set_review_origin_ops(Box::new(discovered));
     }
     app.set_repo_root(runner.root().to_path_buf());
     // Config loads exactly once, here, before the first render — there is no
-    // reload path (docs/specs/07-spec-config-layer). Warnings (missing file
-    // is silent and yields none; a syntax error or an invalid entry each
-    // yield one) are handed to the app for its dismissible status-line
-    // notice; never printed to stdout.
+    // reload path. Warnings (missing file is silent and yields none; a
+    // syntax error or an invalid entry each yield one) are handed to the app
+    // for its dismissible status-line notice; never printed to stdout.
     let (loaded_config, mut config_warnings) = config::load();
     // The `[editor]` config tier is resolved *before* `loaded_config` moves
     // into `app.set_config` below. An unknown preset name is folded into
@@ -401,10 +394,6 @@ mod tests {
         assert_eq!(cli.review.as_deref(), Some("feature"));
         assert_eq!(cli.base.as_deref(), Some("trunk"));
     }
-
-    // `paths_match` moved to `redquill::ui::review_session` (spec 08 task
-    // 5.2, shared entry-point core) along with `ensure_review_worktree`;
-    // its own tests moved with it.
 
     #[test]
     fn flag_wins_over_everything() {
@@ -513,16 +502,13 @@ mod tests {
         );
     }
 
-    // -- gc_review_state (spec 08 Unit 4) --------------------------------------
+    // -- gc_review_state ----------------------------------------------------
     //
     // Real-git tempdir tests: `gc_review_state` is private to the binary
-    // crate (not part of `redquill::ui`'s public surface), so — like
-    // `commit_integration_tests.rs`'s identical reasoning for `dispatch_key`
-    // — it can only be exercised from *this* crate's own `#[cfg(test)]`
-    // module, which is exactly where `cargo test`'s `unittests src/main.rs`
-    // binary already runs from. `load_reconciled_review_state`'s own tests
-    // moved to `redquill::ui::review_session` alongside the function itself
-    // (spec 08 task 5.2).
+    // crate (not part of `redquill::ui`'s public surface), so it can only be
+    // exercised from *this* crate's own `#[cfg(test)]` module, which is
+    // exactly where `cargo test`'s `unittests src/main.rs` binary already
+    // runs from.
 
     use super::gc_review_state;
     use redquill::git::GitRunner;
@@ -551,11 +537,8 @@ mod tests {
         std::fs::canonicalize(path).unwrap_or_else(|e| panic!("canonicalize {path:?}: {e}"))
     }
 
-    /// The shared isolation guard every mutating git call in this section
-    /// runs before touching disk — mirrors `tests/git_review_integration.rs`'s
-    /// `assert_inside_tempdir` (task 1.5), duplicated here per this repo's
-    /// established one-copy-per-file convention (this module can't share
-    /// code with the `tests/*.rs` binaries).
+    /// Asserts that `path` resolves inside `tmp`, so a mutating git call in
+    /// this test module can never touch the host repo.
     fn assert_inside_tempdir(path: &std::path::Path, tmp: &TempDir) {
         let tmp_root = canon(tmp.path());
         let mut probe = path.to_path_buf();

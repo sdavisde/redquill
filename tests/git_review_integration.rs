@@ -1,4 +1,4 @@
-//! Integration tests for the branch-review-mode (spec 08 Unit 1) `GitRunner`
+//! Integration tests for the branch-review-mode `GitRunner`
 //! methods: `git_common_dir`, `default_base`, and `worktree_add`.
 //!
 //! Each test builds a throwaway repository in a fresh tempdir, configures
@@ -293,7 +293,7 @@ fn worktree_add_fails_readably_when_branch_checked_out_elsewhere() {
     assert!(first.join("base.txt").exists());
 }
 
-// -- worktree_remove / worktree_prune (spec 08 Unit 2) ----------------------
+// -- worktree_remove / worktree_prune -----------------------------------------
 
 #[test]
 fn worktree_remove_removes_a_clean_worktree() {
@@ -381,7 +381,7 @@ fn worktree_prune_clears_a_stale_admin_entry_left_by_an_external_deletion() {
     );
 }
 
-// -- blob_sha (spec 08 Unit 4) -----------------------------------------------
+// -- blob_sha -------------------------------------------------------------
 
 #[test]
 fn blob_sha_returns_the_full_sha_for_an_existing_path_on_a_branch() {

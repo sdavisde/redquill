@@ -1,6 +1,6 @@
-//! The pure per-file review-status state machine (spec 08 Unit 3). No TUI
-//! types and no I/O — every transition is a plain function over
-//! [`ReviewStatus`], so the full transition table is unit-tested here
+//! The pure per-file review-status state machine. No TUI types and no I/O
+//! — every transition is a plain function over [`ReviewStatus`], so the
+//! full transition table is unit-tested here
 //! without constructing an `App` or a git backend. The presentation-side
 //! wiring (`src/ui/review_ops.rs`) maps `Space`/`S`/`d` onto these functions
 //! against an `App`-owned per-path map, mirroring how `staged_states` drives
@@ -20,9 +20,10 @@ pub enum ReviewStatus {
     /// Reviewed and accepted (`Space`/`S`). Collapses the file's section.
     Accepted,
     /// Was `Accepted` in a previous review session, but the branch's blob
-    /// SHA for this file has since changed (spec 08 Unit 4 reconciliation).
-    /// Rendered un-collapsed with its own marker; a `Space` press re-accepts
-    /// it at the fresh SHA (see [`accept`]).
+    /// SHA for this file has since changed (detected at load-time
+    /// reconciliation — see [`super::reconcile::reconcile`]). Rendered
+    /// un-collapsed with its own marker; a `Space` press re-accepts it at
+    /// the fresh SHA (see [`accept`]).
     ChangedSinceAccepted,
 }
 
@@ -31,11 +32,10 @@ pub enum ReviewStatus {
 /// first press (neither round-trips through `Unreviewed` first); an
 /// already-`Accepted` file un-accepts straight back to `Unreviewed`.
 ///
-/// Both `Space` (`ToggleAccept`, cursor-row granularity is irrelevant — spec
-/// 08 deliberately has no hunk/line-level accept) and `S` (`AcceptFile`,
-/// works from anywhere in the file) drive this same transition (spec 08
-/// Unit 5, amending Unit 3's originally one-directional `S`, to fully mirror
-/// `StageFile`'s toggle direction) — see `src/ui/review_ops.rs`'s
+/// Both `Space` (`ToggleAccept`, works regardless of cursor row — there is
+/// no hunk/line-level accept) and `S` (`AcceptFile`, works from anywhere in
+/// the file) drive this same transition, mirroring `StageFile`'s toggle
+/// direction — see `src/ui/review_ops.rs`'s
 /// `toggle_accept_file`/`accept_file`, which differ only in which key
 /// resolves to them, not in the transition applied.
 pub fn toggle_accept(status: ReviewStatus) -> ReviewStatus {
@@ -47,16 +47,11 @@ pub fn toggle_accept(status: ReviewStatus) -> ReviewStatus {
     }
 }
 
-/// An unconditional accept, regardless of the current status — always
-/// lands on `Accepted`, with no un-accept direction. Not used by either
-/// `Space` or `S` today (spec 08 Unit 5 amended `S` to the full
-/// [`toggle_accept`] toggle, matching `StageFile`'s toggle direction — see
-/// that function's doc); reserved for the re-accept-at-a-fresh-blob-SHA
-/// gesture spec 08 Unit 4 will wire up for a `ChangedSinceAccepted` file,
-/// which must always accept forward and never toggle back to `Unreviewed`
-/// on a repeated press. Kept as a distinct function rather than folded into
-/// `toggle_accept` so that future call site has an unconditional primitive
-/// to reach for without re-deriving one.
+/// Unconditionally marks `Accepted`, with no un-accept direction. Not used
+/// by either `Space` or `S` today (both drive the full [`toggle_accept`]
+/// toggle instead); reserved for re-accepting a file whose contents changed
+/// since acceptance, which must always accept forward rather than toggle
+/// back to `Unreviewed` on a repeated press.
 pub fn accept(_status: ReviewStatus) -> ReviewStatus {
     ReviewStatus::Accepted
 }

@@ -7,32 +7,19 @@
 //!
 //! ## Degradation contract: code-intel is silently absent off the live working tree
 //!
-//! An LSP server only ever sees the file *as it sits on disk right now* — it
-//! has no notion of "the version this diff's new side shows," so a request
-//! is only meaningful when that new side *is* the on-disk working tree.
-//! [`request`] and [`refresh_peek_preview`] both gate on
-//! [`crate::git::DiffTarget::supports_code_intel`] and, when it's `false`
-//! (every target but [`crate::git::DiffTarget::WorkingTree`] today — a
-//! staged diff shows the index's content, a range diff shows two historical
-//! revisions, neither backed by the file at that path on disk), degrade
-//! silently: `gd`/`gr`/`K` set the same `"no code intelligence here"` footer
-//! message as any other request that can't start (no repo root, missing
-//! file, unsupported language), rather than an error. The alternative —
-//! resolving the request against on-disk content that doesn't match what's
-//! displayed — would silently jump to the wrong line or definition, which is
-//! strictly worse than the feature being unavailable (this was the actual
-//! bug on range views before this gate existed).
-//!
-//! The same predicate drives which of `gd`/`gr`/`K` even *appear* in the `?`
-//! help overlay and footer strip (see [`super::help::binding_hidden`],
-//! consumed by [`super::footer`]) — mirroring how the staging keys already
-//! hide on a read-only target — so the degradation is structurally invisible
-//! rather than a key that's listed but silently does nothing.
-//!
-//! Per the repository's error-handling rules, this degrade-silently choice is
-//! deliberate and scoped to *this* subsystem only: it does not license
-//! swallowing errors elsewhere (a real LSP failure still surfaces via
-//! `"lsp: failed"`, see [`handle_event`]).
+//! An LSP server only ever sees the file *as it sits on disk right now*, so
+//! a request is only meaningful when the diff's new side *is* the on-disk
+//! working tree. [`request`] and [`refresh_peek_preview`] both gate on
+//! [`crate::git::DiffTarget::supports_code_intel`] and, when it's `false`,
+//! degrade silently: `gd`/`gr`/`K` set the same `"no code intelligence
+//! here"` footer message as any other request that can't start, rather
+//! than resolving against on-disk content that doesn't match what's
+//! displayed and silently jumping to the wrong line or definition. The
+//! same predicate drives which of `gd`/`gr`/`K` even *appear* in the `?`
+//! help overlay and footer strip, so the degradation is structurally
+//! invisible. This degrade-silently choice is scoped to *this* subsystem
+//! only: a real LSP failure still surfaces via `"lsp: failed"` (see
+//! [`handle_event`]).
 
 use crate::diff::LineOrigin;
 use crate::highlight::Lang;
@@ -311,8 +298,8 @@ fn utf16_offset(content: &str, char_index: usize) -> u32 {
 /// The row in `rows` whose `new_line` is closest to `target_line` (ties
 /// broken toward the earlier row). `None` if `rows` has no `Line` row with
 /// a `new_line` at all. `pub(super)` so [`super::file_view`] can reuse it for
-/// the read-only file view's open-at-line support (spec 06 Unit 1) — the
-/// same "land on the nearest line" need `peek_enter` has.
+/// the read-only file view's open-at-line support — the same "land on the
+/// nearest line" need `peek_enter` has.
 pub(super) fn closest_row_for_new_line(rows: &[Row], target_line: u32) -> Option<usize> {
     rows.iter()
         .enumerate()
@@ -920,7 +907,7 @@ index 1..2 100644
         assert!(app.peek.is_some());
     }
 
-    // -- Multibuffer LSP integration (task 4.3) -----------------------------
+    // -- Multibuffer LSP integration -----------------------------------------
 
     /// A two-line hunk (`fn main() {` context, `old()`->`new()`) for `path`,
     /// whose added line has `new_line == 2` — the row `code_intel_position`

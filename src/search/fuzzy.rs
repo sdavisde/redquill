@@ -1,4 +1,4 @@
-//! `nucleo-matcher` ranking glue for the fuzzy file finder (spec 06 Unit 1).
+//! `nucleo-matcher` ranking glue for the fuzzy file finder.
 //! Pure — no I/O, no TUI types; [`rank`] is a plain function over
 //! [`crate::search::files::FileCandidate`]s and a query string, unit-tested
 //! directly.

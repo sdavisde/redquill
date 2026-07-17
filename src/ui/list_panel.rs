@@ -55,9 +55,8 @@ fn item_line(annotation: &Annotation, theme: &Theme) -> Line<'static> {
 /// Renders the annotation list panel into `area`. An empty store renders a
 /// hint line instead of an empty list; the hint's key is resolved from
 /// `keymap` (diff scope, [`Action::Compose`]) rather than hardcoded, so a
-/// `[keys.diff]` remap can't leave this text naming a stale key (spec 07
-/// Unit 4, task 4.6) — an unbound action falls back to generic wording
-/// rather than showing no key at all.
+/// `[keys.diff]` remap can't leave this text naming a stale key — an unbound
+/// action falls back to generic wording rather than showing no key at all.
 pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
     let block = Block::default().borders(Borders::ALL).title("notes");
 

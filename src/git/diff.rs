@@ -32,16 +32,16 @@ pub enum DiffTarget {
     /// empty tree for a root commit. The payload is any revision spec git
     /// accepts (full/short SHA, `HEAD`, etc.).
     Commit(String),
-    /// A single worktree file opened as a read-only whole-file view (spec 06
-    /// Unit 1: the fuzzy file finder / project search's shared target). Not
-    /// a comparison at all — [`GitRunner::diff`] never shells out for it;
-    /// the view is synthesized directly from the file's on-disk content (see
+    /// A single worktree file opened as a read-only whole-file view (the
+    /// fuzzy file finder / project search's shared target). Not a
+    /// comparison at all — [`GitRunner::diff`] never shells out for it; the
+    /// view is synthesized directly from the file's on-disk content (see
     /// `ui::file_view`). The payload is the file's repo-relative path.
     /// Staging, commit, and code-intelligence are all unavailable against
     /// it (see the capability methods below).
     File(String),
-    /// A branch review session (spec 08 Unit 1): the merge-base (three-dot)
-    /// diff between `base` and `branch`, computed and rendered from inside
+    /// A branch review session: the merge-base (three-dot) diff between
+    /// `base` and `branch`, computed and rendered from inside
     /// the branch's dedicated review worktree. Code intelligence is
     /// truthful here — unlike every other non-live target — precisely
     /// because that worktree's on-disk files match the diff's post-state.
@@ -74,26 +74,16 @@ pub enum StagingMode {
 impl DiffTarget {
     /// Whether this source's content can change out from under the app while
     /// it's running (independent of any git action the user takes here) —
-    /// drives whether auto-refresh polls the target at all and whether
-    /// untracked files get synthesized into the diff (only meaningful for a
-    /// source that reflects the live working tree).
+    /// drives whether auto-refresh polls the target at all (only
+    /// [`DiffTarget::WorkingTree`] does) and whether untracked files get
+    /// synthesized into the diff.
     pub fn is_live(&self) -> bool {
         match self {
             DiffTarget::WorkingTree => true,
             DiffTarget::Staged => false,
             DiffTarget::Range(_) => false,
             DiffTarget::Commit(_) => false,
-            // A point-in-time snapshot the finder/search opened, not a
-            // continuously-tracked review target: `false` keeps it out of
-            // the periodic working-tree auto-refresh poll (see
-            // `ui::refresh::App::maybe_auto_refresh`), which would otherwise
-            // try to `build_review` against a target that isn't a
-            // comparison at all.
             DiffTarget::File(_) => false,
-            // A review's diff range is a fixed historical comparison (`base`
-            // and `branch` are both resolved refs, not the working tree),
-            // so it never needs the working-tree auto-refresh poll either —
-            // same reasoning as `Range`/`Commit`, not `WorkingTree`.
             DiffTarget::Review { .. } => false,
         }
     }
@@ -107,9 +97,9 @@ impl DiffTarget {
             DiffTarget::Range(_) => StagingMode::ReadOnly,
             DiffTarget::Commit(_) => StagingMode::ReadOnly,
             DiffTarget::File(_) => StagingMode::ReadOnly,
-            // A review has its own accept/defer tri-state (spec 08 Unit 3),
-            // not the index staging gesture: there's no working-tree/index
-            // comparison to stage into or out of here.
+            // A review has its own accept/defer tri-state, not the index
+            // staging gesture: there's no working-tree/index comparison to
+            // stage into or out of here.
             DiffTarget::Review { .. } => StagingMode::ReadOnly,
         }
     }
@@ -260,7 +250,7 @@ mod tests {
     //
     // One test per variant asserting the full triple in a single place, so
     // the exhaustive-match methods above and this table can't silently drift
-    // apart (rust-best-practices: data-driven invariants).
+    // apart.
 
     #[test]
     fn working_tree_capability_triple() {

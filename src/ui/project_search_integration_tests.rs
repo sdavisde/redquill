@@ -1,4 +1,4 @@
-//! Real-git integration tests for spec 06 Unit 2 (`g/` Project Search),
+//! Real-git integration tests for `g/` Project Search,
 //! driven through the actual key-dispatch pipeline against a throwaway
 //! repository built in a tempdir — never the host repo. Mirrors
 //! `file_finder_integration_tests.rs`'s conventions exactly (same

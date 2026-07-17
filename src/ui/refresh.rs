@@ -240,7 +240,7 @@ impl App {
         self.recompute_untracked();
         self.refresh_repo_state();
 
-        // Collapse-map maintenance (spec Unit 2, "nothing hides"):
+        // Collapse-map maintenance ("nothing hides"):
         // - drop entries for files that left the review, then
         // - auto-expand any collapsed file that is now *partially* staged
         //   (staged, then edited again — its fresh unstaged work must not
@@ -263,8 +263,8 @@ impl App {
             self.view.set_collapsed(&path, false);
         }
 
-        // Per-file highlight-cache invalidation (spec 03, task 5.1): keep the
-        // cached spans for files whose diff content is byte-identical across
+        // Per-file highlight-cache invalidation: keep the cached spans for
+        // files whose diff content is byte-identical across
         // the refresh, invalidate only files whose `FileDiff` changed (or are
         // newly present), and drop entries for files that left the review so
         // the cache can't grow without bound. `FileDiff` equality is a sound

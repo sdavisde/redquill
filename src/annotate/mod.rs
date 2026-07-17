@@ -7,11 +7,11 @@
 //! - [`markdown`] — [`render_markdown`], which emits the public-contract
 //!   markdown format (`## path/to/file.rs:LINE (+)` header, comment body
 //!   below) that the UI writes to stdout on quit.
-//! - [`persist`] — [`PersistedAnnotation`] plus [`snapshot`]/[`restore_all`]
-//!   (spec 08 Unit 6): the serde shape a review session's annotations are
-//!   saved in, composed into `crate::review::store::PersistedReview`, and
-//!   the pair of functions that move annotations between that shape and a
-//!   live [`AnnotationStore`].
+//! - [`persist`] — [`PersistedAnnotation`] plus [`snapshot`]/[`restore_all`]:
+//!   the serde shape a review session's annotations are saved in, composed
+//!   into `crate::review::store::PersistedReview`, and the pair of
+//!   functions that move annotations between that shape and a live
+//!   [`AnnotationStore`].
 
 mod markdown;
 mod model;

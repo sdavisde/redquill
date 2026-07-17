@@ -8,8 +8,8 @@
 //!   `+line` (vim/nvim/emacs/nano/helix's shared convention) or, for VS
 //!   Code/VSCodium specifically, `--goto path:line`.
 //! - [`build_from_template`]: the lazygit-style `[editor] edit_at_line`/
-//!   `preset` template grammar (docs/specs/07-spec-config-layer, Unit 2) —
-//!   `{{filename}}`/`{{line}}` placeholders substituted per whitespace
+//!   `preset` template grammar — `{{filename}}`/`{{line}}` placeholders
+//!   substituted per whitespace
 //!   token, never through a shell, so a filename containing spaces survives
 //!   intact as long as it's the *only* thing in its token (the common case:
 //!   `{{filename}}` alone, or a mixed token like `{{filename}}:{{line}}`).
@@ -77,8 +77,8 @@ pub(super) fn build_editor_command(editor: &str, path: &Path, line: u32) -> (Str
 /// A token may mix literal text with one or both placeholders (e.g.
 /// `{{filename}}:{{line}}`); `{{line}}` is optional (a template that never
 /// mentions it simply ignores `line`). Returns `None` when `template` has
-/// no `{{filename}}` placeholder at all — required per the Unit 2 FR
-/// ("template without `{{filename}}` is an invalid value"); callers treat
+/// no `{{filename}}` placeholder at all — a template without
+/// `{{filename}}` is an invalid value; callers treat
 /// `None` as a config-tier miss, falling through to the next precedence
 /// tier rather than spawning anything.
 pub(super) fn build_from_template(
@@ -101,7 +101,7 @@ pub(super) fn build_from_template(
     Some((program, args))
 }
 
-/// The eleven built-in `[editor] preset` names (Unit 2's floor set), each
+/// The eleven built-in `[editor] preset` names, each
 /// mapped to a known-correct `edit_at_line` template for that editor's own
 /// line-jump CLI convention — every template here is validated by its own
 /// test in `editor_tests.rs`. Growing this table (spec Open Question 3) is
@@ -121,7 +121,7 @@ const PRESETS: &[(&str, &str)] = &[
 ];
 
 /// Looks up `name` in the built-in [`PRESETS`] table; `None` means an
-/// unrecognized preset name — an invalid value per the Unit 2 FR (see
+/// unrecognized preset name — an invalid value (see
 /// [`EditorConfigTier::UnknownPreset`]).
 fn preset_template(name: &str) -> Option<&'static str> {
     PRESETS

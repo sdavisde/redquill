@@ -1,4 +1,4 @@
-//! Config layer (spec 07): a single, optional TOML file at
+//! Config layer: a single, optional TOML file at
 //! `$XDG_CONFIG_HOME/redquill/config.toml` (falling back to
 //! `~/.config/redquill/config.toml` on Linux and macOS; the platform config
 //! directory on Windows), read exactly once at startup by [`load`]. There is
@@ -94,7 +94,7 @@ pub struct SearchConfig {
     pub literal: bool,
 }
 
-/// `[editor]` (Unit 2): the editor `g<Space>` opens, either as an explicit
+/// `[editor]`: the editor `g<Space>` opens, either as an explicit
 /// [`edit_at_line`](EditorConfig::edit_at_line) template or a named
 /// [`preset`](EditorConfig::preset) — `edit_at_line` wins when both are set.
 /// `None`/`None` (the default) means this config tier is absent entirely;
@@ -123,7 +123,7 @@ pub struct EditorConfig {
     pub edit_at_line: Option<String>,
 }
 
-/// One language's `[lsp.<lang>]` override (Unit 3): every field is a partial
+/// One language's `[lsp.<lang>]` override: every field is a partial
 /// overlay onto that language's row in `crate::lsp::config::default_commands`
 /// — `command`/`args` are `None` when unset (that half of the invocation
 /// keeps its default independently of the other; see the merge function's
@@ -153,7 +153,7 @@ impl Default for LspServerOverride {
     }
 }
 
-/// `[lsp]` (Unit 3): per-language server overrides for the four languages
+/// `[lsp]`: per-language server overrides for the four languages
 /// redquill knows how to spawn a server for (`rust`, `typescript`, `python`,
 /// `go` — matching `crate::lsp::config::ServerLang`'s variants by name).
 /// Adding a fifth language remains a code change (spec Non-Goal 8), so this
@@ -181,7 +181,7 @@ pub struct Config {
     pub search: SearchConfig,
     pub editor: EditorConfig,
     pub lsp: LspConfig,
-    /// `[keys.diff]`/`[keys.panel]` (Unit 4): raw, not-yet-resolved main-
+    /// `[keys.diff]`/`[keys.panel]`: raw, not-yet-resolved main-
     /// keymap overrides. See [`KeysConfig`]'s doc for why action-name
     /// resolution and the actual merge onto `Keymap::default_map()` live
     /// ui-side (`crate::ui::keymap_config`) rather than here.

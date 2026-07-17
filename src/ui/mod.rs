@@ -123,26 +123,16 @@ const AUTO_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 /// How a TUI session ended: governs only the one stdout side effect (`main`'s
 /// `render_markdown(&app.annotations)` call on quit) — never what's kept in
 /// `app.annotations` itself or on disk, both of which are already settled by
-/// the time either variant is produced. Reached from more than one gesture
-/// each, since spec 08 Unit 6 (review annotation persistence) repurposed the
-/// existing two-variant quit gate for the end-review modal rather than
-/// adding a third:
+/// the time either variant is produced.
 ///
-/// - [`QuitOutcome::Emit`]: a plain session's `q`, or a review session's
-///   `f` (finish, [`super::app::App::finish_review`]) — finish emits the
-///   *complete* annotation set (restored-from-earlier-sessions and this
-///   session's own, together) exactly once, in the unchanged markdown
-///   format, since restore-on-resume (task 7.2) already merged both into
-///   `app.annotations` well before this point is ever reached.
-/// - [`QuitOutcome::Discard`]: a plain session's `Q`/Ctrl-C (unchanged), or
-///   — amended 2026-07-16, spec 08 Unit 6, reversing Unit 2's original
-///   "pause emits" contract — a review session's `p` (pause). Pause still
-///   keeps the worktree, the review state, and every annotation (persisted
-///   via the same save-on-change path every add/edit/delete already
-///   triggers, spec 08 Unit 6 task 7.2); only the stdout emission is
-///   suppressed, so a consumer piping redquill's output sees each
-///   annotation exactly once, on finish, rather than once per pause plus
-///   once more on finish.
+/// [`QuitOutcome::Emit`]: a plain session's `q`, or a review session's `f`
+/// (finish, [`super::app::App::finish_review`]) — finish emits the complete
+/// annotation set exactly once, in the unchanged markdown format.
+/// [`QuitOutcome::Discard`]: a plain session's `Q`/Ctrl-C, or a review
+/// session's `p` (pause). Pause keeps the worktree, the review state, and
+/// every annotation on disk; only the stdout emission is suppressed, so a
+/// consumer piping redquill's output sees each annotation exactly once, on
+/// finish rather than once per pause plus once more on finish.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuitOutcome {
     /// Emit `app.annotations` to stdout on the way out.
@@ -237,8 +227,8 @@ fn split_right(area: Rect, show_panel: bool) -> (Rect, Option<Rect>) {
     (chunks[0], Some(chunks[1]))
 }
 
-/// Splits off the full-width, single-row review banner band (spec 08 Unit 2)
-/// from the top of `area` when `show_banner` is true (an active review
+/// Splits off the full-width, single-row review banner band from the top of
+/// `area` when `show_banner` is true (an active review
 /// session — see [`App::in_review_session`]), leaving the rest for
 /// everything else (footer, sidebar, diff pane). Mirrors [`split_footer`]'s
 /// `(Some/None, rest)` shape. This split runs in *both* [`draw`] and the
@@ -284,7 +274,7 @@ enum Flow {
 
 /// What `Action::Quit` (`q`) does, shared by both interception sites
 /// (diff-scope [`dispatch_key`] and [`modes::handle_panel_key`]) so review
-/// mode's `q` can't drift between them (spec 08 Unit 2): during a review
+/// mode's `q` can't drift between them: during a review
 /// session it opens the end-review modal instead of quitting; otherwise it
 /// quits exactly as before, emitting annotations. `Action::QuitDiscard`
 /// (`Q`) is untouched by this — its global "quit immediately, emit nothing"
@@ -428,7 +418,7 @@ fn dispatch_key(
 
             // Esc only ever closes an already-open help overlay, cancels an
             // in-progress Visual selection, or returns from a commit view
-            // opened via the git panel's History tab (spec 05 Unit 3); it is
+            // opened via the git panel's History tab; it is
             // never bound to opening help, unlike `?` (see keymap.rs). This
             // runs only when nothing was pending — an Esc that cancelled a
             // pending `g` prefix (handled inside `resolve`) stops there
@@ -472,8 +462,8 @@ fn dispatch_key(
                         None => Flow::Continue,
                     };
                 }
-                // Review-session accept translation (spec 08 Unit 3): `Space`/
-                // `S` resolve through the keymap to `ToggleStage`/`StageFile`
+                // Review-session accept translation: `Space`/`S` resolve
+                // through the keymap to `ToggleStage`/`StageFile`
                 // exactly as they always have (see `Action::ToggleAccept`'s
                 // doc) — this is the one place their *meaning* changes while
                 // reviewing, mirroring `quit_action`'s identical pattern for
@@ -761,7 +751,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
         ));
         frame.render_widget(footer, footer_area);
     } else if let Some(notice) = app.config_warning_notice() {
-        // A config-load problem (spec 07 Unit 1): dismissible (`!`) and
+        // A config-load problem: dismissible (`!`) and
         // non-blocking — it never covers the diff/panel content above, only
         // this footer row — and, like every other footer message, never
         // written to stdout (stdout is reserved for the annotation
@@ -923,16 +913,16 @@ pub fn run(app: &mut App) -> anyhow::Result<QuitOutcome> {
     let mut terminal = init_terminal()?;
     // Effective-keymap construction happens exactly once, here, before the
     // event loop starts: `default_map()` plus `[keys.diff]`/`[keys.panel]`
-    // config overrides (spec 07 Unit 4). Merge-time warnings (unknown
-    // action names, same-scope collisions) join the config-load warnings
-    // `main` already collected via `App::set_config`, so both surface
-    // through the same dismissible status-line notice.
+    // config overrides. Merge-time warnings (unknown action names,
+    // same-scope collisions) join the config-load warnings `main` already
+    // collected via `App::set_config`, so both surface through the same
+    // dismissible status-line notice.
     let (keymap, keymap_warnings) = keymap_config::effective_keymap(&app.config.keys);
     app.config_warnings.extend(keymap_warnings);
-    // Same one-shot construction for every modal mode's table (spec 07 Unit
-    // 4 task 5.3/5.4): `modal_keys::ModalKeymaps::default()` (the compiled-in
-    // defaults) with each `[keys.<mode>]` override applied, stored on `app`
-    // so every modal handler and render call reads a plain owned table.
+    // Same one-shot construction for every modal mode's table:
+    // `modal_keys::ModalKeymaps::default()` (the compiled-in defaults) with
+    // each `[keys.<mode>]` override applied, stored on `app` so every modal
+    // handler and render call reads a plain owned table.
     let (modal_keymaps, modal_warnings) = modal_keys_config::effective_modal_keys(&app.config.keys);
     app.modal_keys = modal_keymaps;
     app.config_warnings.extend(modal_warnings);
@@ -968,8 +958,8 @@ fn event_loop(
         let size = terminal.size()?;
         let full_area = Rect::new(0, 0, size.width, size.height);
         // Delegates to `diff_pane_rect` — the same split chain `draw` itself
-        // runs, including the review-session banner split (spec 08 Unit 2) and
-        // the `[layout]` sidebar config (spec 07) — so the viewport height
+        // runs, including the review-session banner split and the
+        // `[layout]` sidebar config — so the viewport height
         // measured here for the diff pane matches what actually renders this
         // frame (same `app`/`pending` state, same computation). See
         // `diff_pane_rect`'s doc for why this indirection exists rather than
@@ -1031,21 +1021,21 @@ fn event_loop(
         // Drain any completed background working-tree read every tick (cheap,
         // non-blocking) so its result lands promptly once the worker finishes.
         app.poll_refresh();
-        // Drain any completed History-tab commit-log page fetch (spec 05
-        // Unit 3), same cadence as the other pollers.
+        // Drain any completed History-tab commit-log page fetch, same
+        // cadence as the other pollers.
         app.poll_history();
-        // Drain any completed fuzzy-finder candidate-list load (spec 06
-        // Unit 1), same cadence as the other pollers.
+        // Drain any completed fuzzy-finder candidate-list load, same
+        // cadence as the other pollers.
         app.poll_finder();
         // Drain Project Search's streaming scan results and fire a fresh
-        // scan once its debounce elapses (spec 06 Unit 2). Runs regardless
-        // of mode — kept alive while a hit's file view is showing on top
-        // (see `project_search`'s module doc) — so results keep streaming
-        // in behind it.
+        // scan once its debounce elapses. Runs regardless of mode — kept
+        // alive while a hit's file view is showing on top (see
+        // `project_search`'s module doc) — so results keep streaming in
+        // behind it.
         app.poll_project_search();
-        // Drain any completed review-state save (spec 08 Unit 4), same
-        // cadence as the other pollers — the write itself runs off this
-        // loop entirely (see `App::persist_review_state`).
+        // Drain any completed review-state save, same cadence as the other
+        // pollers — the write itself runs off this loop entirely (see
+        // `App::persist_review_state`).
         app.poll_review_save();
 
         // Spawn a working-tree read on a fixed cadence (independent of

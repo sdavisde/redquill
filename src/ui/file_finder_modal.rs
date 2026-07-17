@@ -1,6 +1,6 @@
-//! The fuzzy file finder overlay ([`super::app::Mode::Finder`], spec 06 Unit
-//! 1): a centered modal in the style of [`super::switcher_modal`] — input
-//! line on top, ranked result list below, matched characters emphasized.
+//! The fuzzy file finder overlay ([`super::app::Mode::Finder`]): a centered
+//! modal in the style of [`super::switcher_modal`] — input line on top,
+//! ranked result list below, matched characters emphasized.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
@@ -25,11 +25,9 @@ fn centered(area: Rect, width_pct: u16, height_pct: u16) -> Rect {
 /// Builds one result row's spans: the path with every char index in
 /// `positions` emphasized via `theme.search_match_fg` (blue) plus bold — the
 /// same match-emphasis treatment [`super::project_search_view`]'s results
-/// list uses (spec 06 round-1 UX fix: the matched substring's *text* itself
-/// carries the emphasis, not just a background tint), so "this substring
-/// matched your query" reads consistently, and with high contrast, across
-/// the app. Split out from [`match_row`] so it's directly unit-testable
-/// without constructing a `ListItem`.
+/// list uses, so "this substring matched your query" reads consistently,
+/// and with high contrast, across the app. Split out from [`match_row`] so
+/// it's directly unit-testable without constructing a `ListItem`.
 fn match_spans(path: &str, positions: &[u32], theme: &super::theme::Theme) -> Vec<Span<'static>> {
     let matched_style = Style::default()
         .fg(theme.search_match_fg)
