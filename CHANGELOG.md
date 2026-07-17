@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/sdavisde/redquill/compare/v0.11.0...v0.11.1) (2026-07-17)
+
+
+### Bug Fixes
+
+* allow diff lines to wrap ([b0cf06b](https://github.com/sdavisde/redquill/commit/b0cf06b08b7f063b39a0e2880f2f8bf07f7bfc5d))
+
 ## [0.11.0](https://github.com/sdavisde/redquill/compare/v0.10.0...v0.11.0) (2026-07-17)
 
 
