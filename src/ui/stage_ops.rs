@@ -138,6 +138,26 @@ pub trait StageOps {
         let _ = name;
         Err(GitError::Parse("branch switch unavailable".into()))
     }
+    /// The repository's common git directory (see
+    /// [`GitRunner::git_common_dir`], spec 08 Units 1/5) — the shared
+    /// administrative directory every linked worktree resolves review paths
+    /// through. The default errors, mirroring [`StageOps::branch_list`].
+    fn git_common_dir(&self) -> Result<std::path::PathBuf, GitError> {
+        Err(GitError::Parse("git common dir unavailable".into()))
+    }
+    /// Resolves `--review`'s default base ref (see [`GitRunner::default_base`],
+    /// spec 08 Units 1/5): the branch `origin/HEAD` points to, else `main`,
+    /// else `master`. The default errors, mirroring [`StageOps::branch_list`].
+    fn default_base(&self) -> Result<String, GitError> {
+        Err(GitError::Parse("default base unavailable".into()))
+    }
+    /// Creates a managed review worktree at `path`, checked out to `branch`
+    /// (see [`GitRunner::worktree_add`], spec 08 Units 1/5). The default
+    /// errors, mirroring [`StageOps::branch_list`].
+    fn worktree_add(&self, path: &std::path::Path, branch: &str) -> Result<(), GitError> {
+        let _ = (path, branch);
+        Err(GitError::Parse("worktree add unavailable".into()))
+    }
     /// Builds the `git commit -m <message>` [`Command`] the commit gesture
     /// (spec 04) spawns on the background poller — returned as a `Command`
     /// rather than run here so the caller can execute it off the render
@@ -263,6 +283,18 @@ impl StageOps for GitRunner {
 
     fn switch_branch(&self, name: &str) -> Result<(), GitError> {
         GitRunner::switch_branch(self, name)
+    }
+
+    fn git_common_dir(&self) -> Result<std::path::PathBuf, GitError> {
+        GitRunner::git_common_dir(self)
+    }
+
+    fn default_base(&self) -> Result<String, GitError> {
+        GitRunner::default_base(self)
+    }
+
+    fn worktree_add(&self, path: &std::path::Path, branch: &str) -> Result<(), GitError> {
+        GitRunner::worktree_add(self, path, branch)
     }
 
     fn commit_command(&self, message: &str) -> Option<Command> {

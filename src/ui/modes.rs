@@ -15,7 +15,7 @@ use super::App;
 use super::modal_keys::{
     self, AcceptedPanelAction, CommitMessageAction, ComposeAction, ConfirmRemoteOpAction,
     EndReviewAction, FinderAction, ListAction, PeekAction, ProjectSearchInputAction,
-    ProjectSearchResultsAction, SearchAction, StagingAction, SwitcherAction,
+    ProjectSearchResultsAction, ReviewBranchAction, SearchAction, StagingAction, SwitcherAction,
 };
 
 /// Handles one key event while [`super::Mode::Compose`] is active. Resolves
@@ -374,6 +374,26 @@ pub(super) fn handle_switcher_key(app: &mut App, key: KeyEvent) {
         SwitcherAction::MoveUp => app.switcher_move_up(),
         SwitcherAction::Confirm => app.switcher_confirm(),
         SwitcherAction::Close => app.close_switcher(),
+    }
+}
+
+/// Handles one key event while [`super::Mode::ReviewBranch`] is active (the
+/// review-branch modal, `R` panel scope, spec 08 Unit 1 in-app path / Unit
+/// 5): `j`/`k`/arrows move the cursor, `Enter` starts a review session on
+/// the highlighted branch (see
+/// [`super::review_branch::App::confirm_review_branch`]), `Esc` closes the
+/// modal. Dispatch is driven by [`modal_keys::REVIEW_BRANCH_KEYS`] — the
+/// same table the help overlay renders. Bypasses the [`super::Keymap`] table
+/// entirely, mirroring [`handle_switcher_key`].
+pub(super) fn handle_review_branch_key(app: &mut App, key: KeyEvent) {
+    let Some(action) = modal_keys::resolve(&app.modal_keys.review_branch, key) else {
+        return;
+    };
+    match action {
+        ReviewBranchAction::MoveDown => app.review_branch_move_down(),
+        ReviewBranchAction::MoveUp => app.review_branch_move_up(),
+        ReviewBranchAction::Confirm => app.confirm_review_branch(),
+        ReviewBranchAction::Close => app.close_review_branch_modal(),
     }
 }
 

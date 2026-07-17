@@ -131,6 +131,11 @@ pub enum Action {
     CommitStaged,
     /// Open the branch/worktree switcher modal (panel scope).
     OpenSwitcher,
+    /// Open the review-branch modal (panel scope, spec 08 Unit 1's in-app
+    /// entry path / Unit 5): lists local branches (excluding the one
+    /// currently checked out) so the user can start a review session in
+    /// place, without leaving the app.
+    OpenReviewBranch,
     /// Open the fuzzy file finder overlay (`gp`, diff scope, spec 06 Unit
     /// 1).
     OpenFileFinder,
@@ -235,6 +240,7 @@ pub(crate) fn action_name(action: Action) -> &'static str {
         RemotePush => "remote-push",
         CommitStaged => "commit-staged",
         OpenSwitcher => "open-switcher",
+        OpenReviewBranch => "open-review-branch",
         OpenFileFinder => "open-file-finder",
         OpenProjectSearch => "open-project-search",
         OpenEditor => "open-editor",
@@ -303,6 +309,7 @@ pub(crate) fn action_from_name(name: &str) -> Option<Action> {
         "remote-push" => RemotePush,
         "commit-staged" => CommitStaged,
         "open-switcher" => OpenSwitcher,
+        "open-review-branch" => OpenReviewBranch,
         "open-file-finder" => OpenFileFinder,
         "open-project-search" => OpenProjectSearch,
         "open-editor" => OpenEditor,
@@ -823,6 +830,11 @@ impl Keymap {
                     KeySeq::one(Char('b'), none),
                     OpenSwitcher,
                     "Open branch/worktree switcher",
+                ),
+                p(
+                    KeySeq::one(Char('R'), none),
+                    OpenReviewBranch,
+                    "Open review-branch modal (start a review in place)",
                 ),
                 p(
                     KeySeq::one(Char('@'), none),

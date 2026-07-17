@@ -35,6 +35,7 @@ use super::lsp_ops::LspClient;
 use super::peek::{PeekKind, PeekState};
 use super::project_search::ProjectSearchState;
 use super::refresh::InFlightRefresh;
+use super::review_branch::ReviewBranchState;
 use super::rows::Row;
 use super::search::SearchState;
 use super::stage_ops::{ReviewSnapshot, StageOps, StagedFile, StagedState};
@@ -90,6 +91,15 @@ pub enum Mode {
     Peek,
     /// The branch/worktree switcher modal (`b`, panel scope) is open.
     Switcher,
+    /// The review-branch modal (`R`, panel scope, spec 08 Unit 1's in-app
+    /// entry path / Unit 5) is open: lists local branches (excluding the one
+    /// currently checked out) so the user can start a review session in
+    /// place, styled and behaved like [`Mode::Switcher`]'s Branches tab (see
+    /// [`super::review_branch::ReviewBranchState`]). Its own mode rather
+    /// than a third switcher tab, since confirming here resolves a base ref
+    /// and ensures a managed worktree exists (spec 08 Unit 1) instead of
+    /// switching onto an already-checked-out ref.
+    ReviewBranch,
     /// The commit-message modal (`c`, panel scope, spec 04) is open.
     CommitMessage,
     /// The fuzzy file finder overlay (`gp`, spec 06 Unit 1) is open. The
@@ -314,6 +324,14 @@ pub struct App {
     /// [`Mode::Switcher`] is active (see [`App::open_switcher`] /
     /// [`App::close_switcher`]).
     pub switcher: Option<SwitcherState>,
+    /// The review-branch modal's state (spec 08 Unit 5), `Some` only while
+    /// [`Mode::ReviewBranch`] is active (see
+    /// [`super::review_branch::App::open_review_branch_modal`] /
+    /// [`super::review_branch::App::close_review_branch_modal`]). Named
+    /// distinctly from [`App::review_branch`] (the *existing* method naming
+    /// the branch under review) so the field and the predicate can never be
+    /// confused at a call site.
+    pub review_branch_modal: Option<ReviewBranchState>,
     /// The LSP client backing `gd`/`gr`/`K`, created lazily on first use
     /// against `repo_root`. `None` until then. `pub(super)` for the
     /// code-intelligence module.
@@ -609,6 +627,7 @@ impl App {
             repo_root: None,
             peek: None,
             switcher: None,
+            review_branch_modal: None,
             lsp: None,
             pending_lsp: None,
             background: BackgroundTasks::new(),
@@ -1003,6 +1022,7 @@ impl App {
             Action::RemotePush => self.request_remote_op(self.remote_push_op()),
             Action::CommitStaged => self.open_commit_message(),
             Action::OpenSwitcher => self.open_switcher(),
+            Action::OpenReviewBranch => self.open_review_branch_modal(),
             Action::OpenFileFinder => self.open_finder(),
             Action::OpenProjectSearch => self.open_project_search(),
             Action::ToggleCommandLog => self.toggle_command_log(),

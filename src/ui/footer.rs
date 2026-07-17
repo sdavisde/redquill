@@ -435,6 +435,7 @@ pub(super) fn build_hints(
         Mode::Search => Vec::new(),
         Mode::EndReview { .. } => modal_hints(&modal_keys.end_review),
         Mode::ConfirmRemoteOp { .. } => modal_hints(&modal_keys.confirm_remote_op),
+        Mode::ReviewBranch => modal_hints(&modal_keys.review_branch),
     }
 }
 

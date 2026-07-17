@@ -65,7 +65,7 @@ fn group_of(action: Action) -> &'static str {
         | OpenProjectSearch | OpenEditor | DismissConfigWarning => "Panels",
         GotoDefinition | GotoReferences | Hover => "Code intelligence",
         PanelCursorDown | PanelCursorUp | PanelSelect | TogglePanelTab | RemoteFetch
-        | RemotePull | RemotePush | CommitStaged | OpenSwitcher => "Git panel",
+        | RemotePull | RemotePush | CommitStaged | OpenSwitcher | OpenReviewBranch => "Git panel",
         Quit | QuitDiscard => "Quit",
     }
 }
@@ -178,7 +178,7 @@ fn modal_hints<A: Clone>(table: &[ModalBinding<A>]) -> Vec<(String, &'static str
 fn modal_sections(
     modal_keys: &ModalKeymaps,
     review_session: bool,
-) -> [(&'static str, Vec<(String, &'static str)>); 13] {
+) -> [(&'static str, Vec<(String, &'static str)>); 14] {
     let staging_section = if review_session {
         (
             "Accepted files panel (s, review sessions)",
@@ -196,6 +196,10 @@ fn modal_sections(
         (
             "Branch/worktree switcher",
             modal_hints(&modal_keys.switcher),
+        ),
+        (
+            "Review branch (R, git panel)",
+            modal_hints(&modal_keys.review_branch),
         ),
         (
             "Commit message (c, git panel)",

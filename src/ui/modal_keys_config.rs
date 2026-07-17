@@ -153,6 +153,9 @@ pub(super) fn effective_modal_keys(
         accepted_panel: modal_keys::ACCEPTED_PANEL_KEYS.clone(),
         // The pull/push confirm modal (spec 08 Unit 5) — same shape again.
         confirm_remote_op: modal_keys::CONFIRM_REMOTE_OP_KEYS.clone(),
+        // The review-branch modal (spec 08 Unit 1 in-app path / Unit 5) —
+        // same shape again.
+        review_branch: modal_keys::REVIEW_BRANCH_KEYS.clone(),
     };
 
     // Every mode name the config actually provided a table for that isn't

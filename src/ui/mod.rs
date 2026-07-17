@@ -53,7 +53,10 @@ mod project_search_view;
 mod refresh;
 mod render_glue;
 mod review_banner;
+mod review_branch;
+mod review_branch_modal;
 mod review_ops;
+mod review_session;
 mod rows;
 mod search;
 mod stage_ops;
@@ -73,6 +76,10 @@ pub use diff_view_state::DiffViewState;
 pub use editor::{EditorConfigTier, EditorLaunch, resolve_editor_config_tier};
 pub use keymap::{Action, Binding, Keymap};
 pub use lsp_ops::LspClient;
+pub use review_session::{
+    ReconciledReviewState, ensure_review_worktree, load_reconciled_review_state,
+    resolve_review_base,
+};
 pub use rows::{Row, build_rows};
 pub use stage_ops::{ReviewError, ReviewSnapshot, StageOps, StagedFile, build_review};
 pub use theme::Theme;
@@ -368,6 +375,7 @@ fn dispatch_key(
         Mode::Search => modes::handle_search_key(app, key),
         Mode::Peek => modes::handle_peek_key(app, key),
         Mode::Switcher => modes::handle_switcher_key(app, key),
+        Mode::ReviewBranch => modes::handle_review_branch_key(app, key),
         Mode::CommitMessage => modes::handle_commit_message_key(app, key),
         Mode::Finder => modes::handle_finder_key(app, key),
         Mode::ProjectSearch => modes::handle_project_search_key(app, key),
@@ -828,6 +836,9 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     if matches!(app.mode, Mode::Switcher) {
         switcher_modal::render(frame, area, app);
     }
+    if matches!(app.mode, Mode::ReviewBranch) {
+        review_branch_modal::render(frame, area, app);
+    }
     if matches!(app.mode, Mode::CommitMessage) {
         commit_modal::render(frame, area, app);
     }
@@ -1079,3 +1090,7 @@ mod review_guard_integration_tests;
 #[cfg(test)]
 #[path = "review_persistence_integration_tests.rs"]
 mod review_persistence_integration_tests;
+
+#[cfg(test)]
+#[path = "review_branch_integration_tests.rs"]
+mod review_branch_integration_tests;

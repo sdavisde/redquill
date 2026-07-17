@@ -21,7 +21,11 @@ Tasks for `08-spec-branch-review-mode.md`. Each parent task is a thin vertical s
 | `src/ui/mod.rs` | Layout: banner band in `draw()` AND the viewport-measurement mirror (~line 747). |
 | `src/ui/theme.rs` | `review_banner_bg`/`review_banner_fg` + contrast drift-guard test. |
 | `src/ui/rows.rs` | Section-header review markers (O(1) lookups in the row-build path). |
-| `src/ui/switcher.rs` | Reroot flow reference; branch read models reused by the review-branch modal. |
+| `src/ui/switcher.rs` | Reroot flow reference; `App::reroot` generalized (task 5.2) to take an explicit target so the review-branch modal shares it with the worktree switcher. |
+| `src/ui/review_session.rs` | New module (task 5.2): shared "ensure a review session" core — `resolve_review_base`, `ensure_review_worktree`, `load_reconciled_review_state` — called by both `main.rs`'s CLI path and the in-app modal. |
+| `src/ui/review_branch.rs` | New module (task 5.1/5.2/5.3): `ReviewBranchState` + `App` handlers for the review-branch modal (open/close/cursor/confirm). |
+| `src/ui/review_branch_modal.rs` | New module (task 5.1): the review-branch modal's render, styled like `switcher_modal.rs`. |
+| `src/ui/review_branch_integration_tests.rs` | New module (task 5.4): real-git, real-dispatch tests for the reroot-into-review flow and its failure path. |
 | `src/ui/perf_tests.rs` | Must pass unmodified — tripwire for marker lookups in the hot path. |
 | `CLAUDE.md` | Write-ceiling amendment (worktree add / no-force remove / prune) + architecture-map entry for `review/`. |
 | `docs/specs/08-spec-branch-review-mode/proofs/` | Captured transcripts/screenshots (gitignored per repo convention). |
@@ -125,7 +129,7 @@ Covers: spec Unit 4 — `review-state.json` in the common git dir, atomic writes
 - [x] 4.5 Launch-time GC + corruption handling: drop entries whose branch no longer exists (never touching live entries); corrupt file → rename to `review-state.json.corrupt`, one stderr line, continue empty. Document this as the module's silent-degradation contract in the module doc. Tempdir tests for both.
 - [x] 4.6 Finish (2.4) additionally deletes the branch's state entry; two-session tempdir integration test covering resume → staleness → re-accept → finish; run gates; capture the two-session and cleanup transcripts into `proofs/`; commit.
 
-### [ ] 5.0 Start a review without leaving the app: review-branch modal
+### [x] 5.0 Start a review without leaving the app: review-branch modal
 
 **User can verify:** from a normal redquill session, open the git panel, press the new review key → a modal lists local branches (current branch excluded), Enter on one lands in the same banner-topped review session as the CLI path (worktree created or reused, review states restored); Esc dismisses; a branch that can't be worktree'd shows the git error in-app; the action appears in the `?` overlay.
 
@@ -139,10 +143,10 @@ Covers: spec Unit 1 (in-app path) — panel-scope binding, modal reusing spec-03
 
 #### 5.0 Tasks
 
-- [ ] 5.1 New panel-scope `Action` + binding opening `Mode::ReviewBranch`: modal lists local branches via the existing `branch_list` read model, excluding the branch checked out in the user's worktree; cursor/Enter/Esc handling and a `modal_keys.rs` table with drift test, styled like the spec-03 switcher list.
-- [ ] 5.2 In-app session start sharing the CLI path's core: resolve base → ensure worktree → re-root via `App::reroot` (build-before-swap, LSP re-create, annotation preservation) → `Review` target snapshot → load + reconcile persisted state (4.4). One "ensure review session" code path, two entry points.
-- [ ] 5.3 In-app failure surfacing: `worktree_add`/reroot errors render in the modal or panel message area (existing error-surface pattern), never crash, never mutate state.
-- [ ] 5.4 Reroot-into-review tempdir integration test (isolation helper mandatory — this is the switcher-adjacent shape the incident implicates); `?` overlay entry; run gates; capture modal + parity screenshots into `proofs/`; commit.
+- [x] 5.1 New panel-scope `Action` + binding opening `Mode::ReviewBranch`: modal lists local branches via the existing `branch_list` read model, excluding the branch checked out in the user's worktree; cursor/Enter/Esc handling and a `modal_keys.rs` table with drift test, styled like the spec-03 switcher list.
+- [x] 5.2 In-app session start sharing the CLI path's core: resolve base → ensure worktree → re-root via `App::reroot` (build-before-swap, LSP re-create, annotation preservation) → `Review` target snapshot → load + reconcile persisted state (4.4). One "ensure review session" code path, two entry points.
+- [x] 5.3 In-app failure surfacing: `worktree_add`/reroot errors render in the modal or panel message area (existing error-surface pattern), never crash, never mutate state.
+- [x] 5.4 Reroot-into-review tempdir integration test (isolation helper mandatory — this is the switcher-adjacent shape the incident implicates); `?` overlay entry; run gates; capture modal + parity screenshots into `proofs/`; commit.
 
 ### [x] 7.0 Review annotations survive pause: save on change, emit once on finish
 

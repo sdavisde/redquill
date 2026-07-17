@@ -9,20 +9,20 @@
 //! stderr is not a terminal — e.g. piped, or running under a test harness —
 //! falls back to the plain-text summary so redquill stays scriptable.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io::IsTerminal;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use clap::Parser;
 
-use redquill::annotate::{PersistedAnnotation, render_markdown};
+use redquill::annotate::render_markdown;
 use redquill::config;
 use redquill::diff::FileDiff;
-use redquill::git::{ChangeKind, DiffTarget, GitRunner, sanitize_branch_dir_name};
-use redquill::review::{ReviewStatus, reconcile, store};
+use redquill::git::{ChangeKind, DiffTarget, GitRunner};
+use redquill::review::store;
 use redquill::ui::{
-    self, App, EditorConfigTier, EditorLaunch, QuitOutcome, build_review,
-    resolve_editor_config_tier,
+    self, App, EditorConfigTier, EditorLaunch, QuitOutcome, build_review, ensure_review_worktree,
+    load_reconciled_review_state, resolve_editor_config_tier, resolve_review_base,
 };
 
 /// redquill: a terminal UI for reviewing agentic code changes.
@@ -138,11 +138,7 @@ fn resolve_session(
         return Ok((discovered, config.diff_target()));
     };
 
-    let base = match &config.base {
-        Some(base) => base.clone(),
-        None => discovered.default_base()?,
-    };
-
+    let base = resolve_review_base(&discovered, config.base.as_deref())?;
     let worktree_path = ensure_review_worktree(&discovered, branch)?;
     let session_runner = GitRunner::discover_in(&worktree_path)?;
 
@@ -153,43 +149,6 @@ fn resolve_session(
             branch: branch.clone(),
         },
     ))
-}
-
-/// Ensures a managed worktree exists for `branch`, at
-/// `<git-common-dir>/redquill/worktrees/<sanitized-branch>`, and returns its
-/// path. Reuses an existing worktree (a paused review) rather than creating
-/// a new one when `git worktree list` already knows about the path;
-/// otherwise creates it with [`GitRunner::worktree_add`], which surfaces
-/// git's own error message (unknown branch, branch checked out elsewhere,
-/// ...) without side effects on failure.
-fn ensure_review_worktree(runner: &GitRunner, branch: &str) -> anyhow::Result<PathBuf> {
-    let common_dir = runner.git_common_dir()?;
-    let dir_name = sanitize_branch_dir_name(branch);
-    let worktree_path = common_dir.join("redquill").join("worktrees").join(dir_name);
-
-    let already_registered = worktree_path.exists()
-        && runner
-            .worktree_list()?
-            .iter()
-            .any(|entry| paths_match(&entry.path, &worktree_path));
-
-    if !already_registered {
-        runner.worktree_add(&worktree_path, branch)?;
-    }
-
-    Ok(worktree_path)
-}
-
-/// Whether `a` and `b` name the same filesystem location, canonicalizing
-/// both when possible (falling back to a direct comparison for a path that
-/// doesn't exist, e.g. before the first `worktree add`) — macOS tempdirs
-/// live under a symlinked root, so a raw `PathBuf` comparison can spuriously
-/// disagree with what `git worktree list` reports.
-fn paths_match(a: &Path, b: &Path) -> bool {
-    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
-    }
 }
 
 /// Resolves `<git-common-dir>/redquill/review-state.json`'s path for this
@@ -221,66 +180,6 @@ fn gc_review_state(discovered: &GitRunner) -> Option<PathBuf> {
         let _ = discovered.worktree_prune();
     }
     Some(path)
-}
-
-/// `load_reconciled_review_state`'s return shape: reconciled file statuses,
-/// their 1:1 blob-SHA companion map, and this branch's persisted
-/// annotations verbatim — named so clippy's `type_complexity` lint (and any
-/// reader) doesn't have to parse a three-deep nested tuple inline.
-type ReconciledReviewState = (
-    HashMap<String, ReviewStatus>,
-    HashMap<String, Option<String>>,
-    Vec<PersistedAnnotation>,
-);
-
-/// Loads and reconciles `branch`'s persisted review state (spec 08 Unit 4)
-/// against its *current* blob SHAs, resolved through `runner` (the
-/// session's own runner, rooted inside the review worktree, so `blob_sha`
-/// reads the branch's real current tip). Returns empty maps when nothing
-/// was ever persisted for this branch — an entirely ordinary first review,
-/// not an error. The second map mirrors `review_states`' 1:1 blob-SHA
-/// companion `App::review_blob_shas` expects: for both `Accepted` and
-/// `ChangedSinceAccepted` results this is the *persisted* SHA (not
-/// `runner`'s freshly-read current one) — for `Accepted` the two are equal
-/// anyway (reconciliation only keeps `Accepted` on a match), and for
-/// `ChangedSinceAccepted` the persisted (now-stale) SHA is exactly what
-/// `App::persist_review_state` needs to keep writing back out unchanged
-/// until the user re-accepts (see that method's doc for why re-deriving
-/// staleness on every subsequent save, rather than silently losing it,
-/// matters).
-///
-/// The third element is this branch's persisted annotations, verbatim and
-/// in their original order (spec 08 Unit 6, task 7.2) — unlike the file
-/// statuses above, annotations have no reconciliation step in v1 (see
-/// `crate::annotate::persist`'s module doc on the accepted anchor-drift
-/// limitation): they're simply carried through for `run_tui` to replay into
-/// `app.annotations` before the first render.
-fn load_reconciled_review_state(
-    runner: &GitRunner,
-    state_path: &Path,
-    branch: &str,
-) -> ReconciledReviewState {
-    let state = store::load(state_path);
-    let Some(review) = state.reviews.get(branch) else {
-        return (HashMap::new(), HashMap::new(), Vec::new());
-    };
-    let mut current_shas = HashMap::new();
-    for path in review.files.keys() {
-        let sha = runner.blob_sha(branch, path).unwrap_or(None);
-        current_shas.insert(path.clone(), sha);
-    }
-    let statuses = reconcile(review, &current_shas);
-    let mut blob_shas = HashMap::new();
-    for (path, status) in &statuses {
-        if matches!(
-            status,
-            ReviewStatus::Accepted | ReviewStatus::ChangedSinceAccepted
-        ) && let Some(entry) = review.files.get(path)
-        {
-            blob_shas.insert(path.clone(), entry.blob_sha.clone());
-        }
-    }
-    (statuses, blob_shas, review.annotations.clone())
 }
 
 /// Prints a one-line summary per changed file for the resolved diff target.
@@ -449,7 +348,7 @@ fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, paths_match, resolve_editor};
+    use super::{Cli, resolve_editor};
     use clap::Parser;
     use redquill::ui::{EditorConfigTier, EditorLaunch};
 
@@ -503,23 +402,9 @@ mod tests {
         assert_eq!(cli.base.as_deref(), Some("trunk"));
     }
 
-    // -- paths_match ----------------------------------------------------------
-
-    #[test]
-    fn paths_match_identical_nonexistent_paths() {
-        // Neither side exists, so this exercises the direct-comparison
-        // fallback rather than canonicalize.
-        let p = std::path::PathBuf::from("/no/such/path/anywhere");
-        assert!(paths_match(&p, &p));
-    }
-
-    #[test]
-    fn paths_match_distinguishes_different_nonexistent_paths() {
-        assert!(!paths_match(
-            std::path::Path::new("/no/such/path/a"),
-            std::path::Path::new("/no/such/path/b")
-        ));
-    }
+    // `paths_match` moved to `redquill::ui::review_session` (spec 08 task
+    // 5.2, shared entry-point core) along with `ensure_review_worktree`;
+    // its own tests moved with it.
 
     #[test]
     fn flag_wins_over_everything() {
@@ -628,18 +513,20 @@ mod tests {
         );
     }
 
-    // -- gc_review_state / load_reconciled_review_state (spec 08 Unit 4) ------
+    // -- gc_review_state (spec 08 Unit 4) --------------------------------------
     //
-    // Real-git tempdir tests: `gc_review_state`/`load_reconciled_review_state`
-    // are private to the binary crate (not part of `redquill::ui`'s public
-    // surface), so — like `commit_integration_tests.rs`'s identical reasoning
-    // for `dispatch_key` — they can only be exercised from *this* crate's own
-    // `#[cfg(test)]` module, which is exactly where `cargo test`'s
-    // `unittests src/main.rs` binary already runs from.
+    // Real-git tempdir tests: `gc_review_state` is private to the binary
+    // crate (not part of `redquill::ui`'s public surface), so — like
+    // `commit_integration_tests.rs`'s identical reasoning for `dispatch_key`
+    // — it can only be exercised from *this* crate's own `#[cfg(test)]`
+    // module, which is exactly where `cargo test`'s `unittests src/main.rs`
+    // binary already runs from. `load_reconciled_review_state`'s own tests
+    // moved to `redquill::ui::review_session` alongside the function itself
+    // (spec 08 task 5.2).
 
-    use super::{PersistedAnnotation, gc_review_state, load_reconciled_review_state};
+    use super::gc_review_state;
     use redquill::git::GitRunner;
-    use redquill::review::{ReviewStatus, store};
+    use redquill::review::store;
     use std::process::Command;
     use tempfile::TempDir;
 
@@ -762,130 +649,5 @@ mod tests {
         gc_review_state(&runner);
 
         assert_eq!(store::load(&state_path), before);
-    }
-
-    #[test]
-    fn load_reconciled_review_state_demotes_a_changed_file_and_carries_over_the_rest() {
-        let repo = repo_with_branch("main");
-        write(repo.path(), "a.rs", "fn a() {}\n");
-        write(repo.path(), "b.rs", "fn b() {}\n");
-        git(repo.path(), &["add", "."]);
-        git(repo.path(), &["commit", "-qm", "add a.rs and b.rs"]);
-        let runner = GitRunner::discover_in(repo.path()).unwrap();
-        let a_sha_at_accept = runner.blob_sha("main", "a.rs").unwrap().unwrap();
-        let b_sha_at_accept = runner.blob_sha("main", "b.rs").unwrap().unwrap();
-
-        let common_dir = runner.git_common_dir().unwrap();
-        let state_path = common_dir.join("redquill").join("review-state.json");
-        assert_inside_tempdir(&state_path, &repo);
-        let mut files = std::collections::BTreeMap::new();
-        files.insert(
-            "a.rs".to_string(),
-            store::PersistedFile {
-                status: store::PersistedStatus::Accepted,
-                blob_sha: Some(a_sha_at_accept),
-            },
-        );
-        files.insert(
-            "b.rs".to_string(),
-            store::PersistedFile {
-                status: store::PersistedStatus::Accepted,
-                blob_sha: Some(b_sha_at_accept.clone()),
-            },
-        );
-        files.insert(
-            "c.rs".to_string(),
-            store::PersistedFile {
-                status: store::PersistedStatus::Deferred,
-                blob_sha: None,
-            },
-        );
-        store::save_review(
-            &state_path,
-            "main",
-            store::PersistedReview {
-                base: "main".to_string(),
-                worktree_path: repo.path().to_path_buf(),
-                files,
-                annotations: Vec::new(),
-            },
-        )
-        .unwrap();
-
-        // Change a.rs on the branch after the "accept" above.
-        write(repo.path(), "a.rs", "fn a() { changed(); }\n");
-        git(repo.path(), &["commit", "-aqm", "change a.rs"]);
-
-        let (states, blob_shas, annotations) =
-            load_reconciled_review_state(&runner, &state_path, "main");
-        assert!(
-            annotations.is_empty(),
-            "this fixture never persisted any annotations"
-        );
-
-        assert_eq!(
-            states.get("a.rs"),
-            Some(&ReviewStatus::ChangedSinceAccepted)
-        );
-        assert_eq!(states.get("b.rs"), Some(&ReviewStatus::Accepted));
-        assert_eq!(states.get("c.rs"), Some(&ReviewStatus::Deferred));
-        // The stale SHA is preserved (not overwritten with the new one) —
-        // `App::persist_review_state`'s contract for `ChangedSinceAccepted`.
-        assert_ne!(blob_shas.get("a.rs").cloned().flatten().unwrap(), {
-            runner.blob_sha("main", "a.rs").unwrap().unwrap()
-        });
-        assert_eq!(
-            blob_shas.get("b.rs").cloned().flatten(),
-            Some(b_sha_at_accept)
-        );
-    }
-
-    #[test]
-    fn load_reconciled_review_state_is_empty_for_a_branch_with_no_persisted_entry() {
-        let repo = repo_with_branch("main");
-        let runner = GitRunner::discover_in(repo.path()).unwrap();
-        let common_dir = runner.git_common_dir().unwrap();
-        let state_path = common_dir.join("redquill").join("review-state.json");
-
-        let (states, blob_shas, annotations) =
-            load_reconciled_review_state(&runner, &state_path, "main");
-
-        assert!(states.is_empty());
-        assert!(blob_shas.is_empty());
-        assert!(annotations.is_empty());
-    }
-
-    #[test]
-    fn load_reconciled_review_state_returns_persisted_annotations_verbatim() {
-        use redquill::annotate::{Classification, Side, Source, Target};
-
-        let repo = repo_with_branch("main");
-        let runner = GitRunner::discover_in(repo.path()).unwrap();
-        let common_dir = runner.git_common_dir().unwrap();
-        let state_path = common_dir.join("redquill").join("review-state.json");
-        assert_inside_tempdir(&state_path, &repo);
-
-        store::save_review(
-            &state_path,
-            "main",
-            store::PersistedReview {
-                base: "main".to_string(),
-                worktree_path: repo.path().to_path_buf(),
-                files: Default::default(),
-                annotations: vec![PersistedAnnotation {
-                    target: Target::line("a.rs", 3, Side::New),
-                    classification: Classification::Nit,
-                    body: "note".to_string(),
-                    source: Source::WorkingTree,
-                }],
-            },
-        )
-        .unwrap();
-
-        let (_, _, annotations) = load_reconciled_review_state(&runner, &state_path, "main");
-
-        assert_eq!(annotations.len(), 1);
-        assert_eq!(annotations[0].body, "note");
-        assert_eq!(annotations[0].target, Target::line("a.rs", 3, Side::New));
     }
 }
