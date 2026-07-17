@@ -5,9 +5,11 @@
 //! the crate.
 //!
 //! If stderr is a terminal, launches the interactive TUI (which renders to
-//! stderr, keeping stdout free for annotation markdown emitted on quit). If
-//! stderr is not a terminal — e.g. piped, or running under a test harness —
-//! falls back to the plain-text summary so redquill stays scriptable.
+//! stderr). On quit, emitted annotations are copied to the system clipboard,
+//! with stdout as the fallback sink when no clipboard is available (see
+//! [`present_annotations`]). If stderr is not a terminal — e.g. piped, or
+//! running under a test harness — falls back to the plain-text summary so
+//! redquill stays scriptable.
 
 use std::collections::HashSet;
 use std::io::IsTerminal;
@@ -56,7 +58,8 @@ struct Cli {
     #[arg(long, value_name = "REF", requires = "review")]
     base: Option<String>,
 
-    /// Also write emitted annotations to this file, in addition to stdout.
+    /// Also write emitted annotations to this file, in addition to copying
+    /// them to the clipboard.
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
 
@@ -79,7 +82,8 @@ struct RunConfig {
     /// `--base <ref>`, if passed: overrides `--review`'s default base
     /// resolution (see [`GitRunner::default_base`]).
     base: Option<String>,
-    /// Optional file to additionally write annotations to, alongside stdout.
+    /// Optional file to additionally write annotations to, alongside the
+    /// clipboard copy.
     output: Option<PathBuf>,
     /// The `--editor` flag, if passed; highest-precedence tier of
     /// [`resolve_editor`].
@@ -319,12 +323,61 @@ fn run_tui(config: &RunConfig) -> anyhow::Result<()> {
 
     if let QuitOutcome::Emit = outcome {
         let markdown = render_markdown(&app.annotations);
-        print!("{markdown}");
-        if let Some(path) = &config.output {
-            std::fs::write(path, &markdown)?;
-        }
+        present_annotations(&markdown, app.annotations.len(), config.output.as_deref())?;
     }
 
+    Ok(())
+}
+
+/// Presents emitted annotations to the user on quit: copies the rendered
+/// markdown to the system clipboard and prints a one-line confirmation
+/// (`Copied <N> annotations to the clipboard`).
+///
+/// If the clipboard is unavailable — e.g. a headless or SSH session with no
+/// display server — falls back to writing the markdown to stdout (the prior
+/// behavior) with a note on stderr, so annotations are never lost. When
+/// `output` is set (`-o <file>`), the markdown is written there regardless of
+/// how the clipboard fares. An empty annotation set is a no-op.
+///
+/// Note: on X11 the clipboard is served by the owning process, so a value set
+/// immediately before exit may not persist; macOS and Windows (the primary
+/// targets) keep it after exit.
+fn present_annotations(
+    markdown: &str,
+    count: usize,
+    output: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
+    if let Some(path) = output {
+        std::fs::write(path, markdown)?;
+    }
+    if count == 0 {
+        return Ok(());
+    }
+    match copy_to_clipboard(markdown) {
+        Ok(()) => {
+            let noun = if count == 1 {
+                "annotation"
+            } else {
+                "annotations"
+            };
+            println!("Copied {count} {noun} to the clipboard");
+        }
+        Err(err) => {
+            eprintln!(
+                "redquill: clipboard unavailable ({err}); writing annotations to stdout instead"
+            );
+            print!("{markdown}");
+        }
+    }
+    Ok(())
+}
+
+/// Copies `text` to the system clipboard, returning any backend error so the
+/// caller can fall back. Kept as a thin seam around `arboard` so the fallback
+/// policy lives in one place ([`present_annotations`]).
+fn copy_to_clipboard(text: &str) -> anyhow::Result<()> {
+    let mut clipboard = arboard::Clipboard::new()?;
+    clipboard.set_text(text.to_owned())?;
     Ok(())
 }
 
