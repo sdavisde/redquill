@@ -585,8 +585,8 @@ fn submit_compose_with_body_adds_annotation_and_refreshes_rows() {
 }
 
 /// A review session's annotations map to `Source::Range("base...branch")`
-/// (spec 08 Unit 2 — see `App::annotation_source`'s doc), so they group
-/// under the existing `Reviewing: <spec>` metadata line unchanged. Pinned
+/// (see `App::annotation_source`'s doc), so they group under the existing
+/// `Reviewing: <spec>` metadata line unchanged. Pinned
 /// byte-exactly against the real stdout serializer (`render_markdown`),
 /// since no prior test exercised the three-dot review spec specifically
 /// (only a plain two-dot `Source::Range` was covered in
@@ -646,8 +646,7 @@ fn submit_compose_while_editing_updates_body_and_classification() {
     assert_eq!(annotation.classification, Classification::Praise);
 }
 
-// -- Save-on-change: annotations persist in a review session (spec 08 Unit
-// 6, task 7.2) --------------------------------------------------------
+// -- Save-on-change: annotations persist in a review session ---------------
 
 /// A review-session `App` with a tempdir-backed state path, ready to
 /// exercise the real (backgrounded) `persist_review_state` write —
@@ -751,7 +750,7 @@ fn deleting_the_focused_annotation_in_a_review_session_persists_the_removal() {
     );
 }
 
-/// Regression pin (spec 08 Unit 6's explicit requirement): outside a review
+/// Regression pin: outside a review
 /// session, `submit_compose`/`delete_focused_annotation`'s new
 /// `persist_review_state` call is a total no-op — no background task is
 /// ever spawned, exactly as if the call weren't there at all.
@@ -1570,7 +1569,7 @@ fn refresh_repopulates_branch_and_stash_and_preserves_staged_and_annotations() {
     assert_eq!(app.annotations.len(), 1);
 }
 
-// -- Remote operations & command log (task 4.0) ------------------------
+// -- Remote operations & command log ------------------------------------
 
 /// While a remote op is in flight, a second request is rejected with a
 /// status message and spawns nothing — the guard is a message, not a queue.
@@ -1711,7 +1710,7 @@ fn completed_remote_op_logs_and_refreshes_preserving_staged_and_annotations() {
     assert_eq!(app.annotations.len(), 1);
 }
 
-// -- Commit staged (spec 04) --------------------------------------------
+// -- Commit staged --------------------------------------------------------
 
 /// An `App` over a fake backend whose `commit_command` yields `program`
 /// as the synthetic child, with one staged file so the commit gesture is
@@ -2024,11 +2023,10 @@ fn stage_file_stages_the_file_and_collapses_its_section() {
 
 #[test]
 fn stage_file_then_expand_shows_the_staged_hunks_not_just_the_header() {
-    // Regression test: once a.rs becomes fully staged, `git diff` (working
-    // tree) no longer shows it at all -- only `git diff --staged` does.
-    // Before the fix, `build_review` synthesized an empty header-only
-    // section for it, so expanding it after staging showed nothing but the
-    // FileHeader row. It must now show the staged hunk/line rows.
+    // Once a.rs becomes fully staged, `git diff` (working tree) no longer
+    // shows it -- only `git diff --staged` does. Expanding the section
+    // after staging must show the staged hunk/line rows, not just the
+    // FileHeader row.
     let p = raw_patch("a.rs", 1);
     let calls = Rc::new(RefCell::new(Vec::new()));
     let fake = FakeGit {
@@ -2180,7 +2178,7 @@ fn hunk_stage_marks_file_partial_and_keeps_it_expanded() {
     assert!(!app.view.is_collapsed("a.rs"));
 }
 
-// -- Refresh collapse-map rules (task 3.3) -------------------------------
+// -- Refresh collapse-map rules -------------------------------------------
 
 #[test]
 fn refresh_auto_expands_a_partially_staged_collapsed_file() {
@@ -2673,7 +2671,7 @@ mod async_refresh {
         );
     }
 
-    /// Mirrors the race fix `App::reroot` (spec 03 Unit 3) relies on: a
+    /// Mirrors the race fix `App::reroot` relies on: a
     /// worktree re-root bumps `refresh_generation` and clears
     /// `refresh_in_flight` directly (not via a foreground `refresh()`), so a
     /// working-tree read spawned against the *old* root before the re-root
@@ -3312,7 +3310,7 @@ fn search_pattern_survives_row_rebuild() {
     assert_eq!(app.search.matches.len(), 1);
 }
 
-// -- Search across the multibuffer (task 4.2) ---------------------------
+// -- Search across the multibuffer ----------------------------------------
 
 /// A one-hunk file whose added line contains the pattern `needle`.
 fn needle_file(path: &str) -> FileDiff {
@@ -3395,7 +3393,7 @@ fn toggling_collapse_recomputes_search_matches_without_stale_indices() {
     }
 }
 
-// -- Select-by-path seam (task 4.4) -------------------------------------
+// -- Select-by-path seam ---------------------------------------------------
 
 #[test]
 fn select_file_by_path_moves_cursor_to_section_header() {
@@ -3646,7 +3644,7 @@ fn focus_toggle_is_a_no_op_while_a_modal_owns_the_keyboard() {
     assert_eq!(app.mode, Mode::Search); // unchanged: Search still owns keys
 }
 
-// -- Branch/worktree switcher modal (spec 03, task 3.0) --------------------
+// -- Branch/worktree switcher modal ------------------------------------------
 
 /// A panel fixture with a git backend attached (via [`FakeGit`]), so
 /// `open_switcher` has something to read from.
@@ -3736,7 +3734,7 @@ fn esc_closes_switcher_back_to_panel_mode() {
     assert!(app.switcher.is_none());
 }
 
-// -- Branch switch / worktree re-root (spec 03, task 4.0) -------------------
+// -- Branch switch / worktree re-root ----------------------------------------
 
 fn two_branches() -> Vec<crate::git::LocalBranch> {
     vec![

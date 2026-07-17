@@ -120,7 +120,7 @@ fn key_line(key: &str, description: &str, key_width: usize, theme: &Theme) -> Li
 ///   are inert no-ops too (see [`super::code_intel::request`], gated on
 ///   [`crate::git::DiffTarget::supports_code_intel`]), so they're hidden the
 ///   same way.
-/// - Outside a review session, the accept/defer actions (spec 08 Unit 3) are
+/// - Outside a review session, the accept/defer actions are
 ///   hidden entirely — per the "inapplicable keys are omitted, not
 ///   inert-but-listed" convention this repo follows for capability gating —
 ///   and, since [`crate::git::DiffTarget::Review`]'s [`crate::git::StagingMode`]
@@ -149,9 +149,9 @@ pub(super) fn binding_hidden(
 /// Flattens a per-mode key table (see [`super::modal_keys`]) into the
 /// `(key label, description)` rows the overlay prints — the erased view that
 /// lets tables with different per-mode action types share one render loop.
-/// Takes the *effective* table (`app.modal_keys.*`, spec 07 Unit 4 task 5.4),
-/// not the compiled-in `'static` default, so a config remap shows up here
-/// with no additional wiring.
+/// Takes the *effective* table (`app.modal_keys.*`), not the compiled-in
+/// `'static` default, so a config remap shows up here with no additional
+/// wiring.
 fn modal_hints<A: Clone>(table: &[ModalBinding<A>]) -> Vec<(String, &'static str)> {
     table
         .iter()
@@ -169,7 +169,7 @@ fn modal_hints<A: Clone>(table: &[ModalBinding<A>]) -> Vec<(String, &'static str
 /// own scroll/close keys, already documented on the footer.
 ///
 /// `review_session` swaps the "Staging panel" slot for the accepted-files
-/// panel's own table/title during a review session (spec 08 Unit 5) —
+/// panel's own table/title during a review session —
 /// `Mode::Staging` is one mode shared by both panels
 /// (`super::modes::handle_staging_key` dispatches to whichever table
 /// applies), so only one of the two ever documents itself here at a time,
@@ -259,7 +259,7 @@ pub struct HelpViewState<'a> {
 /// The two tables the overlay renders from, bundled to keep [`render`]'s
 /// argument count under clippy's `too_many_arguments` threshold: the main
 /// keymap and every modal mode's effective table (`app`'s post-`[keys.*]`
-/// -override tables, spec 07 Unit 4 task 5.4) are always passed together.
+/// -override tables) are always passed together.
 pub struct HelpTables<'a> {
     pub keymap: &'a Keymap,
     pub modal_keys: &'a ModalKeymaps,
@@ -273,8 +273,8 @@ pub struct HelpTables<'a> {
 /// inert file/hunk staging gestures; `code_intel_allowed` is `false`
 /// whenever the target's new side isn't the live working tree, hiding the
 /// inert `gd`/`gr`/`K` gestures; `review_session` is `false` outside a
-/// review session, hiding the accept/defer gestures (spec 08 Unit 3) — see
-/// [`binding_hidden`] for how the three combine.
+/// review session, hiding the accept/defer gestures — see [`binding_hidden`]
+/// for how the three combine.
 ///
 /// The box caps its height to ~4/5 of `area` and scrolls the overflow; see
 /// [`HelpViewState`] for the scroll/filter fields `state` carries.
@@ -403,13 +403,10 @@ pub fn render(
     // Width: fit the widest content line (or the subtitle/footer), plus a
     // column for the scrollbar, plus borders and 1-col side padding. Capped
     // so it never spills off a narrow terminal and never grows absurdly wide.
-    // The cap grew from 92 to 130 (spec 07 Unit 4 task 5.3): modal-mode key
-    // labels are now computed from a row's actual `keys` (see
-    // `ModalBinding::key_label`) rather than a hand-tuned static string, so a
-    // row with several alternate encodings for one action (e.g. the switcher's
-    // `ToggleTab`, bound to `Tab`/`Shift-Tab`/`h`/`l`/`Left`/`Right`) can
-    // render a longer key column than the old curated text did; 130
-    // comfortably fits the current widest default row with room to spare.
+    // 130 comfortably fits the widest default row — a modal key label built
+    // from several alternate encodings for one action (e.g. the switcher's
+    // `ToggleTab`, bound to `Tab`/`Shift-Tab`/`h`/`l`/`Left`/`Right`) — with
+    // room to spare.
     let content_w = lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16;
     let inner_w = content_w
         .max(subtitle.chars().count() as u16)
@@ -575,7 +572,7 @@ mod tests {
         assert!(!binding_hidden(Action::Quit, false, false, false));
     }
 
-    // -- Capability gating: review-session actions (spec 08 Unit 3) ---------
+    // -- Capability gating: review-session actions ---------------------------
 
     #[test]
     fn review_actions_hidden_only_outside_a_review_session() {

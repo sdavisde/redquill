@@ -38,8 +38,8 @@ index 111..222 100644
 /// the point where 30% first exceeds the floor (`136` -> `40` still
 /// clamped, `137` -> `41` unclamped) and the point where it first reaches
 /// the cap (`239` -> `71`, `240` -> `72`). This is the "unset preserves
-/// today's formula exactly" contract (spec 07 task 1.7) — identical table,
-/// identical inputs, to the pre-config behavior.
+/// today's formula exactly" contract — identical table, identical inputs,
+/// to the pre-config behavior.
 #[test]
 fn sidebar_width_matches_ratified_table_when_unconfigured() {
     let cases: &[(u16, u16)] = &[
@@ -248,7 +248,7 @@ fn partial_file_section_header_shows_partial_marker() {
     assert!(content.contains("\u{00b1}")); // ± partial-staged marker
 }
 
-// -- Empty-diff welcome state (spec 05 Unit 5) -------------------------------
+// -- Empty-diff welcome state -------------------------------------------------
 
 /// Renders `app` and returns the frame's content as one flattened string, the
 /// way every render test in this module inspects a `TestBackend` buffer.
@@ -434,7 +434,7 @@ fn help_overlay_shows_staging_rows_on_the_working_tree_target() {
     assert!(content.contains("Toggle staging panel"));
 }
 
-/// The dual `?` overlay proof (spec 08 Unit 3, task 3.5): during a review
+/// The dual `?` overlay proof: during a review
 /// session, the accept/defer rows appear with their review-specific
 /// descriptions and the (inapplicable) staging rows are gone — the mirror
 /// image of `help_overlay_shows_staging_rows_on_the_working_tree_target`
@@ -550,7 +550,7 @@ fn help_overlay_lists_remote_and_command_log_bindings() {
     assert!(content.contains("Pull from remote"));
     assert!(content.contains("Push to remote"));
     // Switcher-open binding (Git panel focused section, panel scope) and
-    // its modal hint section (spec 03, task 3.0).
+    // its modal hint section.
     assert!(content.contains("Open branch/worktree switcher"));
     assert!(content.contains("Branch/worktree switcher"));
     assert!(content.contains("Switch to the selected branch/worktree"));
@@ -559,8 +559,8 @@ fn help_overlay_lists_remote_and_command_log_bindings() {
 /// On a terminal too short for the whole binding list, the help overlay
 /// caps its height and scrolls: the top frame shows the first sections
 /// only, and driving it to the bottom (End, through the real key path)
-/// reveals the last section (Project search, spec 06 Unit 2 — the last
-/// entry in `help::modal_sections`) while scrolling the first off-screen.
+/// reveals the last section (Project search — the last entry in
+/// `help::modal_sections`) while scrolling the first off-screen.
 #[test]
 fn help_overlay_scrolls_to_reveal_lower_sections() {
     let backend = TestBackend::new(100, 22);
@@ -1131,8 +1131,8 @@ fn empty_staging_panel_shows_hint() {
 }
 
 /// The staging panel's empty hint resolves its key from the effective
-/// keymap rather than a hardcoded literal (spec 07 Unit 4, task 4.6): a
-/// `[keys.diff] toggle-stage` remap must show up here with no code change.
+/// keymap rather than a hardcoded literal: a `[keys.diff] toggle-stage`
+/// remap must show up here with no code change.
 #[test]
 fn empty_staging_panel_hint_reflects_a_remapped_toggle_stage_key() {
     let backend = TestBackend::new(100, 30);
@@ -1398,7 +1398,7 @@ fn named_file(path: &str) -> FileDiff {
     .unwrap()
 }
 
-// -- Performance (spec 03, task 5.2/5.3) --------------------------------
+// -- Performance -----------------------------------------------------------
 
 /// A file whose single hunk carries `pairs` removed/added line pairs
 /// (`2 * pairs` changed lines), each a realistic Rust statement so the
@@ -1619,8 +1619,8 @@ fn sidebar_rect_and_render_scale_with_terminal_width_when_panel_focused() {
     }
 }
 
-/// `[layout] sidebar_side = "left"` (spec 07 task 1.7) moves the sidebar to
-/// the left edge; the diff pane gets the remaining width on the right.
+/// `[layout] sidebar_side = "left"` moves the sidebar to the left edge; the
+/// diff pane gets the remaining width on the right.
 #[test]
 fn split_layout_left_side_puts_sidebar_at_the_left_edge() {
     let area = Rect::new(0, 0, 100, 30);
@@ -1775,7 +1775,7 @@ fn quit_family_quits_from_focused_panel() {
     }
 }
 
-// -- Review-session banner layout (spec 08 Unit 2) --------------------------
+// -- Review-session banner layout --------------------------------------------
 
 /// `split_banner` reserves exactly one row at the top when shown, and is a
 /// pure passthrough when not — pinning the pure half of the split chain
@@ -1827,7 +1827,7 @@ fn diff_pane_rect_shrinks_by_exactly_the_banner_row_during_a_review_session() {
     assert_eq!(review_area.width, plain_area.width);
 }
 
-// -- `q`/`Q` review-mode lifecycle (spec 08 Unit 2) -------------------------
+// -- `q`/`Q` review-mode lifecycle -------------------------------------------
 
 /// Outside a review session, `q`/`Q` are byte-for-byte unchanged: `q` still
 /// quits emitting, `Q` still quits discarding — pinned as an explicit
@@ -1909,7 +1909,7 @@ fn q_opens_end_review_modal_and_shift_q_still_quits_instantly_in_a_review_sessio
     }
 }
 
-// -- Accept/defer keys (spec 08 Unit 3) --------------------------------------
+// -- Accept/defer keys --------------------------------------------------------
 
 /// `Space` in a review session dispatched through the real `dispatch_key`
 /// path (not `App::apply` directly): translates the resolved `ToggleStage`
@@ -2045,8 +2045,8 @@ fn space_and_shift_s_never_produce_review_state_outside_a_review_session() {
 }
 
 /// Outside a review session, `d` is a total no-op — byte-for-byte the same
-/// as when the key was unbound (it was free before spec 08 Unit 3 claimed
-/// it): no state change, no status message, mode untouched.
+/// as when the key was unbound: no state change, no status message, mode
+/// untouched.
 #[test]
 fn d_is_a_total_no_op_outside_a_review_session_via_dispatch_key() {
     let keymap = Keymap::default_map();
@@ -2082,7 +2082,7 @@ fn file_named(path: &str) -> FileDiff {
     .unwrap()
 }
 
-/// The reviewer-facing rendering proof (spec 08 Unit 3, task 3.4): sidebar
+/// The reviewer-facing rendering proof: sidebar
 /// and section-header markers for an accepted (`●`, reusing the staged
 /// glyph/color) and a deferred (`~`) file, alongside the banner's
 /// `accepted/total` progress count — the full real render, panel focused so
@@ -2144,7 +2144,7 @@ fn review_markers_render_on_sidebar_and_section_headers_with_banner_count() {
     assert!(content.contains('~'), "deferred ~ marker: {content:?}");
 }
 
-// -- Accepted-files panel (spec 08 Unit 5) -----------------------------------
+// -- Accepted-files panel -----------------------------------------------------
 
 /// `s` in a review session with nothing accepted yet shows the
 /// review-appropriate empty-state hint — the mirror of
@@ -2179,8 +2179,8 @@ fn empty_accepted_panel_shows_review_appropriate_hint() {
 /// The accepted-files panel lists accepted files (not deferred/unreviewed
 /// ones) and un-accepting one via `Space` removes it from the list,
 /// re-expands its diff section, and drops the banner's accepted count —
-/// the full round trip through the real `dispatch_key` path (spec 08 Unit
-/// 5, task 6.2's "unstage-panel analogue" proof).
+/// the full round trip through the real `dispatch_key` path (the
+/// unstage-panel analogue).
 #[test]
 fn accepted_panel_lists_accepted_files_and_space_un_accepts() {
     let backend = TestBackend::new(100, 30);
@@ -2275,7 +2275,7 @@ fn staging_panel_is_unchanged_outside_a_review_session() {
     assert!(!content.contains("no files accepted yet"));
 }
 
-// -- Branch/worktree switcher modal (spec 03, task 3.0) --------------------
+// -- Branch/worktree switcher modal ------------------------------------------
 
 /// `b` resolves to `OpenSwitcher` only in panel scope, driven through the
 /// real `dispatch_key` path. `panel_smoke_app` attaches no git backend, so
@@ -2305,7 +2305,7 @@ fn b_in_panel_mode_opens_switcher_through_dispatch_key() {
     );
 }
 
-// -- Guarded panel writes during review (spec 08 Unit 5) --------------------
+// -- Guarded panel writes during review ---------------------------------------
 
 /// `p`/`P` in a review session open the confirm modal instead of running the
 /// op immediately; `f` stays unprompted, running through the unchanged
@@ -2696,7 +2696,7 @@ fn status_message_replaces_the_context_footer_strip() {
     );
 }
 
-// -- Config-warning notice (spec 07 task 1.6) --------------------------------
+// -- Config-warning notice ----------------------------------------------------
 
 /// A loaded warning renders in the footer, naming the problem, without
 /// blocking the diff content above it — and is never printed to stdout (this

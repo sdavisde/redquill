@@ -1,12 +1,12 @@
-//! Full-screen render for [`super::app::Mode::ProjectSearch`] (spec 06 Unit
-//! 2): a query/toggle-indicator input line, a summary/error line, and a
+//! Full-screen render for [`super::app::Mode::ProjectSearch`]: a
+//! query/toggle-indicator input line, a summary/error line, and a
 //! scrollable results list grouped by file with the matched line text
 //! (match span emphasized) — replacing the diff pane's content for the
 //! frame (see `super::mod`'s `draw`), the way the History tab replaces the
 //! sidebar's content rather than overlaying a modal on top of it.
 //!
-//! **Focus model** (spec 06 round-1 UX fix — see
-//! [`super::project_search::SearchFocus`]): the input line's prompt color and
+//! **Focus model** (see [`super::project_search::SearchFocus`]): the input
+//! line's prompt color and
 //! text cursor, and the results list's selection style, both track
 //! `state.focus` so which half is "listening" is visually unambiguous —
 //! [`input_prompt_style`]/[`should_show_input_cursor`]/[`selection_style`]
@@ -27,8 +27,7 @@ use super::theme::Theme;
 
 /// The toggle-indicator string shown at the end of the input line, e.g.
 /// `[regex] [case:smart] [word:off]` — always all three, so every toggle's
-/// current state is visible regardless of whether it's "on" (spec 06 Unit 2:
-/// "active toggle states always visible").
+/// current state is visible regardless of whether it's "on".
 fn toggle_indicators(state: &ProjectSearchState) -> String {
     use crate::search::CaseMode;
     let kind = if state.literal { "literal" } else { "regex" };
@@ -56,7 +55,7 @@ fn input_prompt_style(focus: SearchFocus, theme: &Theme) -> Style {
 /// Whether the input line should carry the blinking terminal text cursor —
 /// only while [`SearchFocus::Input`] has focus, so it never sits blinking
 /// over an input the user has explicitly stepped away from into the results
-/// list (spec 06 round-1 UX fix).
+/// list.
 fn should_show_input_cursor(focus: SearchFocus) -> bool {
     matches!(focus, SearchFocus::Input)
 }
@@ -127,8 +126,7 @@ fn render_summary_line(frame: &mut Frame, area: Rect, state: &ProjectSearchState
 /// that fall in `match_spans`, split into styled runs — matched runs get
 /// `theme.search_match_fg` (blue) plus bold, everything else plain. The
 /// matched substring's *text* carries the emphasis rather than a background
-/// tint (spec 06 round-1 UX fix: a background-only treatment didn't read as
-/// high-contrast enough) — see [`Theme::search_match_fg`]'s doc for why this
+/// tint — see [`Theme::search_match_fg`]'s doc for why this
 /// is scoped to Project Search and the fuzzy finder rather than the in-diff
 /// `/` search, which keeps its own `search_match_bg` treatment. Operates on
 /// `char_indices` so byte offsets always land on a char boundary, never
@@ -172,19 +170,13 @@ fn highlighted_line_spans(
     spans
 }
 
-/// The results list's selection highlight, by focus (spec 06 round-1 UX
-/// fix): a full `REVERSED` block while [`SearchFocus::Results`] has focus —
-/// matching every other list surface's selection convention
-/// ([`super::list_panel`]/[`super::staging_panel`]/[`super::peek_overlay`]/
-/// [`super::switcher_modal`]/[`super::file_finder_modal`]) — versus a plain
-/// `UNDERLINED` marker while [`SearchFocus::Input`] has focus: still shows
-/// where `Enter` would jump, without reading as "drive me with j/k" when
-/// keystrokes are actually going to the query. A matched span's own blue+bold
-/// [`Theme::search_match_fg`] survives either style: `REVERSED` (a terminal
-/// attribute, not a ratatui-level overwrite) renders the span's explicit blue
-/// foreground as the cell's background instead, so the matched substring
-/// still visibly reads as "the blue one" on the selected row; `UNDERLINED`
-/// doesn't touch fg/bg at all.
+/// The results list's selection highlight, by focus: a full `REVERSED`
+/// block while [`SearchFocus::Results`] has focus, matching every other
+/// list surface's selection convention, versus a plain `UNDERLINED` marker
+/// while [`SearchFocus::Input`] has focus — still shows where `Enter` would
+/// jump, without reading as "drive me with j/k" when keystrokes are
+/// actually going to the query. A matched span's own blue+bold
+/// [`Theme::search_match_fg`] survives either style.
 fn selection_style(focus: SearchFocus) -> Style {
     match focus {
         SearchFocus::Input => Style::default().add_modifier(Modifier::UNDERLINED),
@@ -461,7 +453,7 @@ index 111..222 100644
         assert!(content.contains("no matches"));
     }
 
-    // -- Match highlight styling (round-1 UX fix) -------------------------
+    // -- Match highlight styling --------------------------------------------
 
     #[test]
     fn matched_run_gets_blue_bold_foreground_not_a_background_tint() {
@@ -493,7 +485,7 @@ index 111..222 100644
         assert_eq!(plain.style.bg, None);
     }
 
-    // -- Focus model (round-1 UX fix) -------------------------------------
+    // -- Focus model -----------------------------------------------------
 
     #[test]
     fn input_prompt_style_is_bright_in_input_focus_and_dim_in_results_focus() {

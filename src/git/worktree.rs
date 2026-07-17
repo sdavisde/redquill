@@ -108,8 +108,8 @@ pub fn parse_worktree_list(input: &str) -> Result<Vec<WorktreeEntry>, GitError> 
     Ok(out)
 }
 
-/// Maps a branch name to a filesystem-safe worktree directory name (spec 08
-/// Unit 1): every character outside `[A-Za-z0-9._-]` becomes `-`, then a
+/// Maps a branch name to a filesystem-safe worktree directory name: every
+/// character outside `[A-Za-z0-9._-]` becomes `-`, then a
 /// short (8 hex digit) hash of the *original* branch name is appended.
 ///
 /// The hash suffix is what makes this collision-safe: `feat/x` and

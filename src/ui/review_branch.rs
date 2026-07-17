@@ -1,17 +1,10 @@
-//! State for the review-branch modal ([`super::app::Mode::ReviewBranch`],
-//! spec 08 Unit 1's in-app entry path / Unit 5 task 5.1-5.3): lists local
-//! branches (excluding the one currently checked out) so the user can start
-//! a review session in place without leaving the app, using the same
-//! cursor/Enter/Esc gestures and visual styling as
-//! [`super::switcher::SwitcherState`]'s Branches tab. Confirming here is its
-//! own mode/state rather than a third switcher tab, since it does something
-//! structurally different on confirm — resolves a base ref and ensures a
-//! managed worktree exists (spec 08 Unit 1) rather than switching onto an
-//! already-checked-out ref — and shares that "ensure a review session" core
-//! with the CLI's `--review` flag via [`super::review_session`] (task 5.2:
-//! one code path, two entry points), landing through the same generalized
-//! [`super::App::reroot`] build-before-swap the worktree switcher already
-//! established (spec 03 Unit 3).
+//! State for the review-branch modal ([`super::app::Mode::ReviewBranch`]):
+//! lists local branches (excluding the one currently checked out) so the
+//! user can start a review session in place, using the same cursor/Enter/Esc
+//! gestures as [`super::switcher::SwitcherState`]'s Branches tab. Confirming
+//! resolves a base ref and ensures a managed worktree exists (shared with the
+//! CLI's `--review` flag via [`super::review_session`]), then lands through
+//! [`super::App::reroot`]'s build-before-swap.
 
 use crate::git::{DiffTarget, GitRunner, LocalBranch};
 
@@ -68,17 +61,15 @@ impl ReviewBranchState {
 }
 
 impl App {
-    /// Opens the review-branch modal (new panel-scope binding, spec 08 Unit
-    /// 5 task 5.1): reads local branches through `stage_ops`, excluding the
-    /// branch currently checked out in the user's own worktree (nothing to
-    /// review there), and switches to [`Mode::ReviewBranch`]. Degrades to a
-    /// footer message — leaving `self.mode`/`self.review_branch_modal` untouched —
-    /// without a git backend, on a read error, or while already mid-review
-    /// (starting a nested review from inside one is out of scope for this
-    /// spec: the modal's whole point is a normal session's entry point, and
-    /// a second worktree-inside-a-worktree review would tangle the banner,
-    /// annotation group-line, and `finish`'s origin-backend bookkeeping for
-    /// no user-facing benefit — finish or pause the current review first).
+    /// Opens the review-branch modal (a panel-scope binding): reads local
+    /// branches through `stage_ops`, excluding the branch currently checked
+    /// out in the user's own worktree (nothing to review there), and
+    /// switches to [`Mode::ReviewBranch`]. Degrades to a footer message —
+    /// leaving `self.mode`/`self.review_branch_modal` untouched — without a
+    /// git backend, on a read error, or while already mid-review. Starting a
+    /// review from inside one is unsupported — nested worktrees would tangle
+    /// the banner and finish bookkeeping for no user benefit; finish or
+    /// pause the current review first.
     pub(super) fn open_review_branch_modal(&mut self) {
         if self.in_review_session() {
             self.set_status_message(format!(
@@ -134,32 +125,24 @@ impl App {
         }
     }
 
-    /// The `Enter` gesture (spec 08 Unit 5 task 5.2): resolves the base ref,
-    /// ensures the highlighted branch's managed worktree exists (creating or
-    /// reusing it, spec 08 Unit 1), then re-roots the whole session onto it
-    /// via [`App::reroot`] (build-before-swap, LSP re-create, annotation
-    /// preservation) — the exact same "ensure a review session" core
-    /// `main.rs::resolve_session` runs for `--review` (see
-    /// [`super::review_session`]). On success, attaches the origin-rooted
-    /// backend `finish_review` needs (discovered fresh at the *pre-reroot*
-    /// repo root, mirroring `main.rs::run_tui`'s own `discovered` handle) and
-    /// loads + reconciles this branch's persisted progress (spec 08 Unit 4),
-    /// restoring annotations before the modal closes — parity with the CLI
-    /// path's bootstrap order.
+    /// The `Enter` gesture: resolves the base ref, ensures the highlighted
+    /// branch's managed worktree exists (creating or reusing it), then
+    /// re-roots the whole session onto it via [`App::reroot`] — the same
+    /// "ensure a review session" core `main.rs::resolve_session` runs for
+    /// `--review` (see [`super::review_session`]). On success, attaches the
+    /// origin-rooted backend `finish_review` needs and loads + reconciles
+    /// this branch's persisted progress, restoring annotations before the
+    /// modal closes.
     ///
     /// Guarded up front by the same single-in-flight rule
     /// [`App::request_remote_op`]/[`App::switcher_confirm`] enforce: a
-    /// running fetch/pull/push blocks starting a review the same way it
-    /// blocks a branch/worktree switch.
+    /// running fetch/pull/push blocks starting a review.
     ///
-    /// Every failure path (`git_common_dir`/`default_base` unavailable,
-    /// `worktree_add` refusing — unknown branch, branch checked out
-    /// elsewhere, path collision — or a failed rebuild) surfaces git's
-    /// message in the modal via `self.status_message` and leaves the modal
-    /// open with all prior state untouched (spec 08 Unit 5 task 5.3): never
-    /// crashes, never partially mutates `self.target`/`self.stage_ops`/
-    /// `self.repo_root`, since [`App::reroot`] itself only swaps those on a
-    /// successful rebuild.
+    /// Every failure path surfaces git's message in the modal via
+    /// `self.status_message` and leaves the modal open with all prior state
+    /// untouched: never crashes, never partially mutates
+    /// `self.target`/`self.stage_ops`/`self.repo_root`, since
+    /// [`App::reroot`] itself only swaps those on a successful rebuild.
     pub(super) fn confirm_review_branch(&mut self) {
         if let Some(label) = self.running_op_label() {
             self.set_status_message(format!(
@@ -202,20 +185,15 @@ impl App {
 
         // Resolved (and reconciled) *before* `reroot` swaps `self.stage_ops`
         // out from under `ops` — `session_runner` reads the branch's current
-        // blob SHAs exactly as truthfully as the pre-reroot backend would
-        // (Unit 4's reconciliation needs the branch's tip, not any
-        // particular worktree; `git_common_dir` resolves to the same shared
-        // path from either).
+        // blob SHAs exactly as truthfully as the pre-reroot backend would.
         let state_path = resolve_review_state_path(ops).ok();
         let reconciled = state_path
             .as_ref()
             .map(|path| load_reconciled_review_state(&session_runner, path, &branch));
         // The backend `finish_review` later runs `worktree_remove`/`prune`
-        // through (spec 08 Unit 2): discovered fresh at the *current*
-        // (pre-reroot) repo root, mirroring `main.rs::run_tui`'s
-        // `discovered` handle — must be rooted outside the worktree being
-        // removed, which the worktree about to become `self.repo_root` is
-        // not.
+        // through: discovered fresh at the *current* (pre-reroot) repo root,
+        // since it must be rooted outside the worktree being removed, which
+        // the worktree about to become `self.repo_root` is not.
         let origin_runner = self
             .repo_root
             .as_deref()

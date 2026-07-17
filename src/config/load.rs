@@ -24,7 +24,7 @@ pub struct PathEnv {
     pub appdata: Option<PathBuf>,
 }
 
-/// Resolves the config file path per the Unit 1 FR: `$XDG_CONFIG_HOME` if
+/// Resolves the config file path: `$XDG_CONFIG_HOME` if
 /// set, else `~/.config` on Linux **and macOS** (deliberately not
 /// `~/Library/Application Support`, matching helix/yazi user expectations —
 /// the `directories` crate is ruled out for returning the latter); the

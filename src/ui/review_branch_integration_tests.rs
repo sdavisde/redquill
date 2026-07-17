@@ -1,6 +1,6 @@
-//! Real-git integration tests for spec 08 Unit 1's in-app entry path / Unit
-//! 5 (the review-branch modal), driven through the actual key-dispatch
-//! pipeline (`` ` `` -> `R` -> `Enter`) against throwaway repositories built
+//! Real-git integration tests for the review-branch modal's in-app entry
+//! path, driven through the actual key-dispatch pipeline
+//! (`` ` `` -> `R` -> `Enter`) against throwaway repositories built
 //! in tempdirs, per this repo's testing convention — never the host repo.
 //!
 //! Lives beside `git_switch_integration_tests.rs`/`review_guard_integration_tests.rs`
@@ -17,10 +17,10 @@
 //! Every fixture is built with `tempfile`; every mutating git call is
 //! preceded by `assert_inside_tempdir` (a local copy of the shared isolation
 //! guard `tests/git_review_integration.rs`/`tests/cli_review_integration.rs`
-//! introduced in task 1.5 — duplicated here rather than shared, matching how
-//! every one of those files already carries its own copy, per this repo's
-//! established one-copy-per-file convention: this in-crate module can't
-//! share code across the crate boundary with the `tests/*.rs` binaries).
+//! use — duplicated here rather than shared, matching how every one of
+//! those files already carries its own copy, per this repo's established
+//! one-copy-per-file convention: this in-crate module can't share code
+//! across the crate boundary with the `tests/*.rs` binaries).
 //! This file is exactly the incident's risk shape (worktree creation driven
 //! through a modal confirm gesture), so the guard runs before every
 //! mutating call as a matter of discipline, per the task's explicit
@@ -83,8 +83,8 @@ fn canon(path: &Path) -> PathBuf {
 }
 
 /// The shared isolation guard every mutating git call in this file runs
-/// before touching disk (task 1.5's convention; local copy per this repo's
-/// established one-copy-per-file rule).
+/// before touching disk (local copy per this repo's established
+/// one-copy-per-file rule).
 fn assert_inside_tempdir(path: &Path, tmp: &TempDir) {
     let tmp_root = canon(tmp.path());
     let mut probe = path.to_path_buf();
@@ -263,8 +263,7 @@ fn review_branch_modal_reroots_into_a_bannered_review_session_with_persisted_mar
 
     // Pre-seed persisted review progress for `feature` (as if a prior
     // paused CLI session had already accepted a.rs) — proves the in-app
-    // path restores it exactly like the CLI path does (spec 08 Units 1+4
-    // integration).
+    // path restores it exactly like the CLI path does.
     let runner = GitRunner::discover_in(dir).unwrap();
     let common_dir = runner.git_common_dir().unwrap();
     let state_path = common_dir.join("redquill").join("review-state.json");

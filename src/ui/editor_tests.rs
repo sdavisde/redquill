@@ -54,7 +54,7 @@ fn whitespace_only_editor_string_falls_back_to_nvim() {
     assert_eq!(args, vec!["+1".to_string(), "f.rs".to_string()]);
 }
 
-// --- `build_from_template` (task 2.1: the config template engine) ---
+// --- `build_from_template` (the config template engine) ---
 
 #[test]
 fn template_filename_with_spaces_survives_as_one_argv_element() {
@@ -111,7 +111,7 @@ fn template_empty_string_is_rejected() {
     assert_eq!(build_from_template("", Path::new("f.rs"), 1), None);
 }
 
-// --- preset table (task 2.2) — one test per preset, exact argv ---
+// --- preset table — one test per preset, exact argv ---
 
 #[test]
 fn preset_vim_expands_correctly() {

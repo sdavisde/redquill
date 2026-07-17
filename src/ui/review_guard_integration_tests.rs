@@ -1,6 +1,6 @@
-//! Real-git integration tests for spec 08 Unit 5 (local-mode parity: the
-//! accepted-files panel and the pull/push confirm guard), driven through the
-//! actual key-dispatch pipeline against throwaway repositories built in
+//! Real-git integration tests for local-mode parity: the accepted-files
+//! panel and the pull/push confirm guard, driven through the actual
+//! key-dispatch pipeline against throwaway repositories built in
 //! tempdirs — never the host repo.
 //!
 //! Lives beside `commit_integration_tests.rs`/`git_switch_integration_tests.rs`
@@ -14,9 +14,9 @@
 //! Every fixture is built with `tempfile`; every mutating git call is
 //! preceded by `assert_inside_tempdir` (a local copy of the shared isolation
 //! guard `tests/git_review_integration.rs`/`tests/cli_review_integration.rs`
-//! introduced in task 1.5 — duplicated here rather than shared, matching how
-//! every one of those files already carries its own copy, since `tests/*.rs`
-//! and this in-crate module can't share code across the crate boundary).
+//! use — duplicated here rather than shared, matching how every one of
+//! those files already carries its own copy, since `tests/*.rs` and this
+//! in-crate module can't share code across the crate boundary).
 //! Neither test in this file ever runs `git worktree add`/`remove` — the
 //! per-file review-status/panel logic and the remote-op guard are both
 //! provable against a plain two-ref diff (`base...branch`) in an ordinary
@@ -188,7 +188,7 @@ fn wait_for_git_op(app: &mut App) {
     assert!(app.git_op.is_none(), "git op did not complete in time");
 }
 
-// -- Accepted-files panel (spec 08 Unit 5, task 6.2/6.4) ---------------------
+// -- Accepted-files panel -----------------------------------------------------
 
 /// The full round trip against a real review session: accept both files,
 /// open the accepted-files panel (`s`), un-accept one (`Space`) — its diff
@@ -248,7 +248,7 @@ fn accepted_files_panel_un_accept_round_trips_against_a_real_review_session() {
     );
 }
 
-// -- Guarded panel writes (spec 08 Unit 5, task 6.3/6.4) ---------------------
+// -- Guarded panel writes -----------------------------------------------------
 
 /// `P` in a review session opens the confirm modal; confirming (`Enter`)
 /// spawns the real `git push` and — after the background poller drains it —
@@ -322,8 +322,8 @@ fn cancelled_push_in_a_review_session_never_touches_the_scratch_remote() {
 }
 
 /// `f` (fetch) stays unprompted in a review session and runs immediately —
-/// the confirm guard applies only to `p`/`P` (spec 08 Unit 5's explicit
-/// scoping, "reviewers are expected to fetch").
+/// the confirm guard applies only to `p`/`P` ("reviewers are expected to
+/// fetch").
 #[test]
 fn fetch_stays_unprompted_in_a_review_session_against_a_real_remote() {
     let (_origin, review) = origin_and_review_repo();

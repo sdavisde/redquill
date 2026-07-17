@@ -10,13 +10,12 @@
 //! document different keys: both read the same table.
 //!
 //! Each table below is a `static` [`LazyLock<Vec<ModalBinding<A>>>`], built
-//! once (lazily, on first access) from the same row data the tables carried
-//! as `const` arrays before spec 07 Unit 4 task 5.1's move-only refactor —
-//! runtime construction is what lets `crate::config`'s `[keys.<mode>]`
-//! overrides (task 5.3/5.4) layer onto these defaults the same way
-//! `crate::ui::keymap_config::effective_keymap` layers `[keys.diff]`/
-//! `[keys.panel]` onto `Keymap::default_map()`. Every table is still built
-//! exactly once and threaded/read by reference — no per-keystroke parsing.
+//! once (lazily, on first access) from plain row data — runtime construction
+//! is what lets `crate::config`'s `[keys.<mode>]` overrides layer onto these
+//! defaults the same way `crate::ui::keymap_config::effective_keymap` layers
+//! `[keys.diff]`/`[keys.panel]` onto `Keymap::default_map()`. Every table is
+//! still built exactly once and threaded/read by reference — no
+//! per-keystroke parsing.
 //!
 //! - **List / Staging / Peek / Help** are one-action-per-key, so their tables
 //!   carry a small per-mode action enum and their handlers dispatch straight
@@ -27,6 +26,9 @@
 //!   hand-written `match`. Their tables ([`ModalBinding<()>`]) document only the
 //!   non-text *control* keys (Esc/Enter/…) for the overlay, and the drift
 //!   cross-check test feeds those keys back through the real handlers.
+//!
+//! Some newer modal tables are not yet config-remappable; wiring one up
+//! means adding it to `MODAL_MODE_NAMES` and the `[keys.<mode>]` merge.
 
 use std::sync::LazyLock;
 
@@ -35,16 +37,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use super::keymap::FooterHint;
 
 /// One physical key: a code plus the modifiers used to synthesize its
-/// [`KeyEvent`]. Matching considers both ([`ModalKey::matches`]) — spec 07
-/// Unit 4 task 5.3 needs this: once a mode's control keys are remappable
-/// from `[keys.<mode>]`, a table can carry both a plain key and a
-/// modifier-chorded one for genuinely different actions (Compose's plain
-/// `Enter` submits, `Shift-Enter` inserts a newline), and code-only matching
-/// couldn't tell them apart. Before that task, every default table used code-
-/// only-distinguishable rows in practice (either no modifiered keys at all, or
-/// hand-written dispatch that never went through [`resolve`]), so this is a
-/// genuine behavior change scoped to the modal-remap behavior commit, not the
-/// move-only task 5.1 refactor.
+/// [`KeyEvent`]. Matching considers both ([`ModalKey::matches`]): a table can
+/// carry both a plain key and a modifier-chorded one for genuinely different
+/// actions (Compose's plain `Enter` submits, `Shift-Enter` inserts a
+/// newline), which code-only matching couldn't tell apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ModalKey {
     code: KeyCode,
@@ -69,8 +65,8 @@ impl ModalKey {
     }
 
     /// A key pressed with Alt held (Project Search's `Alt-c`/`Alt-w`/`Alt-r`
-    /// toggles, spec 06 Unit 2; the modals' `Alt-b`/`Alt-f`/`Alt-d` word
-    /// motions and `Alt+arrow`/`Alt+Backspace` variants).
+    /// toggles; the modals' `Alt-b`/`Alt-f`/`Alt-d` word motions and
+    /// `Alt+arrow`/`Alt+Backspace` variants).
     const fn alt(code: KeyCode) -> ModalKey {
         ModalKey {
             code,
@@ -154,9 +150,8 @@ impl ModalKey {
     /// (`crate::config::keys::ChordSpec`) — the modal-table counterpart of
     /// `super::keymap::KeySeq::from_spec`. Modal tables never supported
     /// two-chord sequences (unlike the main keymap's `gd`/`gr`), so
-    /// `crate::ui::modal_keys_config` (spec 07 Unit 4 task 5.3) rejects a
-    /// `KeySeqSpec::Two` for a `[keys.<mode>]` entry as an invalid value
-    /// before ever reaching here.
+    /// `crate::ui::modal_keys_config` rejects a `KeySeqSpec::Two` for a
+    /// `[keys.<mode>]` entry as an invalid value before ever reaching here.
     pub(super) fn from_spec(spec: crate::config::keys::ChordSpec) -> ModalKey {
         ModalKey {
             code: spec.code,
@@ -167,26 +162,20 @@ impl ModalKey {
 
 /// One row of a per-mode key table: a `description` for the help overlay,
 /// the `keys` that trigger it, and the `action` a table-driven handler
-/// dispatches to. Every mode's handler is table-driven as of spec 07 Unit 4
-/// task 5.3 — including the free-text modes (Compose, Search, Finder, ...),
-/// whose `action` used to be `()` with a hand-written `match` doing the real
-/// dispatch; now every documented *control* key (never bare printable-char
-/// insertion, which stays a hand-written fallback — see each mode's action
-/// enum doc) resolves to a real per-mode action here too, which is what lets
-/// `[keys.<mode>]` config remap it.
+/// dispatches to. Every mode's handler is table-driven, including the
+/// free-text modes (Compose, Search, Finder, ...): every documented
+/// *control* key (never bare printable-char insertion, which stays a
+/// hand-written fallback — see each mode's action enum doc) resolves to a
+/// real per-mode action here, which is what lets `[keys.<mode>]` config
+/// remap it.
 #[derive(Clone)]
 pub(super) struct ModalBinding<A: Clone + 'static> {
     /// What the help overlay prints next to the label.
     pub description: &'static str,
-    /// Every physical key that triggers this row. Owned (rather than
-    /// `&'static [ModalKey]`) so a table's rows can be built inside a
-    /// [`LazyLock`] initializer (spec 07 Unit 4 task 5.1: the tables below
-    /// are runtime-built, not `const`) without fighting rvalue static
-    /// promotion, which only applies inside `const`/`static` item
-    /// initializers, not ordinary closure/function bodies — and so
-    /// `crate::ui::modal_keys_config`'s `[keys.<mode>]` merge (task 5.3) can
-    /// replace a row's keys with a config-provided `Vec` the same way
-    /// `crate::ui::keymap_config` replaces a `Binding`'s `KeySeq`.
+    /// Every physical key that triggers this row — owned so
+    /// `crate::ui::modal_keys_config`'s `[keys.<mode>]` merge can replace it
+    /// with a config-provided `Vec`, the same way `crate::ui::keymap_config`
+    /// replaces a `Binding`'s `KeySeq`.
     pub keys: Vec<ModalKey>,
     /// The per-mode action this row dispatches to.
     pub action: A,
@@ -200,9 +189,9 @@ pub(super) struct ModalBinding<A: Clone + 'static> {
 impl<A: Clone + 'static> ModalBinding<A> {
     /// The display label for this row's keys, computed from `keys` (joined
     /// with `" / "`) rather than stored as a static string — so a
-    /// `[keys.<mode>]` override that replaces `keys` (task 5.3/5.4) is
-    /// reflected automatically in the help overlay and footer strip, exactly
-    /// like `super::keymap::Binding::key_label` does for the main keymap.
+    /// `[keys.<mode>]` override that replaces `keys` is reflected
+    /// automatically in the help overlay and footer strip, exactly like
+    /// `super::keymap::Binding::key_label` does for the main keymap.
     pub(super) fn key_label(&self) -> String {
         self.keys
             .iter()
@@ -397,7 +386,7 @@ pub(super) static STAGING_KEYS: LazyLock<Vec<ModalBinding<StagingAction>>> = Laz
     ]
 });
 
-// -- Accepted-files panel (spec 08 Unit 5) ----------------------------------
+// -- Accepted-files panel ---------------------------------------------------
 
 /// What a key does in the accepted-files panel — the review-session
 /// analogue of the staging panel (`Mode::Staging` is shared between the two;
@@ -418,12 +407,8 @@ pub(super) enum AcceptedPanelAction {
 }
 
 /// The accepted-files panel's key table, for the help overlay, footer strip,
-/// and [`super::modes::handle_staging_key`]'s review-session dispatch. Like
-/// [`END_REVIEW_KEYS`], this carries no `[keys.accepted-panel]` override
-/// plumbing yet — it's absent from the `MODAL_MODE_NAMES` cross-checked
-/// list, so it always renders its compiled-in defaults; wiring config
-/// remapping is a follow-up, mirroring that table's own documented
-/// follow-up note.
+/// and [`super::modes::handle_staging_key`]'s review-session dispatch. Not
+/// config-remappable yet — see module doc.
 pub(super) static ACCEPTED_PANEL_KEYS: LazyLock<Vec<ModalBinding<AcceptedPanelAction>>> =
     LazyLock::new(|| {
         vec![
@@ -614,10 +599,10 @@ pub(super) static SWITCHER_KEYS: LazyLock<Vec<ModalBinding<SwitcherAction>>> =
                     ModalKey::plain(KeyCode::Up),
                 ],
                 action: SwitcherAction::MoveUp,
-                // Not also tagged: its label ("k / Up") is already a compound key
-                // display, so merging it with MoveDown's would double up the " / "
-                // separators (see the identical note on HELP_KEYS's ScrollUp). The
-                // MoveDown row's own label reads fine alone.
+                // Not also tagged: its label ("k / Up") is already a compound
+                // key display, so merging it with MoveDown's would double up
+                // the " / " separators in the footer merge. The MoveDown
+                // row's own label reads fine alone.
                 footer: None,
             },
             ModalBinding {
@@ -641,29 +626,26 @@ pub(super) static SWITCHER_KEYS: LazyLock<Vec<ModalBinding<SwitcherAction>>> =
         ]
     });
 
-// -- End-review modal (spec 08 Unit 2) --------------------------------------
+// -- End-review modal --------------------------------------------------------
 
 /// What a key does in the end-review modal (`q` in a review session): the
 /// three exits, each labeled with its consequence in [`END_REVIEW_KEYS`]'s
 /// `description` rather than just "pause"/"finish" (per the spec's design
-/// note that the modal must name what happens to the worktree) — plus,
-/// since the dogfood polish pass (spec 08, follow-up to Unit 2), a
+/// note that the modal must name what happens to the worktree) — plus a
 /// lazygit-style highlighted-selection pair (`MoveDown`/`MoveUp`) and
 /// `Confirm` (`Enter`, acting on whichever of the three exits is
 /// highlighted). The mnemonics (`p`/`f`/`c`/`Esc`) keep dispatching
-/// immediately regardless of the highlight, unchanged from before this pass.
+/// immediately regardless of the highlight.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum EndReviewAction {
     /// Quit emitting nothing; the worktree, review state, and every
-    /// annotation (already durable via save-on-change, spec 08 Unit 6) are
-    /// kept. Amended 2026-07-16, spec 08 Unit 6, reversing this variant's
-    /// original "emit and quit" contract.
+    /// annotation (already durable via save-on-change) are kept.
     Pause,
     /// Emit the complete annotation set (restored-from-earlier-sessions and
     /// this session's own, together, exactly once), remove the worktree
-    /// (and, spec 08 Unit 4/6, delete the persisted review-state entry —
-    /// statuses and annotations together), then quit. On removal failure
-    /// the modal closes with the git error surfaced instead of quitting.
+    /// (and delete the persisted review-state entry — statuses and
+    /// annotations together), then quit. On removal failure the modal
+    /// closes with the git error surfaced instead of quitting.
     Finish,
     /// Close the modal and keep reviewing; nothing happens.
     Cancel,
@@ -698,18 +680,11 @@ impl EndReviewAction {
     }
 }
 
-/// End-review modal control keys (spec 08 Unit 2, extended by the dogfood
-/// polish pass with `j`/`k`/arrow selection and `Enter` confirm), for the
-/// help overlay, footer strip, [`super::modes::handle_end_review_key`]'s
-/// dispatch, and the modal's own body ([`super::end_review_modal`]).
-/// Registered on [`ModalKeymaps`] as the effective table like every other
-/// modal mode, but not (yet) exposed to `[keys.<mode>]` config remapping —
-/// it is absent from the `MODAL_MODE_NAMES` cross-checked lists, so it
-/// always renders its compiled-in defaults. Wiring `[keys.end-review]`
-/// remapping is a follow-up (spec 08 later units): it would add
-/// `end_review` to both name lists, an `end_review_action_name`/`_from_name`
-/// pair, and an `apply_modal_overrides` call in `super::modal_keys_config`,
-/// mirroring the sibling modes above.
+/// End-review modal control keys (`j`/`k`/arrow selection plus `Enter`
+/// confirm), for the help overlay, footer strip,
+/// [`super::modes::handle_end_review_key`]'s dispatch, and the modal's own
+/// body ([`super::end_review_modal`]). Not config-remappable yet — see
+/// module doc.
 pub(super) static END_REVIEW_KEYS: LazyLock<Vec<ModalBinding<EndReviewAction>>> =
     LazyLock::new(|| {
         vec![
@@ -762,10 +737,7 @@ pub(super) static END_REVIEW_KEYS: LazyLock<Vec<ModalBinding<EndReviewAction>>> 
                     ModalKey::plain(KeyCode::Up),
                 ],
                 action: EndReviewAction::MoveUp,
-                // Not also tagged: its label ("k / Up") is already a
-                // compound key display, so merging it with MoveDown's would
-                // double up the " / " separators — see the identical note
-                // on SWITCHER_KEYS's MoveUp row.
+                // Not tagged — same reasoning as SWITCHER_KEYS's MoveUp row.
                 footer: None,
             },
             ModalBinding {
@@ -780,11 +752,11 @@ pub(super) static END_REVIEW_KEYS: LazyLock<Vec<ModalBinding<EndReviewAction>>> 
         ]
     });
 
-// -- Pull/push confirm modal (spec 08 Unit 5) --------------------------------
+// -- Pull/push confirm modal --------------------------------------------------
 
 /// What a key does in the pull/push confirm modal (`p`/`P` in a review
-/// session, spec 08 Unit 5): a plain confirm/cancel gate naming the branch
-/// under review, opened by [`super::modes::handle_panel_key`] in place of
+/// session): a plain confirm/cancel gate naming the branch under review,
+/// opened by [`super::modes::handle_panel_key`] in place of
 /// running [`crate::git::RemoteOp::Pull`]/[`crate::git::RemoteOp::Push`]
 /// immediately (`f` fetch is unaffected — reviewers are expected to fetch).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -797,10 +769,8 @@ pub(super) enum ConfirmRemoteOpAction {
 }
 
 /// The pull/push confirm modal's key table, for the help overlay, footer
-/// strip, and [`super::modes::handle_confirm_remote_op_key`]'s dispatch.
-/// Same no-`[keys.<mode>]`-plumbing-yet status as [`END_REVIEW_KEYS`]/
-/// [`ACCEPTED_PANEL_KEYS`] — absent from the cross-checked `MODAL_MODE_NAMES`
-/// list, so it always renders its compiled-in defaults.
+/// strip, and [`super::modes::handle_confirm_remote_op_key`]'s dispatch. Not
+/// config-remappable yet — see module doc.
 pub(super) static CONFIRM_REMOTE_OP_KEYS: LazyLock<Vec<ModalBinding<ConfirmRemoteOpAction>>> =
     LazyLock::new(|| {
         vec![
@@ -831,7 +801,7 @@ pub(super) static CONFIRM_REMOTE_OP_KEYS: LazyLock<Vec<ModalBinding<ConfirmRemot
         ]
     });
 
-// -- Review-branch modal (spec 08 Unit 1 in-app path / Unit 5) --------------
+// -- Review-branch modal -----------------------------------------------------
 
 /// What a key does in the review-branch modal (`R`, panel scope — opens
 /// [`super::app::Mode::ReviewBranch`]): `j`/`k`/arrows move the cursor,
@@ -850,11 +820,8 @@ pub(super) enum ReviewBranchAction {
 }
 
 /// The review-branch modal's key table, for the help overlay, footer strip,
-/// and [`super::modes::handle_review_branch_key`]'s dispatch. Like
-/// [`END_REVIEW_KEYS`]/[`ACCEPTED_PANEL_KEYS`]/[`CONFIRM_REMOTE_OP_KEYS`], no
-/// `[keys.review-branch]` override plumbing yet — absent from the
-/// `MODAL_MODE_NAMES` cross-checked list, so it always renders its
-/// compiled-in defaults.
+/// and [`super::modes::handle_review_branch_key`]'s dispatch. Not
+/// config-remappable yet — see module doc.
 pub(super) static REVIEW_BRANCH_KEYS: LazyLock<Vec<ModalBinding<ReviewBranchAction>>> =
     LazyLock::new(|| {
         vec![
@@ -877,10 +844,7 @@ pub(super) static REVIEW_BRANCH_KEYS: LazyLock<Vec<ModalBinding<ReviewBranchActi
                     ModalKey::plain(KeyCode::Up),
                 ],
                 action: ReviewBranchAction::MoveUp,
-                // Not also tagged: mirrors SWITCHER_KEYS's own MoveUp row —
-                // its label ("k / Up") is already a compound key display, so
-                // merging it with MoveDown's would double up the " / "
-                // separators.
+                // Not tagged — same reasoning as SWITCHER_KEYS's MoveUp row.
                 footer: None,
             },
             ModalBinding {
@@ -906,8 +870,8 @@ pub(super) static REVIEW_BRANCH_KEYS: LazyLock<Vec<ModalBinding<ReviewBranchActi
 
 // -- Fuzzy file finder --------------------------------------------------------
 
-/// What a key does in the fuzzy file finder overlay (spec 06 Unit 1). Free-
-/// text input (printable chars extend the query) plus these control keys.
+/// What a key does in the fuzzy file finder overlay. Free-text input
+/// (printable chars extend the query) plus these control keys.
 /// `MoveUp`/`MoveDown` are split from the historic single "Move selection"
 /// hint row for the same reason [`ComposeAction`]'s cursor motions are —
 /// genuinely different actions need independently remappable rows.
@@ -941,7 +905,7 @@ pub(super) fn finder_action_from_name(name: &str) -> Option<FinderAction> {
     })
 }
 
-/// Fuzzy file finder control keys (spec 06 Unit 1), for the help overlay,
+/// Fuzzy file finder control keys, for the help overlay,
 /// footer strip, and [`super::modes::handle_finder_key`]'s dispatch. `Up`/
 /// `Down` (not `j`/`k`) navigate results — `j`/`k` must stay typeable into the
 /// query, unlike the switcher modal (which has no free-text input to
@@ -1000,10 +964,10 @@ pub(super) static FINDER_HINTS: LazyLock<Vec<ModalBinding<FinderAction>>> = Lazy
 // -- Project Search -----------------------------------------------------------
 
 /// What a key does in the full-screen Project Search view while
-/// [`super::project_search::SearchFocus::Input`] has focus (spec 06 Unit 2,
-/// round-1 UX fix). Free-text input plus these control keys; `MoveUp`/
-/// `MoveDown` are split from the historic single "Move result selection" row
-/// for the same reason [`ComposeAction`]'s cursor motions are.
+/// [`super::project_search::SearchFocus::Input`] has focus. Free-text input
+/// plus these control keys; `MoveUp`/`MoveDown` are split from a single
+/// "Move result selection" row for the same reason [`ComposeAction`]'s
+/// cursor motions are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ProjectSearchInputAction {
     MoveUp,
@@ -1144,9 +1108,9 @@ pub(super) static PROJECT_SEARCH_INPUT_HINTS: LazyLock<
 });
 
 /// What a key does in the full-screen Project Search view while
-/// [`super::project_search::SearchFocus::Results`] has focus (spec 06 Unit 2,
-/// round-1 UX fix). Nothing types into the query from here, so every letter
-/// key is a genuine control action, not just the `Alt`-chorded toggles.
+/// [`super::project_search::SearchFocus::Results`] has focus. Nothing types
+/// into the query from here, so every letter key is a genuine control
+/// action, not just the `Alt`-chorded toggles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ProjectSearchResultsAction {
     EditQuery,
@@ -1368,10 +1332,8 @@ pub(super) static HELP_KEYS: LazyLock<Vec<ModalBinding<HelpAction>>> = LazyLock:
                 ModalKey::plain(KeyCode::Down),
             ],
             action: HelpAction::ScrollDown,
-            // `ScrollUp` isn't also tagged: its label ("k / Up") is already a
-            // compound key display, so merging it in would double up the " / "
-            // separators (`super::footer`'s merge is for atomic key text like
-            // "j" + "k"). This row's own label already reads fine alone.
+            // `ScrollUp` isn't tagged either — same reasoning as
+            // SWITCHER_KEYS's MoveUp row.
             footer: Some(FooterHint {
                 rank: 1,
                 label: "scroll",
@@ -1488,15 +1450,12 @@ pub(super) static HELP_SEARCH_HINTS: LazyLock<Vec<ModalBinding<HelpSearchAction>
 // -- Shared buffer-editing actions (Compose + commit-message) ---------------
 
 /// The text-editing control actions Compose and the commit-message modal
-/// share verbatim (spec 07 Unit 4 task 5.3) — both wrap a
-/// [`super::compose::TextBuffer`] and offer the identical desktop-editor
-/// motion/delete keymap around it, differing only in their lifecycle keys
-/// (Compose additionally cycles a classification; both cancel/submit
-/// differently — see [`ComposeAction`]/[`CommitMessageAction`]). One shared
-/// enum (rather than two copies) keeps the two modes' editing behavior from
-/// drifting apart the way [`super::modes::apply_buffer_key`] used to
-/// guarantee by construction (one function, two callers) before this task
-/// made each control key an independently remappable action.
+/// share verbatim — both wrap a [`super::compose::TextBuffer`] and offer the
+/// identical desktop-editor motion/delete keymap around it, differing only
+/// in their lifecycle keys (Compose additionally cycles a classification;
+/// both cancel/submit differently — see
+/// [`ComposeAction`]/[`CommitMessageAction`]). One shared enum (rather than
+/// two copies) keeps the two modes' editing behavior from drifting apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BufferEditAction {
     Newline,
@@ -1591,10 +1550,10 @@ pub(super) fn buffer_edit_action_from_name(name: &str) -> Option<BufferEditActio
 // -- Compose modal -----------------------------------------------------------
 
 /// What a key does in the Compose modal. Every row here is a documented
-/// *control* key; bare printable-character insertion is never an action (spec
-/// 07 Unit 4 FR) — [`super::modes::handle_compose_key`] resolves against
-/// [`COMPOSE_HINTS`] first and only inserts a literal character for an
-/// unresolved, unmodified `Char`.
+/// *control* key; bare printable-character insertion is never an action —
+/// [`super::modes::handle_compose_key`] resolves against [`COMPOSE_HINTS`]
+/// first and only inserts a literal character for an unresolved, unmodified
+/// `Char`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ComposeAction {
     Cancel,
@@ -1626,11 +1585,10 @@ pub(super) fn compose_action_from_name(name: &str) -> Option<ComposeAction> {
 /// input (printable chars insert) *plus* these control keys, so the handler
 /// resolves against this table first and falls back to character insertion
 /// only for an unresolved, unmodified `Char` (see [`ComposeAction`]'s doc).
-/// The historic single "Move cursor" hint row (four keys, one label) is now
-/// four separate rows — `MoveLeft`/`MoveRight`/`MoveUp`/`MoveDown` are
-/// genuinely different actions (spec 07 Unit 4 task 5.3: each documented
-/// control key must be independently remappable, and a user can't remap "all
-/// four arrow keys at once" as a single action without losing directionality).
+/// `MoveLeft`/`MoveRight`/`MoveUp`/`MoveDown` are four separate rows because
+/// each documented control key must be independently remappable, and a user
+/// can't remap "all four arrow keys at once" as a single action without
+/// losing directionality.
 pub(super) static COMPOSE_HINTS: LazyLock<Vec<ModalBinding<ComposeAction>>> = LazyLock::new(|| {
     vec![
         ModalBinding {
@@ -1777,7 +1735,7 @@ pub(super) static COMPOSE_HINTS: LazyLock<Vec<ModalBinding<ComposeAction>>> = La
 
 // -- Commit-message modal -----------------------------------------------------
 
-/// What a key does in the commit-message modal (spec 04). Same shape as
+/// What a key does in the commit-message modal. Same shape as
 /// [`ComposeAction`] minus classification cycling — see that type's doc.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CommitMessageAction {
@@ -1802,10 +1760,10 @@ pub(super) fn commit_message_action_from_name(name: &str) -> Option<CommitMessag
     })
 }
 
-/// Commit-message control keys (spec 04), for the help overlay, footer, and
+/// Commit-message control keys, for the help overlay, footer, and
 /// [`super::modes::handle_commit_message_key`]'s dispatch. Like Compose, the
 /// modal is free-text input *plus* these control keys; see [`COMPOSE_HINTS`]'s
-/// doc for why "Move cursor" is now four separate rows.
+/// doc for why "Move cursor" is four separate rows.
 pub(super) static COMMIT_MESSAGE_HINTS: LazyLock<Vec<ModalBinding<CommitMessageAction>>> =
     LazyLock::new(|| {
         vec![
@@ -2001,7 +1959,7 @@ pub(super) static SEARCH_HINTS: LazyLock<Vec<ModalBinding<SearchAction>>> = Lazy
 
 // -- Effective (post-config-override) modal tables --------------------------
 
-/// The canonical `[keys.<mode>]` table names (spec 07 Unit 4 task 5.2), in
+/// The canonical `[keys.<mode>]` table names, in
 /// the same order [`ModalKeymaps`]'s fields are declared. One table per modal
 /// mode currently defined in this module; adding a thirteenth mode means
 /// adding both a field here and a name here, which
@@ -2028,8 +1986,8 @@ pub(super) const MODAL_MODE_NAMES: &[&str] = &[
 ];
 
 /// Every modal mode's *effective* table — [`LazyLock`] defaults above, each
-/// with its `[keys.<mode>]` config overrides already applied (spec 07 Unit 4
-/// task 5.3/5.4) — built exactly once in [`super::run`] alongside
+/// with its `[keys.<mode>]` config overrides already applied — built exactly
+/// once in [`super::run`] alongside
 /// [`super::keymap_config::effective_keymap`] and stored on
 /// [`super::app::App`] so every handler and render call reads a plain owned
 /// table with no per-keystroke parsing. [`Default`] (every `App` built
@@ -2049,22 +2007,17 @@ pub struct ModalKeymaps {
     pub(super) finder: Vec<ModalBinding<FinderAction>>,
     pub(super) project_search_input: Vec<ModalBinding<ProjectSearchInputAction>>,
     pub(super) project_search_results: Vec<ModalBinding<ProjectSearchResultsAction>>,
-    /// The end-review modal (spec 08 Unit 2). Unlike the twelve modes above
-    /// it carries no `[keys.end-review]` override plumbing yet (see
-    /// [`END_REVIEW_KEYS`]), so this is always the compiled-in default table
-    /// — [`Default`] and the effective-keymaps builder both clone it verbatim.
+    /// The end-review modal. Not config-remappable yet — see
+    /// [`END_REVIEW_KEYS`] and the module doc.
     pub(super) end_review: Vec<ModalBinding<EndReviewAction>>,
-    /// The accepted-files panel (spec 08 Unit 5, review sessions' analogue
-    /// of `staging`). Same no-config-plumbing-yet status as `end_review` —
-    /// see [`ACCEPTED_PANEL_KEYS`].
+    /// The accepted-files panel (review sessions' analogue of `staging`).
+    /// Not config-remappable yet — see [`ACCEPTED_PANEL_KEYS`].
     pub(super) accepted_panel: Vec<ModalBinding<AcceptedPanelAction>>,
-    /// The pull/push confirm modal (spec 08 Unit 5). Same
-    /// no-config-plumbing-yet status as `end_review`/`accepted_panel` — see
+    /// The pull/push confirm modal. Not config-remappable yet — see
     /// [`CONFIRM_REMOTE_OP_KEYS`].
     pub(super) confirm_remote_op: Vec<ModalBinding<ConfirmRemoteOpAction>>,
-    /// The review-branch modal (spec 08 Unit 1 in-app path / Unit 5). Same
-    /// no-config-plumbing-yet status as `end_review`/`accepted_panel`/
-    /// `confirm_remote_op` — see [`REVIEW_BRANCH_KEYS`].
+    /// The review-branch modal. Not config-remappable yet — see
+    /// [`REVIEW_BRANCH_KEYS`].
     pub(super) review_branch: Vec<ModalBinding<ReviewBranchAction>>,
 }
 
@@ -2107,10 +2060,10 @@ mod tests {
 
     // -- Bijectivity: every mode's action-name mapping is total and 1:1 -----
     //
-    // Mirrors `super::keymap::tests::action_names_are_total_and_bijective`
-    // (spec 07 Unit 4 task 4.2), extended to every modal mode's action enum
-    // (task 5.2): every action that appears in the mode's default table gets
-    // exactly one name, no two actions share a name, and every name resolves
+    // Mirrors `super::keymap::tests::action_names_are_total_and_bijective`,
+    // extended to every modal mode's action enum: every action that appears
+    // in the mode's default table gets exactly one name, no two actions
+    // share a name, and every name resolves
     // back to the same action via that mode's `*_action_from_name`. Since
     // every enum variant was defined directly from an existing table row
     // (one row per action, `BufferEditAction`'s callers included), iterating
@@ -2403,7 +2356,7 @@ index 111..222 100644
     /// accepted) with the accepted-files panel populated the way
     /// `App::toggle_staging_panel` would — via the real
     /// `App::refresh_accepted_list`, not a hand-built `staged` list, so
-    /// these tests exercise the actual production wiring (spec 08 Unit 5).
+    /// these tests exercise the actual production wiring.
     fn accepted_panel_app() -> App {
         let mut app = App::new(vec![named_file("a.rs"), named_file("b.rs")]);
         app.target = DiffTarget::Review {
@@ -3030,9 +2983,9 @@ index 111..222 100644
     /// table row fails here. Printable chars are exempt (free-text input).
     #[test]
     fn compose_handler_ignores_control_keys_absent_from_its_table() {
-        // Home/End/Delete are no longer here: they're now meaningful editing
-        // keys documented in COMPOSE_HINTS (line start/end, delete forward),
-        // so they belong to the consumed-key test above, not this reverse one.
+        // Home/End/Delete are meaningful editing keys (line start/end, delete
+        // forward) documented in COMPOSE_HINTS, so they belong to the
+        // consumed-key test above, not this reverse one.
         let mut universe: Vec<KeyEvent> = [
             KeyCode::PageUp,
             KeyCode::PageDown,
@@ -3123,9 +3076,9 @@ index 111..222 100644
     #[test]
     fn commit_message_handler_ignores_control_keys_absent_from_its_table() {
         use crate::ui::modes::handle_commit_message_key;
-        // Home/End/Delete are no longer here: they're now meaningful editing
-        // keys documented in COMMIT_MESSAGE_HINTS, covered by the consumed-key
-        // test above rather than this reverse one.
+        // Home/End/Delete are meaningful editing keys documented in
+        // COMMIT_MESSAGE_HINTS, covered by the consumed-key test above
+        // rather than this reverse one.
         let mut universe: Vec<KeyEvent> = [
             KeyCode::PageUp,
             KeyCode::PageDown,
@@ -3359,7 +3312,7 @@ index 111..222 100644
         assert!(resolve(&PROJECT_SEARCH_RESULTS_HINTS, ev).is_none());
     }
 
-    // -- Project Search mode (spec 06 Unit 2) -----------------------------
+    // -- Project Search mode -------------------------------------------------
 
     /// An `App` mid-Project-Search with a non-empty query, three hits across
     /// two files, and the cursor on the middle hit — so `Up`/`Down` (each
@@ -3399,8 +3352,8 @@ index 111..222 100644
         }
     }
 
-    /// Builds the fixture app in `focus` (spec 06 round-1 UX fix: the
-    /// two-focus model — see [`SearchFocus`]). Cursor starts on the middle
+    /// Builds the fixture app in `focus` (the two-focus model — see
+    /// [`SearchFocus`]). Cursor starts on the middle
     /// hit of three across two files, so `Up`/`Down`/`j`/`k` (each moving
     /// away from the middle) all produce an observable change.
     fn project_search_app_with_focus(focus: SearchFocus) -> App {

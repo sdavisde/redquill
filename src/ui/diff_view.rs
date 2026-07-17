@@ -248,14 +248,12 @@ fn staged_marker_span(marker: StagedMarker, theme: &Theme) -> Span<'static> {
     }
 }
 
-/// The review-status glyph shown in a section header's marker slot (spec 08
-/// Unit 3), rendered right after [`staged_marker_span`] — the two slots
-/// never both carry a glyph for the same file (a review target's
-/// [`StagedMarker`] is always [`StagedMarker::None`]). `Accepted` reuses
-/// [`staged_marker_span`]'s exact `●` glyph and [`Theme::staged_indicator`]
-/// color (deliberate exception — see [`super::rows::ReviewMarker`]'s doc);
-/// `Deferred`/`Changed` use their own colors and stay visually distinct from
-/// staging's `±`/`●`.
+/// The review-status glyph shown in a section header's marker slot,
+/// rendered right after [`staged_marker_span`] — the two slots never both
+/// carry a glyph for the same file (a review target's [`StagedMarker`] is
+/// always [`StagedMarker::None`]). `Accepted` renders as the staged ● — see
+/// theme.rs's staged_indicator rationale; `Deferred`/`Changed` use their own
+/// colors.
 fn review_marker_span(marker: ReviewMarker, theme: &Theme) -> Span<'static> {
     match marker {
         ReviewMarker::Accepted => {
@@ -519,7 +517,7 @@ pub(super) fn row_line(
     }
 }
 
-/// The commit-view header block (spec 05 Unit 3): short SHA, author name,
+/// The commit-view header block: short SHA, author name,
 /// absolute date, and the commit subject, rendered above the diff whenever a
 /// commit view (opened from the git panel's History tab) is displayed.
 fn commit_header_line(commit: &CommitLogEntry, theme: &Theme) -> Line<'static> {
@@ -579,7 +577,7 @@ fn split_area(area: Rect, has_commit_header: bool) -> (Rect, Rect) {
 /// there are no files at all. When `app.active_commit` is `Some` (a commit
 /// view opened from the History tab), a one-row header block (short SHA,
 /// author, absolute date, subject — see [`commit_header_line`]) renders above
-/// the bordered diff block instead of inside it, per spec 05 Unit 3.
+/// the bordered diff block instead of inside it.
 pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
     let (header_area, diff_area) = split_area(area, app.active_commit.is_some());
     if let Some(commit) = &app.active_commit {
@@ -606,9 +604,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
     }
 
     if app.view.files.is_empty() {
-        // Spec 05 Unit 5: the empty-diff welcome state, replacing the bare
-        // "no changes" placeholder with situational wording plus a small set
-        // of keyed next steps sourced from the shared keymap table.
+        // The empty-diff welcome state, replacing the bare "no changes"
+        // placeholder with situational wording plus a small set of keyed
+        // next steps sourced from the shared keymap table.
         welcome::render(
             frame,
             diff_area,
@@ -930,13 +928,11 @@ mod tests {
         );
     }
 
-    // -- Review-status markers (spec 08 Unit 3) -----------------------------
+    // -- Review-status markers -----------------------------
 
     #[test]
     fn review_marker_accepted_reuses_the_staged_glyph_and_color() {
-        // Deliberate exception (user decision 2026-07-16): accepted must be
-        // byte-identical to the staged `●` — same glyph, same color — so an
-        // accepted-and-collapsed file reads exactly like a staged one.
+        // Renders as the staged ● — see theme.rs's staged_indicator rationale.
         let theme = Theme::default();
         let staged = staged_marker_span(StagedMarker::Staged, &theme);
         let accepted = review_marker_span(ReviewMarker::Accepted, &theme);

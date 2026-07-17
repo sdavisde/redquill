@@ -1,34 +1,18 @@
-//! Persisted-annotation schema (spec 08 Unit 6): the serde shape a review
-//! session's [`super::Annotation`]s are saved in as part of
+//! Persisted-annotation schema: the serde shape a review session's
+//! [`super::Annotation`]s are saved in as part of
 //! `crate::review::store::PersistedReview`, and the snapshot/restore pair
 //! that moves annotations between an in-memory [`super::AnnotationStore`]
 //! and that shape.
 //!
-//! **Why this lives in `annotate/`, not `review/`** (per the architecture
-//! map, `annotate/` owns the annotation model *and its persistence*;
-//! `review/` composes): [`PersistedAnnotation`] is built directly from
-//! [`super::model::Target`]/[`super::model::Classification`]/
-//! [`super::model::Source`] — all three already derive `Serialize`/
-//! `Deserialize` (see `model`'s doc) — so this module only has to add the
-//! one wrapper struct and the two conversion functions, never a shadow copy
-//! of any domain shape. `crate::review::store::PersistedReview` merely holds
-//! a `Vec<PersistedAnnotation>` field; it never constructs or interprets one
-//! itself, keeping the "review composes, annotate owns" boundary intact
-//! without dragging any TUI type into `review/` (there are none here to
-//! drag — `Target`/`Classification`/`Source` are pure domain data, same as
-//! every other type this module touches).
+//! Lives here so `review/` stays free of annotation types: `review/`
+//! composes a `Vec<PersistedAnnotation>` field without ever constructing or
+//! interpreting one itself.
 //!
-//! **Anchor-drift note (accepted v1 limitation, spec 08 Unit 6):** restore
-//! reattaches an annotation to the exact `path`/`line`/`side` (or
-//! hunk/range) recorded in [`PersistedAnnotation::target`], verbatim. If the
-//! branch's tip has moved since the annotation was made — a line shifted, a
-//! hunk was rewritten, the file was renamed — the restored annotation still
-//! targets its original coordinates rather than being re-resolved against
-//! the new content. This mirrors `review_states`' own blob-SHA staleness
-//! detection (`ReviewStatus::ChangedSinceAccepted`) deliberately not being
-//! extended to annotations in v1: re-anchoring is a future spec's problem;
-//! this one only guarantees the annotation survives at all rather than
-//! being silently dropped on pause.
+//! **Accepted limitation:** restore reattaches an annotation to the exact
+//! `path`/`line`/`side` (or hunk/range) recorded in its target, verbatim.
+//! Line anchors are not re-mapped when the file's content has changed since
+//! the annotation was made, so a stale anchor is tolerated rather than
+//! re-resolved or dropped.
 
 use serde::{Deserialize, Serialize};
 
@@ -69,9 +53,9 @@ impl PersistedAnnotation {
 }
 
 /// Snapshots every annotation currently in `store`, in insertion order —
-/// the shape the UI layer's review save path (spec 08 Unit 6's
-/// save-on-change) writes into a review's persisted entry on every
-/// annotation add/edit/delete, alongside the existing accept/defer save.
+/// the shape the UI layer's review save path writes into a review's
+/// persisted entry on every annotation add/edit/delete, alongside the
+/// existing accept/defer save.
 pub fn snapshot(store: &AnnotationStore) -> Vec<PersistedAnnotation> {
     store
         .iter()
@@ -80,16 +64,14 @@ pub fn snapshot(store: &AnnotationStore) -> Vec<PersistedAnnotation> {
 }
 
 /// Replays `persisted` into `store`, in order, via
-/// [`AnnotationStore::add_with_source`] — the session-start restore path
-/// (spec 08 Unit 6: "annotations reattach to their recorded file/line
-/// anchors verbatim before first render"). A record whose body is empty
-/// after trimming (only reachable from hand-edited or corrupt JSON — the
-/// compose modal already rejects an empty body before anything reaches
-/// [`snapshot`]) is skipped rather than failing the whole restore, so one
-/// bad record can't cost every other annotation in the session — the same
-/// "one bad entry degrades, not the whole load" posture
-/// `crate::review::store::load`'s corrupt-file handling documents. Returns
-/// the number of annotations actually restored.
+/// [`AnnotationStore::add_with_source`] — the session-start restore path:
+/// annotations reattach to their recorded file/line anchors verbatim before
+/// first render. A record whose body is empty after trimming (only
+/// reachable from hand-edited or corrupt JSON — the compose modal already
+/// rejects an empty body before anything reaches [`snapshot`]) is skipped
+/// rather than failing the whole restore, so one bad record can't cost
+/// every other annotation in the session. Returns the number of
+/// annotations actually restored.
 pub fn restore_all(store: &mut AnnotationStore, persisted: Vec<PersistedAnnotation>) -> usize {
     let mut restored = 0;
     for entry in persisted {

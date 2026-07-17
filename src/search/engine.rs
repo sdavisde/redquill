@@ -1,5 +1,5 @@
-//! In-process search engine (spec 06 Unit 2): the embedded ripgrep engine
-//! behind Project Search. Pure — no TUI types; `crate::ui` (task 3.0) drains
+//! In-process search engine: the embedded ripgrep engine behind Project
+//! Search. Pure — no TUI types; `crate::ui` drains
 //! [`spawn_scan`]'s channel once per tick, alongside the existing
 //! `BackgroundTasks` polls, and renders [`SearchHit`]s.
 //!
@@ -64,8 +64,8 @@ use ignore::{WalkBuilder, WalkState};
 
 use super::query::{SearchError, SearchQuery, build_matcher};
 
-/// Default cap on total hits collected in one scan (spec 06 Unit 2, open
-/// question 2 — a proposed default, tunable without affecting scope): beyond
+/// Default cap on total hits collected in one scan (a proposed default,
+/// tunable without affecting scope): beyond
 /// this, matching stops contributing new hits and [`ScanSummary::capped`] is
 /// set, with the UI expected to show "capped — refine your query".
 pub const DEFAULT_MAX_HITS: usize = 10_000;

@@ -1,5 +1,5 @@
-//! Performance tripwire for the "instant feel on a 5k-line diff" bar (audit
-//! §3.5). These are *not* frame-rate tests — they bound the wall-clock cost of
+//! Performance tripwire for the "instant feel on a 5k-line diff" bar. These
+//! are *not* frame-rate tests — they bound the wall-clock cost of
 //! the terminal-free hot paths whose cost determines frame time:
 //!
 //! 1. Full row/multibuffer construction (`rebuild_rows` / `build_multibuffer`).

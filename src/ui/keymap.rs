@@ -114,11 +114,10 @@ pub enum Action {
     PanelCursorUp,
     /// Open the git panel cursor's file in the diff and return focus to it;
     /// a no-op on stash/header rows (panel scope). On the History tab,
-    /// opens the highlighted commit into the main diff view instead (spec
-    /// 05 Unit 3).
+    /// opens the highlighted commit into the main diff view instead.
     PanelSelect,
     /// Toggles the git panel between its Changes and History tabs (panel
-    /// scope, spec 05 Unit 3).
+    /// scope).
     TogglePanelTab,
     /// Fetch from the upstream remote on a background thread (panel scope).
     RemoteFetch,
@@ -126,21 +125,18 @@ pub enum Action {
     RemotePull,
     /// Push to the upstream remote on a background thread (panel scope).
     RemotePush,
-    /// Open the commit-message modal for the staged changes (panel scope,
-    /// spec 04); a footer message when nothing is staged.
+    /// Open the commit-message modal for the staged changes (panel scope);
+    /// a footer message when nothing is staged.
     CommitStaged,
     /// Open the branch/worktree switcher modal (panel scope).
     OpenSwitcher,
-    /// Open the review-branch modal (panel scope, spec 08 Unit 1's in-app
-    /// entry path / Unit 5): lists local branches (excluding the one
-    /// currently checked out) so the user can start a review session in
-    /// place, without leaving the app.
+    /// Open the review-branch modal (panel scope): lists local branches
+    /// (excluding the one currently checked out) so the user can start a
+    /// review session in place, without leaving the app.
     OpenReviewBranch,
-    /// Open the fuzzy file finder overlay (`gp`, diff scope, spec 06 Unit
-    /// 1).
+    /// Open the fuzzy file finder overlay (`gp`, diff scope).
     OpenFileFinder,
-    /// Open the full-screen Project Search view (`g/`, diff scope, spec 06
-    /// Unit 2).
+    /// Open the full-screen Project Search view (`g/`, diff scope).
     OpenProjectSearch,
     /// Suspend the TUI and open the configured editor on the file under the
     /// cursor at the cursor's line (`g<Space>`, diff scope). Intercepted in
@@ -157,18 +153,14 @@ pub enum Action {
     Quit,
     /// Quit, discarding annotations.
     QuitDiscard,
-    /// Dismiss the config-warning status-line notice (spec 07 Unit 1),
-    /// if one is showing. Bound in both scopes since the notice can be
-    /// visible whether or not the git panel is focused.
+    /// Dismiss the config-warning status-line notice, if one is showing.
+    /// Bound in both scopes since the notice can be visible whether or not
+    /// the git panel is focused.
     DismissConfigWarning,
-    /// `Space` in a review session (spec 08 Unit 3): toggles the cursor file
-    /// between `Accepted` and `Unreviewed` (see [`crate::review::toggle_accept`]).
-    /// Bound to the same physical key as [`Action::ToggleStage`]; outside a
-    /// review session `Space` keeps staging its pre-existing meaning —
-    /// `super::dispatch_key` is what translates the resolved
-    /// [`Action::ToggleStage`] into this action only while
-    /// `App::in_review_session()` holds (see its doc), so this variant is
-    /// never produced by a plain keymap lookup.
+    /// `Space` means accept in a review session; `super::dispatch_key`
+    /// translates the resolved [`Action::ToggleStage`] into this action only
+    /// while `App::in_review_session()` holds, so this variant is never
+    /// produced by a plain keymap lookup.
     ToggleAccept,
     /// `S` in a review session: accepts the cursor file unconditionally from
     /// anywhere inside it (see [`crate::review::accept`]), mirroring
@@ -177,15 +169,14 @@ pub enum Action {
     AcceptFile,
     /// `d` in a review session: toggles the cursor file between `Deferred`
     /// and `Unreviewed` (see [`crate::review::toggle_defer`]). Unlike the
-    /// two actions above, this is bound directly (`d` was previously free in
-    /// [`Scope::Diff`]) — its handler self-guards on
-    /// `App::in_review_session()` so a non-review session's `d` stays a
-    /// total no-op, byte-for-byte the same as when the key was unbound.
+    /// two actions above, this is bound directly in [`Scope::Diff`]; its
+    /// handler self-guards on `App::in_review_session()`, so outside a
+    /// review session `d` stays a total no-op.
     ToggleDefer,
 }
 
-/// The kebab-case config action-name for every [`Action`] variant (spec 07
-/// Unit 4, `[keys.diff]`/`[keys.panel]`'s left-hand side). An exhaustive
+/// The kebab-case config action-name for every [`Action`] variant (the
+/// `[keys.diff]`/`[keys.panel]` left-hand side). An exhaustive
 /// match: a new `Action` variant fails to *compile* here until it's named,
 /// which is a stronger guarantee than a test — see
 /// [`tests::action_names_are_total_and_bijective`] for the runtime half
@@ -407,8 +398,7 @@ impl KeySeq {
     /// key-string grammar's plain chord data becomes the real
     /// `KeyChord`/`KeySeq` representation. Used only by
     /// [`super::keymap_config`], the edge module that merges
-    /// `[keys.diff]`/`[keys.panel]` overrides onto `Keymap::default_map()`
-    /// (spec 07 Unit 4).
+    /// `[keys.diff]`/`[keys.panel]` overrides onto `Keymap::default_map()`.
     pub(crate) fn from_spec(spec: crate::config::keys::KeySeqSpec) -> KeySeq {
         use crate::config::keys::KeySeqSpec;
         match spec {
@@ -616,9 +606,8 @@ impl Keymap {
                 // Esc is *bound*, so the overlay lists it; the actual
                 // dispatch is a hand-written cascade in `mod.rs`'s
                 // `dispatch_key` (close help / cancel a Visual selection /
-                // return from a commit view opened via the History tab,
-                // spec 05 Unit 3) — the same multi-duty-single-key pattern
-                // Visual-cancel already used before this addition.
+                // return from a commit view opened via the History tab) —
+                // the same multi-duty-single-key pattern Visual-cancel uses.
                 d(
                     KeySeq::one(Esc, none),
                     ToggleHelp,
@@ -657,15 +646,9 @@ impl Keymap {
                     ToggleStagingPanel,
                     "Toggle staging panel",
                 ),
-                // Review-session accept/defer (spec 08 Unit 3). `ToggleAccept`/
-                // `AcceptFile` share Space/`S` with `ToggleStage`/`StageFile`
-                // above — reachable only via `super::dispatch_key`'s
-                // review-session translation, never a direct keymap lookup
-                // (see `Action::ToggleAccept`'s doc) — so these rows exist
-                // purely so the help overlay/footer can document review's
-                // meaning for those keys; `super::help::binding_hidden` shows
-                // exactly one of each pair depending on `in_review_session()`.
-                // `ToggleDefer` is bound directly (`d` was free).
+                // These rows exist so the help overlay/footer can document
+                // Space/`S`'s review-session meaning; dispatch translates
+                // them (see dispatch_key). `ToggleDefer` is bound directly.
                 d(
                     KeySeq::one(Char(' '), none),
                     ToggleAccept,
@@ -813,18 +796,16 @@ impl Keymap {
                 .footer(5, "push"),
                 // Plain `c` is free in panel scope: `Compose` binds it in
                 // diff scope only, so the same physical key can commit here
-                // (spec 04) without touching the annotate gesture.
+                // without touching the annotate gesture.
                 p(
                     KeySeq::one(Char('c'), none),
                     CommitStaged,
                     "Commit staged changes",
                 )
                 .footer(6, "commit"),
-                // Wired here specifically so the git panel's footer strip can
-                // promise a working `? help` escape hatch (see `super::footer`):
-                // before this row, `?` was diff-scope only and did nothing while
-                // the panel held focus. README's git panel table documents it
-                // alongside this addition.
+                // `?` toggles help while the panel is focused too, so the
+                // panel's footer strip can promise a working `? help` escape
+                // hatch (see `super::footer`).
                 p(KeySeq::one(Char('?'), none), ToggleHelp, "Toggle help").footer(0, "help"),
                 p(
                     KeySeq::one(Char('b'), none),
@@ -870,7 +851,7 @@ impl Keymap {
     /// Builds a [`Keymap`] from an explicit binding list — the constructor
     /// `super::keymap_config`'s merge machinery uses to assemble the
     /// effective (post-config-override) table from `default_map`'s
-    /// bindings (spec 07 Unit 4; see that module for the merge semantics).
+    /// bindings (see that module for the merge semantics).
     pub(crate) fn from_bindings(bindings: Vec<Binding>) -> Keymap {
         Keymap { bindings }
     }
@@ -887,9 +868,9 @@ impl Keymap {
     /// place that spells a main-keymap action's key out in prose — rather
     /// than rendering the [`Keymap`] table directly, like the help overlay
     /// and footer already do — reads through this, so a remap or unbind can
-    /// never leave stale key text on screen (spec 07 Unit 4, task 4.6): see
-    /// `super::welcome`'s next-step hints, `super::git_panel`'s remote-op
-    /// line, and the staging/list panels' empty-state hints.
+    /// never leave stale key text on screen: see `super::welcome`'s
+    /// next-step hints, `super::git_panel`'s remote-op line, and the
+    /// staging/list panels' empty-state hints.
     pub(crate) fn label_for(&self, scope: Scope, action: Action) -> Option<String> {
         self.bindings
             .iter()
@@ -1043,7 +1024,7 @@ mod tests {
             Some(Action::HalfPageDown)
         );
         // Plain 'd' (no modifier) is a different binding entirely — the
-        // review-session defer toggle (spec 08 Unit 3), not half-page-down.
+        // review-session defer toggle, not half-page-down.
         assert_eq!(
             km.lookup(key(KeyCode::Char('d'), KeyModifiers::NONE)),
             Some(Action::ToggleDefer)
@@ -1501,7 +1482,7 @@ mod tests {
                     "diff-scope binding {:?} must resolve identically via lookup and lookup_in",
                     b.action
                 );
-                // `ToggleAccept`/`AcceptFile` (spec 08 Unit 3) deliberately
+                // `ToggleAccept`/`AcceptFile` deliberately
                 // share Space/`S` with `ToggleStage`/`StageFile` — see
                 // `Action::ToggleAccept`'s doc: those rows exist purely so
                 // the help overlay/footer can document review's meaning for
@@ -1576,7 +1557,7 @@ mod tests {
         );
     }
 
-    // -- Remote ops and command log (task 4.0) ------------------------------
+    // -- Remote ops and command log ------------------------------------------
 
     /// `f`/`p`/`P` are panel-scope remote ops and resolve to nothing in diff
     /// scope, so they never fire during the ordinary review loop.
@@ -1614,7 +1595,7 @@ mod tests {
         );
     }
 
-    // -- Switcher modal (task 3.0) -------------------------------------------
+    // -- Switcher modal -------------------------------------------------------
 
     /// `b` opens the switcher only in panel scope; in diff scope it stays
     /// bound to `WordBackward` (column-cursor motion), unaffected.
@@ -1626,7 +1607,7 @@ mod tests {
         assert_eq!(km.lookup_in(Scope::Diff, b), Some(Action::WordBackward));
     }
 
-    // -- Commit staged (spec 04) ----------------------------------------------
+    // -- Commit staged --------------------------------------------------------
 
     /// Plain `c` commits only in panel scope; in diff scope it stays bound
     /// to `Compose` (annotate), unaffected — the scope dimension keeps the
@@ -1823,7 +1804,7 @@ mod tests {
         );
     }
 
-    // -- Config action-name mapping (spec 07 Unit 4, task 4.2) ---------------
+    // -- Config action-name mapping -------------------------------------------
 
     /// Bijectivity's runtime half: `action_name` is total by construction
     /// (an exhaustive match — a missing arm fails the *build*, not just this
@@ -1866,7 +1847,7 @@ mod tests {
         assert_eq!(action_from_name("not-a-real-action"), None);
     }
 
-    // -- Grammar/label consistency (spec 07 Unit 4, task 4.3) ----------------
+    // -- Grammar/label consistency --------------------------------------------
 
     /// Every default binding's `key_label()` (what `?` and the footer show)
     /// must round-trip through `crate::config::keys::parse_key_string` back

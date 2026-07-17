@@ -1,13 +1,13 @@
-//! Non-UI search domain (spec 06): the fuzzy file-finder core (Unit 1) —
-//! candidate model plus `nucleo-matcher` ranking glue. No TUI types; `crate::ui`
-//! composes this with the background-task poller and renders results (see
+//! Non-UI search domain: the fuzzy file-finder core — candidate model plus
+//! `nucleo-matcher` ranking glue. No TUI types; `crate::ui` composes this
+//! with the background-task poller and renders results (see
 //! `ui::file_finder`).
 //!
-//! Unit 2 (Project Search) adds the in-process grep engine: [`query`] is the
+//! Project Search adds the in-process grep engine: [`query`] is the
 //! pure query model and `grep-regex` matcher construction; [`engine`] is the
 //! scan itself (parallel `.gitignore`-respecting walk, streaming sink,
-//! cancellation, caps). `crate::ui` (task 3.0) wires the engine's channel
-//! into the background-task poller and renders results.
+//! cancellation, caps). `crate::ui` wires the engine's channel into the
+//! background-task poller and renders results.
 
 pub mod engine;
 pub mod files;

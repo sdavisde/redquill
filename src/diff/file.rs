@@ -132,9 +132,9 @@ impl FileDiff {
         }
     }
 
-    /// Builds a synthetic [`FileDiff`] for the read-only whole-file view
-    /// (spec 06 Unit 1): every line is [`LineOrigin::Context`], with both the
-    /// old and new line numbers set to the same 1-based line. Unlike
+    /// Builds a synthetic [`FileDiff`] for the read-only whole-file view:
+    /// every line is [`LineOrigin::Context`], with both the old and new line
+    /// numbers set to the same 1-based line. Unlike
     /// [`FileDiff::synthetic_added`], this isn't a diff at all — it's the
     /// file's current content framed as one all-context hunk, so it renders
     /// through the same multibuffer/highlighting pipeline as a real diff.
@@ -372,7 +372,7 @@ Binary files a/img.png and b/img.png differ
         assert_eq!(diff.kind, FileChangeKind::Added);
     }
 
-    // -- FileDiff::synthetic_context (spec 06 Unit 1: read-only file view) --
+    // -- FileDiff::synthetic_context (read-only file view) --
 
     #[test]
     fn synthetic_context_marks_every_line_as_context_on_both_sides() {

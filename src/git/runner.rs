@@ -282,11 +282,10 @@ impl GitRunner {
     }
 
     /// Removes a worktree at `path` (`git worktree remove <path>`, fixed
-    /// argv, never `--force`, spec 08 Unit 2). Fails with
-    /// [`GitError::Command`] (git's own stderr — e.g. a dirty tree) rather
-    /// than retrying with force; the caller decides how to surface it and
-    /// must leave the worktree and any persisted review state untouched on
-    /// failure.
+    /// argv, never `--force`). Fails with [`GitError::Command`] (git's own
+    /// stderr — e.g. a dirty tree) rather than retrying with force; the
+    /// caller decides how to surface it and must leave the worktree and any
+    /// persisted review state untouched on failure.
     pub fn worktree_remove(&self, path: &Path) -> Result<(), GitError> {
         let path_str = path.to_string_lossy().into_owned();
         let args = ["worktree", "remove", path_str.as_str()];
@@ -304,7 +303,7 @@ impl GitRunner {
     }
 
     /// Prunes stale worktree administrative records (`git worktree prune`,
-    /// fixed argv, spec 08 Unit 2). Run only after a successful
+    /// fixed argv). Run only after a successful
     /// [`GitRunner::worktree_remove`], to clear now-stale admin entries.
     pub fn worktree_prune(&self) -> Result<(), GitError> {
         self.run_raw(&["worktree", "prune"])?;
@@ -347,10 +346,9 @@ impl GitRunner {
 
     /// Returns every tracked file path, repo-relative, via `git ls-files -z`
     /// (NUL-delimited, parsed by [`parse_ls_files_z`]). Half of the fuzzy
-    /// file finder's candidate source (spec 06 Unit 1); combined with
+    /// file finder's candidate source; combined with
     /// [`GitRunner::ls_files_untracked`] for the full set. Chosen over the
-    /// `ignore` crate's walker for exact fidelity to git's own tracked set
-    /// (see the spec's Technical Considerations).
+    /// `ignore` crate's walker for exact fidelity to git's own tracked set.
     pub fn ls_files(&self) -> Result<Vec<String>, GitError> {
         let out = self.run_utf8(&["ls-files", "-z"])?;
         Ok(parse_ls_files_z(&out))
@@ -358,26 +356,21 @@ impl GitRunner {
 
     /// Returns every untracked-but-not-ignored file path, repo-relative, via
     /// `git ls-files -z --others --exclude-standard`. The other half of the
-    /// fuzzy file finder's candidate source (spec 06 Unit 1).
+    /// fuzzy file finder's candidate source.
     pub fn ls_files_untracked(&self) -> Result<Vec<String>, GitError> {
         let out = self.run_utf8(&["ls-files", "-z", "--others", "--exclude-standard"])?;
         Ok(parse_ls_files_z(&out))
     }
 
     /// Returns `path`'s blob SHA on `branch` (`git rev-parse --verify -q
-    /// <branch>:<path>`, full SHA — spec 08 Unit 4), for capturing at accept
-    /// time and comparing again at reconciliation time to detect staleness.
+    /// <branch>:<path>`, full SHA), for capturing at accept time and
+    /// comparing again at reconciliation time to detect staleness.
     /// `Ok(None)` — never an error — whenever the spec doesn't resolve to a
-    /// blob: the path doesn't exist at `branch` (an accepted deletion
-    /// records its absence, not a SHA — the caller's job, not this
-    /// method's, to decide what that *means*), or `branch` itself doesn't
-    /// resolve (a deleted/renamed branch degrades the same way, matching
-    /// this module's "expected, not an error" treatment for `rev_exists`/
-    /// [`GitRunner::last_commit`]). `-q` suppresses git's `fatal:` stderr
-    /// noise for the ordinary "doesn't resolve" case, mirroring
-    /// [`GitRunner::rev_exists`]'s `--verify` precedent. A genuine failure
-    /// to run `git` at all (not found, spawn error, non-UTF8 output) still
-    /// surfaces as `Err`.
+    /// blob: the path doesn't exist at `branch`, or `branch` itself doesn't
+    /// resolve. Deletion vs. a missing branch is the caller's concern to
+    /// distinguish, not this method's. A genuine failure to run `git` at
+    /// all (not found, spawn error, non-UTF8 output) still surfaces as
+    /// `Err`.
     pub fn blob_sha(&self, branch: &str, path: &str) -> Result<Option<String>, GitError> {
         let spec = format!("{branch}:{path}");
         let args = ["rev-parse", "--verify", "-q", spec.as_str()];

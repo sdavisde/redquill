@@ -1,10 +1,16 @@
-//! Pure blob-SHA reconciliation (spec 08 Unit 4): turns a persisted
-//! review's per-file entries into the in-memory [`ReviewStatus`] map
-//! `App::review_states` uses, given the branch's *current* blob SHA for
-//! each persisted path. Kept pure and git-free — the caller resolves each
-//! path's current blob SHA (via [`crate::git::GitRunner::blob_sha`]) and
-//! hands the results in as plain data — so the reconciliation rule itself
-//! is unit-testable without a repository.
+//! Pure blob-SHA reconciliation: turns a persisted review's per-file
+//! entries into the in-memory [`ReviewStatus`] map `App::review_states`
+//! uses, given the branch's *current* blob SHA for each persisted path.
+//! Kept pure and git-free — the caller resolves each path's current blob
+//! SHA (via [`crate::git::GitRunner::blob_sha`]) and hands the results in
+//! as plain data — so the reconciliation rule itself is unit-testable
+//! without a repository.
+//!
+//! This module is the canonical home of the `ChangedSinceAccepted`
+//! invariant: that status is only ever derived here, at load-time
+//! reconciliation — never set directly by a live user gesture. Live code
+//! (the presentation layer, mid-session) only ever persists `Accepted` or
+//! `Deferred`.
 
 use std::collections::HashMap;
 
@@ -13,7 +19,7 @@ use super::store::{PersistedReview, PersistedStatus};
 
 /// Reconciles `persisted`'s per-file entries against `current_blob_shas`
 /// (one entry per persisted path; `None` means the path no longer exists on
-/// the branch). The rule (spec 08 Unit 4 FR):
+/// the branch). The rule:
 ///
 /// - `Deferred` carries over unconditionally — no staleness check ever
 ///   applies to a deferred file.
@@ -25,9 +31,8 @@ use super::store::{PersistedReview, PersistedStatus};
 ///   demotes it to `ChangedSinceAccepted`.
 /// - A path with no persisted entry gets no entry in the returned map at
 ///   all, exactly mirroring `App::review_status`'s "missing = Unreviewed"
-///   convention — "files new on the branch since last session are
-///   Unreviewed" (spec 08 Unit 4) needs no special-casing here, it falls
-///   out of simply never being visited.
+///   convention — files new on the branch since last session need no
+///   special-casing here, it falls out of simply never being visited.
 pub fn reconcile(
     persisted: &PersistedReview,
     current_blob_shas: &HashMap<String, Option<String>>,

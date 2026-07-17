@@ -1,4 +1,4 @@
-//! The review-session banner (spec 08 Unit 2): a full-width, single-row band
+//! The review-session banner: a full-width, single-row band
 //! reading ` REVIEWING <branch> — q to end review` with the
 //! `<accepted>/<total>` progress count right-aligned at the row's far edge,
 //! shown above everything else in [`super::draw`] whenever
@@ -37,9 +37,7 @@ const HINT: &str = " \u{2014} q to end review";
 /// `Full` covers every terminal wide enough for the fixed chrome (`PREFIX`
 /// plus `HINT` plus the progress count plus one trailing-space column) to
 /// fit, truncating only the branch name (with a trailing ellipsis) when it
-/// doesn't fit alongside that chrome. The branch is the one variable-length
-/// part, and the spec calls for truncating it rather than ever wrapping to a
-/// second row.
+/// doesn't fit — the branch never wraps to a second row.
 ///
 /// `Clipped` covers the pathologically narrow remainder, where even the
 /// fixed chrome doesn't fit: a hard clip of the unpadded text, not worth a
@@ -102,9 +100,7 @@ fn layout(branch: &str, accepted: usize, total: usize, width: usize) -> BannerLa
 /// [`layout`] directly, as separately styled spans, rather than going
 /// through this concatenated string — hence `#[cfg(test)]`: this exists
 /// purely so the truncation/padding contract stays unit-testable against a
-/// plain `width`, without a real frame). See [`layout`]'s doc for the
-/// truncation contract this preserves unchanged from before the
-/// padding/right-alignment polish pass.
+/// plain `width`, without a real frame).
 #[cfg(test)]
 pub(super) fn banner_text(branch: &str, accepted: usize, total: usize, width: u16) -> String {
     let width = width as usize;

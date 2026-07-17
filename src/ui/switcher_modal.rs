@@ -1,5 +1,5 @@
-//! The branch/worktree switcher modal ([`super::app::Mode::Switcher`], spec
-//! 03 Unit 1): a centered overlay with two tabs — Branches (default) and
+//! The branch/worktree switcher modal ([`super::app::Mode::Switcher`]): a
+//! centered overlay with two tabs — Branches (default) and
 //! Worktrees — each listing the rows [`super::switcher::SwitcherState`]'s
 //! per-tab cursor moves over. Modeled on [`super::compose_modal`] (a
 //! centered, `Clear`-ed, bordered block) and [`super::git_panel`]'s row

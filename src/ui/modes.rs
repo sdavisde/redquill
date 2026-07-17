@@ -7,7 +7,10 @@
 //! [`super::Action`] per key.
 //!
 //! Each handler drives [`super::App`] purely through its public methods and
-//! modal state; no App internals are reached into here.
+//! modal state; no App internals are reached into here. Every modal handler
+//! bypasses the [`super::Keymap`] table entirely, resolving instead against
+//! its own table in [`super::modal_keys`] — drift-tested against the `?`
+//! help overlay's hints in both directions.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -19,12 +22,9 @@ use super::modal_keys::{
 };
 
 /// Handles one key event while [`super::Mode::Compose`] is active. Resolves
-/// against `app.modal_keys.compose` (spec 07 Unit 4 task 5.3/5.4: the
-/// effective, config-overridable table — see [`modal_keys::ComposeAction`])
-/// first; an unresolved, unmodified `Char` inserts as literal text (never
-/// remappable, per the free-text-mode contract). Bypasses the
-/// [`super::Keymap`] table entirely; documented in
-/// [`modal_keys::COMPOSE_HINTS`], drift-tested both directions.
+/// against `app.modal_keys.compose` first; an unresolved, unmodified `Char`
+/// inserts as literal text (never remappable, per the free-text-mode
+/// contract). See [`modal_keys::COMPOSE_HINTS`].
 pub(super) fn handle_compose_key(app: &mut App, key: KeyEvent) {
     if let Some(action) = modal_keys::resolve(&app.modal_keys.compose, key) {
         match action {
@@ -46,13 +46,11 @@ pub(super) fn handle_compose_key(app: &mut App, key: KeyEvent) {
     insert_if_plain_char(app.compose.as_mut().map(|c| &mut c.buffer), key);
 }
 
-/// Handles one key event while [`super::Mode::CommitMessage`] is active
-/// (spec 04). Resolves against `app.modal_keys.commit_message` first (same
-/// contract as [`handle_compose_key`], minus classification cycling — see
-/// [`modal_keys::CommitMessageAction`]); an unresolved, unmodified `Char`
-/// inserts as literal text, so `q` types a `q` rather than quitting (an open
-/// overlay never quits the app). Documented in
-/// [`modal_keys::COMMIT_MESSAGE_HINTS`], drift-tested in both directions.
+/// Handles one key event while [`super::Mode::CommitMessage`] is active.
+/// Resolves against `app.modal_keys.commit_message` first (same contract as
+/// [`handle_compose_key`], minus classification cycling); an unresolved,
+/// unmodified `Char` inserts as literal text, so `q` types a `q` rather than
+/// quitting (an open overlay never quits the app).
 pub(super) fn handle_commit_message_key(app: &mut App, key: KeyEvent) {
     if let Some(action) = modal_keys::resolve(&app.modal_keys.commit_message, key) {
         match action {
@@ -71,9 +69,8 @@ pub(super) fn handle_commit_message_key(app: &mut App, key: KeyEvent) {
 
 /// Inserts `key`'s character into `buffer` when it's a bare, unmodified
 /// `Char` — the one thing every free-text mode's resolve-first dispatch
-/// falls back to, and the one thing config can never remap (spec 07 Unit 4
-/// FR: "character insertion is not an action and cannot be bound"). A no-op
-/// for anything else (a `Char` chorded with Ctrl/Alt that the mode's table
+/// falls back to, and the one thing config can never remap. A no-op for
+/// anything else (a `Char` chorded with Ctrl/Alt that the mode's table
 /// doesn't document, or a non-`Char` key already exhausted by `resolve`).
 fn insert_if_plain_char(buffer: Option<&mut super::compose::TextBuffer>, key: KeyEvent) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -87,11 +84,7 @@ fn insert_if_plain_char(buffer: Option<&mut super::compose::TextBuffer>, key: Ke
 
 /// Handles one key event while [`super::Mode::List`] is active: `j`/`k` move
 /// focus, `Enter` jumps to the annotation and closes the panel, `e` edits
-/// it, `d` deletes it, `a`/`Esc` close the panel. Dispatch is driven by
-/// `app.modal_keys.list` (spec 07 Unit 4 task 5.3/5.4: `modal_keys::LIST_KEYS`
-/// plus its `[keys.list]` config overrides) — the same table the help
-/// overlay renders — so the keys can't drift from their documentation.
-/// Bypasses the [`super::Keymap`] table entirely.
+/// it, `d` deletes it, `a`/`Esc` close the panel.
 pub(super) fn handle_list_key(app: &mut App, key: KeyEvent) {
     let Some(action) = modal_keys::resolve(&app.modal_keys.list, key) else {
         return;
@@ -108,13 +101,11 @@ pub(super) fn handle_list_key(app: &mut App, key: KeyEvent) {
 
 /// Handles one key event while [`super::Mode::Staging`] is active: `j`/`k`
 /// move focus, `Space`/`Enter` unstage the focused file (the panel stays
-/// open), `s`/`Esc` close the panel. Dispatch is driven by
-/// `app.modal_keys.staging` — the same table the help overlay renders.
-/// Bypasses the [`super::Keymap`] table entirely.
+/// open), `s`/`Esc` close the panel.
 pub(super) fn handle_staging_key(app: &mut App, key: KeyEvent) {
-    // Review sessions repurpose `Mode::Staging` as the accepted-files panel
-    // (spec 08 Unit 5): resolve against its own table instead of the local
-    // staging panel's, so the two never cross-dispatch (`unstage_focused_file`
+    // Review sessions repurpose `Mode::Staging` as the accepted-files panel:
+    // resolve against its own table instead of the local staging panel's,
+    // so the two never cross-dispatch (`unstage_focused_file`
     // would be untruthful during a review — there is nothing staged to
     // unstage — and `un_accept_focused_file` would be meaningless locally).
     if app.in_review_session() {
@@ -145,8 +136,7 @@ pub(super) fn handle_staging_key(app: &mut App, key: KeyEvent) {
 /// (jumping to the first match at-or-after the cursor), `Esc` cancels
 /// (clearing the active pattern only if the buffer was left empty), Backspace
 /// deletes. The three control keys resolve against `app.modal_keys.search`
-/// first (spec 07 Unit 4 task 5.3). Bypasses the [`super::Keymap`] table
-/// entirely.
+/// first.
 pub(super) fn handle_search_key(app: &mut App, key: KeyEvent) {
     let Some(action) = modal_keys::resolve(&app.modal_keys.search, key) else {
         if let KeyCode::Char(c) = key.code {
@@ -177,9 +167,9 @@ pub(super) fn handle_search_key(app: &mut App, key: KeyEvent) {
 ///
 /// `p`/`P` (pull/push) additionally open the confirm modal instead of
 /// running immediately whenever [`super::app::App::in_review_session`] holds
-/// (spec 08 Unit 5) — `f` (fetch) is untouched, since reviewers are expected
-/// to fetch freely. Every other action still runs through the unchanged
-/// generic `app.apply(action)` path.
+/// — `f` (fetch) is untouched, since reviewers are expected to fetch freely.
+/// Every other action still runs through the unchanged generic
+/// `app.apply(action)` path.
 pub(super) fn handle_panel_key(
     app: &mut App,
     key: KeyEvent,
@@ -206,11 +196,10 @@ pub(super) fn handle_panel_key(
     }
 }
 
-/// Handles one key event while [`super::Mode::ConfirmRemoteOp`] is active
-/// (spec 08 Unit 5): resolves against `app.modal_keys.confirm_remote_op`,
-/// dispatching confirm/cancel through [`App`]'s state-transition methods
-/// (`src/ui/confirm_remote_op.rs`). Bypasses the [`super::Keymap`] table
-/// entirely, like every other modal mode.
+/// Handles one key event while [`super::Mode::ConfirmRemoteOp`] is active:
+/// resolves against `app.modal_keys.confirm_remote_op`, dispatching
+/// confirm/cancel through [`App`]'s state-transition methods
+/// (`src/ui/confirm_remote_op.rs`).
 pub(super) fn handle_confirm_remote_op_key(app: &mut App, key: KeyEvent) {
     let Some(action) = modal_keys::resolve(&app.modal_keys.confirm_remote_op, key) else {
         return;
@@ -226,8 +215,7 @@ pub(super) fn handle_confirm_remote_op_key(app: &mut App, key: KeyEvent) {
 /// a Definition/References result that's one of the diff's files (closing
 /// the overlay) or sets `not in diff` otherwise (a no-op for Hover), `Esc`
 /// closes back to Normal (`q` is inert — an open overlay never quits the
-/// app). Dispatch is driven by [`modal_keys::PEEK_KEYS`] — the same table the
-/// help overlay renders. Bypasses the [`super::Keymap`] table entirely.
+/// app).
 pub(super) fn handle_peek_key(app: &mut App, key: KeyEvent) {
     use super::code_intel;
     let Some(action) = modal_keys::resolve(&app.modal_keys.peek, key) else {
@@ -242,13 +230,10 @@ pub(super) fn handle_peek_key(app: &mut App, key: KeyEvent) {
 }
 
 /// Handles one key event while [`super::Mode::Finder`] is active (the fuzzy
-/// file finder overlay, spec 06 Unit 1): printable chars extend the query
-/// (re-ranking on every keystroke, never remappable), and the control keys —
-/// Backspace, `Up`/`Down` move the selection, `Enter` opens the selected
-/// file, `Esc` closes losslessly — resolve against `app.modal_keys.finder`
-/// first (spec 07 Unit 4 task 5.3). Bypasses the [`super::Keymap`] table
-/// entirely, like Compose/Search — free text and navigation together aren't
-/// expressible as one fixed [`super::Action`] per key. Documented in
+/// file finder overlay): printable chars extend the query (re-ranking on
+/// every keystroke, never remappable), and the control keys — Backspace,
+/// `Up`/`Down` move the selection, `Enter` opens the selected file, `Esc`
+/// closes losslessly — resolve against `app.modal_keys.finder` first. See
 /// [`modal_keys::FINDER_HINTS`] (control keys only; free-text chars are the
 /// exemption every other free-text mode's hint table carries).
 pub(super) fn handle_finder_key(app: &mut App, key: KeyEvent) {
@@ -267,39 +252,12 @@ pub(super) fn handle_finder_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-/// Handles one key event while [`super::Mode::ProjectSearch`] is active (the
-/// full-screen Project Search view, spec 06 Unit 2, plus the round-1 UX
-/// fix's two-focus model — see [`super::project_search::SearchFocus`]):
-///
-/// - **Input focus**: printable chars extend the query (debounced re-scan,
-///   never remappable), and the control keys resolve against
-///   `app.modal_keys.project_search_input` (spec 07 Unit 4 task 5.3) —
-///   Backspace shortens it, `Up`/`Down` move the result selection, `Enter`
-///   opens the selected hit, `Esc` moves to Results focus (view stays open).
-/// - **Results focus**: control keys resolve against
-///   `app.modal_keys.project_search_results` instead — `j`/`k`/`Up`/`Down`
-///   move the result selection (letters no longer type into the query —
-///   there's nothing to type into while browsing), `Enter` opens the
-///   selected hit, `/` returns to Input focus (query preserved), `Esc` is
-///   the final "leave the feature" gesture — closes back to the exact prior
-///   diff position.
-/// - **Both focuses**: `Tab` toggles focus either direction; the three
-///   `Alt`-chord toggles (`Alt-c` case, `Alt-w` whole-word, `Alt-r`
-///   regex/literal) cycle their state regardless of which half has focus —
-///   `Esc`/`Tab`/`Open`/the three toggles route to the *same*
-///   `App` methods from either table (e.g. `project_search_esc` itself
-///   branches on focus internally to pick "move to Results" vs. "close the
-///   view"), so the two tables' shared action names stay behaviorally
-///   identical even though they're separate enums per focus.
-///
-/// Bypasses the [`super::Keymap`] table entirely, like [`handle_finder_key`]
-/// — free text and navigation together aren't expressible as one fixed
-/// [`super::Action`] per key. Documented in
-/// [`modal_keys::PROJECT_SEARCH_INPUT_HINTS`]/
-/// [`modal_keys::PROJECT_SEARCH_RESULTS_HINTS`] (control keys and the
-/// Alt-chords only; free-text chars — including bare `c`/`w`/`r`/`j`/`k`/`/`
-/// with no Alt while Input-focused — are the exemption every other
-/// free-text mode's hint table carries).
+/// Handles one key event while [`super::Mode::ProjectSearch`] is active,
+/// dispatching against whichever table matches the current
+/// [`super::project_search::SearchFocus`] (Input vs. Results — see that
+/// type's doc for the full per-focus key contract). `Tab` and the three
+/// `Alt`-chord toggles act the same from either focus, routing to the same
+/// `App` methods.
 pub(super) fn handle_project_search_key(app: &mut App, key: KeyEvent) {
     use super::project_search::SearchFocus;
     let results_focused = app
@@ -356,14 +314,10 @@ pub(super) fn handle_project_search_key(app: &mut App, key: KeyEvent) {
 /// Handles one key event while [`super::Mode::Switcher`] is active (the
 /// branch/worktree switcher modal is open): `Tab`/`BackTab`/`h`/`l`/arrow
 /// keys switch between the Branches and Worktrees tabs, `j`/`k` move the
-/// active tab's cursor, `Enter` acts on the selected row (a stub until
-/// Task 4 wires up `git switch`/re-root — see
+/// active tab's cursor, `Enter` acts on the selected row (see
 /// [`super::App::switcher_confirm`]), and `Esc` closes the modal back to
-/// the git panel at its pre-open cursor row. Dispatch is driven by
-/// [`modal_keys::SWITCHER_KEYS`] — the same table the help overlay renders
-/// — so, like [`handle_peek_key`], `q` isn't in the table and is therefore
-/// inert here: an open overlay never quits the app. Bypasses the
-/// [`super::Keymap`] table entirely.
+/// the git panel at its pre-open cursor row. `q` isn't in the table and is
+/// therefore inert here: an open overlay never quits the app.
 pub(super) fn handle_switcher_key(app: &mut App, key: KeyEvent) {
     let Some(action) = modal_keys::resolve(&app.modal_keys.switcher, key) else {
         return;
@@ -378,13 +332,10 @@ pub(super) fn handle_switcher_key(app: &mut App, key: KeyEvent) {
 }
 
 /// Handles one key event while [`super::Mode::ReviewBranch`] is active (the
-/// review-branch modal, `R` panel scope, spec 08 Unit 1 in-app path / Unit
-/// 5): `j`/`k`/arrows move the cursor, `Enter` starts a review session on
-/// the highlighted branch (see
+/// review-branch modal, `R` panel scope): `j`/`k`/arrows move the cursor,
+/// `Enter` starts a review session on the highlighted branch (see
 /// [`super::review_branch::App::confirm_review_branch`]), `Esc` closes the
-/// modal. Dispatch is driven by [`modal_keys::REVIEW_BRANCH_KEYS`] — the
-/// same table the help overlay renders. Bypasses the [`super::Keymap`] table
-/// entirely, mirroring [`handle_switcher_key`].
+/// modal.
 pub(super) fn handle_review_branch_key(app: &mut App, key: KeyEvent) {
     let Some(action) = modal_keys::resolve(&app.modal_keys.review_branch, key) else {
         return;
@@ -397,21 +348,19 @@ pub(super) fn handle_review_branch_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-/// Handles one key event while [`super::Mode::EndReview`] is active (spec 08
-/// Unit 2: `q` in a review session opens this modal instead of quitting —
-/// see [`super::quit_action`]): `p` pauses (quits, emitting annotations
-/// through the ordinary on-quit path — the worktree and review state are
+/// Handles one key event while [`super::Mode::EndReview`] is active (`q` in
+/// a review session opens this modal instead of quitting — see
+/// [`super::quit_action`]): `p` pauses (quits, emitting annotations through
+/// the ordinary on-quit path — the worktree and review state are
 /// untouched), `f` finishes (removes the worktree via
 /// [`super::App::finish_review`], quitting on success or surfacing the
 /// failure and staying open), `c`/`Esc` cancel back to the mode `q` was
-/// pressed from — plus, since the dogfood polish pass, `j`/`k`/arrows move a
-/// highlighted selection across the three options and `Enter` confirms
-/// whichever one is highlighted (acting exactly like its mnemonic; see
-/// [`EndReviewAction::from_cursor`]). Dispatch is driven by
-/// [`modal_keys::END_REVIEW_KEYS`] — the same table the help overlay
-/// renders. Unlike most modal handlers this one returns [`super::Flow`]
-/// (like [`handle_panel_key`]): pause/a successful finish end the session,
-/// so the event loop must see the quit rather than this function looping it
+/// pressed from. `j`/`k`/arrows move a highlighted selection across the
+/// three options and `Enter` confirms whichever one is highlighted (acting
+/// exactly like its mnemonic; see [`EndReviewAction::from_cursor`]). Unlike
+/// most modal handlers this one returns [`super::Flow`] (like
+/// [`handle_panel_key`]): pause/a successful finish end the session, so the
+/// event loop must see the quit rather than this function looping it
 /// internally.
 pub(super) fn handle_end_review_key(app: &mut App, key: KeyEvent) -> super::Flow {
     use super::Flow;
@@ -448,12 +397,10 @@ pub(super) fn handle_end_review_key(app: &mut App, key: KeyEvent) -> super::Flow
 fn end_review_choice(app: &mut App, choice: EndReviewAction) -> super::Flow {
     use super::{Flow, QuitOutcome};
     match choice {
-        // Amended 2026-07-16, spec 08 Unit 6 (reversing Unit 2's original
-        // "pause emits" contract): pause discards rather than emits, so a
-        // consumer sees each annotation exactly once — on finish. The
-        // worktree, review state, and every annotation made this session
-        // are still kept; only the stdout side effect changes (see
-        // `QuitOutcome`'s doc).
+        // Pause discards rather than emits, so a consumer sees each
+        // annotation exactly once — on finish. The worktree, review state,
+        // and every annotation made this session are still kept; only the
+        // stdout side effect changes (see `QuitOutcome`'s doc).
         EndReviewAction::Pause => Flow::Quit(QuitOutcome::Discard),
         EndReviewAction::Finish => match app.finish_review() {
             Some(outcome) => Flow::Quit(outcome),

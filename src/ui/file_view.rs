@@ -1,5 +1,5 @@
-//! The read-only whole-file view (spec 06 Unit 1): opens any worktree file —
-//! not just files with a diff — as a synthesized all-context body via the
+//! The read-only whole-file view: opens any worktree file — not just files
+//! with a diff — as a synthesized all-context body via the
 //! [`DiffTarget::File`] capability variant, reusing the diff rendering
 //! surface, the existing scroll/jump motions, and the suspend/restore
 //! mechanism [`super::git_panel`]'s commit view pioneered.
@@ -7,16 +7,19 @@
 //! Deliberately *not* a new [`Mode`] variant: the file view is
 //! [`Mode::Normal`] over a `File` target, so every Normal-mode navigation
 //! gesture works unchanged, and the existing capability gating
-//! (`target.staging_mode()` / `target.supports_code_intel()`, both already
-//! wired into the footer/help overlay per the spec 05 pattern) hides
-//! staging/commit/LSP keys automatically — no new gating logic needed here.
+//! (`target.staging_mode()` / `target.supports_code_intel()`, already wired
+//! into the footer/help overlay) hides staging/commit/LSP keys
+//! automatically — no new gating logic needed here.
 //!
 //! Suspension uses its own field ([`App::suspended_file_view`]), not
 //! [`super::app::SuspendedView`]'s sibling `suspended_view` field (commit
 //! views): the two are independent so a file opened from within a commit
 //! view suspends the commit view (not the true original state), and `Esc`
 //! unwinds one layer at a time, mirroring how nested commit opens already
-//! collapse into a single suspension rather than stacking.
+//! collapse into a single suspension rather than stacking. A second file
+//! opened without returning replaces the displayed file but leaves the
+//! original suspension untouched, so `Esc` always returns to the true
+//! starting point.
 
 use crate::diff::FileDiff;
 use crate::git::DiffTarget;
@@ -30,15 +33,7 @@ impl App {
     /// landing on `line` (1-based) if given, else the top of the file.
     /// `Esc` from the view restores `Mode::Normal` — see
     /// [`App::open_file_view_with_return_mode`] for opening with a different
-    /// restore mode (Project Search's confirm gesture, spec 06 Unit 2).
-    ///
-    /// Suspends the prior view the first time a file view is opened while
-    /// none is already showing; a nested open (a file view opened from
-    /// within another file view — not reachable via the finder alone today,
-    /// but kept consistent with [`super::git_panel::App::open_commit_view`]'s
-    /// nested-commit behavior) replaces the displayed file but leaves the
-    /// original suspension untouched, so `Esc` always returns to the true
-    /// starting point.
+    /// restore mode. See the module doc for the suspend/restore contract.
     ///
     /// Degrades to a footer message, leaving the current view untouched, on:
     /// no git backend attached, an unreadable path, or non-UTF-8 (binary)
@@ -48,13 +43,10 @@ impl App {
     }
 
     /// [`App::open_file_view`], but `Esc` restores `return_mode` instead of
-    /// always `Mode::Normal` — used by Project Search's confirm gesture
-    /// (spec 06 Unit 2) so opening a hit while in `Mode::ProjectSearch`
-    /// lands back there (query/toggles/results/selection intact) rather than
-    /// falling through to the diff. `return_mode` is captured only on the
-    /// first-level open (mirrors `suspended_file_view`'s own nested-open
-    /// rule below): a second file opened without returning must not
-    /// overwrite the true restore target.
+    /// always `Mode::Normal` — used by Project Search's confirm gesture so
+    /// opening a hit while in `Mode::ProjectSearch` lands back there
+    /// (query/toggles/results/selection intact) rather than falling through
+    /// to the diff. `return_mode` is captured only on the first-level open.
     pub(super) fn open_file_view_with_return_mode(
         &mut self,
         path: String,

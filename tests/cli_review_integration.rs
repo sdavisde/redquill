@@ -1,5 +1,5 @@
-//! End-to-end CLI integration tests for `redquill --review <branch>` (spec
-//! 08 Unit 1, task 1.0): the actual compiled binary is spawned via
+//! End-to-end CLI integration tests for `redquill --review <branch>`: the
+//! actual compiled binary is spawned via
 //! `env!("CARGO_BIN_EXE_redquill")` against throwaway repositories built in
 //! fresh tempdirs, exercising real CLI parsing, real `git` subprocesses, and
 //! the headless plain-text summary path (`main.rs` falls back to it

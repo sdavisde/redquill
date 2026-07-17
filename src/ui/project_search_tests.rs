@@ -1,5 +1,5 @@
-//! Unit tests for [`super::App`]'s Project Search state machine (spec 06
-//! Unit 2): mode capture/restore, the generation/debounce contract (stale
+//! Unit tests for [`super::App`]'s Project Search state machine:
+//! mode capture/restore, the generation/debounce contract (stale
 //! results dropped, in-flight scan aborted on every query-affecting change,
 //! invalid regex never wipes prior results), and result navigation/confirm.
 //! Split out per the repo's big-test-module convention.
@@ -143,7 +143,7 @@ fn close_project_search_without_opening_is_a_no_op() {
     assert_eq!(app.mode, Mode::Normal);
 }
 
-// -- `[search]` startup defaults (spec 07 task 1.8) --------------------------
+// -- `[search]` startup defaults ----------------------------------------------
 
 #[test]
 fn seeded_maps_search_config_onto_startup_toggle_state() {

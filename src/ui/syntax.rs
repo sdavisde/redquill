@@ -81,15 +81,7 @@ pub(super) fn content_source(
             // this function's contract uniform with every other historical
             // target rather than special-casing review to read off disk.
             DiffTarget::Review { branch, .. } => ContentSource::Show(format!("{branch}:{path}")),
-            // The read-only file view's whole-file body is always
-            // synthesized with a `None` patch entry (see `ui::file_view`),
-            // which routes `rebuild_rows`'s `synthetic` flag to
-            // `populate_cache`'s worktree-read branch directly — this arm
-            // is therefore never reached in practice. Kept as a real,
-            // non-panicking fallback (never `unreachable!()`) rather than a
-            // wildcard, so a future caller that *does* invoke this on a
-            // `File` target gets a sensible answer instead of a dropped
-            // match.
+            // Defensive fallback; never expected in practice.
             DiffTarget::File(p) => ContentSource::Worktree(p.clone()),
         },
         Side::Old => {

@@ -1,28 +1,23 @@
-//! The end-review modal's state transitions ([`super::app::Mode::EndReview`],
-//! spec 08 Unit 2): opening it (capturing where `q` was pressed from),
-//! cancelling back to that exact mode, and finishing a review (removing its
-//! managed worktree and deleting the persisted state — Unit 4 wires the
-//! latter half). Split out of `app.rs` alongside this state, mirroring
-//! [`super::switcher`]'s own state-plus-handlers split.
+//! The end-review modal's state transitions ([`super::app::Mode::EndReview`]):
+//! opening it (capturing where `q` was pressed from), cancelling back to
+//! that exact mode, and finishing a review (removing its managed worktree
+//! and deleting the persisted state). Split out of `app.rs` alongside this
+//! state, mirroring [`super::switcher`]'s own state-plus-handlers split.
 //!
 //! Pausing has no dedicated method here: it's exactly the pre-existing quit
 //! path (`Flow::Quit(QuitOutcome::Discard)`, handled by
-//! [`super::modes::handle_end_review_key`]'s `end_review_choice`) — amended
-//! 2026-07-16, spec 08 Unit 6, reversing this module's original "pause
-//! emits" note: pause now discards the stdout side effect, since
-//! annotations are already durable (save-on-change, task 7.2) by the time
-//! `p` is pressed. The "pause" contract is now keep the worktree, keep the
-//! state, keep every annotation on disk, emit nothing, quit.
+//! [`super::modes::handle_end_review_key`]'s `end_review_choice`). Pause
+//! keeps the worktree, review state, and annotations on disk and emits
+//! nothing; quit-and-emit prints annotations exactly once.
 
 use super::QuitOutcome;
 use super::app::{App, EndReviewOrigin, Mode};
 use super::modal_keys::EndReviewAction;
 
 impl App {
-    /// Opens the end-review modal (spec 08 Unit 2), capturing the mode `q`
-    /// was pressed from so [`App::cancel_end_review`] can restore it
-    /// exactly. Called only when [`App::in_review_session`] is true (see
-    /// [`super::quit_action`]).
+    /// Opens the end-review modal, capturing the mode `q` was pressed from
+    /// so [`App::cancel_end_review`] can restore it exactly. Called only
+    /// when [`App::in_review_session`] is true (see [`super::quit_action`]).
     pub(super) fn open_end_review_modal(&mut self) {
         let origin = match self.mode {
             Mode::Visual { anchor } => EndReviewOrigin::Visual { anchor },
@@ -85,25 +80,17 @@ impl App {
 
     /// The `f` (finish) gesture: removes the managed review worktree through
     /// [`App::review_origin_ops`] (never `stage_ops`, which is rooted
-    /// *inside* the worktree being removed — see that field's doc), then
-    /// prunes stale worktree admin records and — spec 08 Unit 4, closing the
-    /// loop with this unit — deletes this branch's persisted review-state
-    /// entry (statuses *and* annotations together, spec 08 Unit 6 task 7.3:
-    /// they live in one [`crate::review::store::PersistedReview`], so one
-    /// [`crate::review::store::delete_review`] call removes both — "one
-    /// lifecycle", no orphaned annotation data left behind), so a later
-    /// fresh `--review` of the same branch starts clean rather than
-    /// resuming stale progress. Returns `Some(QuitOutcome::Emit)` on
-    /// success — the caller quits emitting `app.annotations`, which by this
-    /// point holds the complete restored-plus-new set exactly once, in the
-    /// unchanged markdown format. On failure (e.g. a dirty worktree; or no
-    /// origin backend/no review session attached, in a git-less test
-    /// context) the git message is surfaced as a status message and the
-    /// modal closes back to its origin mode — the review continues, nothing
-    /// is removed, and the persisted state entry (statuses and annotations
-    /// alike) is left untouched (the worktree removal is the gate; the
-    /// state entry is only ever deleted alongside a worktree that actually
-    /// went away).
+    /// *inside* the worktree being removed — see that field's doc). On
+    /// success it also prunes stale worktree admin records and deletes this
+    /// branch's persisted review entry — statuses and annotations live in
+    /// one [`crate::review::store::PersistedReview`], so one
+    /// [`crate::review::store::delete_review`] call removes both, and a
+    /// later fresh `--review` of the same branch starts clean. Returns
+    /// `Some(QuitOutcome::Emit)`, so the caller quits emitting
+    /// `app.annotations` exactly once. On failure (e.g. a dirty worktree, or
+    /// no origin backend/review session attached) the git message surfaces
+    /// as a status message, the modal closes back to its origin mode, and
+    /// the persisted state entry is left untouched for retry.
     pub(super) fn finish_review(&mut self) -> Option<QuitOutcome> {
         let Some(ops) = self.review_origin_ops.as_deref() else {
             self.set_status_message("finish unavailable (no origin git backend)");
@@ -125,11 +112,10 @@ impl App {
                 // Same best-effort treatment: the worktree is already gone,
                 // so a failure to also delete the (much less consequential)
                 // state entry isn't worth surfacing over — the next launch's
-                // GC (spec 08 Unit 4 task 4.5) would clean up a leftover
-                // entry anyway once the branch itself is gone, and while the
-                // branch still exists a stale entry just means the next
-                // `--review` of it resumes old progress instead of starting
-                // fresh, not a crash or data-loss risk.
+                // GC would clean up a leftover entry once the branch itself
+                // is gone, and while the branch still exists a stale entry
+                // just means the next `--review` of it resumes old progress
+                // instead of starting fresh, not a crash or data-loss risk.
                 if let (Some(state_path), Some(branch)) =
                     (self.review_state_path.clone(), self.review_branch())
                 {
@@ -373,10 +359,9 @@ index 111..222 100644
         );
     }
 
-    /// Spec 08 Unit 6, task 7.3's "one lifecycle" requirement: finish
-    /// deletes a branch's persisted *annotations* alongside its file
-    /// statuses, in the same call — there is no separate annotation-only
-    /// entry left orphaned behind.
+    /// The "one lifecycle" requirement: finish deletes a branch's persisted
+    /// *annotations* alongside its file statuses, in the same call — there
+    /// is no separate annotation-only entry left orphaned behind.
     #[test]
     fn finish_deletes_persisted_annotations_alongside_the_state_entry() {
         use crate::annotate::{Classification, PersistedAnnotation, Side, Source, Target};

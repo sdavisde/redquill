@@ -1,5 +1,5 @@
-//! Performance tripwire for Project Search's "instant feel" bar (spec 06:
-//! first results <100ms on a ~5,000-file repository). Style matches
+//! Performance tripwire for Project Search's "instant feel" bar (first
+//! results <100ms on a ~5,000-file repository). Style matches
 //! `src/ui/perf_tests.rs`: budgets are deliberately loose (~10-20x measured
 //! debug-build time) so the assertions catch a complexity-class regression
 //! (e.g. an accidental full second read-back, or losing the streaming

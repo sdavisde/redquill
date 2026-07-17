@@ -12,7 +12,7 @@ use crate::lsp::{LspEvent, LspManager, RequestId};
 /// routing and event handling are unit-testable without spawning real
 /// language servers. [`LspManager`] is the production implementation.
 ///
-/// `Send` (spec 03 Unit 3): a worktree re-root shuts down the old client
+/// `Send`: a worktree re-root shuts down the old client
 /// off-thread (`take_lsp_client` + a spawned `shutdown` call) so the render
 /// loop never blocks on server teardown, which requires `Box<dyn LspClient>`
 /// to cross a thread boundary.

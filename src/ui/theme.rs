@@ -49,13 +49,11 @@ pub struct Theme {
     pub selected_row_bg: Color,
     pub search_match_bg: Color,
     /// Foreground carried by query-match spans in the Project Search results
-    /// list and the fuzzy file finder modal (spec 06 round-1 UX fix): a
-    /// vivid blue + bold, so the matched substring's *text* itself reads as
-    /// emphasized rather than relying solely on a background tint (the
-    /// original `search_match_bg`-only treatment didn't read as high-contrast
-    /// enough per user acceptance feedback). Not used by the in-diff `/`
+    /// list and the fuzzy file finder modal: a vivid blue + bold, so the
+    /// matched substring's *text* itself reads as emphasized rather than
+    /// relying solely on a background tint. Not used by the in-diff `/`
     /// search highlight, which keeps its own `search_match_bg` treatment
-    /// untouched — this is scoped to the two surfaces the feedback named.
+    /// untouched.
     pub search_match_fg: Color,
     pub search_prompt: Color,
     pub annotation_text: Color,
@@ -77,8 +75,8 @@ pub struct Theme {
     /// their header row — stay visible against the diff buffer.
     pub file_header_bg: Color,
 
-    /// The review-session banner's background (spec 08 Unit 2): a dark red,
-    /// deliberately unlike any other chrome color in this palette, so the
+    /// The review-session banner's background: a dark red, deliberately
+    /// unlike any other chrome color in this palette, so the
     /// banner reads as an unmistakable "you are in a review, not your own
     /// working tree" signal. Paired with [`Theme::review_banner_fg`]; the
     /// pairing's contrast is guarded by a drift test in this module.
@@ -89,9 +87,8 @@ pub struct Theme {
 
     /// The deferred-file review marker's color (`~`).
     pub review_deferred_marker: Color,
-    /// The changed-since-accepted review marker's color (`!`) — spec 08 Unit
-    /// 4 sets this status once persistence/reconciliation lands; the color
-    /// exists now so the marker glyph has a home from the start.
+    /// The changed-since-accepted review marker's color (`!`), set once
+    /// persistence/reconciliation flags a status change.
     pub review_changed_marker: Color,
 
     // -- Change-kind letters (sidebar file list + staging panel) --
@@ -103,13 +100,12 @@ pub struct Theme {
 
     // -- Sidebar --
     /// The `●` staged-file marker's color. Also the accepted-file review
-    /// marker's color (spec 08 Unit 3, deliberate exception, user decision
-    /// 2026-07-16): a review session's [`Theme::staged_indicator`] never
-    /// renders (review targets are read-only for staging), so reusing this
-    /// exact green for `Accepted`'s `●` deliberately mirrors the staged-file
-    /// affordance rather than inventing a new signal for the same "this file
-    /// is done, collapsed, no action needed" meaning — see
-    /// [`super::rows::ReviewMarker`].
+    /// marker's color, byte-identical and deliberate: a review session's
+    /// staging marker never renders (review targets are read-only for
+    /// staging), so reusing this exact green for `Accepted`'s `●` mirrors
+    /// the staged-file affordance rather than inventing a new signal for
+    /// the same "this file is done, collapsed, no action needed" meaning —
+    /// see [`super::rows::ReviewMarker`].
     pub staged_indicator: Color,
     pub dir_prefix: Color,
     pub footer_text: Color,
@@ -371,12 +367,12 @@ mod tests {
         }
     }
 
-    // -- Review banner contrast (spec 08 Unit 2) -----------------------------
+    // -- Review banner contrast -----------------------------------------------
     //
-    // Written before `review_banner_bg`/`review_banner_fg` existed (TDD): the
-    // banner must read as an unmistakable, high-contrast "you're in a review"
-    // signal, so these guard both halves of that claim — the background
-    // reads as dark, and the foreground reads as far brighter than it.
+    // The banner must read as an unmistakable, high-contrast "you're in a
+    // review" signal, so these guard both halves of that claim — the
+    // background reads as dark, and the foreground reads as far brighter
+    // than it.
 
     #[test]
     fn review_banner_bg_reads_as_dark() {

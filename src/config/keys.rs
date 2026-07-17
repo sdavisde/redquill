@@ -1,4 +1,4 @@
-//! `[keys.diff]`/`[keys.panel]` config (spec 07 Unit 4): the key-string
+//! `[keys.diff]`/`[keys.panel]` config: the key-string
 //! grammar plus the raw partial-override section data. Config-side, so this
 //! module knows nothing about `crate::ui::keymap::{Action, Keymap, Binding,
 //! KeySeq}` — only crossterm's `KeyCode`/`KeyModifiers` (already a
@@ -159,8 +159,8 @@ pub fn parse_key_string(s: &str) -> Result<KeySeqSpec, KeyGrammarError> {
     }
 }
 
-/// The `[keys.<mode>]` table names for every modal mode (spec 07 Unit 4 task
-/// 5.2), besides the main keymap's `diff`/`panel`. Plain string literals —
+/// The `[keys.<mode>]` table names for every modal mode, besides the main
+/// keymap's `diff`/`panel`. Plain string literals —
 /// this module must never import `crate::ui` (see the module doc) — so this
 /// list is the config-side half of the contract; `crate::ui::modal_keys`'s
 /// `MODAL_MODE_NAMES` is the ui-side half, and
@@ -192,9 +192,8 @@ const MODAL_MODE_NAMES: &[&str] = &[
 /// default untouched. `modal` holds every `[keys.<mode>]` table besides
 /// `diff`/`panel`, keyed by mode name (one of [`MODAL_MODE_NAMES`]) — a
 /// single map rather than one field per mode, since
-/// `crate::ui::modal_keys_config` (the edge module resolving these, spec 07
-/// Unit 4 task 5.3/5.4) already needs one generic merge function reusable
-/// across all twelve modes.
+/// `crate::ui::modal_keys_config` (the edge module resolving these) already
+/// needs one generic merge function reusable across all twelve modes.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct KeysConfig {
     pub diff: BTreeMap<String, Vec<KeySeqSpec>>,
@@ -254,7 +253,7 @@ impl KeysConfig {
 /// key strings (each independently parsed; `[]` is the explicit-unbind
 /// case). On the first bad entry, the whole value is rejected — one ignored
 /// entry (falling back to "no override" for that action), not a partial
-/// merge of the array, matching the rest of the Unit 1 warning contract.
+/// merge of the array, matching the rest of the warning contract.
 fn parse_key_value(value: &toml::Value) -> Result<Vec<KeySeqSpec>, String> {
     match value {
         toml::Value::String(s) => parse_key_string(s)

@@ -1,15 +1,10 @@
-//! The staging panel: every file with staged changes, one line each
-//! (status letter + path), with the focused row highlighted. Toggled with
-//! `s`; deliberately styled like the annotation list panel so the two feel
-//! like siblings.
-//!
-//! During a review session (spec 08 Unit 5) this same widget renders the
-//! **accepted-files panel** instead: `App::staged` is fed from
-//! `review_states` rather than `git status` (see `App::refresh_accepted_list`
-//! in `super::review_ops`), so the row content here needs no session
-//! branching at all — only the title and the empty-state hint text/key
-//! differ, since "staged"/"nothing staged yet" would be untruthful during a
-//! review (its `git status` is always clean).
+//! The staging panel: every file with staged changes, one line each (status
+//! letter + path), with the focused row highlighted. Toggled with `s`;
+//! deliberately styled like the annotation list panel so the two feel like
+//! siblings. During a review session this same widget renders the
+//! accepted-files panel instead: `App::staged` is fed from `review_states`
+//! rather than `git status` (see `App::refresh_accepted_list`), so only the
+//! title and empty-state hint text/key differ.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -35,12 +30,10 @@ fn item_line(entry: &StagedFile, theme: &Theme) -> Line<'static> {
 }
 
 /// Renders the staging panel into `area` — or, during a review session, the
-/// accepted-files panel (spec 08 Unit 5; see the module doc). An empty list
-/// renders a hint line instead of an empty list; the hint's key is resolved
-/// from `keymap` (diff scope, [`Action::ToggleStage`]/[`Action::ToggleAccept`])
-/// rather than hardcoded, so a `[keys.diff]` remap can't leave this text
-/// naming a stale key (spec 07 Unit 4, task 4.6) — an unbound action falls
-/// back to generic wording rather than showing no key at all.
+/// accepted-files panel (see the module doc). An empty list renders a hint
+/// line instead; the hint's key is resolved from `keymap` (diff scope,
+/// [`Action::ToggleStage`]/[`Action::ToggleAccept`]) rather than hardcoded,
+/// so a `[keys.diff]` remap can't leave this text naming a stale key.
 pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
     let review = app.in_review_session();
     let title = if review { "accepted" } else { "staged" };

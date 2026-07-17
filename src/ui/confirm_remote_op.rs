@@ -1,10 +1,8 @@
 //! The pull/push confirm modal's state transitions
-//! ([`super::app::Mode::ConfirmRemoteOp`], spec 08 Unit 5): opening it
-//! (capturing the panel cursor/tab `p`/`P` were pressed from), cancelling
-//! back to the panel, and confirming (running the pending
-//! [`crate::git::RemoteOp`] through the existing [`App::request_remote_op`],
-//! unchanged). Split out of `app.rs` alongside this state, mirroring
-//! [`super::end_review`]'s own state-plus-handlers split.
+//! ([`super::app::Mode::ConfirmRemoteOp`]): opening it (capturing the panel
+//! cursor/tab `p`/`P` were pressed from), cancelling back to the panel, and
+//! confirming (running the pending [`crate::git::RemoteOp`] through the
+//! existing [`App::request_remote_op`], unchanged).
 
 use crate::git::RemoteOp;
 

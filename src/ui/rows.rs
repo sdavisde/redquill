@@ -65,10 +65,10 @@ pub struct LineRow {
     pub syntax_spans: Option<Vec<(Range<usize>, TokenKind)>>,
 }
 
-/// A file section's staged-state marker, shown in its section header. For
-/// task 2.0 only [`StagedMarker::None`] and [`StagedMarker::Staged`] are
-/// produced (from membership in `App::staged`); [`StagedMarker::Partial`]
-/// (the `±` glyph) is wired up by the staged-state derivation in task 3.0.
+/// A file section's staged-state marker, shown in its section header:
+/// [`StagedMarker::Staged`]/[`StagedMarker::None`] come from membership in
+/// `App::staged`; [`StagedMarker::Partial`] (the `±` glyph) comes from the
+/// staged-state derivation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StagedMarker {
     /// No staged changes for this file.
@@ -80,33 +80,24 @@ pub enum StagedMarker {
     Partial,
 }
 
-/// A file section's review-status marker (spec 08 Unit 3), shown in its
-/// section header alongside (never instead of) [`StagedMarker`]. `None`
-/// covers both "not a review session" and `ReviewStatus::Unreviewed` — a
-/// review session's [`StagedMarker`] is always [`StagedMarker::None`]
+/// A file section's review-status marker, shown in its section header
+/// alongside (never instead of) [`StagedMarker`]. `None` covers both "not a
+/// review session" and `ReviewStatus::Unreviewed` — a review session's
+/// [`StagedMarker`] is always [`StagedMarker::None`]
 /// ([`crate::git::DiffTarget::Review`]'s staging mode is read-only), so the
 /// two marker slots never compete for the same file.
-///
-/// `Accepted` renders as the *same* green `●` [`StagedMarker::Staged`] uses
-/// (deliberate exception, user decision 2026-07-16 — see
-/// `super::theme::Theme::staged_indicator`'s doc): since staging markers
-/// never render inside a review session, reusing that exact glyph/color is
-/// unambiguous in context and makes "accepted" as instantly legible as
-/// "staged" is in local mode — an accepted-and-collapsed file must read
-/// clearly differently from a merely-collapsed one. `Deferred`/`Changed`
-/// stay visually distinct from staging's `±`/`●` per the spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ReviewMarker {
     /// No review marker for this file.
     #[default]
     None,
-    /// The file has been accepted — renders as the staged-file `●`, reusing
-    /// [`super::theme::Theme::staged_indicator`].
+    /// The file has been accepted. Renders as the staged ● — see theme.rs's
+    /// staged_indicator rationale.
     Accepted,
     /// The file has been deferred (`~`).
     Deferred,
     /// The file was accepted in a previous review session but its content
-    /// has since changed (`!`) — spec 08 Unit 4 reconciliation.
+    /// has since changed (`!`) — reconciliation surfaces this on resume.
     Changed,
 }
 
@@ -187,8 +178,8 @@ pub enum Row {
         file_index: usize,
         /// The file's staged-state marker.
         staged_marker: StagedMarker,
-        /// The file's review-status marker (spec 08 Unit 3), `None` outside
-        /// a review session.
+        /// The file's review-status marker, `None` outside a review
+        /// session.
         review_marker: ReviewMarker,
         /// Whether this section is collapsed (header-only).
         collapsed: bool,

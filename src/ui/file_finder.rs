@@ -1,5 +1,5 @@
-//! The fuzzy file finder overlay ([`super::app::Mode::Finder`], spec 06 Unit
-//! 1): candidates loaded once per open through [`super::background::BackgroundTasks`]
+//! The fuzzy file finder overlay ([`super::app::Mode::Finder`]): candidates
+//! loaded once per open through [`super::background::BackgroundTasks`]
 //! (single-flight, generation-guarded — mirrors [`super::history`]'s
 //! commit-log loader), then ranked by [`crate::search::rank`] and re-ranked on
 //! every keystroke. Split out of `app.rs` alongside the switcher/history
@@ -30,8 +30,8 @@ pub(super) struct FinderState {
     /// The mode to restore on `Esc` (the mode the finder was opened from) —
     /// `Enter` never uses this: opening a file always lands in
     /// [`Mode::Normal`] via [`App::open_file_view`], mirroring how a commit
-    /// view (spec 05) always returns focus to the diff regardless of where
-    /// it was opened from.
+    /// view always returns focus to the diff regardless of where it was
+    /// opened from.
     pub(super) return_mode: Mode,
 }
 

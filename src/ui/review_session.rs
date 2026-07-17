@@ -1,11 +1,10 @@
-//! Shared "ensure a review session" orchestration (spec 08 Units 1 and 5,
-//! task 5.2): resolving the base ref and ensuring a managed worktree exists
-//! for a branch under review, plus loading and reconciling that branch's
-//! persisted progress (Unit 4's machinery). Both entry points — the CLI's
-//! `--review` flag (`main.rs::resolve_session`) and the in-app review-branch
-//! modal ([`super::review_branch`]) — call through these same functions, so
-//! there is exactly one "ensure a review session" code path, not two copies
-//! that could drift.
+//! Shared "ensure a review session" orchestration: resolving the base ref
+//! and ensuring a managed worktree exists for a branch under review, plus
+//! loading and reconciling that branch's persisted progress. Both entry
+//! points — the CLI's `--review` flag (`main.rs::resolve_session`) and the
+//! in-app review-branch modal ([`super::review_branch`]) — call through
+//! these same functions, so there is exactly one "ensure a review session"
+//! code path, not two copies that could drift.
 //!
 //! Operates over `&dyn StageOps`, exactly like
 //! [`super::stage_ops::build_review`]: the CLI's concrete `GitRunner`
@@ -97,26 +96,23 @@ pub type ReconciledReviewState = (
     Vec<PersistedAnnotation>,
 );
 
-/// Loads and reconciles `branch`'s persisted review state (spec 08 Unit 4)
-/// against its *current* blob SHAs, resolved through `ops` (the session's
-/// own backend, rooted inside the review worktree, so `blob_sha` reads the
-/// branch's real current tip). Returns empty maps when nothing was ever
-/// persisted for this branch — an entirely ordinary first review, not an
-/// error. The second map mirrors `review_states`' 1:1 blob-SHA companion
-/// `App::review_blob_shas` expects: for both `Accepted` and
-/// `ChangedSinceAccepted` results this is the *persisted* SHA (not `ops`'s
-/// freshly-read current one) — for `Accepted` the two are equal anyway
-/// (reconciliation only keeps `Accepted` on a match), and for
-/// `ChangedSinceAccepted` the persisted (now-stale) SHA is exactly what
-/// `App::persist_review_state` needs to keep writing back out unchanged
-/// until the user re-accepts.
+/// Loads and reconciles `branch`'s persisted review state against its
+/// *current* blob SHAs, resolved through `ops` (the session's own backend,
+/// rooted inside the review worktree, so `blob_sha` reads the branch's real
+/// current tip). Returns empty maps when nothing was ever persisted for
+/// this branch — an entirely ordinary first review, not an error. The
+/// second map mirrors `review_states`' 1:1 blob-SHA companion
+/// `App::review_blob_shas` expects, holding the *persisted* SHA rather than
+/// `ops`'s freshly-read current one: for a stale (`ChangedSinceAccepted`)
+/// result, keeping the persisted SHA is what lets the next session
+/// re-derive `ChangedSinceAccepted` again instead of the reconciliation
+/// silently losing track of the staleness.
 ///
 /// The third element is this branch's persisted annotations, verbatim and
-/// in their original order (spec 08 Unit 6, task 7.2) — unlike the file
-/// statuses above, annotations have no reconciliation step in v1 (see
-/// `crate::annotate::persist`'s module doc on the accepted anchor-drift
-/// limitation): they're simply carried through for the caller to replay
-/// into `app.annotations` before the first render.
+/// in their original order — annotations have no reconciliation step in v1
+/// (see `crate::annotate::persist`'s module doc on the accepted
+/// anchor-drift limitation): they're simply carried through for the caller
+/// to replay into `app.annotations` before the first render.
 pub fn load_reconciled_review_state(
     ops: &dyn StageOps,
     state_path: &Path,
@@ -170,13 +166,10 @@ mod tests {
         ));
     }
 
-    // -- load_reconciled_review_state (spec 08 Unit 4/5; ported here from
-    // main.rs when `ensure_review_worktree`/`load_reconciled_review_state`
-    // moved out to become the shared entry-point core, spec 08 task 5.2) --
+    // -- load_reconciled_review_state ----------------------------------------
     //
-    // Real-git tempdir tests, mirroring `tests/git_review_integration.rs`'s
-    // (task 1.5) isolation discipline: every fixture is built with
-    // `tempfile`, every mutating call is preceded by
+    // Real-git tempdir tests exercising reconciliation end to end: every
+    // fixture is built with `tempfile`, every mutating call is preceded by
     // `assert_inside_tempdir` (a local copy of the shared guard — this
     // in-crate module can't share code with the `tests/*.rs` binaries, per
     // this repo's established one-copy-per-file convention).

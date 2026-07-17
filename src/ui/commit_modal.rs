@@ -1,4 +1,4 @@
-//! The commit-message modal (spec 04): a centered overlay for typing the
+//! The commit-message modal: a centered overlay for typing the
 //! message `git commit -m` will receive. Renders the multi-line text buffer
 //! (first line = subject, `Ctrl-j` adds body lines), places the terminal
 //! cursor at the buffer's edit position, and shows the staged-file count in
@@ -40,8 +40,8 @@ fn title(staged_count: usize) -> String {
     format!("Commit {staged_count} staged {files}")
 }
 
-/// The review-session warning line (spec 08 Unit 5): a prominent, banner-
-/// colored reminder naming the branch under review, shown above the message
+/// The review-session warning line: a prominent, banner-colored reminder
+/// naming the branch under review, shown above the message
 /// buffer whenever the commit modal opens during a review session — the
 /// nothing-staged gate ([`App::open_commit_message`]) is otherwise
 /// unchanged, so this is purely an added confirm-first *reminder*, never a
@@ -215,7 +215,7 @@ index 111..222 100644
         assert_eq!(title(2), "Commit 2 staged files");
     }
 
-    // -- Review-session warning line (spec 08 Unit 5) ------------------------
+    // -- Review-session warning line ------------------------------------------
 
     #[test]
     fn review_session_shows_a_warning_naming_the_reviewed_branch() {

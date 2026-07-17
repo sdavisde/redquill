@@ -1,4 +1,4 @@
-//! The empty-diff welcome state (spec 05 Unit 5).
+//! The empty-diff welcome state.
 //!
 //! [`super::diff_view::render`] shows this instead of a blank buffer whenever
 //! the active target's review has zero files — most commonly the "agent
@@ -46,10 +46,7 @@ pub(super) fn situation(target: &DiffTarget, active_commit: Option<&CommitLogEnt
                 .unwrap_or(rev.as_str());
             format!("Empty commit diff for {short}")
         }
-        // The read-only file view always populates exactly one file on a
-        // successful open (see `ui::file_view::App::open_file_view`), so
-        // this welcome copy is never actually shown in practice — kept as a
-        // real, sensible fallback rather than `unreachable!()`.
+        // Defensive fallback; never expected in practice.
         DiffTarget::File(path) => format!("{path} is empty"),
         DiffTarget::Review { base, branch } => format!("Empty diff for {base}...{branch}"),
     }
@@ -62,8 +59,8 @@ pub(super) struct Hint {
     pub(super) label: &'static str,
 }
 
-/// The welcome screen's three next-step hints (spec Unit 5's minimum: open
-/// the git panel, switch to the History tab, open help), each named by the
+/// The welcome screen's three next-step hints (open the git panel, switch
+/// to the History tab, open help), each named by the
 /// `(scope, action)` its key is looked up under — the single source of truth
 /// [`hints`] and the drift test both read, so the two can never name
 /// different actions.
@@ -196,7 +193,7 @@ mod tests {
         );
     }
 
-    // -- hints() / key sourcing (task 5.2) ---------------------------------
+    // -- hints() / key sourcing ---------------------------------------------
 
     /// The drift test: every hinted action must resolve to a real key in the
     /// shared table. If an action in `HINT_SPECS` is ever renamed or its
