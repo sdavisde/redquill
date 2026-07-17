@@ -1678,44 +1678,50 @@ fn panel_focus_key_dispatch_smoke() {
         );
     };
 
-    // Focus the panel: cursor resets to the top and follows to src/a.rs
-    // (already selected, since `selected_file` starts at 0).
+    // Focus the panel: cursor resets to the top, which is the `src`
+    // directory row. Following a directory row does nothing, so the diff
+    // stays on src/a.rs (`selected_file` starts at 0).
     assert_eq!(app.mode, Mode::Normal);
     press(&mut app, &mut pending, KeyCode::Char('`'));
     assert!(matches!(app.mode, Mode::Panel { .. }));
-    assert_eq!(app.panel_cursor(), 0); // src/a.rs (CHANGES)
+    assert_eq!(app.panel_cursor(), 0); // the src/ directory row
     assert_eq!(app.view.selected_file, 0); // src/a.rs
 
-    // Traverse all three sections with `j`: a.rs -> b.rs -> notes.md
-    // (UNTRACKED) -> stash0 -> stash1, clamping at the last stash. The diff
-    // follows each file row; stash rows leave the last-followed file alone.
+    // Walk the tree with `j`: src/ -> src/a.rs -> src/b.rs -> notes.md,
+    // clamping at the last file. The diff follows each file row; the
+    // directory row leaves the last-followed file alone.
     press(&mut app, &mut pending, KeyCode::Char('j'));
-    assert_eq!(app.panel_cursor(), 1); // src/b.rs
+    assert_eq!(app.panel_cursor(), 1); // src/a.rs
+    assert_eq!(app.view.selected_file, 0); // followed to src/a.rs
+    press(&mut app, &mut pending, KeyCode::Char('j'));
+    assert_eq!(app.panel_cursor(), 2); // src/b.rs
     assert_eq!(app.view.selected_file, 1); // followed to src/b.rs
     press(&mut app, &mut pending, KeyCode::Char('j'));
-    assert_eq!(app.panel_cursor(), 2); // notes.md (crossed into UNTRACKED)
+    assert_eq!(app.panel_cursor(), 3); // notes.md (root-level untracked)
     assert_eq!(app.view.selected_file, 2); // followed to notes.md
     press(&mut app, &mut pending, KeyCode::Char('j'));
-    assert_eq!(app.panel_cursor(), 3); // stash0 (crossed into STASHES)
-    assert_eq!(app.view.selected_file, 2); // unchanged: nothing to follow
-    press(&mut app, &mut pending, KeyCode::Char('j'));
-    assert_eq!(app.panel_cursor(), 4); // stash1
-    assert_eq!(app.view.selected_file, 2); // still unchanged
-    press(&mut app, &mut pending, KeyCode::Char('j'));
-    assert_eq!(app.panel_cursor(), 4); // clamped at the bottom
+    assert_eq!(app.panel_cursor(), 3); // clamped at the bottom
     press(&mut app, &mut pending, KeyCode::Char('k'));
-    assert_eq!(app.panel_cursor(), 3); // back up onto a stash
+    assert_eq!(app.panel_cursor(), 2); // back up onto src/b.rs
+    assert_eq!(app.view.selected_file, 1);
 
-    // Enter on a stash is a no-op; still focused.
+    // Enter on the directory row folds it, hiding its files, and keeps the
+    // panel focused.
+    press(&mut app, &mut pending, KeyCode::Char('k')); // -> src/a.rs
+    press(&mut app, &mut pending, KeyCode::Char('k')); // -> src/ directory
+    assert_eq!(app.panel_cursor(), 0);
     press(&mut app, &mut pending, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::Panel { .. }));
+    assert!(app.panel_collapsed_dirs.contains("src"));
+    // Now only two rows remain: src/ and notes.md.
+    press(&mut app, &mut pending, KeyCode::Enter); // unfold again
+    assert!(!app.panel_collapsed_dirs.contains("src"));
 
     // Move onto src/b.rs (following along the way) and Enter: focus
     // returns to the diff, already on src/b.rs from the follow.
-    press(&mut app, &mut pending, KeyCode::Char('k')); // -> notes.md (2)
-    assert_eq!(app.view.selected_file, 2);
-    press(&mut app, &mut pending, KeyCode::Char('k')); // -> src/b.rs (1)
-    assert_eq!(app.panel_cursor(), 1);
+    press(&mut app, &mut pending, KeyCode::Char('j')); // -> src/a.rs (1)
+    press(&mut app, &mut pending, KeyCode::Char('j')); // -> src/b.rs (2)
+    assert_eq!(app.panel_cursor(), 2);
     assert_eq!(app.view.selected_file, 1); // followed to src/b.rs
     press(&mut app, &mut pending, KeyCode::Enter);
     assert_eq!(app.mode, Mode::Normal);

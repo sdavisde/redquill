@@ -702,7 +702,7 @@ fn dead_end_journey_reaches_the_newest_commit_in_a_handful_of_keys() {
             .lines()
             .last()
             .unwrap_or("")
-            .contains("Enter open file"),
+            .contains("Enter open"),
         "the panel footer must promise Enter opens the highlighted row:\n{history_view}"
     );
     // Discoverability of step 3, signal 2: the `?` overlay's Git-panel

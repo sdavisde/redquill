@@ -1,66 +1,83 @@
 //! The git panel: a branch header (name plus `↑N↓M` ahead/behind against the
-//! upstream), then CHANGES / UNTRACKED / STASHES sections, then a bottom
-//! section carrying file/staged/note counts, the tip commit's summary, and
-//! the fetch/pull/push keybind hints — all in a fixed-width slot alongside
-//! the diff view.
+//! upstream), then the changed-file tree, then a bottom-pinned STASHES
+//! section, then a bottom section carrying file/staged/note counts, the tip
+//! commit's summary, and the fetch/pull/push keybind hints — all in a
+//! fixed-width slot alongside the diff view.
 //!
-//! CHANGES rows show a green `●` staged marker, a colored change-kind
-//! letter, and a dimmed-directory / normal basename path split. UNTRACKED
-//! lists working-tree files git isn't
-//! tracking yet; STASHES lists `git stash list` entries view-only. The panel
-//! is passive in this task — the currently selected diff file is highlighted,
-//! but there is no independent cursor or focus yet.
+//! The Changes tab renders one unified file tree (see [`super::file_tree`])
+//! that mirrors an editor's file explorer: directories group their files and
+//! are collapsible, single-child directory chains fold into one row, and each
+//! file carries a Nerd Font type glyph (see [`super::icons`]) tinted by — and
+//! trailed with the letter of — its change kind. Untracked files sit in the
+//! same tree, marked with `?`. STASHES are pinned to their own region just
+//! above the footer (`git stash list` entries, view-only) so the file tree
+//! keeps the room above it even when there are only a few files. The panel
+//! cursor navigates the tree's directory and file rows; stash rows are passive.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
+use crate::diff::FileChangeKind;
 use crate::git::{BranchStatus, CommitLogEntry, CommitSummary, DiffTarget};
 use crate::review::ReviewStatus;
 
 use super::app::App;
 use super::app::{Mode, PanelTab, SuspendedView};
 use super::diff_view_state::DiffViewState;
+use super::file_tree::{TreeFile, TreeNode, TreeRow, flatten};
+use super::icons;
 use super::keymap::{Action, Keymap, Scope};
 use super::stage_ops::{StagedState, build_review};
 use super::theme::Theme;
 use super::time_format::{now_unix, relative_time};
 
-/// One navigable panel row: either a diff file (index into `app.view.files`)
-/// or a stash (index into `app.stashes`). Section-header and branch-title
-/// rows are not navigable and never appear here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One navigable panel row: a tree directory (identified by its full-path
+/// key, collapse toggles against it) or a diff file (index into
+/// `app.view.files`). Section-header, stash, and branch-title rows are not
+/// navigable and never appear here.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum PanelRow {
-    /// A CHANGES or UNTRACKED file entry.
+    /// A collapsible directory row; the `String` is its tree key.
+    Dir(String),
+    /// A changed-file entry.
     File(usize),
-    /// A STASHES entry (view-only: Enter is a no-op).
-    Stash(usize),
 }
 
-/// Flattens the panel's three sections into the ordered list of navigable
-/// rows, in exactly the order [`render`] lays them out: tracked CHANGES
-/// files, then UNTRACKED files, then STASHES. Section headers are skipped, so
-/// the panel cursor can never land on one, and `j`/`k` cross section
-/// boundaries seamlessly. The single source of truth shared by the cursor
-/// motion helpers and the render highlight.
+/// The changed-file tree for the Changes tab, flattened against the panel's
+/// current collapse state. The single source of truth shared by the renderer
+/// and the cursor model, so the visible rows and the navigable rows can never
+/// disagree.
+pub(super) fn panel_tree_rows(app: &App) -> Vec<TreeRow> {
+    let files: Vec<TreeFile> = app
+        .view
+        .files
+        .iter()
+        .enumerate()
+        .map(|(i, f)| TreeFile {
+            file_index: i,
+            path: f.path.clone(),
+            kind: f.kind,
+            untracked: app.untracked_paths.contains(&f.path),
+        })
+        .collect();
+    flatten(&files, &app.panel_collapsed_dirs)
+}
+
+/// Flattens the file tree into the ordered list of navigable rows, in exactly
+/// the order [`render`] lays them out. Directory and file rows are both
+/// navigable (a directory row toggles its own collapse on `Enter`); stash rows
+/// are not, so the panel cursor can never land on one.
 pub(super) fn navigable_rows(app: &App) -> Vec<PanelRow> {
-    let mut rows = Vec::new();
-    for i in 0..app.view.files.len() {
-        if !app.untracked_paths.contains(&app.view.files[i].path) {
-            rows.push(PanelRow::File(i));
-        }
-    }
-    for i in 0..app.view.files.len() {
-        if app.untracked_paths.contains(&app.view.files[i].path) {
-            rows.push(PanelRow::File(i));
-        }
-    }
-    for i in 0..app.stashes.len() {
-        rows.push(PanelRow::Stash(i));
-    }
-    rows
+    panel_tree_rows(app)
+        .into_iter()
+        .map(|r| match r.node {
+            TreeNode::Dir { key, .. } => PanelRow::Dir(key),
+            TreeNode::File { file_index, .. } => PanelRow::File(file_index),
+        })
+        .collect()
 }
 
 /// Steps a panel cursor by one row within a `len`-row navigable list,
@@ -85,75 +102,150 @@ fn split_path(path: &str) -> (&str, &str) {
     }
 }
 
-/// The staged-indicator column: a `●` for a fully-staged file, `±` for a
-/// partially-staged one, blank otherwise, so paths stay column-aligned
-/// regardless of state.
-fn staged_span(state: StagedState, theme: &Theme) -> Span<'static> {
-    match state {
-        StagedState::Full => Span::styled("\u{25cf} ", Style::default().fg(theme.staged_indicator)),
-        StagedState::Partial => {
-            Span::styled("\u{00b1} ", Style::default().fg(theme.staged_indicator))
+/// Box-drawing tree guides for each flattened row: a vertical bar in every
+/// ancestor column that still has rows below it, then a `├`/`└` connector for
+/// the row itself (root rows included). Derived from the rows' depths alone,
+/// so the guides stay in lockstep with whatever [`panel_tree_rows`] laid out.
+/// Each guide cell is two columns wide — the same width the old blank
+/// indentation used, so the tree now *fills* that left space with structure
+/// rather than wasting it.
+fn tree_guides(rows: &[TreeRow]) -> Vec<String> {
+    // `is_last[r]`: row `r` is the last among its siblings at its own depth —
+    // i.e. the next row at depth <= its own dedents rather than continuing.
+    let mut is_last = vec![true; rows.len()];
+    for r in 0..rows.len() {
+        let d = rows[r].depth;
+        for row in rows.iter().skip(r + 1) {
+            if row.depth < d {
+                break;
+            }
+            if row.depth == d {
+                is_last[r] = false;
+                break;
+            }
         }
-        StagedState::Unstaged => Span::raw("  "),
     }
+    let mut guides = vec![String::new(); rows.len()];
+    // The ancestor row index at each depth, rebuilt as we walk the preorder.
+    let mut stack: Vec<usize> = Vec::new();
+    for r in 0..rows.len() {
+        let d = rows[r].depth;
+        stack.truncate(d);
+        let mut g = String::new();
+        for &ancestor in &stack {
+            g.push_str(if is_last[ancestor] { "  " } else { "\u{2502} " });
+        }
+        g.push_str(if is_last[r] { "\u{2514} " } else { "\u{251c} " });
+        guides[r] = g;
+        stack.push(r);
+    }
+    guides
 }
 
-/// The review-status indicator column, rendered right after [`staged_span`]
-/// — the two slots never both carry a glyph for the same row (a review
-/// session's [`StagedState`] is always [`StagedState::Unstaged`]).
-/// `Accepted` renders as the staged ● — see theme.rs's staged_indicator
-/// rationale; `Deferred`/`ChangedSinceAccepted` use their own colors.
-fn review_span(status: ReviewStatus, theme: &Theme) -> Span<'static> {
-    match status {
-        ReviewStatus::Accepted => {
-            Span::styled("\u{25cf} ", Style::default().fg(theme.staged_indicator))
-        }
-        ReviewStatus::Deferred => {
-            Span::styled("~ ", Style::default().fg(theme.review_deferred_marker))
-        }
-        ReviewStatus::ChangedSinceAccepted => {
-            Span::styled("! ", Style::default().fg(theme.review_changed_marker))
-        }
-        ReviewStatus::Unreviewed => Span::raw("  "),
-    }
-}
-
-/// A CHANGES row: staged marker, review marker, change-kind letter, then the
-/// split path.
-fn file_line(
+/// The right-aligned status cluster for a file row: an optional staged/review
+/// glyph, then the change-kind letter. The staged and review markers are
+/// mutually exclusive (a review session never stages), so at most one glyph
+/// precedes the letter. Moving these to the right frees the entire left
+/// column that the two blank marker slots used to reserve on every row.
+/// Returns the spans and their total display width. `Accepted` reuses the
+/// staged ● — see theme.rs's staged_indicator rationale.
+fn status_cluster(
     letter: char,
-    path: &str,
+    color: Color,
     state: StagedState,
     review: ReviewStatus,
     theme: &Theme,
-) -> Line<'static> {
-    let (dir, base) = split_path(path);
+) -> (Vec<Span<'static>>, usize) {
+    let marker: Option<(&'static str, Color)> = match (state, review) {
+        (StagedState::Full, _) => Some(("\u{25cf}", theme.staged_indicator)),
+        (StagedState::Partial, _) => Some(("\u{00b1}", theme.staged_indicator)),
+        (_, ReviewStatus::Accepted) => Some(("\u{25cf}", theme.staged_indicator)),
+        (_, ReviewStatus::Deferred) => Some(("~", theme.review_deferred_marker)),
+        (_, ReviewStatus::ChangedSinceAccepted) => Some(("!", theme.review_changed_marker)),
+        _ => None,
+    };
+    let mut spans = Vec::new();
+    let mut width = 0;
+    if let Some((glyph, marker_color)) = marker {
+        spans.push(Span::styled(
+            glyph.to_string(),
+            Style::default().fg(marker_color),
+        ));
+        spans.push(Span::raw(" "));
+        width += 2;
+    }
+    spans.push(Span::styled(
+        letter.to_string(),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    ));
+    width += 1;
+    (spans, width)
+}
+
+/// A directory row: its tree guide, a fold chevron, a folder glyph (open or
+/// closed), then the (possibly compressed) directory name in bold.
+fn dir_line(guide: &str, name: &str, collapsed: bool, theme: &Theme) -> Line<'static> {
     Line::from(vec![
-        staged_span(state, theme),
-        review_span(review, theme),
+        Span::styled(guide.to_string(), Style::default().fg(theme.dir_prefix)),
         Span::styled(
-            format!("{letter} "),
-            Style::default()
-                .fg(theme.letter_color(letter))
-                .add_modifier(Modifier::BOLD),
+            format!(
+                "{} {} ",
+                icons::chevron(collapsed),
+                icons::dir_icon(collapsed)
+            ),
+            Style::default().fg(theme.dir_prefix),
         ),
-        Span::styled(dir.to_string(), Style::default().fg(theme.dir_prefix)),
-        Span::raw(base.to_string()),
+        Span::styled(
+            name.to_string(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
     ])
 }
 
-/// An UNTRACKED row: no marker or letter, just the split path, indented to
-/// sit under the CHANGES rows.
-fn untracked_line(path: &str, theme: &Theme) -> Line<'static> {
-    let (dir, base) = split_path(path);
-    Line::from(vec![
-        Span::raw("  "),
-        Span::styled(dir.to_string(), Style::default().fg(theme.dir_prefix)),
-        Span::raw(base.to_string()),
-    ])
+/// A file row: its tree guide, a change-kind-tinted type glyph, the basename,
+/// an optional `← old` rename tail, then the right-aligned status cluster
+/// (staged/review marker + change-kind letter). `content_width` is the list's
+/// inner width in cells; when the row is too wide for a right-aligned cluster,
+/// the cluster still trails after a single space so the status never vanishes.
+#[allow(clippy::too_many_arguments)]
+fn file_line(
+    guide: &str,
+    name: &str,
+    kind: FileChangeKind,
+    untracked: bool,
+    state: StagedState,
+    review: ReviewStatus,
+    old_path: Option<&str>,
+    theme: &Theme,
+    content_width: usize,
+) -> Line<'static> {
+    let letter = if untracked { '?' } else { kind.letter() };
+    let color = theme.letter_color(letter);
+    let mut spans = vec![
+        Span::styled(guide.to_string(), Style::default().fg(theme.dir_prefix)),
+        Span::styled(
+            format!("{} ", icons::file_icon(name)),
+            Style::default().fg(color),
+        ),
+        Span::raw(name.to_string()),
+    ];
+    if let Some(old) = old_path {
+        let (_, old_base) = split_path(old);
+        spans.push(Span::styled(
+            format!(" \u{2190} {old_base}"),
+            Style::default().fg(theme.dir_prefix),
+        ));
+    }
+    let (cluster, cluster_w) = status_cluster(letter, color, state, review, theme);
+    let mut line = Line::from(spans);
+    let used = line.width() as usize;
+    let pad = content_width.saturating_sub(used + cluster_w + 1).max(1);
+    line.spans.push(Span::raw(" ".repeat(pad)));
+    line.spans.extend(cluster);
+    line
 }
 
-/// A section header row (`CHANGES`, `UNTRACKED`, `STASHES (2)`).
+/// A section header row (`STASHES (2)`).
 fn section_header(text: String, theme: &Theme) -> Line<'static> {
     Line::from(Span::styled(
         text,
@@ -278,51 +370,104 @@ fn panel_title(branch: Option<&BranchStatus>, tab: PanelTab, theme: &Theme) -> L
     ])
 }
 
-/// A History-tab row: two lines (subject + unpushed marker; dimmed `author ·
-/// relative-time · short-sha`), matching Zed's row anatomy. `now` is the
-/// caller's wall-clock read (kept a parameter
-/// so [`super::time_format::relative_time`] stays pure and independently
-/// testable). Long subjects/meta lines are left to ratatui's own line
-/// clipping to the panel width, the same way file paths elsewhere in this
-/// panel are never manually truncated.
+/// A History-tab row: two lines echoing the Changes tab's visual language. A
+/// `git log --graph`-style rail runs down the left — a commit dot (`●`) on the
+/// subject line, bright when the commit is unpushed and dim otherwise, and a
+/// connector bar (`│`) on the meta line flowing to the next commit, mirroring
+/// the file tree's box-drawing guides. The short sha is right-aligned into the
+/// panel's inner edge (the same right gutter the file rows use for their
+/// change letter), and the dimmed meta line carries `author · relative-time`.
+/// `now` is the caller's wall-clock read (kept a parameter so
+/// [`super::time_format::relative_time`] stays pure and independently
+/// testable); `content_width` is the list's inner width in cells. Long
+/// subjects are left to ratatui's own clipping.
 fn history_item(
     entry: &CommitLogEntry,
     unpushed: bool,
     now: i64,
     theme: &Theme,
+    content_width: usize,
 ) -> ListItem<'static> {
-    let mut subject_spans = Vec::new();
-    if unpushed {
-        subject_spans.push(Span::styled(
-            "\u{25cf} ",
-            Style::default().fg(theme.staged_indicator),
-        ));
-    }
-    subject_spans.push(Span::raw(entry.subject.clone()));
+    let dot_color = if unpushed {
+        theme.staged_indicator
+    } else {
+        theme.dir_prefix
+    };
+    let mut subject_line = Line::from(vec![
+        Span::styled("\u{25cf} ", Style::default().fg(dot_color)),
+        Span::raw(entry.subject.clone()),
+    ]);
+    // Right-align the short sha, leaving one trailing cell of margin.
+    let sha_w = entry.short_sha.chars().count();
+    let used = subject_line.width() as usize;
+    let pad = content_width.saturating_sub(used + sha_w + 1).max(1);
+    subject_line.spans.push(Span::raw(" ".repeat(pad)));
+    subject_line.spans.push(Span::styled(
+        entry.short_sha.clone(),
+        Style::default().fg(theme.dir_prefix),
+    ));
+
     let meta = format!(
-        "  {} \u{b7} {} \u{b7} {}",
+        "\u{2502} {} \u{b7} {}",
         entry.author_name,
         relative_time(now, entry.timestamp),
-        entry.short_sha
     );
     ListItem::new(vec![
-        Line::from(subject_spans),
+        subject_line,
         Line::from(Span::styled(meta, Style::default().fg(theme.dir_prefix))),
     ])
 }
 
+/// The passive STASHES region rendered just above the footer: a counted
+/// header, then one `<index> <message>` row per stash. Not navigable — the
+/// panel cursor never lands here. Returns an empty `Vec` (and so occupies no
+/// height) when there are no stashes.
+fn stash_lines(app: &App, theme: &Theme) -> Vec<Line<'static>> {
+    if app.stashes.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![section_header(
+        format!("STASHES ({})", app.stashes.len()),
+        theme,
+    )];
+    for (i, stash) in app.stashes.iter().enumerate() {
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("{i} "), Style::default().fg(theme.dir_prefix)),
+            Span::raw(stash.message.clone()),
+        ]));
+    }
+    lines
+}
+
 /// Renders the git panel into `area`.
 pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
-    // The list fills the panel above a three-row bottom section: counts, the
-    // tip-commit summary, and the fetch/pull/push keybind hints.
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(3)])
-        .split(area);
-
     let theme = &app.theme;
     let focused = app.git_panel_focused();
     let tab = app.panel_tab();
+
+    // The STASHES region is pinned just above the footer on the Changes tab,
+    // capped at half the panel so a long stash list can never crowd out the
+    // file tree. The tree list fills whatever remains above it.
+    let stashes = if tab == PanelTab::Changes {
+        stash_lines(app, theme)
+    } else {
+        Vec::new()
+    };
+    let stash_h = (stashes.len() as u16).min(area.height / 2);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(stash_h),
+            Constraint::Length(3),
+        ])
+        .split(area);
+
+    // The list's inner width (panel minus its left/right borders), used to
+    // right-align each file row's change-kind letter.
+    let content_width = chunks[0].width.saturating_sub(2) as usize;
+
     let mut items: Vec<ListItem> = Vec::new();
     // Flat index (into `items`) of the currently selected diff file, used to
     // highlight it when the panel is *not* focused (as the old sidebar did).
@@ -334,64 +479,42 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
 
     match tab {
         PanelTab::Changes => {
-            // CHANGES: tracked files (those with a real patch), in display order.
-            let tracked: Vec<usize> = (0..app.view.files.len())
-                .filter(|&i| !app.untracked_paths.contains(&app.view.files[i].path))
-                .collect();
-            if !tracked.is_empty() {
-                items.push(ListItem::new(section_header("CHANGES".to_string(), theme)));
-                for &i in &tracked {
-                    let f = &app.view.files[i];
-                    let state = app.staged_states.get(&f.path).copied().unwrap_or_default();
-                    let review = app.review_status(&f.path);
-                    let mut line = file_line(f.kind.letter(), &f.path, state, review, theme);
-                    if let Some(old) = &f.old_path {
-                        let (_, old_base) = split_path(old);
-                        line.spans.push(Span::styled(
-                            format!(" \u{2190} {old_base}"),
-                            Style::default().fg(theme.dir_prefix),
-                        ));
+            let rows = panel_tree_rows(app);
+            let guides = tree_guides(&rows);
+            for (idx, row) in rows.iter().enumerate() {
+                let guide = guides[idx].as_str();
+                match &row.node {
+                    TreeNode::Dir { key, name } => {
+                        let collapsed = app.panel_collapsed_dirs.contains(key);
+                        nav_item_indices.push(items.len());
+                        items.push(ListItem::new(dir_line(guide, name, collapsed, theme)));
                     }
-                    if i == app.view.selected_file {
-                        selected_row = Some(items.len());
+                    TreeNode::File {
+                        file_index,
+                        kind,
+                        untracked,
+                        name,
+                    } => {
+                        let f = &app.view.files[*file_index];
+                        let state = app.staged_states.get(&f.path).copied().unwrap_or_default();
+                        let review = app.review_status(&f.path);
+                        let line = file_line(
+                            guide,
+                            name,
+                            *kind,
+                            *untracked,
+                            state,
+                            review,
+                            f.old_path.as_deref(),
+                            theme,
+                            content_width,
+                        );
+                        if *file_index == app.view.selected_file {
+                            selected_row = Some(items.len());
+                        }
+                        nav_item_indices.push(items.len());
+                        items.push(ListItem::new(line));
                     }
-                    nav_item_indices.push(items.len());
-                    items.push(ListItem::new(line));
-                }
-            }
-
-            // UNTRACKED: files git isn't tracking yet.
-            let untracked: Vec<usize> = (0..app.view.files.len())
-                .filter(|&i| app.untracked_paths.contains(&app.view.files[i].path))
-                .collect();
-            if !untracked.is_empty() {
-                items.push(ListItem::new(section_header(
-                    "UNTRACKED".to_string(),
-                    theme,
-                )));
-                for &i in &untracked {
-                    let f = &app.view.files[i];
-                    if i == app.view.selected_file {
-                        selected_row = Some(items.len());
-                    }
-                    nav_item_indices.push(items.len());
-                    items.push(ListItem::new(untracked_line(&f.path, theme)));
-                }
-            }
-
-            // STASHES: view-only, `<index> <message>` rows under a counted header.
-            if !app.stashes.is_empty() {
-                items.push(ListItem::new(section_header(
-                    format!("STASHES ({})", app.stashes.len()),
-                    theme,
-                )));
-                for (i, stash) in app.stashes.iter().enumerate() {
-                    nav_item_indices.push(items.len());
-                    items.push(ListItem::new(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled(format!("{i} "), Style::default().fg(theme.dir_prefix)),
-                        Span::raw(stash.message.clone()),
-                    ])));
                 }
             }
         }
@@ -416,7 +539,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
                 let now = now_unix();
                 for (i, entry) in app.history.iter().enumerate() {
                     nav_item_indices.push(items.len());
-                    items.push(history_item(entry, i < ahead, now, theme));
+                    items.push(history_item(entry, i < ahead, now, theme, content_width));
                 }
             }
         }
@@ -452,6 +575,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
     state.select(highlight);
     frame.render_stateful_widget(list, chunks[0], &mut state);
 
+    if stash_h > 0 {
+        frame.render_widget(Paragraph::new(stashes), chunks[1]);
+    }
+
     let notes = app.annotations.len();
     let mut counts_text = format!(" [{} files]", app.view.files.len());
     if !app.staged.is_empty() {
@@ -474,7 +601,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
             Constraint::Length(1),
             Constraint::Length(1),
         ])
-        .split(chunks[1]);
+        .split(chunks[2]);
     frame.render_widget(counts, footer[0]);
     frame.render_widget(commit_line(app.last_commit.as_ref(), theme), footer[1]);
     frame.render_widget(
@@ -606,14 +733,24 @@ impl App {
         self.panel_follow();
     }
 
+    /// Toggles the collapse state of the directory keyed by `key` in the
+    /// panel's file tree. Persists in `self.panel_collapsed_dirs`, which
+    /// survives refreshes so a background status refresh can't silently
+    /// re-expand a folder the user closed.
+    pub(super) fn panel_toggle_dir(&mut self, key: &str) {
+        if !self.panel_collapsed_dirs.remove(key) {
+            self.panel_collapsed_dirs.insert(key.to_string());
+        }
+    }
+
     /// Follows the panel cursor into the diff: if it rests on a file row
     /// whose file isn't already selected, scrolls the multibuffer to that
     /// file's section (expanding it if collapsed) via
-    /// [`App::select_file_by_path`]. Stash rows, an empty panel, and an
-    /// out-of-range cursor leave the diff untouched. A no-op on the History
-    /// tab — its rows have nothing to auto-follow into; opening a commit
-    /// needs an explicit `Enter` (see [`App::panel_select`]). Pure in-memory
-    /// on the Changes tab — never re-runs git. Always stays in
+    /// [`App::select_file_by_path`]. Directory rows, stash rows, an empty
+    /// panel, and an out-of-range cursor leave the diff untouched. A no-op on
+    /// the History tab — its rows have nothing to auto-follow into; opening a
+    /// commit needs an explicit `Enter` (see [`App::panel_select`]). Pure
+    /// in-memory on the Changes tab — never re-runs git. Always stays in
     /// `Mode::Panel`; the caller decides whether to also move focus (see
     /// [`App::panel_select`]).
     pub(super) fn panel_follow(&mut self) {
@@ -631,20 +768,24 @@ impl App {
 
     /// Acts on the panel cursor's current row: on the Changes tab, a file
     /// row follows the diff to that file (via [`App::panel_follow`]) and
-    /// returns focus to the diff; a stash row (or an out-of-range cursor) is
-    /// a no-op, leaving the panel focused. On the History tab, opens the
-    /// highlighted commit into the main diff view (see
-    /// [`App::open_commit_view`]); an out-of-range cursor (an empty or
-    /// still-loading list) is a no-op.
+    /// returns focus to the diff; a directory row toggles its collapse and
+    /// keeps the panel focused; an out-of-range cursor is a no-op, leaving
+    /// the panel focused. On the History tab, opens the highlighted commit
+    /// into the main diff view (see [`App::open_commit_view`]); an
+    /// out-of-range cursor (an empty or still-loading list) is a no-op.
     pub fn panel_select(&mut self) {
         match self.panel_tab() {
-            PanelTab::Changes => {
-                let rows = navigable_rows(self);
-                if let Some(PanelRow::File(_)) = rows.get(self.panel_cursor()) {
+            PanelTab::Changes => match navigable_rows(self).get(self.panel_cursor()) {
+                Some(PanelRow::File(_)) => {
                     self.panel_follow();
                     self.mode = Mode::Normal;
                 }
-            }
+                Some(PanelRow::Dir(key)) => {
+                    let key = key.clone();
+                    self.panel_toggle_dir(&key);
+                }
+                None => {}
+            },
             PanelTab::History => {
                 if let Some(entry) = self.history.get(self.panel_cursor()) {
                     let sha = entry.sha.clone();
@@ -743,619 +884,5 @@ impl App {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::super::stage_ops::{StagedFile, StagedState};
-    use super::*;
-    use crate::diff::FileDiff;
-    use crate::git::{RawFilePatch, StashEntry};
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-    use std::collections::HashMap;
-
-    fn sample_file(path: &str) -> FileDiff {
-        let raw = format!(
-            "diff --git a/{path} b/{path}\n\
-             index 111..222 100644\n\
-             --- a/{path}\n\
-             +++ b/{path}\n\
-             @@ -1,1 +1,1 @@\n\
-             -old\n\
-             +new\n"
-        );
-        FileDiff::from_patch(&RawFilePatch {
-            path: path.to_string(),
-            old_path: None,
-            raw,
-            is_binary: false,
-        })
-        .unwrap()
-    }
-
-    /// Renders `app`'s panel to a 32x24 `TestBackend` and returns the flat
-    /// buffer text.
-    fn render_panel(app: &App) -> String {
-        render_panel_with_keymap(app, &Keymap::default_map())
-    }
-
-    /// [`render_panel`], but over an explicit keymap — used to prove the
-    /// remote-op hint line resolves keys dynamically rather than hardcoding
-    /// `f`/`p`/`P`.
-    fn render_panel_with_keymap(app: &App, keymap: &Keymap) -> String {
-        let backend = TestBackend::new(32, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let area = Rect::new(0, 0, 32, 24);
-        terminal
-            .draw(|frame| render(frame, area, app, keymap))
-            .unwrap();
-        terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect()
-    }
-
-    fn branch(name: &str, upstream: Option<&str>, ab: Option<(u32, u32)>) -> BranchStatus {
-        BranchStatus {
-            name: name.to_string(),
-            detached: false,
-            upstream: upstream.map(|s| s.to_string()),
-            ahead_behind: ab,
-        }
-    }
-
-    #[test]
-    fn header_shows_branch_name_and_ahead_behind_with_upstream() {
-        let mut app = App::new(vec![sample_file("session.rs")]);
-        app.branch = Some(branch("main", Some("origin/main"), Some((2, 1))));
-        let content = render_panel(&app);
-        assert!(content.contains("git: main"));
-        assert!(content.contains("\u{2191}2\u{2193}1"));
-    }
-
-    #[test]
-    fn header_detached_head_shows_short_oid_without_arrows() {
-        let mut app = App::new(vec![sample_file("session.rs")]);
-        app.branch = Some(BranchStatus {
-            name: "85d7cc5".to_string(),
-            detached: true,
-            upstream: None,
-            ahead_behind: None,
-        });
-        let content = render_panel(&app);
-        assert!(content.contains("git: 85d7cc5"));
-        assert!(!content.contains("\u{2191}"));
-        assert!(!content.contains("\u{2193}"));
-    }
-
-    #[test]
-    fn header_no_upstream_shows_no_arrows() {
-        let mut app = App::new(vec![sample_file("session.rs")]);
-        app.branch = Some(branch("feature", None, None));
-        let content = render_panel(&app);
-        assert!(content.contains("git: feature"));
-        assert!(!content.contains("\u{2191}"));
-        assert!(!content.contains("\u{2193}"));
-    }
-
-    #[test]
-    fn zero_ahead_behind_shows_no_arrows() {
-        let mut app = App::new(vec![sample_file("session.rs")]);
-        app.branch = Some(branch("main", Some("origin/main"), Some((0, 0))));
-        let content = render_panel(&app);
-        assert!(content.contains("git: main"));
-        assert!(!content.contains("\u{2191}"));
-        assert!(!content.contains("\u{2193}"));
-    }
-
-    #[test]
-    fn changes_section_preserves_staged_marker_and_letter() {
-        let mut app = App::new(vec![sample_file("session.rs")]);
-        app.branch = Some(branch("main", Some("origin/main"), Some((2, 1))));
-        app.staged = vec![StagedFile {
-            path: "session.rs".to_string(),
-            letter: 'M',
-        }];
-        app.staged_states = HashMap::from([("session.rs".to_string(), StagedState::Full)]);
-        let content = render_panel(&app);
-        assert!(content.contains("CHANGES"));
-        assert!(content.contains("\u{25cf}")); // staged dot preserved
-        assert!(content.contains("M session.rs")); // change-kind letter
-    }
-
-    #[test]
-    fn changes_section_shows_accepted_file_with_the_staged_dot() {
-        // Renders as the staged ● — see theme.rs's staged_indicator rationale.
-        let mut app = App::new(vec![sample_file("session.rs")]);
-        app.target = crate::git::DiffTarget::Review {
-            base: "main".to_string(),
-            branch: "feature".to_string(),
-        };
-        app.apply(Action::ToggleAccept);
-        let content = render_panel(&app);
-        assert!(content.contains("CHANGES"));
-        assert!(content.contains("\u{25cf}")); // the reused staged dot
-        assert!(!content.contains('~'));
-        assert!(!content.contains('!'));
-    }
-
-    #[test]
-    fn changes_section_shows_deferred_file_with_a_distinct_marker() {
-        let mut app = App::new(vec![sample_file("session.rs")]);
-        app.target = crate::git::DiffTarget::Review {
-            base: "main".to_string(),
-            branch: "feature".to_string(),
-        };
-        app.apply(Action::ToggleDefer);
-        let content = render_panel(&app);
-        assert!(content.contains('~'));
-    }
-
-    #[test]
-    fn untracked_section_lists_untracked_files() {
-        let mut app = App::new(vec![sample_file("session.rs"), sample_file("notes.md")]);
-        app.untracked_paths = vec!["notes.md".to_string()];
-        let content = render_panel(&app);
-        assert!(content.contains("CHANGES"));
-        assert!(content.contains("session.rs"));
-        assert!(content.contains("UNTRACKED"));
-        assert!(content.contains("notes.md"));
-    }
-
-    #[test]
-    fn stashes_section_shows_counted_header_and_indexed_rows() {
-        let mut app = App::new(vec![sample_file("session.rs")]);
-        app.stashes = vec![
-            StashEntry {
-                stash_ref: "stash@{0}".to_string(),
-                branch: Some("main".to_string()),
-                message: "wip: parser".to_string(),
-            },
-            StashEntry {
-                stash_ref: "stash@{1}".to_string(),
-                branch: Some("main".to_string()),
-                message: "spike: tabs".to_string(),
-            },
-        ];
-        let content = render_panel(&app);
-        assert!(content.contains("STASHES (2)"));
-        assert!(content.contains("0 wip: parser"));
-        assert!(content.contains("1 spike: tabs"));
-    }
-
-    #[test]
-    fn footer_shows_file_and_staged_counts() {
-        let mut app = App::new(vec![sample_file("session.rs")]);
-        app.staged = vec![StagedFile {
-            path: "session.rs".to_string(),
-            letter: 'M',
-        }];
-        let content = render_panel(&app);
-        assert!(content.contains("[1 files]"));
-        assert!(content.contains("[1 staged]"));
-    }
-
-    // -- Bottom section: last commit + remote keybind hints ----------------
-
-    #[test]
-    fn bottom_section_shows_last_commit_hash_and_subject() {
-        let mut app = App::new(vec![sample_file("session.rs")]);
-        app.last_commit = Some(CommitSummary {
-            short_hash: "a1b2c3d".to_string(),
-            subject: "fix: parser".to_string(),
-        });
-        let content = render_panel(&app);
-        assert!(content.contains("a1b2c3d"));
-        assert!(content.contains("fix: parser"));
-    }
-
-    #[test]
-    fn bottom_section_shows_no_commits_yet_without_a_last_commit() {
-        let app = App::new(vec![sample_file("session.rs")]);
-        let content = render_panel(&app);
-        assert!(content.contains("no commits yet"));
-    }
-
-    #[test]
-    fn bottom_section_shows_fetch_pull_push_keybind_hints() {
-        let mut app = App::new(vec![sample_file("session.rs")]);
-        app.branch = Some(branch("main", Some("origin/main"), Some((0, 0))));
-        let content = render_panel(&app);
-        assert!(content.contains("f fetch"));
-        assert!(content.contains("p pull"));
-        assert!(content.contains("P push"));
-        assert!(!content.contains("P publish"));
-    }
-
-    /// On a branch with no upstream, `P` publishes (see
-    /// `App::remote_push_op`), so the keybind line must say so.
-    #[test]
-    fn bottom_section_relabels_push_to_publish_on_an_unpublished_branch() {
-        let mut app = App::new(vec![sample_file("session.rs")]);
-        app.branch = Some(branch("feature", None, None));
-        let content = render_panel(&app);
-        assert!(content.contains("P publish"));
-        assert!(!content.contains("P push"));
-    }
-
-    /// The remote-op hint line resolves its keys from the keymap rather than
-    /// hardcoding `f`/`p`/`P`: a `[keys.panel]` remap of `remote-fetch` must
-    /// show up here with no code change, and an unbind must drop that
-    /// segment entirely rather than showing a stale key.
-    #[test]
-    fn remote_keys_line_reflects_a_remapped_and_an_unbound_action() {
-        let mut app = App::new(vec![sample_file("session.rs")]);
-        app.branch = Some(branch("main", Some("origin/main"), Some((0, 0))));
-
-        let mut keys = crate::config::KeysConfig::default();
-        keys.panel.insert(
-            "remote-fetch".to_string(),
-            vec![crate::config::keys::KeySeqSpec::One(
-                crate::config::keys::ChordSpec {
-                    code: crossterm::event::KeyCode::Char('F'),
-                    mods: crossterm::event::KeyModifiers::NONE,
-                },
-            )],
-        );
-        keys.panel.insert("remote-pull".to_string(), Vec::new());
-        let (keymap, warnings) = super::super::keymap_config::effective_keymap(&keys);
-        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
-
-        let content = render_panel_with_keymap(&app, &keymap);
-        assert!(content.contains("F fetch"), "must show the remapped key");
-        assert!(
-            !content.contains("f fetch"),
-            "the stale default must be gone"
-        );
-        assert!(
-            !content.contains("pull"),
-            "an unbound action's segment must be omitted entirely"
-        );
-        assert!(content.contains("P push"), "untouched action is unaffected");
-    }
-
-    // -- Empty states ------------------------------------------------------
-
-    #[test]
-    fn empty_stashes_hide_the_stashes_section() {
-        let app = App::new(vec![sample_file("session.rs")]);
-        let content = render_panel(&app);
-        assert!(!content.contains("STASHES"));
-    }
-
-    #[test]
-    fn no_untracked_files_hide_the_untracked_section() {
-        let app = App::new(vec![sample_file("session.rs")]);
-        let content = render_panel(&app);
-        assert!(!content.contains("UNTRACKED"));
-        // The tracked file still appears under CHANGES.
-        assert!(content.contains("CHANGES"));
-        assert!(content.contains("session.rs"));
-    }
-
-    // -- Cursor model (flattening + clamping) ------------------------------
-
-    /// An app with two tracked files, one untracked file, and two stashes —
-    /// the fixture the flattening/clamping tests share.
-    fn mixed_app() -> App {
-        let mut app = App::new(vec![
-            sample_file("a.rs"),
-            sample_file("b.rs"),
-            sample_file("notes.md"),
-        ]);
-        app.untracked_paths = vec!["notes.md".to_string()];
-        app.stashes = vec![
-            StashEntry {
-                stash_ref: "stash@{0}".to_string(),
-                branch: Some("main".to_string()),
-                message: "wip: parser".to_string(),
-            },
-            StashEntry {
-                stash_ref: "stash@{1}".to_string(),
-                branch: Some("main".to_string()),
-                message: "spike: tabs".to_string(),
-            },
-        ];
-        app
-    }
-
-    /// The three sections flatten into files-then-stashes, in render order,
-    /// with no header rows present (headers are not a `PanelRow` variant).
-    #[test]
-    fn navigable_rows_flatten_sections_in_render_order() {
-        let app = mixed_app();
-        let rows = navigable_rows(&app);
-        assert_eq!(
-            rows,
-            vec![
-                PanelRow::File(0), // a.rs   (CHANGES)
-                PanelRow::File(1), // b.rs   (CHANGES)
-                PanelRow::File(2), // notes.md (UNTRACKED)
-                PanelRow::Stash(0),
-                PanelRow::Stash(1),
-            ]
-        );
-    }
-
-    #[test]
-    fn moved_cursor_clamps_at_the_top() {
-        // Already at 0, moving up stays at 0.
-        assert_eq!(moved_cursor(0, 5, false), 0);
-    }
-
-    #[test]
-    fn moved_cursor_clamps_at_the_bottom() {
-        // At the last row (len 5 -> index 4), moving down stays at 4.
-        assert_eq!(moved_cursor(4, 5, true), 4);
-    }
-
-    #[test]
-    fn moved_cursor_crosses_section_boundaries() {
-        // With mixed_app's 5 navigable rows, stepping down from the last
-        // CHANGES row (index 1) lands on the UNTRACKED file (index 2), and
-        // from there onto the first STASH (index 3) — the flat list makes
-        // section boundaries invisible to motion.
-        let app = mixed_app();
-        let rows = navigable_rows(&app);
-        let len = rows.len();
-        let after_changes = moved_cursor(1, len, true);
-        assert_eq!(after_changes, 2);
-        assert_eq!(rows[after_changes], PanelRow::File(2));
-        let into_stashes = moved_cursor(2, len, true);
-        assert_eq!(into_stashes, 3);
-        assert_eq!(rows[into_stashes], PanelRow::Stash(0));
-    }
-
-    #[test]
-    fn moved_cursor_on_empty_list_stays_at_zero() {
-        // No files, no stashes -> nothing navigable; both directions pin 0.
-        let app = App::new(vec![]);
-        let len = navigable_rows(&app).len();
-        assert_eq!(len, 0);
-        assert_eq!(moved_cursor(0, len, true), 0);
-        assert_eq!(moved_cursor(0, len, false), 0);
-    }
-
-    #[test]
-    fn navigable_rows_with_empty_stash_section_omit_stash_rows() {
-        let mut app = mixed_app();
-        app.stashes.clear();
-        let rows = navigable_rows(&app);
-        assert_eq!(
-            rows,
-            vec![PanelRow::File(0), PanelRow::File(1), PanelRow::File(2)]
-        );
-        assert!(rows.iter().all(|r| matches!(r, PanelRow::File(_))));
-    }
-
-    // -- Auto-follow (Task 2) -----------------------------------------------
-
-    /// Moving the panel cursor onto a file row scrolls the diff to that
-    /// file without leaving `Mode::Panel` — follow, don't focus-jump.
-    #[test]
-    fn panel_cursor_motion_follows_file_rows() {
-        let mut app = mixed_app();
-        app.mode = Mode::Panel {
-            cursor: 0,
-            tab: PanelTab::Changes,
-        }; // a.rs, already selected (selected_file starts at 0)
-        app.panel_move_down(); // -> b.rs
-        assert_eq!(app.panel_cursor(), 1);
-        assert_eq!(app.view.selected_file, 1);
-        assert!(matches!(app.mode, Mode::Panel { .. }));
-    }
-
-    /// Moving onto a stash row leaves the diff's file selection exactly
-    /// where it last followed to — stash rows have nothing to follow to.
-    #[test]
-    fn panel_cursor_on_stash_row_leaves_diff_selection() {
-        let mut app = mixed_app();
-        app.mode = Mode::Panel {
-            cursor: 1,
-            tab: PanelTab::Changes,
-        };
-        app.panel_follow(); // -> b.rs selected
-        assert_eq!(app.view.selected_file, 1);
-        app.panel_move_down(); // -> notes.md
-        assert_eq!(app.view.selected_file, 2);
-        app.panel_move_down(); // -> stash 0, nothing to follow to
-        assert_eq!(app.panel_cursor(), 3);
-        assert_eq!(app.view.selected_file, 2); // unchanged from the last file row
-    }
-
-    /// An empty panel (no files, no stashes) is a no-op, not a panic.
-    #[test]
-    fn panel_follow_on_empty_panel_is_noop() {
-        let mut app = App::new(vec![]);
-        app.mode = Mode::Panel {
-            cursor: 0,
-            tab: PanelTab::Changes,
-        };
-        app.panel_follow();
-        assert_eq!(app.panel_cursor(), 0);
-        assert_eq!(app.view.selected_file, 0);
-    }
-
-    /// Focusing the panel (`` ` ``) resets the cursor to the top row and
-    /// follows it, so the diff snaps back to the first file even if it had
-    /// scrolled elsewhere while the panel was unfocused.
-    #[test]
-    fn focusing_panel_follows_to_first_file() {
-        let mut app = mixed_app();
-        assert!(app.select_file_by_path("b.rs"));
-        assert_eq!(app.view.selected_file, 1);
-        app.toggle_git_panel();
-        assert!(matches!(app.mode, Mode::Panel { .. }));
-        assert_eq!(app.panel_cursor(), 0);
-        assert_eq!(app.view.selected_file, 0); // followed back to a.rs
-    }
-
-    /// Following onto a collapsed file's row expands it — a collapsed
-    /// section has nothing to follow to otherwise.
-    #[test]
-    fn panel_follow_expands_collapsed_target() {
-        let mut app = mixed_app();
-        app.view.set_collapsed("b.rs", true);
-        app.rebuild_rows();
-        assert!(app.view.is_collapsed("b.rs"));
-        app.mode = Mode::Panel {
-            cursor: 0,
-            tab: PanelTab::Changes,
-        };
-        app.panel_move_down(); // onto b.rs's row
-        assert_eq!(app.panel_cursor(), 1);
-        assert_eq!(app.view.selected_file, 1);
-        assert!(!app.view.is_collapsed("b.rs"));
-    }
-
-    /// Enter on a file row follows to it and returns focus to the diff.
-    #[test]
-    fn enter_on_file_row_returns_focus_with_file_selected() {
-        let mut app = mixed_app();
-        app.mode = Mode::Panel {
-            cursor: 1,
-            tab: PanelTab::Changes,
-        }; // b.rs
-        app.panel_select();
-        assert_eq!(app.mode, Mode::Normal);
-        assert_eq!(app.view.selected_file, 1);
-    }
-
-    /// Enter on a stash row stays put — no file to focus on.
-    #[test]
-    fn enter_on_stash_row_is_noop_keeping_panel_focus() {
-        let mut app = mixed_app();
-        app.mode = Mode::Panel {
-            cursor: 3,
-            tab: PanelTab::Changes,
-        }; // stash 0
-        app.panel_select();
-        assert!(matches!(app.mode, Mode::Panel { .. }));
-    }
-
-    // -- History tab ---------------------------------------------------------
-    //
-    // TestBackend buffer assertions (no real TTY in CI).
-
-    use super::super::background::TaskId;
-    use super::super::history::InFlightHistory;
-    use crate::git::CommitLogEntry;
-
-    fn commit(sha: &str, subject: &str, author: &str, ts: i64) -> CommitLogEntry {
-        CommitLogEntry {
-            sha: sha.to_string(),
-            short_sha: sha[..sha.len().min(7)].to_string(),
-            subject: subject.to_string(),
-            author_name: author.to_string(),
-            timestamp: ts,
-        }
-    }
-
-    fn app_on_history_tab() -> App {
-        let mut app = App::new(vec![sample_file("session.rs")]);
-        app.mode = Mode::Panel {
-            cursor: 0,
-            tab: PanelTab::History,
-        };
-        app
-    }
-
-    #[test]
-    fn history_tab_shows_a_loading_placeholder_before_the_first_page_lands() {
-        let mut app = app_on_history_tab();
-        // Simulate a fetch in flight without actually spawning a thread.
-        app.history_in_flight = Some(InFlightHistory {
-            id: TaskId(0),
-            generation: app.history_generation,
-        });
-        let content = render_panel(&app);
-        assert!(content.contains("loading"));
-    }
-
-    #[test]
-    fn history_tab_shows_no_commits_when_nothing_is_in_flight_and_history_is_empty() {
-        let app = app_on_history_tab();
-        let content = render_panel(&app);
-        assert!(content.contains("no commits"));
-        assert!(!content.contains("loading"));
-    }
-
-    #[test]
-    fn history_tab_renders_commit_rows_with_subject_meta_and_unpushed_marker() {
-        let mut app = app_on_history_tab();
-        app.branch = Some(branch("main", Some("origin/main"), Some((1, 0))));
-        app.history = vec![
-            commit("abc1234full", "feat: new thing", "Jane Dev", 1_700_000_000),
-            commit("def5678full", "fix: old bug", "Jane Dev", 1_600_000_000),
-        ];
-        let content = render_panel(&app);
-        assert!(content.contains("feat: new thing"));
-        assert!(content.contains("fix: old bug"));
-        // The unpushed marker (●) decorates only the first `ahead` (1) row.
-        assert!(content.contains("\u{25cf}"));
-        assert!(content.contains("Jane Dev"));
-        assert!(content.contains("abc1234"));
-    }
-
-    #[test]
-    fn panel_title_shows_both_tab_labels_regardless_of_which_is_active() {
-        let mut app = App::new(vec![sample_file("session.rs")]);
-        app.mode = Mode::Panel {
-            cursor: 0,
-            tab: PanelTab::Changes,
-        };
-        let content = render_panel(&app);
-        assert!(content.contains("Changes"));
-        assert!(content.contains("History"));
-    }
-
-    #[test]
-    fn moving_the_cursor_down_the_history_tab_stops_at_the_last_loaded_row() {
-        let mut app = app_on_history_tab();
-        app.history = vec![
-            commit("a", "one", "Dev", 1_700_000_000),
-            commit("b", "two", "Dev", 1_700_000_000),
-        ];
-        app.history_exhausted = true;
-        app.panel_move_down();
-        app.panel_move_down();
-        app.panel_move_down(); // clamps at the last row
-        assert_eq!(app.panel_cursor(), 1);
-    }
-
-    /// `Tab` switches tabs, resets the cursor, and remembers the tab for the
-    /// next time the panel is focused.
-    #[test]
-    fn toggle_panel_tab_switches_and_resets_cursor() {
-        let mut app = mixed_app();
-        app.mode = Mode::Panel {
-            cursor: 2,
-            tab: PanelTab::Changes,
-        };
-        app.toggle_panel_tab();
-        assert_eq!(app.panel_tab(), PanelTab::History);
-        assert_eq!(app.panel_cursor(), 0);
-        assert_eq!(app.last_panel_tab, PanelTab::History);
-
-        app.toggle_panel_tab();
-        assert_eq!(app.panel_tab(), PanelTab::Changes);
-        assert_eq!(app.panel_cursor(), 0);
-    }
-
-    /// Re-focusing the panel lands on whichever tab was last active, not
-    /// always Changes.
-    #[test]
-    fn refocusing_the_panel_remembers_the_last_active_tab() {
-        let mut app = mixed_app();
-        app.mode = Mode::Panel {
-            cursor: 0,
-            tab: PanelTab::Changes,
-        };
-        app.toggle_panel_tab(); // -> History
-        app.toggle_git_panel(); // unfocus
-        assert_eq!(app.mode, Mode::Normal);
-        app.toggle_git_panel(); // refocus
-        assert_eq!(app.panel_tab(), PanelTab::History);
-    }
-}
+#[path = "git_panel_tests.rs"]
+mod tests;
