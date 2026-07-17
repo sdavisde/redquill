@@ -113,12 +113,36 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// actually changing, so idle ticks are cheap.
 const AUTO_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
-/// How a TUI session ended.
+/// How a TUI session ended: governs only the one stdout side effect (`main`'s
+/// `render_markdown(&app.annotations)` call on quit) — never what's kept in
+/// `app.annotations` itself or on disk, both of which are already settled by
+/// the time either variant is produced. Reached from more than one gesture
+/// each, since spec 08 Unit 6 (review annotation persistence) repurposed the
+/// existing two-variant quit gate for the end-review modal rather than
+/// adding a third:
+///
+/// - [`QuitOutcome::Emit`]: a plain session's `q`, or a review session's
+///   `f` (finish, [`super::app::App::finish_review`]) — finish emits the
+///   *complete* annotation set (restored-from-earlier-sessions and this
+///   session's own, together) exactly once, in the unchanged markdown
+///   format, since restore-on-resume (task 7.2) already merged both into
+///   `app.annotations` well before this point is ever reached.
+/// - [`QuitOutcome::Discard`]: a plain session's `Q`/Ctrl-C (unchanged), or
+///   — amended 2026-07-16, spec 08 Unit 6, reversing Unit 2's original
+///   "pause emits" contract — a review session's `p` (pause). Pause still
+///   keeps the worktree, the review state, and every annotation (persisted
+///   via the same save-on-change path every add/edit/delete already
+///   triggers, spec 08 Unit 6 task 7.2); only the stdout emission is
+///   suppressed, so a consumer piping redquill's output sees each
+///   annotation exactly once, on finish, rather than once per pause plus
+///   once more on finish.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuitOutcome {
-    /// The user pressed `q`: emit `app.annotations` to stdout.
+    /// Emit `app.annotations` to stdout on the way out.
     Emit,
-    /// The user pressed `Q` or Ctrl-C: discard annotations, emit nothing.
+    /// Emit nothing; annotations already in `app.annotations` are simply
+    /// dropped from memory (not from disk — a review session's are already
+    /// persisted by this point).
     Discard,
 }
 

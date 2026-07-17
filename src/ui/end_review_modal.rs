@@ -38,8 +38,11 @@ const CONTENT_WIDTH: u16 = 48;
 /// Total modal width: content + 2 columns of padding + 2 columns of border.
 const MODAL_WIDTH: u16 = CONTENT_WIDTH + 2 + 2;
 /// The caption under the three options, naming the annotations-emit detail
-/// the spec asks to keep out of the per-option lines.
-const CAPTION: &str = "annotations print to stdout on pause and finish";
+/// the spec asks to keep out of the per-option lines. Amended 2026-07-16,
+/// spec 08 Unit 6: pause no longer emits — annotations print to stdout
+/// exactly once, on finish, whether they were made this session or restored
+/// from an earlier one.
+const CAPTION: &str = "annotations print to stdout once, on finish";
 
 /// The three exits' display order, short label, and short description —
 /// the modal's own tuned prose, distinct from [`super::modal_keys::END_REVIEW_KEYS`]'s

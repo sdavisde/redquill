@@ -654,11 +654,16 @@ pub(super) static SWITCHER_KEYS: LazyLock<Vec<ModalBinding<SwitcherAction>>> =
 /// immediately regardless of the highlight, unchanged from before this pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum EndReviewAction {
-    /// Emit annotations and quit; the worktree and review state are kept.
+    /// Quit emitting nothing; the worktree, review state, and every
+    /// annotation (already durable via save-on-change, spec 08 Unit 6) are
+    /// kept. Amended 2026-07-16, spec 08 Unit 6, reversing this variant's
+    /// original "emit and quit" contract.
     Pause,
-    /// Emit annotations, remove the worktree (and, spec 08 Unit 4, delete
-    /// the persisted review-state entry), then quit. On removal failure the
-    /// modal closes with the git error surfaced instead of quitting.
+    /// Emit the complete annotation set (restored-from-earlier-sessions and
+    /// this session's own, together, exactly once), remove the worktree
+    /// (and, spec 08 Unit 4/6, delete the persisted review-state entry —
+    /// statuses and annotations together), then quit. On removal failure
+    /// the modal closes with the git error surfaced instead of quitting.
     Finish,
     /// Close the modal and keep reviewing; nothing happens.
     Cancel,
@@ -709,7 +714,7 @@ pub(super) static END_REVIEW_KEYS: LazyLock<Vec<ModalBinding<EndReviewAction>>> 
     LazyLock::new(|| {
         vec![
             ModalBinding {
-                description: "Pause — emit annotations, quit (keep worktree)",
+                description: "Pause — quit, emit nothing (keep worktree)",
                 keys: vec![ModalKey::plain(KeyCode::Char('p'))],
                 action: EndReviewAction::Pause,
                 footer: Some(FooterHint {
@@ -718,7 +723,7 @@ pub(super) static END_REVIEW_KEYS: LazyLock<Vec<ModalBinding<EndReviewAction>>> 
                 }),
             },
             ModalBinding {
-                description: "Finish — emit annotations, remove worktree, quit",
+                description: "Finish — emit annotations once, remove worktree, quit",
                 keys: vec![ModalKey::plain(KeyCode::Char('f'))],
                 action: EndReviewAction::Finish,
                 footer: Some(FooterHint {
@@ -2595,8 +2600,8 @@ index 111..222 100644
                     EndReviewAction::Pause => {
                         let flow = handle_end_review_key(&mut app, key.event());
                         assert!(
-                            matches!(flow, Flow::Quit(QuitOutcome::Emit)),
-                            "End review {label}: pause must quit emitting annotations"
+                            matches!(flow, Flow::Quit(QuitOutcome::Discard)),
+                            "End review {label}: pause must quit emitting nothing (spec 08 Unit 6)"
                         );
                     }
                     EndReviewAction::Finish => {
@@ -2646,8 +2651,8 @@ index 111..222 100644
                         // the `p` mnemonic.
                         let flow = handle_end_review_key(&mut app, key.event());
                         assert!(
-                            matches!(flow, Flow::Quit(QuitOutcome::Emit)),
-                            "End review {label}: confirm on the highlighted Pause option must quit emitting annotations"
+                            matches!(flow, Flow::Quit(QuitOutcome::Discard)),
+                            "End review {label}: confirm on the highlighted Pause option must quit emitting nothing"
                         );
                     }
                 }

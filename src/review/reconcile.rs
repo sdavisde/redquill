@@ -80,6 +80,7 @@ mod tests {
             base: "main".to_string(),
             worktree_path: PathBuf::from("/tmp/wt"),
             files,
+            annotations: Vec::new(),
         }
     }
 

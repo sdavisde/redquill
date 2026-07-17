@@ -469,15 +469,38 @@ pub struct App {
     /// next status change retries with fresh data regardless.
     pub(super) review_save_tasks: BackgroundTasks<Result<(), String>>,
     /// The count of review-state saves spawned but not yet drained by
-    /// [`App::poll_review_save`] — incremented on every
-    /// [`App::persist_review_state`] spawn, decremented as each result
-    /// drains. Not a single-flight guard (saves are idempotent overwrites,
-    /// so nothing is rejected while one is in flight — see
-    /// [`App::review_save_tasks`]'s doc); exists so a "did every in-flight
+    /// [`App::poll_review_save`] — incremented on every actual spawn (i.e.
+    /// on [`App::review_save_in_flight`] transitioning false→true),
+    /// decremented as each result drains; exists so a "did every in-flight
     /// save land" check has somewhere to read, both for a future
     /// quit-safety wait and for tests that need to await a save
     /// deterministically rather than sleeping a fixed guess.
     pub(super) review_saves_pending: u32,
+    /// Single-flight guard for review-state saves (spec 08 Unit 6/task 7.2
+    /// hardening): whether a [`App::review_save_tasks`] write is currently
+    /// running. `App::persist_review_state` used to spawn a new background
+    /// writer unconditionally on every call, reasoning that each save is an
+    /// idempotent full overwrite so a race couldn't lose data — that
+    /// reasoning missed that two *out-of-order-completing* writers each
+    /// racing a `save_review` read-modify-write on the same file can still
+    /// land the *older* snapshot last, silently reverting the newer one
+    /// (observed directly: `review_persistence_integration_tests.rs`'s
+    /// rapid accept/accept/defer sequence intermittently lost the defer).
+    /// This flag turns every burst of rapid gestures (or annotation
+    /// add/edit/delete now that Unit 6 wires those into the same path too)
+    /// into at most one in-flight write plus one coalesced follow-up (see
+    /// [`App::review_save_dirty`]), which is both correct (writes always
+    /// land in submission order) and cheaper (a burst of five gestures
+    /// before the first save lands does one write, not five).
+    pub(super) review_save_in_flight: bool,
+    /// Set by `App::persist_review_state` when it's asked to save again
+    /// while [`App::review_save_in_flight`] is already true; cleared by
+    /// [`App::poll_review_save`], which immediately spawns exactly one more
+    /// save (capturing whatever `review_states`/`review_blob_shas`/
+    /// `annotations` look like *at drain time*, i.e. already reflecting
+    /// every gesture made during the in-flight save) whenever it drains a
+    /// result and finds this set.
+    pub(super) review_save_dirty: bool,
 }
 
 /// The prior view state suspended while a commit view (opened from the git
@@ -615,6 +638,8 @@ impl App {
             review_blob_shas: HashMap::new(),
             review_save_tasks: BackgroundTasks::new(),
             review_saves_pending: 0,
+            review_save_in_flight: false,
+            review_save_dirty: false,
         };
         app.rebuild_rows();
         app
@@ -773,15 +798,23 @@ impl App {
     /// Drains completed background review-state saves (spec 08 Unit 4, once
     /// per event-loop tick alongside [`App::poll_git_ops`]). A failed save —
     /// a disk error, or the background task panicking — surfaces as a
-    /// status message; the in-memory `review_states`/`review_blob_shas` are
-    /// never rolled back on a failed save, so the very next status change's
-    /// save simply retries with current data. Foreign or stale task ids
-    /// need no special handling here (unlike `git_op`'s single-flight
-    /// guard) — saves are idempotent overwrites of the same branch's entry,
-    /// so draining every completed one in order is always safe.
+    /// status message; the in-memory `review_states`/`review_blob_shas`/
+    /// `annotations` are never rolled back on a failed save, so the very
+    /// next status change's save simply retries with current data.
+    ///
+    /// Clears [`App::review_save_in_flight`] on every drain and, if
+    /// [`App::review_save_dirty`] was set while that save was running,
+    /// immediately spawns exactly one follow-up via
+    /// [`App::persist_review_state`] — the single-flight-plus-coalesce
+    /// pattern that field's doc explains. At most one task is ever in
+    /// flight under this invariant, so this loop drains at most one review
+    /// save per tick in practice; it still loops (rather than assuming
+    /// exactly one) purely to stay correct if that invariant is ever
+    /// relaxed, mirroring every other poller in this module.
     pub(super) fn poll_review_save(&mut self) {
         for (_, result) in self.review_save_tasks.poll() {
             self.review_saves_pending = self.review_saves_pending.saturating_sub(1);
+            self.review_save_in_flight = false;
             match result {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
@@ -791,6 +824,10 @@ impl App {
                     self.set_status_message(format!("review state save failed: {}", panic.message));
                 }
             }
+        }
+        if !self.review_save_in_flight && self.review_save_dirty {
+            self.review_save_dirty = false;
+            self.persist_review_state();
         }
     }
 
@@ -1177,6 +1214,11 @@ impl App {
         }
         self.mode = Mode::Normal;
         self.refresh_rows();
+        // Save-on-change (spec 08 Unit 6, task 7.2): a no-op outside a
+        // review session (no `review_state_path` set) — see
+        // `review_ops`'s module doc for why this is safe to call
+        // unconditionally.
+        self.persist_review_state();
     }
 
     /// Derives the [`Source`] to record for an annotation composed against

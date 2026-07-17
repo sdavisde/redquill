@@ -58,8 +58,8 @@ The core stays forge-agnostic: redquill reviews *a local branch*, not "a GitHub 
 - Banner colors shall come from two new `Theme` fields (`review_banner_bg`, a dark red; `review_banner_fg`, a light foreground), with a contrast drift-guard test in `theme.rs` following the existing brightness-assertion pattern.
 - The banner row shall be accounted for in both layout computations (the `draw()` split and the viewport-measurement mirror) so cursor/scroll math stays correct.
 - In review mode, `q` shall open an end-review modal with three exits, driven from a `modal_keys.rs` table with the standard bidirectional drift test:
-  - **pause**: emit annotations to stdout (unchanged output contract), quit; worktree and review state are kept.
-  - **finish**: emit annotations, remove the worktree with fixed argv `git worktree remove <path>` (never `--force`), delete this review's persisted state entry, quit. If removal fails (e.g. the worktree is dirty), surface git's message, keep the state entry, and stay in the app.
+  - **pause**: quit, emitting nothing to stdout; worktree, review state, and persisted annotations are kept. (Amended 2026-07-16 per Unit 6, reversing the original "pause emits" contract: a consumer now sees each annotation exactly once, on finish.)
+  - **finish**: emit the complete annotation set — new and restored-from-earlier-sessions alike — exactly once in the unchanged output format, remove the worktree with fixed argv `git worktree remove <path>` (never `--force`), delete this review's persisted state entry (statuses and annotations together), quit. If removal fails (e.g. the worktree is dirty), surface git's message, keep the state entry, and stay in the app.
   - **cancel**: close the modal, continue reviewing.
 - `Q` in review mode shall keep its global meaning: quit immediately, emit nothing; worktree and review state survive.
 - Outside review mode, `q` and `Q` behavior shall be byte-for-byte unchanged.
@@ -130,11 +130,31 @@ The core stays forge-agnostic: redquill reviews *a local branch*, not "a GitHub 
 - Test/render: the pull/push confirm modal naming the reviewed branch, fetch running unprompted, and the commit modal's review warning line; drift tests for every new modal table.
 - Test: regressions pinning staging panel, pull/push, and commit behavior outside review sessions as byte-for-byte unchanged.
 
+### Unit 6: Review annotations survive pause (added 2026-07-16, user-ratified)
+
+**Purpose:** Multi-day reviews keep their comments, not just their accept/defer marks — pausing a review must never cost the reviewer written work.
+
+**Functional Requirements:**
+
+- In a review session, annotations shall be persisted alongside review status: saved on every annotation change (add/edit/delete) through the same off-render-loop save path as status changes, so a crash or `Q` loses nothing. (Pause is the user-facing contract; save-on-change is the mechanism.)
+- Pause shall emit nothing to stdout. Finish shall emit the complete annotation set — including annotations restored from earlier sessions — exactly once, in the existing markdown format under the existing `Reviewing:` group line, byte-identical to the shipped output contract.
+- `Q` (instant quit) shall continue to emit nothing; persisted annotations and statuses survive it.
+- Resuming a review shall restore annotations to their recorded file/line anchors verbatim. Anchor drift after the branch changes is accepted for v1 and documented in the module doc; the reviewer can edit or delete restored annotations as usual.
+- Finish and launch-time GC shall delete persisted annotations together with the branch's review-state entry — one lifecycle, no orphaned annotation data.
+- Local sessions are unchanged: in-memory annotations, emitted on `q`, never persisted (non-goal 3).
+- Serialization is developed test-first (pure code); the stdout emission format tests remain untouched and passing.
+
+**Proof Artifacts:**
+
+- Test: round-trip serialization plus a two-session tempdir integration test (annotate → pause → resume restores annotations → finish emits the full set once, byte-exact against the shipped format).
+- CLI/test render: pause produces no stdout; finish prints restored + new annotations under the `Reviewing:` group line.
+- Test: regression pins local-session `q` emission and the stdout format tests as unchanged.
+
 ## Non-Goals (Out of Scope)
 
 1. **Forge integration**: no GitHub/GitLab awareness — no PR listing, no comment posting, no verdicts (approve/request-changes). A future spec may add this as a thin adapter; the core stays forge-agnostic.
 2. **In-app ref-range entry**: typing an arbitrary range to re-target the open diff is excluded (user decision, round 2) and will be filed as its own small spec. CLI range launch continues to work as shipped in spec 05.
-3. **Annotation persistence across sessions**: annotations remain in-memory and are emitted to stdout on quit (pause and finish both emit). Carrying unemitted annotations between sessions belongs to the future output-mechanisms / persisted-sessions spec.
+3. **Annotation persistence in local sessions**: local (working-tree/`--staged`) sessions keep today's behavior — in-memory annotations, emitted to stdout on `q`. (Amended 2026-07-16, user decision reversing the round-2 call: **review-session** annotations now persist across pause/resume — see Unit 6. Broader output mechanisms remain future-spec territory.)
 4. **Local-mode changes**: working-tree and `--staged` review keep today's staging model untouched; no "deferred" marker in local mode.
 5. **Remote operations on the user's behalf**: redquill does not fetch the branch being reviewed; the user fetches via the existing git panel or their shell.
 6. **Configurability of worktree/state locations**: fixed paths under `.git/redquill/` for now; a spec-07 config knob can come later without migration pain.

@@ -6,9 +6,13 @@
 //! [`super::switcher`]'s own state-plus-handlers split.
 //!
 //! Pausing has no dedicated method here: it's exactly the pre-existing quit
-//! path (`Flow::Quit(QuitOutcome::Emit)`, handled by [`super::quit_action`]'s
-//! caller), which already emits `app.annotations` to stdout on the way out —
-//! the "pause" contract (emit, keep the worktree, quit) needs nothing extra.
+//! path (`Flow::Quit(QuitOutcome::Discard)`, handled by
+//! [`super::modes::handle_end_review_key`]'s `end_review_choice`) — amended
+//! 2026-07-16, spec 08 Unit 6, reversing this module's original "pause
+//! emits" note: pause now discards the stdout side effect, since
+//! annotations are already durable (save-on-change, task 7.2) by the time
+//! `p` is pressed. The "pause" contract is now keep the worktree, keep the
+//! state, keep every annotation on disk, emit nothing, quit.
 
 use super::QuitOutcome;
 use super::app::{App, EndReviewOrigin, Mode};
@@ -84,16 +88,22 @@ impl App {
     /// *inside* the worktree being removed — see that field's doc), then
     /// prunes stale worktree admin records and — spec 08 Unit 4, closing the
     /// loop with this unit — deletes this branch's persisted review-state
-    /// entry, so a later fresh `--review` of the same branch starts clean
-    /// rather than resuming stale progress. Returns `Some(QuitOutcome::Emit)`
-    /// on success — the caller quits exactly like a plain `q`, so annotations
-    /// emit through the existing on-quit path unchanged. On failure (e.g. a
-    /// dirty worktree; or no origin backend/no review session attached, in a
-    /// git-less test context) the git message is surfaced as a status
-    /// message and the modal closes back to its origin mode — the review
-    /// continues, nothing is removed, and the persisted state entry is left
-    /// untouched (the worktree removal is the gate; the state entry is only
-    /// ever deleted alongside a worktree that actually went away).
+    /// entry (statuses *and* annotations together, spec 08 Unit 6 task 7.3:
+    /// they live in one [`crate::review::store::PersistedReview`], so one
+    /// [`crate::review::store::delete_review`] call removes both — "one
+    /// lifecycle", no orphaned annotation data left behind), so a later
+    /// fresh `--review` of the same branch starts clean rather than
+    /// resuming stale progress. Returns `Some(QuitOutcome::Emit)` on
+    /// success — the caller quits emitting `app.annotations`, which by this
+    /// point holds the complete restored-plus-new set exactly once, in the
+    /// unchanged markdown format. On failure (e.g. a dirty worktree; or no
+    /// origin backend/no review session attached, in a git-less test
+    /// context) the git message is surfaced as a status message and the
+    /// modal closes back to its origin mode — the review continues, nothing
+    /// is removed, and the persisted state entry (statuses and annotations
+    /// alike) is left untouched (the worktree removal is the gate; the
+    /// state entry is only ever deleted alongside a worktree that actually
+    /// went away).
     pub(super) fn finish_review(&mut self) -> Option<QuitOutcome> {
         let Some(ops) = self.review_origin_ops.as_deref() else {
             self.set_status_message("finish unavailable (no origin git backend)");
@@ -326,6 +336,7 @@ index 111..222 100644
                 base: "main".to_string(),
                 worktree_path: PathBuf::from("/tmp/review-worktree"),
                 files: std::collections::BTreeMap::new(),
+                annotations: Vec::new(),
             },
         )
         .unwrap();
@@ -337,6 +348,7 @@ index 111..222 100644
                 base: "main".to_string(),
                 worktree_path: PathBuf::from("/tmp/other-worktree"),
                 files: std::collections::BTreeMap::new(),
+                annotations: Vec::new(),
             },
         )
         .unwrap();
@@ -361,6 +373,55 @@ index 111..222 100644
         );
     }
 
+    /// Spec 08 Unit 6, task 7.3's "one lifecycle" requirement: finish
+    /// deletes a branch's persisted *annotations* alongside its file
+    /// statuses, in the same call — there is no separate annotation-only
+    /// entry left orphaned behind.
+    #[test]
+    fn finish_deletes_persisted_annotations_alongside_the_state_entry() {
+        use crate::annotate::{Classification, PersistedAnnotation, Side, Source, Target};
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state_path = tmp.path().join("review-state.json");
+        crate::review::store::save_review(
+            &state_path,
+            "feature",
+            crate::review::store::PersistedReview {
+                base: "main".to_string(),
+                worktree_path: PathBuf::from("/tmp/review-worktree"),
+                files: std::collections::BTreeMap::new(),
+                annotations: vec![PersistedAnnotation {
+                    target: Target::line("src/main.rs", 1, Side::New),
+                    classification: Classification::Nit,
+                    body: "note".to_string(),
+                    source: Source::WorkingTree,
+                }],
+            },
+        )
+        .unwrap();
+        assert!(
+            !crate::review::store::load(&state_path).reviews["feature"]
+                .annotations
+                .is_empty(),
+            "fixture must actually have a persisted annotation before finish"
+        );
+
+        let mut app = review_app();
+        app.set_repo_root(PathBuf::from("/tmp/review-worktree"));
+        app.set_review_state_path(state_path.clone());
+        app.set_review_origin_ops(Box::new(WorktreeFake::default()));
+        app.open_end_review_modal();
+
+        let outcome = app.finish_review();
+
+        assert_eq!(outcome, Some(QuitOutcome::Emit));
+        let state = crate::review::store::load(&state_path);
+        assert!(
+            !state.reviews.contains_key("feature"),
+            "finish deletes the whole entry, annotations included"
+        );
+    }
+
     #[test]
     fn finish_failure_leaves_the_persisted_state_entry_untouched() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -372,6 +433,7 @@ index 111..222 100644
                 base: "main".to_string(),
                 worktree_path: PathBuf::from("/tmp/review-worktree"),
                 files: std::collections::BTreeMap::new(),
+                annotations: Vec::new(),
             },
         )
         .unwrap();

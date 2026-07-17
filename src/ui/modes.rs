@@ -428,7 +428,13 @@ pub(super) fn handle_end_review_key(app: &mut App, key: KeyEvent) -> super::Flow
 fn end_review_choice(app: &mut App, choice: EndReviewAction) -> super::Flow {
     use super::{Flow, QuitOutcome};
     match choice {
-        EndReviewAction::Pause => Flow::Quit(QuitOutcome::Emit),
+        // Amended 2026-07-16, spec 08 Unit 6 (reversing Unit 2's original
+        // "pause emits" contract): pause discards rather than emits, so a
+        // consumer sees each annotation exactly once — on finish. The
+        // worktree, review state, and every annotation made this session
+        // are still kept; only the stdout side effect changes (see
+        // `QuitOutcome`'s doc).
+        EndReviewAction::Pause => Flow::Quit(QuitOutcome::Discard),
         EndReviewAction::Finish => match app.finish_review() {
             Some(outcome) => Flow::Quit(outcome),
             None => Flow::Continue,

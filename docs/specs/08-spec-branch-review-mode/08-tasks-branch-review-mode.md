@@ -144,6 +144,25 @@ Covers: spec Unit 1 (in-app path) — panel-scope binding, modal reusing spec-03
 - [ ] 5.3 In-app failure surfacing: `worktree_add`/reroot errors render in the modal or panel message area (existing error-surface pattern), never crash, never mutate state.
 - [ ] 5.4 Reroot-into-review tempdir integration test (isolation helper mandatory — this is the switcher-adjacent shape the incident implicates); `?` overlay entry; run gates; capture modal + parity screenshots into `proofs/`; commit.
 
+### [x] 7.0 Review annotations survive pause: save on change, emit once on finish
+
+Added 2026-07-16 (user decision reversing non-goal 3 for review sessions; spec Unit 6). Pause becomes silent; finish is the single emission point.
+
+**User can verify:** annotate lines during a review, `q` → pause prints nothing; relaunch → the annotations are back in the annotation list and on their lines; finish → the full set (restored + new) prints exactly once in the existing format; `Q` mid-session then relaunch → annotations still there; in a local session `q` still prints annotations and nothing is persisted.
+
+#### 7.0 Proof Artifact(s)
+
+- Test: serde round-trip for persisted annotations plus a two-session tempdir integration test (annotate → pause silent → resume restores → finish emits once, byte-exact against the shipped stdout format) demonstrates the persistence contract (FR: Unit 6).
+- CLI/test render: pause with annotations produces no stdout; finish prints restored + new annotations under the `Reviewing:` group line (FR: Unit 6 emission).
+- Test: regression pins for local-session `q` emission and the existing stdout-format tests demonstrate the public output API is untouched (FR: Unit 6 / non-goal 3).
+
+#### 7.0 Tasks
+
+- [x] 7.1 TDD the persisted-annotation schema: serde types live with the annotation model (architecture map: `annotate/` owns persistence), composed into the review store's per-branch entry — extend `review-state.json` to schema v2 with a v1→v2 migration/compat test, or a sibling file sharing the entry lifecycle if composition forces TUI types into `review/` (decide against the codebase; document the choice and why). Byte-exact round-trip test.
+- [x] 7.2 Wire save-on-change: annotation add/edit/delete in a review session triggers the existing off-render-loop review save path (4.4's `BackgroundTasks` queue); on session start/resume, load and restore annotations to their recorded anchors before first render; anchor-drift limitation documented in the module doc.
+- [x] 7.3 Lifecycle changes: pause emits nothing (amend 2.4's flow + end-review modal labels if they promise emission); finish emits restored + new annotations exactly once, byte-identical format; finish and launch-time GC delete persisted annotations with the state entry; regression pins local `q` emission and stdout-format tests unchanged.
+- [x] 7.4 Two-session tempdir integration test per the proof artifacts (isolation helper mandatory); run gates; capture transcripts/renders into `proofs/08-task-07-proofs.md`; commit.
+
 ### [x] 6.0 Local-mode parity: `S` toggle, accepted-files panel, guarded panel writes
 
 Added 2026-07-16 from the user-ratified parity audit (spec Unit 5). Local staging constructs get deliberate review-mode analogues; the git panel's write ops get confirm-first guards during review.

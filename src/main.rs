@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 
-use redquill::annotate::render_markdown;
+use redquill::annotate::{PersistedAnnotation, render_markdown};
 use redquill::config;
 use redquill::diff::FileDiff;
 use redquill::git::{ChangeKind, DiffTarget, GitRunner, sanitize_branch_dir_name};
@@ -223,6 +223,16 @@ fn gc_review_state(discovered: &GitRunner) -> Option<PathBuf> {
     Some(path)
 }
 
+/// `load_reconciled_review_state`'s return shape: reconciled file statuses,
+/// their 1:1 blob-SHA companion map, and this branch's persisted
+/// annotations verbatim — named so clippy's `type_complexity` lint (and any
+/// reader) doesn't have to parse a three-deep nested tuple inline.
+type ReconciledReviewState = (
+    HashMap<String, ReviewStatus>,
+    HashMap<String, Option<String>>,
+    Vec<PersistedAnnotation>,
+);
+
 /// Loads and reconciles `branch`'s persisted review state (spec 08 Unit 4)
 /// against its *current* blob SHAs, resolved through `runner` (the
 /// session's own runner, rooted inside the review worktree, so `blob_sha`
@@ -238,17 +248,21 @@ fn gc_review_state(discovered: &GitRunner) -> Option<PathBuf> {
 /// until the user re-accepts (see that method's doc for why re-deriving
 /// staleness on every subsequent save, rather than silently losing it,
 /// matters).
+///
+/// The third element is this branch's persisted annotations, verbatim and
+/// in their original order (spec 08 Unit 6, task 7.2) — unlike the file
+/// statuses above, annotations have no reconciliation step in v1 (see
+/// `crate::annotate::persist`'s module doc on the accepted anchor-drift
+/// limitation): they're simply carried through for `run_tui` to replay into
+/// `app.annotations` before the first render.
 fn load_reconciled_review_state(
     runner: &GitRunner,
     state_path: &Path,
     branch: &str,
-) -> (
-    HashMap<String, ReviewStatus>,
-    HashMap<String, Option<String>>,
-) {
+) -> ReconciledReviewState {
     let state = store::load(state_path);
     let Some(review) = state.reviews.get(branch) else {
-        return (HashMap::new(), HashMap::new());
+        return (HashMap::new(), HashMap::new(), Vec::new());
     };
     let mut current_shas = HashMap::new();
     for path in review.files.keys() {
@@ -266,7 +280,7 @@ fn load_reconciled_review_state(
             blob_shas.insert(path.clone(), entry.blob_sha.clone());
         }
     }
-    (statuses, blob_shas)
+    (statuses, blob_shas, review.annotations.clone())
 }
 
 /// Prints a one-line summary per changed file for the resolved diff target.
@@ -364,9 +378,15 @@ fn run_tui(config: &RunConfig) -> anyhow::Result<()> {
         // collapsed and a stale `Accepted` file starts marked
         // `ChangedSinceAccepted` and un-collapsed from the very first frame.
         if let Some(state_path) = &review_state_path {
-            let (states, blob_shas) = load_reconciled_review_state(&runner, state_path, branch);
+            let (states, blob_shas, annotations) =
+                load_reconciled_review_state(&runner, state_path, branch);
             app.set_review_states(states, blob_shas);
             app.set_review_state_path(state_path.clone());
+            // Restore before the first render (spec 08 Unit 6, task 7.2):
+            // annotations reattach to their recorded anchors verbatim, so a
+            // resumed session's annotation list and in-diff markers already
+            // reflect them on the very first frame.
+            app.restore_review_annotations(annotations);
         }
         app.set_review_origin_ops(Box::new(discovered));
     }
@@ -617,7 +637,7 @@ mod tests {
     // `#[cfg(test)]` module, which is exactly where `cargo test`'s
     // `unittests src/main.rs` binary already runs from.
 
-    use super::{gc_review_state, load_reconciled_review_state};
+    use super::{PersistedAnnotation, gc_review_state, load_reconciled_review_state};
     use redquill::git::GitRunner;
     use redquill::review::{ReviewStatus, store};
     use std::process::Command;
@@ -698,6 +718,7 @@ mod tests {
                     base: "main".to_string(),
                     worktree_path: repo.path().join("wt").join(branch),
                     files: Default::default(),
+                    annotations: Default::default(),
                 },
             )
             .unwrap();
@@ -732,6 +753,7 @@ mod tests {
                 base: "main".to_string(),
                 worktree_path: repo.path().join("wt"),
                 files: Default::default(),
+                annotations: Default::default(),
             },
         )
         .unwrap();
@@ -785,6 +807,7 @@ mod tests {
                 base: "main".to_string(),
                 worktree_path: repo.path().to_path_buf(),
                 files,
+                annotations: Vec::new(),
             },
         )
         .unwrap();
@@ -793,7 +816,12 @@ mod tests {
         write(repo.path(), "a.rs", "fn a() { changed(); }\n");
         git(repo.path(), &["commit", "-aqm", "change a.rs"]);
 
-        let (states, blob_shas) = load_reconciled_review_state(&runner, &state_path, "main");
+        let (states, blob_shas, annotations) =
+            load_reconciled_review_state(&runner, &state_path, "main");
+        assert!(
+            annotations.is_empty(),
+            "this fixture never persisted any annotations"
+        );
 
         assert_eq!(
             states.get("a.rs"),
@@ -819,9 +847,45 @@ mod tests {
         let common_dir = runner.git_common_dir().unwrap();
         let state_path = common_dir.join("redquill").join("review-state.json");
 
-        let (states, blob_shas) = load_reconciled_review_state(&runner, &state_path, "main");
+        let (states, blob_shas, annotations) =
+            load_reconciled_review_state(&runner, &state_path, "main");
 
         assert!(states.is_empty());
         assert!(blob_shas.is_empty());
+        assert!(annotations.is_empty());
+    }
+
+    #[test]
+    fn load_reconciled_review_state_returns_persisted_annotations_verbatim() {
+        use redquill::annotate::{Classification, Side, Source, Target};
+
+        let repo = repo_with_branch("main");
+        let runner = GitRunner::discover_in(repo.path()).unwrap();
+        let common_dir = runner.git_common_dir().unwrap();
+        let state_path = common_dir.join("redquill").join("review-state.json");
+        assert_inside_tempdir(&state_path, &repo);
+
+        store::save_review(
+            &state_path,
+            "main",
+            store::PersistedReview {
+                base: "main".to_string(),
+                worktree_path: repo.path().to_path_buf(),
+                files: Default::default(),
+                annotations: vec![PersistedAnnotation {
+                    target: Target::line("a.rs", 3, Side::New),
+                    classification: Classification::Nit,
+                    body: "note".to_string(),
+                    source: Source::WorkingTree,
+                }],
+            },
+        )
+        .unwrap();
+
+        let (_, _, annotations) = load_reconciled_review_state(&runner, &state_path, "main");
+
+        assert_eq!(annotations.len(), 1);
+        assert_eq!(annotations[0].body, "note");
+        assert_eq!(annotations[0].target, Target::line("a.rs", 3, Side::New));
     }
 }

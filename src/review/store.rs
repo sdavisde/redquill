@@ -26,6 +26,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -35,10 +36,23 @@ use thiserror::Error;
 /// covers an unreadable *future* version the same way it covers hand-edited
 /// garbage — both fail to deserialize into the current [`ReviewStateFile`]
 /// shape and degrade to empty, per this module's silent-degradation
-/// contract. There is no migration path (spec 08 doesn't need one yet): a
-/// version bump only needs to happen if a later spec changes the schema in
-/// a way `#[serde(default)]` fields can't absorb.
-pub const SCHEMA_VERSION: u32 = 1;
+/// contract.
+///
+/// Bumped to `2` by spec 08 Unit 6 (task 7.1), which added
+/// [`PersistedReview::annotations`]. This particular bump needed no actual
+/// migration code: `annotations` is `#[serde(default)]`, so a v1 file (no
+/// `annotations` key anywhere) still deserializes cleanly into the current
+/// shape with an empty annotation list — `load` never even notices the
+/// version number changed, since (as this doc already noted before the
+/// bump) `load` doesn't gate on `version` at all, it only ever fails via a
+/// structural deserialize error. `version` on disk is closer to an
+/// informational marker than an enforced contract; see this module's test
+/// `v1_file_without_annotations_loads_as_empty_not_corrupt` for the explicit
+/// regression pin proving a v1 file is not treated as corrupt. A *future*
+/// bump only needs real migration code if a later spec changes the
+/// schema in a way `#[serde(default)]` fields can't absorb (e.g. renaming or
+/// restructuring an existing field rather than adding a new one).
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// A file's persisted review status. Only the two statuses a user gesture
 /// can *durably* choose are represented here — `Unreviewed` (the default;
@@ -84,6 +98,24 @@ pub struct PersistedReview {
     /// side effect for anyone reading the file by hand.
     #[serde(default)]
     pub files: BTreeMap<String, PersistedFile>,
+    /// This review's annotations, in insertion order (spec 08 Unit 6): the
+    /// same entry annotations and file statuses live in together, so
+    /// deleting or GC'ing a branch's [`PersistedReview`]
+    /// ([`delete_review`]/[`gc`]) removes both in one write — "one
+    /// lifecycle, no orphaned data" by construction, with no extra code
+    /// needed here for that guarantee. Snapshotted via
+    /// [`crate::annotate::snapshot`] on every save-on-change and replayed
+    /// via [`crate::annotate::restore_all`] at session start, before the
+    /// first render. `#[serde(default, skip_serializing_if = "Vec::is_empty")]`
+    /// mirrors [`PersistedFile::blob_sha`]'s "omit rather than write empty"
+    /// convention and, as a side effect, keeps every pre-existing
+    /// annotation-free fixture in this module's tests byte-identical to
+    /// before this field existed — only a session with annotations ever
+    /// gets an `"annotations"` key at all. `#[serde(default)]` alone is what
+    /// lets a v1 file (written before this field existed) still parse as
+    /// empty rather than corrupt; see [`SCHEMA_VERSION`]'s doc.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<crate::annotate::PersistedAnnotation>,
 }
 
 /// The whole `review-state.json` file: one entry per review, keyed by
@@ -114,19 +146,41 @@ fn corrupt_sibling_path(path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// Per-process counter mixed into every temp file name (see [`save`]'s
+/// doc): `std::process::id()` alone only guarantees uniqueness *across*
+/// redquill processes, not across the several background threads the UI
+/// layer's `App::persist_review_state` can have in flight concurrently
+/// *within* one process (spec 08 Unit 6 made this the common
+/// case — three quick accept/defer gestures, or an annotation add right
+/// after one, each spawn their own save). Two threads racing on the exact
+/// same tmp path is a real, observed bug (task 7.0's full-suite gate run
+/// hit a "trailing characters" corrupt-file read from it before this
+/// counter was added) — one thread's `std::fs::write` can truncate the
+/// path out from under another thread's still-in-flight write, producing
+/// bytes that are neither writer's complete output. `Relaxed` ordering is
+/// enough: the only property needed is that two concurrent `fetch_add`
+/// calls never observe the same value, not any particular visibility order
+/// relative to other memory operations.
+static SAVE_SEQ: AtomicU64 = AtomicU64::new(0);
+
 /// Writes `state` to `path` atomically: serialize to a temp file in the
 /// same directory, then `rename` over the final path (rename is atomic
 /// within one filesystem, so a crash or a concurrent read never observes a
 /// half-written file — spec 08 Unit 4's "a crash or `Q` loses nothing"
 /// requirement). Creates `path`'s parent directory if it doesn't exist yet
-/// (the first save of a session). The temp file name includes the process
-/// id so two redquill processes saving concurrently (reviewing different
-/// branches) never collide on the same temp path.
+/// (the first save of a session). The temp file name includes both the
+/// process id (two redquill processes saving concurrently, e.g. reviewing
+/// different branches, never collide) and [`SAVE_SEQ`] (two background
+/// threads *within* the same process never collide either — see its doc).
 pub fn save(path: &Path, state: &ReviewStateFile) -> Result<(), StoreError> {
     let json = serde_json::to_string_pretty(state).map_err(StoreError::Serialize)?;
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(dir).map_err(StoreError::Io)?;
-    let tmp_path = dir.join(format!(".review-state.json.tmp-{}", std::process::id()));
+    let seq = SAVE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = dir.join(format!(
+        ".review-state.json.tmp-{}-{seq}",
+        std::process::id()
+    ));
     std::fs::write(&tmp_path, json.as_bytes()).map_err(StoreError::Io)?;
     std::fs::rename(&tmp_path, path).map_err(StoreError::Io)?;
     Ok(())
@@ -237,6 +291,7 @@ mod tests {
                 base: "main".to_string(),
                 worktree_path: PathBuf::from("/tmp/redquill/worktrees/feature-1234"),
                 files,
+                annotations: Vec::new(),
             },
         );
         ReviewStateFile {
@@ -252,7 +307,7 @@ mod tests {
         let state = sample_state();
         let json = serde_json::to_string_pretty(&state).unwrap();
         let expected = r#"{
-  "version": 1,
+  "version": 2,
   "reviews": {
     "feature": {
       "base": "main",
@@ -304,6 +359,162 @@ mod tests {
         let state: ReviewStateFile = serde_json::from_str(json).unwrap();
         let review = state.reviews.get("feature").unwrap();
         assert!(review.files.is_empty());
+        assert!(review.annotations.is_empty());
+    }
+
+    // -- Schema v2: annotations field (task 7.1) -------------------------------
+
+    /// The explicit v1→v2 compat regression pin the task calls for: a v1
+    /// file (`"version": 1`, no `annotations` key anywhere — exactly what
+    /// every pre-7.1 save wrote) must load as a normal, non-corrupt review
+    /// with an empty annotation list, going through the real [`load`]
+    /// entry point (not just a bare `serde_json::from_str`) so the
+    /// corrupt-file side path is proven *not* taken.
+    #[test]
+    fn v1_file_without_annotations_loads_as_empty_not_corrupt() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("review-state.json");
+        let v1_json = r#"{
+  "version": 1,
+  "reviews": {
+    "feature": {
+      "base": "main",
+      "worktree_path": "/tmp/redquill/worktrees/feature-1234",
+      "files": {
+        "a.rs": {
+          "status": "accepted",
+          "blob_sha": "abc123def456"
+        }
+      }
+    }
+  }
+}"#;
+        std::fs::write(&path, v1_json).unwrap();
+
+        let state = load(&path);
+
+        assert!(
+            !tmp.path().join("review-state.json.corrupt").exists(),
+            "a v1 file must never be moved aside as corrupt"
+        );
+        let review = state.reviews.get("feature").expect("v1 entry must load");
+        assert_eq!(review.files.len(), 1);
+        assert!(
+            review.annotations.is_empty(),
+            "a v1 file has no annotations key; it must default to empty, not fail to parse"
+        );
+    }
+
+    /// The v1 file's own `version: 1` survives the read verbatim (`load`
+    /// never rewrites it in place) — the *next* save is what actually
+    /// upgrades it on disk, via [`save_review`]'s `state.version =
+    /// SCHEMA_VERSION` assignment.
+    #[test]
+    fn v1_file_upgrades_to_v2_on_the_next_save() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("review-state.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"reviews":{"feature":{"base":"main","worktree_path":"/tmp/wt","files":{}}}}"#,
+        )
+        .unwrap();
+
+        save_review(
+            &path,
+            "feature",
+            PersistedReview {
+                base: "main".to_string(),
+                worktree_path: PathBuf::from("/tmp/wt"),
+                files: BTreeMap::new(),
+                annotations: Vec::new(),
+            },
+        )
+        .unwrap();
+
+        let state = load(&path);
+        assert_eq!(state.version, SCHEMA_VERSION);
+    }
+
+    /// Byte-exact round-trip for the `annotations` field itself, locking the
+    /// exact shape a review's saved annotations take inside
+    /// `review-state.json` — the array sits directly under the review
+    /// entry, each element in [`crate::annotate::PersistedAnnotation`]'s own
+    /// stable shape (see `annotate::persist`'s own byte-exact test for that
+    /// shape in isolation).
+    #[test]
+    fn annotations_field_round_trips_byte_exact() {
+        use crate::annotate::{Classification, PersistedAnnotation, Side, Source, Target};
+
+        let mut state = ReviewStateFile {
+            version: SCHEMA_VERSION,
+            reviews: BTreeMap::new(),
+        };
+        state.reviews.insert(
+            "feature".to_string(),
+            PersistedReview {
+                base: "main".to_string(),
+                worktree_path: PathBuf::from("/tmp/wt"),
+                files: BTreeMap::new(),
+                annotations: vec![PersistedAnnotation {
+                    target: Target::line("src/lib.rs", 10, Side::New),
+                    classification: Classification::Issue,
+                    body: "fix this".to_string(),
+                    source: Source::WorkingTree,
+                }],
+            },
+        );
+
+        let json = serde_json::to_string_pretty(&state).unwrap();
+        let expected = r#"{
+  "version": 2,
+  "reviews": {
+    "feature": {
+      "base": "main",
+      "worktree_path": "/tmp/wt",
+      "files": {},
+      "annotations": [
+        {
+          "target": {
+            "kind": "line",
+            "path": "src/lib.rs",
+            "line": 10,
+            "side": "new"
+          },
+          "classification": "issue",
+          "body": "fix this",
+          "source": "working_tree"
+        }
+      ]
+    }
+  }
+}"#;
+        assert_eq!(json, expected);
+
+        let round_tripped: ReviewStateFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, state);
+    }
+
+    /// An empty `files` map still serializes as `"files": {}` (no
+    /// `skip_serializing_if` on that field — unchanged from before this
+    /// task) while an empty `annotations` list is omitted entirely — the
+    /// two fields deliberately have different emptiness conventions
+    /// (`files` predates this task and every existing fixture already
+    /// depends on it always appearing; `annotations` is new, so it gets the
+    /// leaner "omit when empty" treatment `PersistedFile::blob_sha` set the
+    /// precedent for). This test exists so a future edit that "fixes" one
+    /// to match the other fails loudly instead of silently changing the
+    /// on-disk shape.
+    #[test]
+    fn empty_annotations_are_omitted_but_empty_files_still_serialize_as_object() {
+        let review = PersistedReview {
+            base: "main".to_string(),
+            worktree_path: PathBuf::from("/tmp/wt"),
+            files: BTreeMap::new(),
+            annotations: Vec::new(),
+        };
+        let json = serde_json::to_string(&review).unwrap();
+        assert!(json.contains("\"files\":{}"));
+        assert!(!json.contains("annotations"));
     }
 
     // -- Atomic write (task 4.1) -----------------------------------------------
@@ -400,6 +611,7 @@ mod tests {
                 base: "main".to_string(),
                 worktree_path: PathBuf::from("/tmp/wt"),
                 files: BTreeMap::new(),
+                annotations: Vec::new(),
             },
         )
         .unwrap();
@@ -424,6 +636,7 @@ mod tests {
                 base: "main".to_string(),
                 worktree_path: PathBuf::from("/tmp/wt2"),
                 files: BTreeMap::new(),
+                annotations: Vec::new(),
             },
         )
         .unwrap();
@@ -447,6 +660,7 @@ mod tests {
                 base: "main".to_string(),
                 worktree_path: PathBuf::from("/tmp/wt"),
                 files: BTreeMap::new(),
+                annotations: Vec::new(),
             },
         )
         .unwrap();
@@ -466,6 +680,7 @@ mod tests {
                 base: "main".to_string(),
                 worktree_path: PathBuf::from("/tmp/wt2"),
                 files: BTreeMap::new(),
+                annotations: Vec::new(),
             },
         );
         save(&path, &state).unwrap();
@@ -507,6 +722,7 @@ mod tests {
                 base: "main".to_string(),
                 worktree_path: PathBuf::from("/tmp/wt-deleted"),
                 files: BTreeMap::new(),
+                annotations: Vec::new(),
             },
         );
         let existing: HashSet<String> = ["feature".to_string()].into_iter().collect();

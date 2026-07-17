@@ -1,7 +1,10 @@
 //! Real-git, real-worktree integration tests for spec 08 Unit 4 (review
 //! progress survives sessions and self-invalidates when files change),
 //! task 4.6: a two-"session" scenario (resume → staleness → re-accept →
-//! finish) plus a GC-of-a-deleted-branch scenario.
+//! finish) plus a GC-of-a-deleted-branch scenario. Also spec 08 Unit 6
+//! (review annotations survive pause), task 7.4: a second two-"session"
+//! scenario — annotate, pause (silent), resume (restored), annotate again,
+//! finish (emits the complete set exactly once, byte-exact).
 //!
 //! Lives beside `commit_integration_tests.rs`/`review_guard_integration_tests.rs`
 //! for the identical reason those files document: `dispatch_key`,
@@ -337,6 +340,214 @@ fn resume_staleness_re_accept_and_finish_round_trip_against_real_git() {
     assert_eq!(git_out(repo.path(), &["status", "--porcelain"]), "");
 }
 
+// -- Two-session scenario: annotate -> pause (silent) -> resume (restored)
+// -> annotate again -> finish (emits once, byte-exact) — spec 08 Unit 6,
+// task 7.4 -------------------------------------------------------------
+
+/// Opens Compose on `path`'s file-header target (real key dispatch, `c`),
+/// types `body` directly into the draft buffer (matching every other test
+/// in this crate's convention — see e.g. `app_tests.rs`'s
+/// `submit_compose_with_body_adds_annotation_and_refreshes_rows` — typed
+/// text isn't driven through per-character key dispatch anywhere in this
+/// suite), then submits it via [`App::submit_compose`] directly.
+fn annotate_file(
+    app: &mut App,
+    keymap: &Keymap,
+    pending: &mut Option<KeyEvent>,
+    path: &str,
+    body: &str,
+) {
+    app.select_file_by_path(path);
+    press(app, keymap, pending, KeyCode::Char('c'));
+    for c in body.chars() {
+        app.compose.as_mut().unwrap().buffer.insert_char(c);
+    }
+    app.submit_compose();
+}
+
+#[test]
+fn annotate_pause_resume_restores_and_finish_emits_the_complete_set_once() {
+    let repo = repo_with_feature_branch_three_files();
+    let discovered = GitRunner::discover_in(repo.path()).expect("discover repo");
+    let common_dir = discovered.git_common_dir().unwrap();
+    let worktree_path = common_dir
+        .join("redquill")
+        .join("worktrees")
+        .join("feature-test");
+    assert_inside_tempdir(&worktree_path, &repo);
+    discovered.worktree_add(&worktree_path, "feature").unwrap();
+    let state_path = common_dir.join("redquill").join("review-state.json");
+    assert_inside_tempdir(&state_path, &repo);
+
+    let target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    // -- "Session 1": annotate a.rs, then pause (drop, no `finish`). --------
+    {
+        let session_runner = GitRunner::discover_in(&worktree_path).expect("discover worktree");
+        let mut app = app_for_worktree(&session_runner, target.clone());
+        app.set_review_state_path(state_path.clone());
+
+        annotate_file(&mut app, &keymap, &mut pending, "a.rs", "first note");
+        wait_for_review_save(&mut app);
+
+        assert_eq!(app.annotations.len(), 1);
+        // Pause: `app` is simply dropped here — exactly like the end-review
+        // modal's `p`, which quits via `Flow::Quit(QuitOutcome::Discard)`
+        // (see `modal_keys.rs`'s drift test for that wiring) and therefore
+        // never reaches `main.rs`'s `render_markdown` call at all. Nothing
+        // in this in-crate test observes stdout directly (that gate is
+        // `main.rs`'s job, already pinned by `modal_keys.rs`'s
+        // `every_end_review_table_entry_drives_its_documented_action`); this
+        // test's job is the persistence/restore half of the contract.
+    }
+    let after_pause = store::load(&state_path);
+    let saved_review = after_pause
+        .reviews
+        .get("feature")
+        .expect("session 1 saved an entry");
+    assert_eq!(
+        saved_review.annotations.len(),
+        1,
+        "pause must leave the annotation persisted, not discard it"
+    );
+    assert_eq!(saved_review.annotations[0].body, "first note");
+
+    // -- "Session 2": resume, restore, annotate b.rs, then finish. ----------
+    let session_runner = GitRunner::discover_in(&worktree_path).expect("discover worktree");
+    let (states, blob_shas, persisted_annotations) = {
+        let persisted = store::load(&state_path);
+        let review = persisted.reviews.get("feature").unwrap();
+        let mut current_shas = std::collections::HashMap::new();
+        for path in review.files.keys() {
+            current_shas.insert(
+                path.clone(),
+                session_runner.blob_sha("feature", path).unwrap(),
+            );
+        }
+        let statuses = crate::review::reconcile(review, &current_shas);
+        (
+            statuses,
+            std::collections::HashMap::new(),
+            review.annotations.clone(),
+        )
+    };
+    let mut app = app_for_worktree(&session_runner, target.clone());
+    app.set_review_states(states, blob_shas);
+    app.set_review_state_path(state_path.clone());
+    app.set_review_origin_ops(Box::new(GitRunner::discover_in(repo.path()).unwrap()));
+
+    // Restore happens before anything else, exactly mirroring `main.rs`'s
+    // bootstrap ordering (`set_review_states` then `restore_review_annotations`,
+    // both before the first render).
+    app.restore_review_annotations(persisted_annotations);
+
+    assert_eq!(
+        app.annotations.len(),
+        1,
+        "the restored annotation must already be in the store before any key is pressed"
+    );
+    assert_eq!(
+        app.annotations.iter().next().unwrap().body,
+        "first note",
+        "restore must reattach to the exact recorded body/target"
+    );
+
+    if std::env::var_os("REDQUILL_PROOF_DUMP").is_some() {
+        app.apply(Action::ToggleList);
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &app, &keymap, None))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let w = buffer.area.width as usize;
+        let symbols: Vec<&str> = buffer.content().iter().map(|c| c.symbol()).collect();
+        eprintln!("-- session 2, resumed before any key press: restored annotation visible --");
+        for row in symbols.chunks(w) {
+            eprintln!("{}", row.concat());
+        }
+        app.apply(Action::ToggleList);
+    }
+
+    annotate_file(&mut app, &keymap, &mut pending, "b.rs", "second note");
+    wait_for_review_save(&mut app);
+    assert_eq!(app.annotations.len(), 2);
+
+    // -- Finish: emits the complete restored-plus-new set exactly once. -----
+    app.open_end_review_modal();
+    let outcome = app.finish_review();
+    assert_eq!(outcome, Some(super::QuitOutcome::Emit));
+
+    let markdown = crate::annotate::render_markdown(&app.annotations);
+    assert_eq!(
+        markdown.matches("first note").count(),
+        1,
+        "the restored annotation must appear exactly once in the emitted set"
+    );
+    assert_eq!(
+        markdown.matches("second note").count(),
+        1,
+        "the new annotation must appear exactly once in the emitted set"
+    );
+
+    // -- One lifecycle: finish deletes the whole entry, annotations included. --
+    let final_state = store::load(&state_path);
+    assert!(
+        !final_state.reviews.contains_key("feature"),
+        "finish must delete this branch's persisted state entry, annotations included"
+    );
+
+    // The user's own checkout is untouched throughout.
+    assert_eq!(git_out(repo.path(), &["branch", "--show-current"]), "main");
+    assert_eq!(git_out(repo.path(), &["status", "--porcelain"]), "");
+}
+
+/// Regression pin (spec 08 Unit 6's explicit requirement): a plain
+/// (non-review) session's `q` still emits in-memory annotations exactly as
+/// before, and nothing about it touches disk — no state file is ever
+/// created for a session that never had `set_review_state_path` called.
+#[test]
+fn a_local_sessions_annotations_are_never_persisted_and_q_still_emits_them_unchanged() {
+    let repo = repo_with_feature_branch_three_files();
+    // An uncommitted change in the *main* checkout, so the working-tree
+    // diff actually has a file to annotate (the fixture's `main` otherwise
+    // has no working-tree changes at all — only `feature`, three commits
+    // ahead, differs).
+    write(repo.path(), "base.txt", "line one\nline two\n");
+    let discovered = GitRunner::discover_in(repo.path()).expect("discover repo");
+    // Deliberately the *working tree* target, not `--review` — a plain
+    // local session, exactly like every pre-spec-08 invocation.
+    let target = DiffTarget::WorkingTree;
+    let mut app = app_for_worktree(&discovered, target);
+    // No `set_review_state_path` call at all — mirrors `main.rs`'s
+    // bootstrap, which only ever calls it inside the `DiffTarget::Review`
+    // branch.
+    assert!(app.review_state_path.is_none());
+
+    app.select_file_by_path("base.txt");
+    app.apply(Action::Compose);
+    for c in "local note".chars() {
+        app.compose.as_mut().unwrap().buffer.insert_char(c);
+    }
+    app.submit_compose();
+
+    assert!(
+        app.review_save_tasks.poll().is_empty(),
+        "a local session must never spawn a review-state save"
+    );
+    assert_eq!(app.review_saves_pending, 0);
+
+    let markdown = crate::annotate::render_markdown(&app.annotations);
+    assert!(markdown.contains("local note"));
+}
+
 // -- GC of a deleted branch (task 4.5, exercised end-to-end here too) -------
 
 /// A plain repo on `main` only — deliberately *without* a `feature`
@@ -371,6 +582,7 @@ fn launching_after_the_reviewed_branch_is_deleted_gcs_its_entry() {
             base: "main".to_string(),
             worktree_path: repo.path().join("wt"),
             files: Default::default(),
+            annotations: Default::default(),
         },
     )
     .unwrap();
@@ -381,6 +593,7 @@ fn launching_after_the_reviewed_branch_is_deleted_gcs_its_entry() {
             base: "main".to_string(),
             worktree_path: repo.path().join("wt2"),
             files: Default::default(),
+            annotations: Default::default(),
         },
     )
     .unwrap();
