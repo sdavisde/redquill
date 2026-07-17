@@ -183,15 +183,7 @@ fn panel_mode_hints_match_the_curated_list_in_order() {
     assert_eq!(
         labels(&entries),
         vec![
-            "move",
-            "open file",
-            "fetch",
-            "pull",
-            "push",
-            "commit",
-            "close",
-            "tab",
-            "help"
+            "move", "open", "fetch", "pull", "push", "commit", "close", "tab", "help"
         ]
     );
 }
@@ -225,15 +217,7 @@ fn panel_push_hint_relabels_to_publish_on_an_unpublished_branch() {
     assert_eq!(
         labels(&entries),
         vec![
-            "move",
-            "open file",
-            "fetch",
-            "pull",
-            "publish",
-            "commit",
-            "close",
-            "tab",
-            "help"
+            "move", "open", "fetch", "pull", "publish", "commit", "close", "tab", "help"
         ]
     );
 }

@@ -3,7 +3,7 @@
 //! methods, unit-tested without a terminal.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::annotate::{AnnotationStore, Source, Target};
@@ -393,6 +393,12 @@ pub struct App {
     /// documented exception in `docs/rust-best-practices.md`'s state-design
     /// guidance for state that must outlive mode exit.
     pub(super) last_panel_tab: PanelTab,
+    /// The set of collapsed directory keys in the git panel's file tree (see
+    /// [`super::file_tree`]). An `App` field rather than [`Mode::Panel`]
+    /// state because a folded directory must stay folded across the panel
+    /// losing focus and across background status refreshes — the same "must
+    /// survive mode exit" exception `last_panel_tab` documents.
+    pub(super) panel_collapsed_dirs: HashSet<String>,
     /// The commit currently displayed by a commit view opened from the
     /// History tab (its metadata, looked up from `history` rather than
     /// re-fetched), for [`super::diff_view`]'s header block. `None` for every
@@ -602,6 +608,7 @@ impl App {
             history_generation: 0,
             history_tasks: BackgroundTasks::new(),
             last_panel_tab: PanelTab::default(),
+            panel_collapsed_dirs: HashSet::new(),
             active_commit: None,
             suspended_view: None,
             finder: None,

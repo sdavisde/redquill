@@ -772,9 +772,9 @@ impl Keymap {
                 p(
                     KeySeq::one(Enter, none),
                     PanelSelect,
-                    "Focus diff on this file (History tab: open the commit)",
+                    "Open file / fold directory (History tab: open the commit)",
                 )
-                .footer(2, "open file"),
+                .footer(2, "open"),
                 p(
                     KeySeq::one(Tab, none),
                     TogglePanelTab,

@@ -3576,19 +3576,20 @@ fn focusing_the_panel_resets_its_cursor_to_top() {
 }
 
 #[test]
-fn panel_cursor_moves_and_clamps_across_sections() {
+fn panel_cursor_moves_and_clamps_over_the_file_tree() {
     let mut app = panel_app();
     app.apply(Action::FocusGitPanel);
-    // 5 navigable rows: a.rs, b.rs, notes.md, stash0, stash1.
+    // 3 navigable rows: a.rs, b.rs, notes.md (all root-level files). Stashes
+    // are pinned to their own passive region and are not navigable.
     assert_eq!(app.panel_cursor(), 0);
     app.apply(Action::PanelCursorUp); // clamps at top
     assert_eq!(app.panel_cursor(), 0);
     for _ in 0..10 {
         app.apply(Action::PanelCursorDown);
     }
-    assert_eq!(app.panel_cursor(), 4); // clamps at bottom (last stash)
+    assert_eq!(app.panel_cursor(), 2); // clamps at bottom (last file)
     app.apply(Action::PanelCursorUp);
-    assert_eq!(app.panel_cursor(), 3);
+    assert_eq!(app.panel_cursor(), 1);
 }
 
 #[test]
@@ -3617,13 +3618,13 @@ fn panel_enter_on_untracked_file_selects_it() {
 }
 
 #[test]
-fn panel_enter_on_stash_is_a_no_op_and_stays_focused() {
+fn panel_enter_on_out_of_range_cursor_is_a_no_op_and_stays_focused() {
     let mut app = panel_app();
     app.apply(Action::FocusGitPanel);
     app.mode = Mode::Panel {
         cursor: 3,
         tab: crate::ui::app::PanelTab::Changes,
-    }; // first stash row
+    }; // past the last navigable row (3 files, indices 0..=2)
     let selected_before = app.view.selected_file;
     app.apply(Action::PanelSelect);
     assert_eq!(app.view.selected_file, selected_before); // unchanged
