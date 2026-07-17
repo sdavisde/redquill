@@ -144,6 +144,7 @@ impl App {
         self.view.file_of_row = mb.file_of_row;
         self.view.header_row_of_file = mb.header_row_of_file;
         self.view.gutter_width = mb.gutter_width;
+        self.view.rebuild_layout();
         self.view.selected_file = self.view.file_of_cursor();
         self.search.recompute(&self.view.rows);
     }

@@ -28,6 +28,7 @@ mod confirm_remote_op;
 mod confirm_remote_op_modal;
 mod diff_view;
 mod diff_view_state;
+mod diff_wrap;
 mod editor;
 mod end_review;
 mod end_review_modal;
@@ -966,6 +967,10 @@ fn event_loop(
         // each site re-deriving the splits inline.
         let diff_area = diff_pane_rect(full_area, app, keymap, pending_prefix);
         app.view.set_viewport_height(diff_view::viewport_height(
+            diff_area,
+            app.active_commit.is_some(),
+        ));
+        app.view.set_content_width(diff_view::content_width(
             diff_area,
             app.active_commit.is_some(),
         ));

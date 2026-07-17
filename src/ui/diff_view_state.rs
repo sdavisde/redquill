@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use crate::annotate::Target;
 use crate::diff::FileDiff;
 
+use super::diff_wrap::WrapLayout;
 use super::rows::{MIN_GUTTER_WIDTH, Row, anchor_row_index};
 
 /// A reasonable default viewport height, used until the first frame reports
@@ -73,6 +74,22 @@ pub struct DiffViewState {
     /// proactively on every vertical motion — a simple clamp, not vim's
     /// "desired column" memory.
     pub cursor_col: usize,
+    /// The diff pane's last-known inner content width (columns available
+    /// for a [`Row::Line`]'s content, after the gutter/marker prefix), used
+    /// to build [`DiffViewState::layout`]. `0` until the render loop calls
+    /// [`DiffViewState::set_content_width`] for the first time — the wrap
+    /// layout stays unbuilt at that width (see [`super::diff_wrap::WrapLayout::build`]),
+    /// so every scroll/render accessor falls back to its pre-wrap identity
+    /// behavior (one visual row per logical row) until then.
+    content_width: usize,
+    /// The soft-wrap layout for `rows` at `content_width`: maps each
+    /// logical row to a visual height and supports visual<->logical
+    /// conversion. Rebuilt by [`DiffViewState::rebuild_layout`] whenever
+    /// `rows` or `content_width` change. Every accessor that reads it is
+    /// gated on [`super::diff_wrap::WrapLayout::is_built_for`], so a stale
+    /// or never-built layout degrades to the identity mapping rather than
+    /// misreporting.
+    layout: WrapLayout,
 }
 
 impl DiffViewState {
@@ -92,6 +109,8 @@ impl DiffViewState {
             scroll: 0,
             viewport_height: DEFAULT_VIEWPORT_HEIGHT,
             cursor_col: 0,
+            content_width: 0,
+            layout: WrapLayout::default(),
         }
     }
 
@@ -172,6 +191,101 @@ impl DiffViewState {
     /// The last-known viewport height (see [`DiffViewState::set_viewport_height`]).
     pub fn viewport_height(&self) -> usize {
         self.viewport_height
+    }
+
+    /// Records the diff pane's current inner content width and rebuilds the
+    /// wrap layout if it changed. Called once per frame by the render loop,
+    /// next to [`DiffViewState::set_viewport_height`]. A no-op (no rebuild)
+    /// when the width is unchanged, so repeated calls at a stable terminal
+    /// size don't re-wrap every frame.
+    pub fn set_content_width(&mut self, w: usize) {
+        if w != self.content_width {
+            self.content_width = w;
+            self.rebuild_layout();
+        }
+    }
+
+    /// Rebuilds the wrap layout from the current `rows`/`gutter_width` at
+    /// the current `content_width`. Called after [`DiffViewState::set_content_width`]
+    /// changes, and by the owner ([`super::App`]) after every row rebuild
+    /// (rows and gutter width can change independently of the pane's
+    /// width).
+    pub fn rebuild_layout(&mut self) {
+        self.layout = WrapLayout::build(&self.rows, self.gutter_width, self.content_width);
+    }
+
+    /// Whether [`DiffViewState::layout`] is trustworthy for the current
+    /// `rows` — the single gate every visual accessor below checks before
+    /// reading it, so a stale layout (never built, or built before the last
+    /// row rebuild) falls back to the identity mapping instead of
+    /// misreporting.
+    fn layout_is_current(&self) -> bool {
+        self.layout.is_built_for(self.rows.len())
+    }
+
+    /// The visual row offset (from the top of the buffer) where logical row
+    /// `logical` begins. Identity (`logical`) when the wrap layout isn't
+    /// built for the current rows (see [`DiffViewState::layout_is_current`]).
+    pub(super) fn row_visual_start(&self, logical: usize) -> usize {
+        if self.layout_is_current() {
+            self.layout.visual_start(logical)
+        } else {
+            logical
+        }
+    }
+
+    /// The visual height (in terminal rows) of logical row `logical`. `1`
+    /// when the wrap layout isn't built for the current rows.
+    fn row_visual_height(&self, logical: usize) -> usize {
+        if self.layout_is_current() {
+            self.layout.row_height(logical)
+        } else {
+            1
+        }
+    }
+
+    /// The total visual row count across the whole buffer. `rows.len()`
+    /// when the wrap layout isn't built for the current rows.
+    fn total_visual(&self) -> usize {
+        if self.layout_is_current() {
+            self.layout.total_visual()
+        } else {
+            self.rows.len()
+        }
+    }
+
+    /// The visual row where the cursor's logical row begins.
+    fn cursor_visual_start(&self) -> usize {
+        self.row_visual_start(self.cursor)
+    }
+
+    /// One past the last visual row the cursor's logical row occupies
+    /// (exclusive), i.e. `cursor_visual_start() + row_visual_height(cursor)`.
+    fn cursor_visual_end(&self) -> usize {
+        self.row_visual_start(self.cursor) + self.row_visual_height(self.cursor)
+    }
+
+    /// The logical row owning visual row `v` — the render walk's entry
+    /// point into the wrap layout. Identity (clamped into range) when the
+    /// wrap layout isn't built for the current rows.
+    pub(super) fn logical_of_visual(&self, v: usize) -> usize {
+        if self.layout_is_current() {
+            self.layout.logical_of_visual(v)
+        } else {
+            v.min(self.rows.len().saturating_sub(1))
+        }
+    }
+
+    /// The char-range partition for a wrapped `Row::Line` at `logical` (see
+    /// [`super::diff_wrap::WrapLayout::ranges_of`]). `None` when the wrap
+    /// layout isn't built for the current rows, so unwrapped/identity
+    /// rendering is the default when width hasn't been fed yet.
+    pub(super) fn ranges_of(&self, logical: usize) -> Option<&[(usize, usize)]> {
+        if self.layout_is_current() {
+            self.layout.ranges_of(logical)
+        } else {
+            None
+        }
     }
 
     fn half_page(&self) -> usize {
@@ -278,10 +392,17 @@ impl DiffViewState {
             self.scroll = 0;
             return;
         }
-        if self.cursor < self.scroll {
-            self.scroll = self.cursor;
-        } else if self.cursor >= self.scroll + self.viewport_height {
-            self.scroll = self.cursor + 1 - self.viewport_height;
+        let cvs = self.cursor_visual_start();
+        let cve = self.cursor_visual_end();
+        if cvs < self.scroll {
+            self.scroll = cvs;
+        } else if cve > self.scroll + self.viewport_height {
+            let height = self.row_visual_height(self.cursor);
+            self.scroll = if height <= self.viewport_height {
+                cve - self.viewport_height
+            } else {
+                cvs
+            };
         }
     }
 
@@ -296,7 +417,7 @@ impl DiffViewState {
     /// The largest useful scroll offset: the one that puts the last row on
     /// the bottom line of the viewport. Zero when everything fits.
     fn max_scroll(&self) -> usize {
-        self.rows.len().saturating_sub(self.viewport_height)
+        self.total_visual().saturating_sub(self.viewport_height)
     }
 
     /// Like [`DiffViewState::ensure_visible`], but keeps a
@@ -311,10 +432,12 @@ impl DiffViewState {
             return;
         }
         let margin = self.scroll_margin();
-        if self.cursor < self.scroll + margin {
-            self.scroll = self.cursor.saturating_sub(margin);
-        } else if self.cursor + margin >= self.scroll + self.viewport_height {
-            self.scroll = (self.cursor + margin + 1)
+        let cvs = self.cursor_visual_start();
+        let cve = self.cursor_visual_end();
+        if cvs < self.scroll + margin {
+            self.scroll = cvs.saturating_sub(margin);
+        } else if cve + margin > self.scroll + self.viewport_height {
+            self.scroll = (cve + margin)
                 .saturating_sub(self.viewport_height)
                 .min(self.max_scroll());
         }
@@ -334,15 +457,15 @@ impl DiffViewState {
             self.scroll = 0;
             return;
         }
-        let body = span_end.saturating_sub(self.cursor + 1);
-        let context = body.min(self.viewport_height / 2);
-        let already_fine = self.cursor >= self.scroll
-            && self.cursor + context < self.scroll + self.viewport_height;
+        let cvs = self.cursor_visual_start();
+        let cve = self.cursor_visual_end();
+        let body_visual = self.row_visual_start(span_end).saturating_sub(cve);
+        let context = body_visual.min(self.viewport_height / 2);
+        let already_fine = cvs >= self.scroll && cvs + context < self.scroll + self.viewport_height;
         if already_fine {
             return;
         }
-        self.scroll = self
-            .cursor
+        self.scroll = cvs
             .saturating_sub(self.scroll_margin())
             .min(self.max_scroll());
     }
@@ -520,7 +643,8 @@ impl DiffViewState {
             return;
         }
         let half = self.viewport_height / 2;
-        self.scroll = self.cursor.saturating_sub(half).min(self.max_scroll());
+        let cvs = self.cursor_visual_start();
+        self.scroll = cvs.saturating_sub(half).min(self.max_scroll());
     }
 
     /// Scrolls so the cursor sits near the top of the viewport (the `zt`
@@ -533,8 +657,8 @@ impl DiffViewState {
             self.scroll = 0;
             return;
         }
-        self.scroll = self
-            .cursor
+        let cvs = self.cursor_visual_start();
+        self.scroll = cvs
             .saturating_sub(self.scroll_margin())
             .min(self.max_scroll());
     }
@@ -547,7 +671,8 @@ impl DiffViewState {
             self.scroll = 0;
             return;
         }
-        self.scroll = (self.cursor + self.scroll_margin() + 1)
+        let cve = self.cursor_visual_end();
+        self.scroll = (cve + self.scroll_margin())
             .saturating_sub(self.viewport_height)
             .min(self.max_scroll());
     }
@@ -1340,5 +1465,77 @@ index 1..2 100644
 
         view.cursor = 0; // file header row: not a Line row
         assert_eq!(view.word_at_cursor(), None);
+    }
+
+    // -- Soft wrap layout: scroll math over wrapped visual rows --------------
+
+    /// A single-hunk file with exactly one content line — a context line
+    /// `len` chars long, with no whitespace so it hard-splits at the wrap
+    /// width deterministically. Rows: FileHeader(0), HunkHeader(1),
+    /// Line(2) — the only addressable content row.
+    fn raw_with_long_line(len: usize) -> String {
+        let content = "x".repeat(len);
+        format!(
+            "diff --git a/f.rs b/f.rs\nindex 1..2 100644\n--- a/f.rs\n+++ b/f.rs\n@@ -1,1 +1,1 @@\n {content}\n"
+        )
+    }
+
+    #[test]
+    fn set_content_width_wraps_a_long_line_and_grows_total_visual_rows() {
+        let mut view = view_with_raw("f.rs", &raw_with_long_line(200));
+        let rows_len = view.rows.len();
+        view.set_viewport_height(10);
+        // gutter_width is MIN_GUTTER_WIDTH (3) for this small file, so
+        // content_col_offset(3) == 11; width 30 -> wrap width 19 for a
+        // 200-char line -> several wrapped rows.
+        view.set_content_width(30);
+        assert!(view.row_visual_height(2) > 1);
+        assert!(view.total_visual() > rows_len);
+    }
+
+    #[test]
+    fn wrapped_cursor_line_stays_fully_visible_when_it_fits_the_viewport() {
+        let mut view = view_with_raw("f.rs", &raw_with_long_line(60));
+        view.set_content_width(30);
+        view.set_viewport_height(20); // generous: the wrapped line's whole span fits
+        view.jump_to_bottom(); // cursor lands on the long line (only content row)
+        assert_eq!(view.cursor, 2);
+        let cvs = view.cursor_visual_start();
+        let cve = view.cursor_visual_end();
+        assert!(
+            cvs >= view.scroll,
+            "cursor's top must not scroll above view"
+        );
+        assert!(
+            cve <= view.scroll + view.viewport_height(),
+            "cursor's whole span must fit in view"
+        );
+    }
+
+    #[test]
+    fn wrapped_cursor_line_taller_than_viewport_aligns_to_its_top() {
+        let mut view = view_with_raw("f.rs", &raw_with_long_line(400));
+        // wrap width 19 -> ceil(400/19) = 22 visual rows, taller than an
+        // 8-row viewport.
+        view.set_content_width(30);
+        view.set_viewport_height(8);
+        view.jump_to_bottom();
+        assert_eq!(view.cursor, 2);
+        assert!(view.row_visual_height(2) > view.viewport_height());
+        let cvs = view.cursor_visual_start();
+        assert_eq!(
+            view.scroll, cvs,
+            "a row taller than the viewport aligns to its top rather than \
+             centering or bottom-anchoring"
+        );
+    }
+
+    #[test]
+    fn zero_content_width_never_wraps_identity_path() {
+        // The render loop hasn't called `set_content_width` yet (or a code
+        // path that never does, e.g. a test `App`): rows stay height 1.
+        let view = view_with_raw("f.rs", &raw_with_long_line(200));
+        assert_eq!(view.row_visual_height(2), 1);
+        assert_eq!(view.total_visual(), view.rows.len());
     }
 }

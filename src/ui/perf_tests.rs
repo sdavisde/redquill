@@ -363,6 +363,36 @@ fn cursor_navigation_is_bounded() {
     );
 }
 
+/// Soft-wrap layout build: `WrapLayout::build` (via
+/// `DiffViewState::rebuild_layout`) walks every row and, for `Row::Line`,
+/// wraps its content — this must stay linear in the buffer size, not blow up
+/// into an accidental O(n^2) (e.g. re-scanning prior rows per line). Measured
+/// with a realistic narrow content width so most lines actually wrap.
+#[test]
+fn wrap_layout_build_is_bounded() {
+    const ITERS: u32 = 20;
+    // Measured ~55ms debug on a dev machine for 20 builds over ~5k rows;
+    // ~14x headroom.
+    const BUDGET: Duration = Duration::from_millis(800);
+    let (mut app, diff_lines) = build_app();
+    app.view.set_content_width(80);
+    let start = Instant::now();
+    for _ in 0..ITERS {
+        app.view.rebuild_layout();
+    }
+    let elapsed = start.elapsed();
+    report(
+        &format!("wrap_layout_build x{ITERS} ({diff_lines} ln)"),
+        elapsed,
+        BUDGET,
+    );
+    assert!(
+        elapsed < BUDGET,
+        "wrap_layout_build x{ITERS} took {elapsed:?}, over budget {BUDGET:?} \
+         (possible O(n^2) in the wrap layout build)"
+    );
+}
+
 /// Hot path 4 (cont.): hunk-to-hunk navigation. `next_hunk` scans the buffer's
 /// header rows on every press, so repeated full sweeps over a many-hunk buffer
 /// are the stress case; the total is budgeted.
