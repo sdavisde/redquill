@@ -3,10 +3,10 @@
 //! host repo or its config.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use redquill::git::GitRunner;
+use redquill::git::{CommitLogRange, GitRunner};
 use tempfile::TempDir;
 
 /// Runs a git command in `dir`, asserting success. Used only to build fixtures.
@@ -28,15 +28,61 @@ fn runner_for(tmp: &TempDir) -> GitRunner {
     GitRunner::discover_in(tmp.path()).expect("discover repo")
 }
 
+/// Canonicalizes `path`, panicking rather than silently comparing raw
+/// (potentially symlink-relative, e.g. macOS `/var`) paths.
+fn canon(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|e| panic!("canonicalize {path:?}: {e}"))
+}
+
+/// The shared isolation guard every fixture in this file runs before
+/// touching disk, per this repo's tempdir-isolation convention (local copy,
+/// matching how every integration-test file already carries its own — see
+/// the 2026-07-16 incident writeup this rule traces back to).
+fn assert_inside_tempdir(path: &Path, tmp: &TempDir) {
+    let tmp_root = canon(tmp.path());
+    let mut probe = path.to_path_buf();
+    while !probe.exists() {
+        match probe.parent() {
+            Some(parent) => probe = parent.to_path_buf(),
+            None => panic!("path {path:?} has no existing ancestor to canonicalize"),
+        }
+    }
+    let probe_canon = canon(&probe);
+    assert!(
+        probe_canon.starts_with(&tmp_root),
+        "refusing to run a git call outside the tempdir: {path:?} (resolved ancestor {probe_canon:?}) is not under {tmp_root:?}"
+    );
+}
+
 /// Initializes a fresh repo with a local-only identity (nothing leaks to
 /// the host's global git config) and no commits yet.
 fn init_bare_repo() -> TempDir {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path();
+    assert_inside_tempdir(dir, &tmp);
     git(dir, &["init", "-q"]);
     git(dir, &["config", "user.name", "redquill test"]);
     git(dir, &["config", "user.email", "test@redquill.invalid"]);
     tmp
+}
+
+/// A fresh repo with its initial branch explicitly named `branch` (never
+/// relying on the ambient `init.defaultBranch` config) and no commits yet —
+/// the fixture the range-log tests build a base/head history on top of.
+fn init_repo_with_base(branch: &str) -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    assert_inside_tempdir(dir, &tmp);
+    git(dir, &["init", "-q", "-b", branch]);
+    git(dir, &["config", "user.name", "redquill test"]);
+    git(dir, &["config", "user.email", "test@redquill.invalid"]);
+    tmp
+}
+
+fn commit_file(dir: &Path, contents: &str, message: &str) {
+    fs::write(dir.join("file.txt"), contents).unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", message]);
 }
 
 /// Builds `count` commits, each touching `file.txt`, with subjects
@@ -108,4 +154,81 @@ fn commit_log_skip_past_the_end_yields_an_empty_final_page() {
     let runner = runner_for(&tmp);
     let last_page = runner.commit_log(10, 2).unwrap();
     assert!(last_page.is_empty());
+}
+
+// -- `GitRunner::commit_log_range` (the Review launcher Commits tab's
+// ahead-of-base source) --------------------------------------------------
+
+#[test]
+fn commit_log_range_lists_commits_ahead_of_base_newest_first() {
+    let tmp = init_repo_with_base("main");
+    let dir = tmp.path();
+    commit_file(dir, "base\n", "base commit");
+    git(dir, &["checkout", "-qb", "feature"]);
+    commit_file(dir, "feature one\n", "feature commit one");
+    commit_file(dir, "feature two\n", "feature commit two");
+
+    let runner = runner_for(&tmp);
+    let range = CommitLogRange {
+        base: "main".to_string(),
+        head: "feature".to_string(),
+    };
+    let commits = runner.commit_log_range(&range).unwrap();
+
+    assert_eq!(commits.len(), 2);
+    assert_eq!(commits[0].subject, "feature commit two");
+    assert_eq!(commits[1].subject, "feature commit one");
+    // The base commit itself is excluded.
+    assert!(commits.iter().all(|c| c.subject != "base commit"));
+}
+
+#[test]
+fn commit_log_range_on_the_base_branch_itself_yields_no_entries() {
+    let tmp = init_repo_with_base("main");
+    let dir = tmp.path();
+    commit_file(dir, "base\n", "base commit");
+
+    let runner = runner_for(&tmp);
+    let range = CommitLogRange {
+        base: "main".to_string(),
+        head: "main".to_string(),
+    };
+    let commits = runner.commit_log_range(&range).unwrap();
+    assert!(
+        commits.is_empty(),
+        "a branch that IS the base has nothing ahead of itself"
+    );
+}
+
+#[test]
+fn commit_log_range_with_head_already_reachable_from_base_yields_no_entries() {
+    // `head` (an older tag) contributes nothing `base` doesn't already
+    // have — still an empty vec, not an error.
+    let tmp = init_repo_with_base("main");
+    let dir = tmp.path();
+    commit_file(dir, "one\n", "first");
+    git(dir, &["tag", "older"]);
+    commit_file(dir, "two\n", "second");
+
+    let runner = runner_for(&tmp);
+    let range = CommitLogRange {
+        base: "main".to_string(),
+        head: "older".to_string(),
+    };
+    let commits = runner.commit_log_range(&range).unwrap();
+    assert!(commits.is_empty());
+}
+
+#[test]
+fn commit_log_range_with_an_unresolvable_base_is_an_error() {
+    let tmp = init_repo_with_base("main");
+    let dir = tmp.path();
+    commit_file(dir, "one\n", "first");
+
+    let runner = runner_for(&tmp);
+    let range = CommitLogRange {
+        base: "does-not-exist".to_string(),
+        head: "main".to_string(),
+    };
+    assert!(runner.commit_log_range(&range).is_err());
 }

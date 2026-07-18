@@ -58,7 +58,7 @@ pub use commit::{
 };
 pub use diff::{DiffTarget, RawFilePatch, StagingMode, split_patches};
 pub use error::GitError;
-pub use log::{COMMIT_LOG_FORMAT, CommitLogEntry, parse_commit_log};
+pub use log::{COMMIT_LOG_FORMAT, CommitLogEntry, CommitLogRange, parse_commit_log};
 pub use ls_files::parse_ls_files_z;
 pub use remote::{RemoteOp, remote_command};
 pub use runner::GitRunner;

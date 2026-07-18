@@ -7,7 +7,7 @@ use super::branch::{BRANCH_LIST_FORMAT, LocalBranch, parse_branch_list};
 use super::commit::{COMMIT_SUMMARY_FORMAT, CommitSummary, parse_commit_summary};
 use super::diff::{DiffTarget, RawFilePatch, split_patches};
 use super::error::{GitError, command_error, map_spawn_err};
-use super::log::{COMMIT_LOG_FORMAT, CommitLogEntry, parse_commit_log};
+use super::log::{COMMIT_LOG_FORMAT, CommitLogEntry, CommitLogRange, parse_commit_log};
 use super::ls_files::parse_ls_files_z;
 use super::stash::{STASH_LIST_FORMAT, StashEntry, parse_stash_list};
 use super::status::{FileStatus, StatusSnapshot, parse_porcelain_v2, parse_porcelain_v2_full};
@@ -190,6 +190,39 @@ impl GitRunner {
             // No commits yet: `git log` exits non-zero on an empty
             // repository — expected, not an error.
             return Ok(Vec::new());
+        }
+        let text = String::from_utf8(output.stdout).map_err(GitError::Utf8)?;
+        parse_commit_log(&text)
+    }
+
+    /// Returns the commits reachable from `range.head` but not from
+    /// `range.base` (`git log <base>..<head> --format=<COMMIT_LOG_FORMAT>`),
+    /// newest first — the Review launcher's Commits-tab ahead-of-base
+    /// source. Base resolution (`origin/HEAD` -> `main` -> `master`) is
+    /// entirely the caller's job (the UI layer's `resolve_review_base`
+    /// already does this for the Branches tab): this takes only refs the
+    /// caller already trusts, so it never itself guesses wrong. An empty range
+    /// (`head` reachable from `base` — e.g. the current branch *is* the
+    /// base) is `git log`'s own empty output, not a nonzero exit, so it
+    /// yields an empty vec rather than an error; an unresolvable ref on
+    /// either side is a genuine error. Sets `GIT_TERMINAL_PROMPT=0`,
+    /// matching every other invocation this runner makes.
+    pub fn commit_log_range(
+        &self,
+        range: &CommitLogRange,
+    ) -> Result<Vec<CommitLogEntry>, GitError> {
+        let range_arg = format!("{}..{}", range.base, range.head);
+        let format_arg = format!("--format={COMMIT_LOG_FORMAT}");
+        let args = ["log", range_arg.as_str(), format_arg.as_str()];
+        let output = Command::new("git")
+            .current_dir(&self.root)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(map_spawn_err)?;
+
+        if !output.status.success() {
+            return Err(command_error(&args, &output.status, &output.stderr));
         }
         let text = String::from_utf8(output.stdout).map_err(GitError::Utf8)?;
         parse_commit_log(&text)

@@ -38,6 +38,24 @@ pub struct CommitLogEntry {
     pub timestamp: i64,
 }
 
+/// A closed range for `git log <base>..<head>`: every commit reachable from
+/// `head` but not from `base`. Both fields are already-resolved ref
+/// expressions (a branch name, tag, or SHA) — never a raw string assembled
+/// from unrelated input at the call site. Resolving a symbolic default
+/// (e.g. `origin/HEAD` -> `main` -> `master`) is entirely the caller's job
+/// before constructing one of these (see
+/// `ui::review_session::resolve_review_base`), so this type only ever
+/// carries refs the caller already trusts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitLogRange {
+    /// The range's exclusive lower bound — commits reachable from this ref
+    /// are excluded from the result.
+    pub base: String,
+    /// The range's upper bound — commits reachable from this ref (and not
+    /// from `base`) are included, newest first.
+    pub head: String,
+}
+
 /// Parses `git log --format=<COMMIT_LOG_FORMAT>` output into
 /// [`CommitLogEntry`] records, one per line, in the order git emitted them
 /// (newest first, when the invocation used no `--reverse`). Empty input (an
