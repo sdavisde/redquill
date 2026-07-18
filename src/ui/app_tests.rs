@@ -917,6 +917,137 @@ fn delete_focused_annotation_removes_and_refreshes() {
     ));
 }
 
+// -- Edit/delete the annotation under the diff cursor (`e`/`x`) ----------
+
+/// Places the cursor on the added line (`new0`, new-side line 1) of a
+/// single-hunk `a.rs`: rows are FileHeader(0), HunkHeader(1), old0(2), new0(3).
+fn app_on_added_line_with_annotation(classification: Classification, body: &str) -> App {
+    let mut app = App::new(vec![file("a.rs", 1)]);
+    app.annotations
+        .add(Target::line("a.rs", 1, Side::New), classification, body)
+        .unwrap();
+    app.rebuild_rows();
+    app.view.cursor = 3; // the added line the annotation targets
+    app
+}
+
+#[test]
+fn edit_annotation_under_cursor_prefills_compose() {
+    let mut app = app_on_added_line_with_annotation(Classification::Question, "why new0?");
+    app.apply(Action::EditAnnotation);
+    assert_eq!(app.mode, Mode::Compose);
+    let compose = app.compose.as_ref().unwrap();
+    assert_eq!(compose.buffer.text(), "why new0?");
+    assert_eq!(compose.classification, Classification::Question);
+    assert_eq!(compose.editing_id, Some(0), "edits in place, not a new add");
+}
+
+#[test]
+fn delete_annotation_under_cursor_removes_it_and_clears_the_inline_row() {
+    let mut app = app_on_added_line_with_annotation(Classification::Nit, "note");
+    // The inline annotation row is present before deletion.
+    assert!(
+        app.view
+            .rows
+            .iter()
+            .any(|r| matches!(r, Row::Annotation { .. })),
+        "annotation renders inline before delete"
+    );
+    app.apply(Action::DeleteAnnotation);
+    assert!(app.annotations.is_empty());
+    assert_eq!(app.mode, Mode::Normal, "delete does not open a modal");
+    assert!(
+        !app.view
+            .rows
+            .iter()
+            .any(|r| matches!(r, Row::Annotation { .. })),
+        "the inline annotation row disappears on rebuild"
+    );
+}
+
+#[test]
+fn edit_annotation_with_nothing_under_cursor_is_a_hinted_no_op() {
+    // A file-level annotation matches only the file-header row, so on the
+    // added line nothing overlaps.
+    let mut app = App::new(vec![file("a.rs", 1)]);
+    app.annotations
+        .add(Target::file("a.rs"), Classification::Nit, "whole file")
+        .unwrap();
+    app.rebuild_rows();
+    app.view.cursor = 3; // added line — no line/range/hunk annotation here
+    app.apply(Action::EditAnnotation);
+    assert_eq!(app.mode, Mode::Normal, "no modal opens");
+    assert!(app.compose.is_none());
+    assert!(app.status_message.is_some(), "a status hint is shown");
+}
+
+#[test]
+fn delete_annotation_with_nothing_under_cursor_is_a_hinted_no_op() {
+    let mut app = App::new(vec![file("a.rs", 1)]);
+    app.annotations
+        .add(Target::file("a.rs"), Classification::Nit, "whole file")
+        .unwrap();
+    app.rebuild_rows();
+    app.view.cursor = 3;
+    app.apply(Action::DeleteAnnotation);
+    assert_eq!(app.annotations.len(), 1, "nothing is deleted");
+    assert!(app.status_message.is_some(), "a status hint is shown");
+}
+
+#[test]
+fn compose_under_an_annotation_still_creates_a_new_one() {
+    // `c` is unchanged: it always starts a fresh annotation even when one
+    // already overlaps the cursor.
+    let mut app = app_on_added_line_with_annotation(Classification::Nit, "existing");
+    app.apply(Action::Compose);
+    assert_eq!(app.mode, Mode::Compose);
+    let compose = app.compose.as_ref().unwrap();
+    assert_eq!(compose.editing_id, None, "Compose never edits in place");
+    assert_eq!(compose.buffer.text(), "", "a fresh, empty draft");
+}
+
+#[test]
+fn edit_annotation_under_cursor_picks_the_nearest_overlap() {
+    // Two annotations cover new-side line 2: a wide range and an exact line.
+    // The exact line starts nearer, so `e` edits it.
+    let raw = "\
+diff --git a/f.rs b/f.rs
+index 1..2 100644
+--- a/f.rs
++++ b/f.rs
+@@ -1,3 +1,3 @@
+ a
++b
+ c
+";
+    let mut app = App::new(vec![file_with_raw("f.rs", raw)]);
+    app.annotations
+        .add(
+            Target::range("f.rs", 1, 3, Side::New).unwrap(),
+            Classification::Nit,
+            "the whole span",
+        )
+        .unwrap();
+    app.annotations
+        .add(
+            Target::line("f.rs", 2, Side::New),
+            Classification::Issue,
+            "just this line",
+        )
+        .unwrap();
+    app.rebuild_rows();
+    // rows: FileHeader(0) HunkHeader(1) a(2,new1) b(3,new2) [ann rows] c(...)
+    app.view.cursor = 3; // the added line b, new-side 2
+    app.apply(Action::EditAnnotation);
+    let compose = app.compose.as_ref().unwrap();
+    assert_eq!(
+        compose.editing_id,
+        Some(1),
+        "the nearer, exact-line annotation wins over the enclosing range"
+    );
+    assert_eq!(compose.buffer.text(), "just this line");
+}
+
 #[test]
 fn list_actions_on_empty_store_are_no_ops() {
     let mut app = App::new(vec![file("a.rs", 1)]);

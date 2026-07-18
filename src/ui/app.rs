@@ -1051,6 +1051,8 @@ impl App {
             Action::ToggleAccept => self.toggle_accept_file(),
             Action::AcceptFile => self.accept_file(),
             Action::ToggleDefer => self.toggle_defer_file(),
+            Action::EditAnnotation => self.edit_annotation_under_cursor(),
+            Action::DeleteAnnotation => self.delete_annotation_under_cursor(),
             // `Quit`/`QuitDiscard` end the session; `OpenEditor` suspends the
             // TUI to spawn the configured editor. Both are intercepted by
             // `super::dispatch_key` before reaching here (see `Action::Quit`'s
@@ -1211,6 +1213,38 @@ impl App {
             &annotation.body,
         ));
         self.mode = Mode::Compose;
+    }
+
+    /// The store id of the annotation under the cursor, resolved by
+    /// [`super::annotation_overlap`] over the cursor's own derived target and
+    /// the annotations targeting the cursor's file. `None` when the cursor is
+    /// on a row with no derivable target, or nothing overlaps.
+    fn annotation_under_cursor(&self) -> Option<usize> {
+        let cursor_target = self.target_for_cursor()?;
+        let anchor = super::annotation_overlap::CursorAnchor::from_target(&cursor_target);
+        super::annotation_overlap::overlapping_annotation(
+            &anchor,
+            self.annotations.for_path(cursor_target.path()),
+        )
+    }
+
+    /// Opens the in-place edit compose for the annotation under the cursor
+    /// (`e`), or leaves a status hint when nothing overlaps.
+    fn edit_annotation_under_cursor(&mut self) {
+        match self.annotation_under_cursor() {
+            Some(id) => self.open_compose_for(id),
+            None => self.set_status_message("no annotation under cursor"),
+        }
+    }
+
+    /// Deletes the annotation under the cursor (`x`) with the annotation
+    /// list's no-confirmation semantics, or leaves a status hint when nothing
+    /// overlaps.
+    fn delete_annotation_under_cursor(&mut self) {
+        match self.annotation_under_cursor() {
+            Some(id) => self.delete_annotation_by_id(id),
+            None => self.set_status_message("no annotation under cursor"),
+        }
     }
 
     /// Cancels Compose without saving, discarding the draft.

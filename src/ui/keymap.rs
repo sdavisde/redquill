@@ -176,6 +176,16 @@ pub enum Action {
     /// handler self-guards on `App::in_review_session()`, so outside a
     /// review session `d` stays a total no-op.
     ToggleDefer,
+    /// `e` in the diff view: opens the in-place edit compose for the
+    /// annotation under the cursor (resolved by
+    /// [`super::annotation_overlap`]). A no-op with a status hint when no
+    /// annotation overlaps the cursor. Distinct from [`Action::Compose`],
+    /// which always starts a new annotation.
+    EditAnnotation,
+    /// `x` in the diff view: deletes the annotation under the cursor with the
+    /// same no-confirmation semantics as the annotation list's delete. A
+    /// no-op with a status hint when no annotation overlaps.
+    DeleteAnnotation,
 }
 
 /// The kebab-case config action-name for every [`Action`] variant (the
@@ -246,6 +256,8 @@ pub(crate) fn action_name(action: Action) -> &'static str {
         ToggleAccept => "toggle-accept",
         AcceptFile => "accept-file",
         ToggleDefer => "toggle-defer",
+        EditAnnotation => "edit-annotation",
+        DeleteAnnotation => "delete-annotation",
     }
 }
 
@@ -315,6 +327,8 @@ pub(crate) fn action_from_name(name: &str) -> Option<Action> {
         "toggle-accept" => ToggleAccept,
         "accept-file" => AcceptFile,
         "toggle-defer" => ToggleDefer,
+        "edit-annotation" => EditAnnotation,
+        "delete-annotation" => DeleteAnnotation,
         _ => return None,
     })
 }
@@ -652,6 +666,21 @@ impl Keymap {
                     "Comment on line/hunk/file (or visual selection)",
                 )
                 .footer(6, "comment"),
+                // In-place edit/delete of the annotation under the cursor
+                // (resolved by `annotation_overlap`); ranked right after
+                // `comment` so the three annotation verbs read together.
+                d(
+                    KeySeq::one(Char('e'), none),
+                    EditAnnotation,
+                    "Edit the annotation under the cursor",
+                )
+                .footer(7, "edit"),
+                d(
+                    KeySeq::one(Char('x'), none),
+                    DeleteAnnotation,
+                    "Delete the annotation under the cursor",
+                )
+                .footer(8, "delete"),
                 d(
                     KeySeq::one(Char('a'), none),
                     ToggleList,
@@ -700,7 +729,7 @@ impl Keymap {
                     FocusGitPanel,
                     "Open git panel",
                 )
-                .footer(8, "git panel"),
+                .footer(10, "git panel"),
                 // `@` and `!` are bound in `Scope::Global` (see the block at
                 // the end of this table) — both are "works everywhere" keys,
                 // not diff-specific. `R` (uppercase) is Global too now — the
@@ -711,7 +740,7 @@ impl Keymap {
                     Refresh,
                     "Refresh diff from working tree",
                 ),
-                d(KeySeq::one(Char('/'), none), Search, "Search").footer(7, "search"),
+                d(KeySeq::one(Char('/'), none), Search, "Search").footer(9, "search"),
                 d(
                     KeySeq::one(Char('n'), none),
                     SearchNext,
@@ -2049,6 +2078,31 @@ mod tests {
             Some(Action::QuitDiscard)
         );
         assert_eq!(km.lookup_in(Scope::Diff, ctrl_c), Some(Action::QuitDiscard));
+    }
+
+    /// `e`/`x` edit and delete the annotation under the cursor in diff scope
+    /// only; both keys stay unbound in panel scope (no accidental collision
+    /// with a panel gesture), and each is promoted into the diff footer strip.
+    #[test]
+    fn e_and_x_edit_and_delete_annotations_only_in_diff_scope() {
+        let km = Keymap::default_map();
+        let e = key(KeyCode::Char('e'), KeyModifiers::NONE);
+        let x = key(KeyCode::Char('x'), KeyModifiers::NONE);
+        assert_eq!(km.lookup_in(Scope::Diff, e), Some(Action::EditAnnotation));
+        assert_eq!(km.lookup_in(Scope::Diff, x), Some(Action::DeleteAnnotation));
+        assert_eq!(km.lookup_in(Scope::Panel, e), None);
+        assert_eq!(km.lookup_in(Scope::Panel, x), None);
+        for (action, label) in [
+            (Action::EditAnnotation, "edit"),
+            (Action::DeleteAnnotation, "delete"),
+        ] {
+            let row = km
+                .bindings()
+                .iter()
+                .find(|b| b.scope == Scope::Diff && b.action == action)
+                .expect("diff-scope annotation-edit row must exist");
+            assert_eq!(row.footer.map(|h| h.label), Some(label));
+        }
     }
 
     /// The `c commit` hint is promoted into the panel footer strip, matching

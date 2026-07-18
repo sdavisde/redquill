@@ -66,7 +66,7 @@ fn group_of(action: Action) -> &'static str {
         | WordForward | WordBackward | HalfPageDown | HalfPageUp | FullPageDown | FullPageUp
         | JumpToTop | JumpToBottom | NextHunk | PrevHunk | NextFile | PrevFile | ToggleCollapse
         | RecenterCursor | ScrollCursorTop | ScrollCursorBottom => "Navigation",
-        EnterVisual | Compose => "Annotate",
+        EnterVisual | Compose | EditAnnotation | DeleteAnnotation => "Annotate",
         ToggleStage | StageFile | ToggleStagingPanel => "Stage",
         ToggleAccept | AcceptFile | ToggleDefer => "Review",
         Search | SearchNext | SearchPrev | SearchWordForward | SearchWordBackward => "Search",

@@ -16,6 +16,7 @@
 //! blocking event loop — and returns which way the session ended.
 
 mod annotation_list;
+mod annotation_overlap;
 mod app;
 mod background;
 mod code_intel;

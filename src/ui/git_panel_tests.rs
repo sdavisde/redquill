@@ -1341,3 +1341,186 @@ fn panel_coherence_journey_transcript() {
         eprintln!("{log}");
     }
 }
+
+// -- Journey: annotation round-trip (edit/delete from the diff view) ----------
+
+/// Renders the diff row model (`app.view.rows`) as text for the annotation
+/// round-trip journey log — the truest view of what splices inline, marking
+/// the cursor row (`>`) and each annotation body line (`┃`). Directly shows an
+/// annotation appearing and disappearing next to the line it targets.
+fn diff_rows_text(app: &App) -> String {
+    use crate::ui::Row;
+    app.view
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let cur = if i == app.view.cursor { ">" } else { " " };
+            match row {
+                Row::FileHeader { path, .. } => format!("{cur} ▾ {path}"),
+                Row::HunkHeader { text, .. } => format!("{cur} {text}"),
+                Row::Line(l) => {
+                    let sign = match l.origin {
+                        crate::diff::LineOrigin::Added => '+',
+                        crate::diff::LineOrigin::Removed => '-',
+                        crate::diff::LineOrigin::Context => ' ',
+                    };
+                    format!("{cur}   {sign}{}", l.content)
+                }
+                Row::Annotation {
+                    text,
+                    classification,
+                    ..
+                } => match classification {
+                    Some(c) => format!("{cur}   ┃ ● [{}] {text}", c.label()),
+                    None => format!("{cur}   ┃   {text}"),
+                },
+                Row::AnnotationBorder { .. } => format!("{cur}   ┃"),
+                Row::Binary => format!("{cur}   <binary>"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Drives `j` until the diff cursor sits on a new-side line (an added or
+/// context line the annotation gestures anchor to), or gives up after a bound.
+fn park_on_new_side_line(app: &mut App) {
+    for _ in 0..64 {
+        if matches!(
+            app.target_for_cursor(),
+            Some(crate::annotate::Target::Line {
+                side: crate::annotate::Side::New,
+                ..
+            })
+        ) {
+            return;
+        }
+        press(app, KeyCode::Char('j'));
+    }
+    panic!("never landed on a new-side line");
+}
+
+/// Journey driver for spec 11 Unit 3: annotate a changed line with `c`, move
+/// away and back, edit it in place with `e` (compose opens pre-filled), submit
+/// the new text, then delete it with `x` (the inline row disappears); finally
+/// `e` on a bare line leaves a no-op status hint. Every step is asserted
+/// against a real scratch tempdir repo driven through the real `dispatch_key`
+/// path (`RQ_JOURNEY_DUMP=1 cargo test --lib annotation_roundtrip_journey_transcript
+/// -- --nocapture` captures the persisted proof).
+#[test]
+fn annotation_roundtrip_journey_transcript() {
+    let mut log = String::new();
+    let mut step = |title: &str, body: &str| {
+        log.push_str(&format!("\n=== {title} ===\n{body}\n"));
+    };
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path();
+    scratch_git(dir, &["init", "-q", "-b", "main"]);
+    scratch_git(dir, &["config", "user.name", "redquill test"]);
+    scratch_git(dir, &["config", "user.email", "test@redquill.invalid"]);
+    scratch_write(dir, "src/a.rs", "fn a() {\n    one();\n    two();\n}\n");
+    scratch_git(dir, &["add", "."]);
+    scratch_git(dir, &["commit", "-q", "-m", "base"]);
+    scratch_write(
+        dir,
+        "src/a.rs",
+        "fn a() {\n    one();\n    changed();\n    two();\n}\n",
+    );
+
+    let runner = crate::git::GitRunner::discover_in(dir).expect("discover scratch repo");
+    let mut app = App::new(Vec::new());
+    app.stage_ops = Some(Box::new(runner));
+    app.refresh();
+    assert_eq!(app.view.files.len(), 1);
+    step(
+        "launch on the scratch working tree",
+        &format!("{} file modified: src/a.rs", app.view.files.len()),
+    );
+
+    // -- Annotate the changed line with `c` --------------------------------
+    park_on_new_side_line(&mut app);
+    let annotated_target = app.target_for_cursor().expect("a line target");
+    press(&mut app, KeyCode::Char('c'));
+    assert_eq!(app.mode, Mode::Compose);
+    for ch in "needs a test".chars() {
+        press(&mut app, KeyCode::Char(ch));
+    }
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(app.annotations.len(), 1);
+    assert_eq!(app.annotations.iter().next().unwrap().body, "needs a test");
+    step(
+        "press c, type \"needs a test\", Enter: annotation renders inline",
+        &diff_rows_text(&app),
+    );
+
+    // -- Move away (down), then back up to the annotated line --------------
+    for _ in 0..3 {
+        press(&mut app, KeyCode::Char('j'));
+    }
+    assert_ne!(
+        app.target_for_cursor(),
+        Some(annotated_target.clone()),
+        "cursor moved off the annotated line"
+    );
+    while app.target_for_cursor() != Some(annotated_target.clone()) {
+        press(&mut app, KeyCode::Char('k'));
+    }
+    step(
+        "j×3 away then k back to the annotated line",
+        &format!("cursor target: {:?}", app.target_for_cursor()),
+    );
+
+    // -- Edit in place with `e` --------------------------------------------
+    press(&mut app, KeyCode::Char('e'));
+    assert_eq!(app.mode, Mode::Compose);
+    let compose = app.compose.as_ref().unwrap();
+    assert_eq!(compose.buffer.text(), "needs a test", "pre-filled body");
+    assert_eq!(compose.editing_id, Some(0), "edits in place");
+    for ch in " (added)".chars() {
+        press(&mut app, KeyCode::Char(ch));
+    }
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.annotations.len(), 1, "still one annotation, edited");
+    assert_eq!(
+        app.annotations.iter().next().unwrap().body,
+        "needs a test (added)"
+    );
+    step(
+        "press e, append \" (added)\", Enter: edited text renders inline",
+        &diff_rows_text(&app),
+    );
+
+    // -- Delete with `x` (cursor is still on the annotated line) -----------
+    assert_eq!(app.target_for_cursor(), Some(annotated_target.clone()));
+    press(&mut app, KeyCode::Char('x'));
+    assert!(app.annotations.is_empty(), "annotation deleted");
+    assert!(
+        !app.view
+            .rows
+            .iter()
+            .any(|r| matches!(r, crate::ui::Row::Annotation { .. })),
+        "the inline annotation row is gone"
+    );
+    step(
+        "press x: annotation deleted, inline row disappears",
+        &diff_rows_text(&app),
+    );
+
+    // -- `e` on a bare line: no-op status hint -----------------------------
+    park_on_new_side_line(&mut app);
+    press(&mut app, KeyCode::Char('e'));
+    assert_eq!(app.mode, Mode::Normal, "no modal opens");
+    assert!(app.compose.is_none());
+    assert!(app.status_message.is_some());
+    step(
+        "press e on a bare line: no-op with a status hint",
+        &format!("status: {:?}", app.status_message.as_deref()),
+    );
+
+    if std::env::var("RQ_JOURNEY_DUMP").is_ok() {
+        eprintln!("{log}");
+    }
+}

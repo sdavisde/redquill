@@ -1359,11 +1359,13 @@ fn empty_staging_panel_hint_reflects_a_remapped_toggle_stage_key() {
     app.mode = Mode::Staging;
 
     let mut keys = crate::config::KeysConfig::default();
+    // `y` is a diff-scope key no default binds (`x` is now `DeleteAnnotation`),
+    // so remapping toggle-stage onto it stays collision-free.
     keys.diff.insert(
         "toggle-stage".to_string(),
         vec![crate::config::keys::KeySeqSpec::One(
             crate::config::keys::ChordSpec {
-                code: crossterm::event::KeyCode::Char('x'),
+                code: crossterm::event::KeyCode::Char('y'),
                 mods: KeyModifiers::NONE,
             },
         )],
@@ -1378,7 +1380,7 @@ fn empty_staging_panel_hint_reflects_a_remapped_toggle_stage_key() {
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
     assert!(
-        content.contains("press x on a hunk to stage it"),
+        content.contains("press y on a hunk to stage it"),
         "staging hint must show the remapped key, not the stale default"
     );
 }

@@ -56,7 +56,7 @@ fn normal_mode_hints_match_the_curated_list_in_order() {
     let entries = normal_hints(&km, true, true, false, false);
     assert_eq!(
         keys(&entries),
-        vec!["j/k", "]", "za", "Space", "S", "c", "/", "`", "?"]
+        vec!["j/k", "]", "za", "Space", "S", "c", "e", "x", "/", "`", "?"]
     );
     assert_eq!(
         labels(&entries),
@@ -67,6 +67,8 @@ fn normal_mode_hints_match_the_curated_list_in_order() {
             "stage hunk",
             "stage file",
             "comment",
+            "edit",
+            "delete",
             "search",
             "git panel",
             "help",
@@ -96,8 +98,8 @@ fn normal_mode_hints_exclude_staging_when_not_allowed() {
     let entries = normal_hints(&km, false, true, false, false);
     assert!(!labels(&entries).contains(&"stage hunk"));
     assert!(!labels(&entries).contains(&"stage file"));
-    // Everything else survives.
-    assert_eq!(entries.len(), 7);
+    // Everything else survives (edit/delete are staging-independent).
+    assert_eq!(entries.len(), 9);
     assert_eq!(labels(&entries).last(), Some(&"help"), "help stays last");
 }
 
@@ -866,7 +868,8 @@ fn panel_help_hint_is_real_and_shadows_panel_dispatch() {
 fn generous_width_fits_the_whole_normal_strip_on_one_line() {
     let km = Keymap::default_map();
     let entries = normal_hints(&km, true, true, false, false);
-    let lines = wrap_hints(&entries, 120);
+    // Wide enough for all 11 hints (the strip grew by `e edit`/`x delete`).
+    let lines = wrap_hints(&entries, 150);
     assert_eq!(lines.len(), 1);
     let shown: usize = lines.iter().map(Vec::len).sum();
     assert_eq!(shown, entries.len(), "no hint dropped at generous width");
@@ -876,7 +879,8 @@ fn generous_width_fits_the_whole_normal_strip_on_one_line() {
 fn medium_width_wraps_to_two_lines_without_splitting_a_hint() {
     let km = Keymap::default_map();
     let entries = normal_hints(&km, true, true, false, false);
-    let lines = wrap_hints(&entries, 60);
+    // 72 fits all 11 hints across two rows (the strip grew by `e`/`x`).
+    let lines = wrap_hints(&entries, 72);
     assert_eq!(lines.len(), 2);
     let shown: usize = lines.iter().map(Vec::len).sum();
     assert_eq!(shown, entries.len(), "no hint dropped at medium width");
@@ -884,7 +888,7 @@ fn medium_width_wraps_to_two_lines_without_splitting_a_hint() {
     // (i.e. nothing was truncated mid-hint).
     for line in &lines {
         for e in line {
-            assert!(hint_width(e) <= 60);
+            assert!(hint_width(e) <= 72);
         }
     }
 }

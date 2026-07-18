@@ -167,22 +167,24 @@ fn colliding_override_wins_and_drops_the_default_with_a_warning() {
 
 #[test]
 fn collision_between_two_override_entries_is_also_caught() {
+    // `y` is a diff-scope key no default binds, so this exercises a pure
+    // override-vs-override collision (`x` is now `DeleteAnnotation`).
     let mut keys = KeysConfig::default();
     keys.diff.insert(
         "next-hunk".to_string(),
-        one(KeyCode::Char('x'), KeyModifiers::NONE),
+        one(KeyCode::Char('y'), KeyModifiers::NONE),
     );
     keys.diff.insert(
         "prev-hunk".to_string(),
-        one(KeyCode::Char('x'), KeyModifiers::NONE),
+        one(KeyCode::Char('y'), KeyModifiers::NONE),
     );
     let (km, warnings) = effective_keymap(&keys);
     assert_eq!(warnings.len(), 1);
-    // Whichever wins, only one action should claim `x` in diff scope.
+    // Whichever wins, only one action should claim `y` in diff scope.
     let claimants: Vec<Action> = km
         .bindings()
         .iter()
-        .filter(|b| b.scope == Scope::Diff && b.key_label() == "x")
+        .filter(|b| b.scope == Scope::Diff && b.key_label() == "y")
         .map(|b| b.action)
         .collect();
     assert_eq!(claimants.len(), 1);
@@ -439,6 +441,54 @@ fn diff_override_remaps_refresh_off_its_post_rebind_default() {
             crossterm::event::KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE)
         ),
         Some(Action::OpenReviewLauncher)
+    );
+}
+
+/// The diff-view annotation edit/delete rows (`e`/`x`) are ordinary
+/// main-table rows, so `[keys.diff]` can remap them like any other action.
+#[test]
+fn diff_overrides_remap_the_annotation_edit_and_delete_rows() {
+    let mut keys = KeysConfig::default();
+    keys.diff.insert(
+        "edit-annotation".to_string(),
+        one(KeyCode::Char('E'), KeyModifiers::NONE),
+    );
+    keys.diff.insert(
+        "delete-annotation".to_string(),
+        one(KeyCode::Char('D'), KeyModifiers::NONE),
+    );
+    let (km, warnings) = effective_keymap(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+    // The remapped keys resolve to the new actions...
+    assert_eq!(
+        km.lookup_in(
+            Scope::Diff,
+            crossterm::event::KeyEvent::new(KeyCode::Char('E'), KeyModifiers::NONE)
+        ),
+        Some(Action::EditAnnotation)
+    );
+    assert_eq!(
+        km.lookup_in(
+            Scope::Diff,
+            crossterm::event::KeyEvent::new(KeyCode::Char('D'), KeyModifiers::NONE)
+        ),
+        Some(Action::DeleteAnnotation)
+    );
+    // ...and the defaults are gone.
+    assert_eq!(
+        km.lookup_in(
+            Scope::Diff,
+            crossterm::event::KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)
+        ),
+        None
+    );
+    assert_eq!(
+        km.lookup_in(
+            Scope::Diff,
+            crossterm::event::KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)
+        ),
+        None
     );
 }
 
