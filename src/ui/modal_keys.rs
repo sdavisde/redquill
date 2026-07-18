@@ -1336,8 +1336,17 @@ pub(super) enum HelpAction {
     PageUp,
     Top,
     Bottom,
-    /// Starts filtering the keybind list (see [`super::App::help_search`]).
+    /// Starts filtering the keybind list (see
+    /// [`super::help::HelpOverlayState::search`]).
     Search,
+    /// Switches to the next tab (see [`super::help::HelpTab::toggled`],
+    /// [`super::handle_help_key`]).
+    NextTab,
+    /// Switches to the previous tab — with exactly two tabs, identical to
+    /// `NextTab` (both toggle), but kept as its own action/key row so `h`
+    /// and `Shift-Tab` are independently remappable and the footer names
+    /// the direction the user pressed.
+    PrevTab,
 }
 
 pub(super) fn help_action_name(action: HelpAction) -> &'static str {
@@ -1350,6 +1359,8 @@ pub(super) fn help_action_name(action: HelpAction) -> &'static str {
         HelpAction::Top => "top",
         HelpAction::Bottom => "bottom",
         HelpAction::Search => "search",
+        HelpAction::NextTab => "next-tab",
+        HelpAction::PrevTab => "prev-tab",
     }
 }
 
@@ -1363,6 +1374,8 @@ pub(super) fn help_action_from_name(name: &str) -> Option<HelpAction> {
         "top" => HelpAction::Top,
         "bottom" => HelpAction::Bottom,
         "search" => HelpAction::Search,
+        "next-tab" => HelpAction::NextTab,
+        "prev-tab" => HelpAction::PrevTab,
         _ => return None,
     })
 }
@@ -1442,6 +1455,30 @@ pub(super) static HELP_KEYS: LazyLock<Vec<ModalBinding<HelpAction>>> = LazyLock:
             footer: Some(FooterHint {
                 rank: 2,
                 label: "filter",
+            }),
+        },
+        ModalBinding {
+            description: "Next tab (This context / All keys)",
+            keys: vec![
+                ModalKey::plain(KeyCode::Tab),
+                ModalKey::plain(KeyCode::Char('l')),
+            ],
+            action: HelpAction::NextTab,
+            footer: Some(FooterHint {
+                rank: 4,
+                label: "next tab",
+            }),
+        },
+        ModalBinding {
+            description: "Previous tab (This context / All keys)",
+            keys: vec![
+                ModalKey::plain(KeyCode::BackTab),
+                ModalKey::plain(KeyCode::Char('h')),
+            ],
+            action: HelpAction::PrevTab,
+            footer: Some(FooterHint {
+                rank: 5,
+                label: "prev tab",
             }),
         },
     ]
@@ -2893,44 +2930,54 @@ index 111..222 100644
 
     #[test]
     fn every_help_table_entry_drives_its_documented_action() {
+        use super::super::help::HelpTab;
         for binding in HELP_KEYS.iter() {
             for key in &binding.keys {
                 let mut app = app();
-                app.help_open = true;
-                app.help_scroll.set(25);
-                app.help_viewport.set(10);
+                app.help.open = true;
+                app.help.scroll.set(25);
+                app.help.viewport.set(10);
                 handle_help_key(&mut app, key.event());
                 let label = binding.key_label();
                 match binding.action {
                     HelpAction::Close => {
-                        assert!(!app.help_open, "Help {label}: must close the overlay");
-                        assert_eq!(app.help_scroll.get(), 0);
+                        assert!(!app.help.open, "Help {label}: must close the overlay");
+                        assert_eq!(app.help.scroll.get(), 0);
                     }
                     HelpAction::ScrollDown => {
-                        assert_eq!(app.help_scroll.get(), 26, "Help {label}: scrolls down")
+                        assert_eq!(app.help.scroll.get(), 26, "Help {label}: scrolls down")
                     }
                     HelpAction::ScrollUp => {
-                        assert_eq!(app.help_scroll.get(), 24, "Help {label}: scrolls up")
+                        assert_eq!(app.help.scroll.get(), 24, "Help {label}: scrolls up")
                     }
                     HelpAction::PageDown => {
-                        assert_eq!(app.help_scroll.get(), 35, "Help {label}: pages down")
+                        assert_eq!(app.help.scroll.get(), 35, "Help {label}: pages down")
                     }
                     HelpAction::PageUp => {
-                        assert_eq!(app.help_scroll.get(), 15, "Help {label}: pages up")
+                        assert_eq!(app.help.scroll.get(), 15, "Help {label}: pages up")
                     }
                     HelpAction::Top => {
-                        assert_eq!(app.help_scroll.get(), 0, "Help {label}: jumps to top")
+                        assert_eq!(app.help.scroll.get(), 0, "Help {label}: jumps to top")
                     }
                     HelpAction::Bottom => {
-                        assert_eq!(app.help_scroll.get(), u16::MAX, "Help {label}: to bottom")
+                        assert_eq!(app.help.scroll.get(), u16::MAX, "Help {label}: to bottom")
                     }
                     HelpAction::Search => {
                         assert_eq!(
-                            app.help_search,
+                            app.help.search,
                             Some((String::new(), true)),
                             "Help {label}: must start filter-editing with an empty query"
                         );
-                        assert_eq!(app.help_scroll.get(), 0, "Help {label}: must reset scroll");
+                        assert_eq!(app.help.scroll.get(), 0, "Help {label}: must reset scroll");
+                    }
+                    HelpAction::NextTab | HelpAction::PrevTab => {
+                        assert_eq!(
+                            app.help.tab,
+                            HelpTab::AllKeys,
+                            "Help {label}: must switch tabs from the ThisContext default"
+                        );
+                        assert_eq!(app.help.search, None, "Help {label}: must reset the filter");
+                        assert_eq!(app.help.scroll.get(), 0, "Help {label}: must reset scroll");
                     }
                 }
             }
@@ -2941,8 +2988,8 @@ index 111..222 100644
     /// control key produces an observable state change.
     fn help_search_app() -> App {
         let mut app = app();
-        app.help_open = true;
-        app.help_search = Some(("ab".to_string(), true));
+        app.help.open = true;
+        app.help.search = Some(("ab".to_string(), true));
         app
     }
 
@@ -2951,11 +2998,11 @@ index 111..222 100644
         for binding in HELP_SEARCH_HINTS.iter() {
             for key in &binding.keys {
                 let mut app = help_search_app();
-                let before = app.help_search.clone();
+                let before = app.help.search.clone();
                 handle_help_key(&mut app, key.event());
                 assert_ne!(
                     before,
-                    app.help_search,
+                    app.help.search,
                     "Help filter {}: documented key must be consumed by handle_help_key",
                     binding.key_label()
                 );
@@ -2991,10 +3038,10 @@ index 111..222 100644
                 continue;
             }
             let mut app = help_search_app();
-            let before = app.help_search.clone();
+            let before = app.help.search.clone();
             handle_help_key(&mut app, ev);
             assert_eq!(
-                before, app.help_search,
+                before, app.help.search,
                 "handle_help_key consumed {ev:?} while filter-editing, which HELP_SEARCH_HINTS doesn't document"
             );
         }

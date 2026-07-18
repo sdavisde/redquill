@@ -254,11 +254,11 @@ fn toggle_collapse_targets_the_cursor_file_not_the_first() {
 #[test]
 fn toggle_help_flips_state() {
     let mut app = App::new(vec![file("a.rs", 1)]);
-    assert!(!app.help_open);
+    assert!(!app.help.open);
     app.apply(Action::ToggleHelp);
-    assert!(app.help_open);
+    assert!(app.help.open);
     app.apply(Action::ToggleHelp);
-    assert!(!app.help_open);
+    assert!(!app.help.open);
 }
 
 #[test]

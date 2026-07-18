@@ -73,6 +73,7 @@ mod textwrap;
 mod theme;
 mod time_format;
 mod welcome;
+mod which_key;
 
 pub use app::{App, Mode};
 pub use diff_view_state::DiffViewState;
@@ -360,7 +361,7 @@ fn dispatch_key(
             // exactly like the Normal/Visual overlay case above, so
             // `j`/`k`/Esc scroll/close the overlay rather than moving the
             // panel cursor underneath it.
-            if app.help_open {
+            if app.help.open {
                 handle_help_key(app, key);
                 return Flow::Continue;
             }
@@ -429,8 +430,8 @@ fn dispatch_key(
             // instead. Esc always cancels an in-progress count too.
             if key.code == KeyCode::Esc && !had_pending {
                 *pending_count = None;
-                if app.help_open {
-                    app.help_open = false;
+                if app.help.open {
+                    app.help.open = false;
                 } else if matches!(app.mode, Mode::Visual { .. }) {
                     app.apply(Action::EnterVisual);
                 } else if app.viewing_file() {
@@ -565,7 +566,8 @@ fn launch_editor(
 
 /// Handles one key while the help overlay is open.
 ///
-/// Behavior depends on [`App::help_search`], a lazygit-style keybind filter:
+/// Behavior depends on [`help::HelpOverlayState::search`], a lazygit-style
+/// keybind filter:
 /// - `None` (no filter): keys resolve through [`modal_keys::HELP_KEYS`] —
 ///   `j`/`k`/arrows scroll by a line, PageUp/PageDown by a viewport,
 ///   `g`/`G`/Home/End jump to the ends, Esc/Enter/`?` close the overlay, and
@@ -587,15 +589,15 @@ fn launch_editor(
 fn handle_help_key(app: &mut App, key: KeyEvent) {
     use modal_keys::{HelpAction, HelpSearchAction};
 
-    if let Some((mut query, editing)) = app.help_search.clone() {
+    if let Some((mut query, editing)) = app.help.search.clone() {
         if editing {
             if let Some(action) = modal_keys::resolve(&app.modal_keys.help_search, key) {
                 match action {
-                    HelpSearchAction::Lock => app.help_search = Some((query, false)),
-                    HelpSearchAction::Clear => app.help_search = None,
+                    HelpSearchAction::Lock => app.help.search = Some((query, false)),
+                    HelpSearchAction::Clear => app.help.search = None,
                     HelpSearchAction::DeleteChar => {
                         query.pop();
-                        app.help_search = Some((query, true));
+                        app.help.search = Some((query, true));
                     }
                 }
                 return;
@@ -604,7 +606,7 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
             // remappable, per the free-text-mode contract.
             if let KeyCode::Char(c) = key.code {
                 query.push(c);
-                app.help_search = Some((query, true));
+                app.help.search = Some((query, true));
             }
             return;
         }
@@ -616,11 +618,11 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
         // help overlay's own `?`/`/` toggle chrome.
         match key.code {
             KeyCode::Char('/') => {
-                app.help_search = Some((query, true));
+                app.help.search = Some((query, true));
                 return;
             }
             KeyCode::Esc => {
-                app.help_search = None;
+                app.help.search = None;
                 return;
             }
             _ => {}
@@ -630,23 +632,33 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
     let Some(action) = modal_keys::resolve(&app.modal_keys.help, key) else {
         return;
     };
-    let page = app.help_viewport.get().max(1);
-    let cur = app.help_scroll.get();
+    let page = app.help.viewport.get().max(1);
+    let cur = app.help.scroll.get();
     match action {
         HelpAction::Close => {
-            app.help_open = false;
-            app.help_scroll.set(0);
-            app.help_search = None;
+            app.help.open = false;
+            app.help.scroll.set(0);
+            app.help.search = None;
         }
-        HelpAction::ScrollDown => app.help_scroll.set(cur.saturating_add(1)),
-        HelpAction::ScrollUp => app.help_scroll.set(cur.saturating_sub(1)),
-        HelpAction::PageDown => app.help_scroll.set(cur.saturating_add(page)),
-        HelpAction::PageUp => app.help_scroll.set(cur.saturating_sub(page)),
-        HelpAction::Top => app.help_scroll.set(0),
-        HelpAction::Bottom => app.help_scroll.set(u16::MAX),
+        HelpAction::ScrollDown => app.help.scroll.set(cur.saturating_add(1)),
+        HelpAction::ScrollUp => app.help.scroll.set(cur.saturating_sub(1)),
+        HelpAction::PageDown => app.help.scroll.set(cur.saturating_add(page)),
+        HelpAction::PageUp => app.help.scroll.set(cur.saturating_sub(page)),
+        HelpAction::Top => app.help.scroll.set(0),
+        HelpAction::Bottom => app.help.scroll.set(u16::MAX),
         HelpAction::Search => {
-            app.help_search = Some((String::new(), true));
-            app.help_scroll.set(0);
+            app.help.search = Some((String::new(), true));
+            app.help.scroll.set(0);
+        }
+        HelpAction::NextTab | HelpAction::PrevTab => {
+            // Two tabs, so next and previous both just flip — see
+            // `help::HelpTab::toggled`. Switching resets the filter and
+            // scroll (FR-4's reset half) so the new tab starts unfiltered
+            // at the top rather than carrying over a position/query that
+            // may not even apply to it.
+            app.help.tab = app.help.tab.toggled();
+            app.help.search = None;
+            app.help.scroll.set(0);
         }
     }
 }
@@ -677,12 +689,20 @@ fn diff_pane_rect(full_area: Rect, app: &App, keymap: &Keymap, pending: Option<K
 }
 
 /// Draws one frame: git panel, diff pane, bottom panel (annotation list or
-/// staging panel, if open), status footer, help overlay (if open), and the
+/// staging panel, if open), status footer, help overlay (if open), the
+/// which-key popup (if a prefix has been pending past the delay), and the
 /// Compose modal (if open). `pending` mirrors the event loop's pending
 /// two-key prefix (see [`event_loop`]), so the footer's pending-completion
 /// strip (`za`, `gd`/`gr`/...) matches what the next keystroke will actually
-/// resolve.
-fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<KeyEvent>) {
+/// resolve. `pending_elapsed` mirrors how long it's been pending (see
+/// [`event_loop`]'s `pending_since`) — `None` whenever `pending` is `None`.
+fn draw(
+    frame: &mut ratatui::Frame,
+    app: &App,
+    keymap: &Keymap,
+    pending: Option<KeyEvent>,
+    pending_elapsed: Option<Duration>,
+) {
     let full_area = frame.area();
     let (banner_area, area) = split_banner(full_area, app.in_review_session());
     let footer_h = footer::footer_height(area.width, app, keymap, pending);
@@ -784,7 +804,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
                 code_intel_allowed,
                 push_publishes: app.push_publishes(),
                 viewing_commit: app.viewing_commit(),
-                help_open: app.help_open,
+                help_open: app.help.open,
                 project_search_focus: app.project_search_focus(),
                 review_session: app.in_review_session(),
             },
@@ -795,17 +815,25 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
         let lines = footer::render_hint_strip(&entries, footer_area.width, &app.theme);
         frame.render_widget(ratatui::widgets::Paragraph::new(lines), footer_area);
     }
-    if app.help_open {
+    if let Some(prefix) = pending
+        && which_key::should_show(pending, pending_elapsed, which_key::WHICH_KEY_DELAY)
+    {
+        let rows = keymap.continuations_for(keymap::Scope::Diff, prefix);
+        which_key::render(frame, area, footer_area.y, &rows, &app.theme);
+    }
+    if app.help.open {
         let staging_allowed = app.target.staging_mode() != crate::git::StagingMode::ReadOnly;
         let code_intel_allowed = app.target.supports_code_intel();
         let search = app
-            .help_search
+            .help
+            .search
             .as_ref()
             .map(|(q, editing)| (q.as_str(), *editing));
         let state = help::HelpViewState {
-            scroll: &app.help_scroll,
-            viewport: &app.help_viewport,
+            scroll: &app.help.scroll,
+            viewport: &app.help.viewport,
             search,
+            tab: app.help.tab,
         };
         help::render(
             frame,
@@ -813,6 +841,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
             &help::HelpTables {
                 keymap,
                 modal_keys: &app.modal_keys,
+                origin: app.help.origin,
             },
             &app.theme,
             staging_allowed,
@@ -941,6 +970,28 @@ pub fn run(app: &mut App) -> anyhow::Result<QuitOutcome> {
     outcome
 }
 
+/// Updates `pending_since` to mirror a `pending_prefix` transition: set the
+/// instant a prefix goes from absent to present, cleared the instant it
+/// clears, otherwise left untouched — in particular, never reset just
+/// because a count prefix (`pending_count`) changed underneath it, which is
+/// what keeps a pending `3g` on the same which-key delay schedule as a
+/// pending `g` (FR-12). A small pure function (the caller supplies `now`)
+/// so the transition logic is unit-testable without a real terminal or
+/// clock — [`event_loop`] itself can't be driven headlessly, since it owns
+/// a live `Terminal<CrosstermBackend<Stderr>>`.
+fn update_pending_since(
+    had_pending: bool,
+    pending_now: bool,
+    pending_since: &mut Option<Instant>,
+    now: Instant,
+) {
+    if !pending_now {
+        *pending_since = None;
+    } else if !had_pending {
+        *pending_since = Some(now);
+    }
+}
+
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stderr>>,
     app: &mut App,
@@ -954,6 +1005,13 @@ fn event_loop(
     // iterations while it awaits the motion key it will repeat (see
     // `dispatch_key`'s digit interception).
     let mut pending_count: Option<usize> = None;
+
+    // The moment `pending_prefix` most recently went from `None` to `Some`,
+    // for the which-key popup's delay check (see `which_key::should_show`).
+    // Updated by `update_pending_since` after every `dispatch_key` call —
+    // unaffected by `pending_count`, so a pending `3g` shows the popup on
+    // the same schedule as a pending `g` (FR-12).
+    let mut pending_since: Option<Instant> = None;
 
     // When the working tree was last polled for external changes.
     let mut last_auto_refresh = Instant::now();
@@ -978,7 +1036,8 @@ fn event_loop(
             app.active_commit.is_some(),
         ));
 
-        terminal.draw(|frame| draw(frame, app, keymap, pending_prefix))?;
+        let pending_elapsed = pending_since.map(|since| since.elapsed());
+        terminal.draw(|frame| draw(frame, app, keymap, pending_prefix, pending_elapsed))?;
 
         // Bounded wait rather than a blocking read: LSP responses must keep
         // flowing (via `poll_lsp` below) even while the user isn't typing,
@@ -986,6 +1045,7 @@ fn event_loop(
         if event::poll(POLL_INTERVAL)? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    let had_pending = pending_prefix.is_some();
                     match dispatch_key(app, keymap, &mut pending_prefix, &mut pending_count, key) {
                         Flow::Quit(outcome) => return Ok(outcome),
                         Flow::Continue => {}
@@ -1015,6 +1075,12 @@ fn event_loop(
                             }
                         }
                     }
+                    update_pending_since(
+                        had_pending,
+                        pending_prefix.is_some(),
+                        &mut pending_since,
+                        Instant::now(),
+                    );
                 }
                 Event::Resize(_, _) => {
                     // The next loop iteration re-measures the layout and

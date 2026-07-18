@@ -536,7 +536,7 @@ pub(super) fn footer_height(
             code_intel_allowed,
             push_publishes: app.push_publishes(),
             viewing_commit: app.viewing_commit(),
-            help_open: app.help_open,
+            help_open: app.help.open,
             project_search_focus: app.project_search_focus(),
             review_session: app.in_review_session(),
         },

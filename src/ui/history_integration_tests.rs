@@ -262,7 +262,7 @@ fn commit_view_hides_and_disarms_staging_keys() {
             code_intel_allowed,
             push_publishes: app.push_publishes(),
             viewing_commit: app.viewing_commit(),
-            help_open: app.help_open,
+            help_open: app.help.open,
             project_search_focus: app.project_search_focus(),
             review_session: app.in_review_session(),
         },
@@ -528,7 +528,7 @@ fn opening_a_commit_with_an_empty_diff_shows_commit_appropriate_welcome_wording(
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -562,7 +562,7 @@ fn screenshot(app: &App, keymap: &Keymap, w: u16, h: u16) -> String {
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|frame| draw(frame, app, keymap, None))
+        .draw(|frame| draw(frame, app, keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let mut out = String::new();
@@ -710,7 +710,7 @@ fn dead_end_journey_reaches_the_newest_commit_in_a_handful_of_keys() {
     // list, so use the overlay's own `/` filter (what a user would do) to
     // bring that row into one viewport.
     press(&mut app, &keymap, &mut pending, KeyCode::Char('?'));
-    assert!(app.help_open, "? must open the help overlay from the panel");
+    assert!(app.help.open, "? must open the help overlay from the panel");
     press(&mut app, &keymap, &mut pending, KeyCode::Char('/'));
     for ch in "open the commit".chars() {
         press(&mut app, &keymap, &mut pending, KeyCode::Char(ch));
@@ -725,7 +725,7 @@ fn dead_end_journey_reaches_the_newest_commit_in_a_handful_of_keys() {
     // the optional "learn the control" detour, not part of the 3-key path).
     press(&mut app, &keymap, &mut pending, KeyCode::Esc); // clears the filter
     press(&mut app, &keymap, &mut pending, KeyCode::Esc); // closes the overlay
-    assert!(!app.help_open, "Esc closes the overlay");
+    assert!(!app.help.open, "Esc closes the overlay");
     assert!(
         matches!(app.mode, Mode::Panel { .. }),
         "still on the focused panel after learning"
@@ -882,13 +882,21 @@ fn commit_view_help_overlay_shows_only_truthful_keys() {
     assert!(matches!(app.target, DiffTarget::Commit(_)));
 
     press(&mut app, &keymap, &mut pending, KeyCode::Char('?'));
-    assert!(app.help_open);
+    assert!(app.help.open);
+    // This test's "no lies" property spans the whole keymap, not just the
+    // Diff-scope rows This context (the default tab) shows for this origin —
+    // switch to All keys so cross-scope keys like `TogglePanelTab` are in
+    // play too.
+    press(&mut app, &keymap, &mut pending, KeyCode::Tab);
+    assert_eq!(app.help.tab, help::HelpTab::AllKeys);
     // The unfiltered top-of-overlay is the primary visible evidence: in a
     // commit view its Stage section is reduced to just `s Toggle staging
     // panel` (the panel toggle still works) and there is NO Code intelligence
     // section at all — the inert file/hunk-stage and gd/gr/K keys are simply
     // gone, not listed-but-dead.
-    let overlay_top = screenshot(&app, &keymap, 100, 55);
+    // Tall enough that the overlay's ~3/5-of-screen cap still reaches past
+    // Navigation/Annotate into the Stage section.
+    let overlay_top = screenshot(&app, &keymap, 100, 74);
     eprintln!("=== 6.3 commit-view ? overlay (unfiltered, top) ===\n{overlay_top}");
 
     // The diff-line stage gestures live in the top viewport's Stage section

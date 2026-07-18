@@ -302,8 +302,20 @@ fn search_mode_has_no_hint_strip() {
 #[test]
 fn help_open_hints_are_scroll_filter_close_with_no_help_entry() {
     let entries = help_open_hints(&ModalKeymaps::default());
-    assert_eq!(labels(&entries), vec!["scroll", "filter", "close"]);
-    assert_eq!(keys(&entries), vec!["j / Down", "/", "Esc / Enter / ?"]);
+    assert_eq!(
+        labels(&entries),
+        vec!["scroll", "filter", "close", "next tab", "prev tab"]
+    );
+    assert_eq!(
+        keys(&entries),
+        vec![
+            "j / Down",
+            "/",
+            "Esc / Enter / ?",
+            "Tab / l",
+            "Shift-Tab / h"
+        ]
+    );
 }
 
 #[test]
@@ -329,7 +341,10 @@ fn help_open_takes_precedence_over_the_mode_strip() {
         &km,
         &ModalKeymaps::default(),
     );
-    assert_eq!(labels(&entries), vec!["scroll", "filter", "close"]);
+    assert_eq!(
+        labels(&entries),
+        vec!["scroll", "filter", "close", "next tab", "prev tab"]
+    );
 }
 
 // -- Pending two-key prefix ------------------------------------------------
@@ -728,9 +743,9 @@ fn panel_help_hint_is_real_and_shadows_panel_dispatch() {
         &mut pending_count,
         key(KeyCode::Char('?')),
     );
-    assert!(app.help_open, "`?` must open help from the panel");
+    assert!(app.help.open, "`?` must open help from the panel");
     assert!(matches!(app.mode, Mode::Panel { .. }), "mode stays Panel");
-    let scroll_before = app.help_scroll.get();
+    let scroll_before = app.help.scroll.get();
     dispatch_key(
         &mut app,
         &keymap,
@@ -739,7 +754,7 @@ fn panel_help_hint_is_real_and_shadows_panel_dispatch() {
         key(KeyCode::Char('j')),
     );
     assert!(
-        app.help_scroll.get() > scroll_before,
+        app.help.scroll.get() > scroll_before,
         "j must scroll help, not move the panel cursor, while help is open over the panel"
     );
     dispatch_key(
@@ -749,7 +764,7 @@ fn panel_help_hint_is_real_and_shadows_panel_dispatch() {
         &mut pending_count,
         KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
     );
-    assert!(!app.help_open, "Esc must close help");
+    assert!(!app.help.open, "Esc must close help");
     assert!(
         matches!(app.mode, Mode::Panel { .. }),
         "closing help returns to the panel, not Normal"
@@ -831,7 +846,7 @@ fn footer_height_matches_wrap_hints_row_count() {
             code_intel_allowed: true,
             push_publishes: false,
             viewing_commit: false,
-            help_open: a.help_open,
+            help_open: a.help.open,
             project_search_focus: a.project_search_focus(),
             review_session: false,
         },

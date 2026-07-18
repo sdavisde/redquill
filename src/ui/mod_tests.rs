@@ -95,7 +95,7 @@ fn renders_diff_pane_content() {
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
 
     let buffer = terminal.backend().buffer().clone();
@@ -118,7 +118,7 @@ fn sidebar_hidden_in_normal_mode_shown_when_panel_focused() {
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -128,7 +128,7 @@ fn sidebar_hidden_in_normal_mode_shown_when_panel_focused() {
     assert!(matches!(app.mode, Mode::Panel { .. }));
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -158,7 +158,7 @@ fn multibuffer_renders_all_section_headers() {
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -184,7 +184,7 @@ fn collapsed_section_renders_header_only_with_collapsed_indicator() {
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     // Scoped to the area above the footer strip: the context-sensitive
@@ -220,7 +220,7 @@ fn staged_file_section_header_shows_marker() {
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -241,7 +241,7 @@ fn partial_file_section_header_shows_partial_marker() {
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -258,7 +258,7 @@ fn rendered_content(app: &App, keymap: &Keymap) -> String {
     let backend = TestBackend::new(80, 20);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|frame| draw(frame, app, keymap, None))
+        .draw(|frame| draw(frame, app, keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     buffer.content().iter().map(|cell| cell.symbol()).collect()
@@ -344,7 +344,7 @@ fn capture_task_05_welcome_buffer() {
     let app = App::new(vec![]);
     let keymap = Keymap::default_map();
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
 
     let buffer = terminal.backend().buffer().clone();
@@ -380,7 +380,7 @@ fn multibuffer_renders_for_a_range_target() {
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -396,15 +396,17 @@ fn multibuffer_renders_for_a_range_target() {
 /// toggle.
 #[test]
 fn help_overlay_hides_staging_rows_on_a_range_target() {
-    let backend = TestBackend::new(100, 55);
+    // Tall enough that the overlay's ~3/5-of-screen cap still fits the whole
+    // This context list (workflow header + Navigation..Quit groups).
+    let backend = TestBackend::new(100, 74);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true;
+    app.help.open = true;
     app.target = crate::git::DiffTarget::Range("main..HEAD".to_string());
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -424,11 +426,11 @@ fn help_overlay_shows_staging_rows_on_the_working_tree_target() {
     let backend = TestBackend::new(100, 300);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true; // target defaults to WorkingTree
+    app.help.open = true; // target defaults to WorkingTree
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -446,10 +448,12 @@ fn help_overlay_shows_staging_rows_on_the_working_tree_target() {
 /// this also proves the "Review" group actually reaches the screen.
 #[test]
 fn help_overlay_shows_review_rows_and_hides_staging_rows_during_a_review_session() {
-    let backend = TestBackend::new(100, 65);
+    // Tall enough that the overlay's ~3/5-of-screen cap still fits the whole
+    // This context list (workflow header + Navigation..Quit groups).
+    let backend = TestBackend::new(100, 87);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true;
+    app.help.open = true;
     app.target = DiffTarget::Review {
         base: "main".to_string(),
         branch: "feature".to_string(),
@@ -457,7 +461,7 @@ fn help_overlay_shows_review_rows_and_hides_staging_rows_during_a_review_session
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -492,11 +496,11 @@ fn help_overlay_hides_review_rows_outside_a_review_session() {
     let backend = TestBackend::new(100, 55);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true; // target defaults to WorkingTree
+    app.help.open = true; // target defaults to WorkingTree
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -508,14 +512,16 @@ fn help_overlay_hides_review_rows_outside_a_review_session() {
 
 #[test]
 fn help_overlay_renders_bindings_when_open() {
-    let backend = TestBackend::new(80, 20);
+    // Tall enough that the overlay's ~3/5-of-screen cap still reaches past
+    // the workflow header into the Navigation group.
+    let backend = TestBackend::new(80, 27);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true;
+    app.help.open = true;
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
 
     let buffer = terminal.backend().buffer().clone();
@@ -532,11 +538,15 @@ fn help_overlay_lists_remote_and_command_log_bindings() {
     let backend = TestBackend::new(100, 300);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true;
+    app.help.open = true;
+    // Panel-scope/modal-section content lives on the All keys tab now
+    // (This context, the new default, only shows the origin's own scope
+    // plus Works everywhere — see `help::this_context_sections`).
+    app.help.tab = help::HelpTab::AllKeys;
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let content: String = terminal
         .backend()
@@ -568,11 +578,15 @@ fn help_overlay_lists_global_bindings_once_in_a_works_everywhere_section() {
     let backend = TestBackend::new(100, 300);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true;
+    app.help.open = true;
+    // This test is about the full reference's fixed section order (Works
+    // everywhere first), which is the All keys tab's contract (FR-3); This
+    // context (the new default) intentionally orders Works everywhere last.
+    app.help.tab = help::HelpTab::AllKeys;
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
@@ -616,17 +630,24 @@ fn help_overlay_lists_global_bindings_once_in_a_works_everywhere_section() {
 /// `help::modal_sections`) while scrolling the first off-screen.
 #[test]
 fn help_overlay_scrolls_to_reveal_lower_sections() {
-    let backend = TestBackend::new(100, 22);
+    // Tall enough that the overlay's ~3/5-of-screen cap still reaches past
+    // the "Works everywhere" section into Navigation, while staying far
+    // short of the full All keys reference so scrolling is still forced.
+    let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true;
+    app.help.open = true;
+    // The modal sections (Project search, last in `help::modal_sections`)
+    // only render on the All keys tab; This context (the new default) never
+    // includes them.
+    app.help.tab = help::HelpTab::AllKeys;
     let keymap = Keymap::default_map();
 
     // First frame renders the top of the list (and records the viewport
     // height the pager needs). The last section (Project search) is far
     // below.
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let top: String = terminal
         .backend()
@@ -645,7 +666,7 @@ fn help_overlay_scrolls_to_reveal_lower_sections() {
     let end = KeyEvent::new(KeyCode::End, KeyModifiers::NONE);
     let _ = dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, end);
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let bottom: String = terminal
         .backend()
@@ -668,40 +689,40 @@ fn help_overlay_scrolls_to_reveal_lower_sections() {
 #[test]
 fn help_filter_enter_locks_and_two_escapes_close() {
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true;
+    app.help.open = true;
     let keymap = Keymap::default_map();
     let mut pending = None;
     let mut pending_count: Option<usize> = None;
 
     let slash = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
     dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, slash);
-    assert_eq!(app.help_search, Some((String::new(), true)));
+    assert_eq!(app.help.search, Some((String::new(), true)));
 
     for c in ['q', 'u', 'i', 't'] {
         let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
         dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, key);
     }
-    assert_eq!(app.help_search, Some(("quit".to_string(), true)));
+    assert_eq!(app.help.search, Some(("quit".to_string(), true)));
 
     let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
     dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, enter);
-    assert_eq!(app.help_search, Some(("quit".to_string(), false)));
+    assert_eq!(app.help.search, Some(("quit".to_string(), false)));
     assert!(
-        app.help_open,
+        app.help.open,
         "locking the filter must not close the overlay"
     );
 
     let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
     dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, esc);
-    assert_eq!(app.help_search, None, "first Esc clears the locked filter");
+    assert_eq!(app.help.search, None, "first Esc clears the locked filter");
     assert!(
-        app.help_open,
+        app.help.open,
         "clearing the filter must not close the overlay"
     );
 
     dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, esc);
     assert!(
-        !app.help_open,
+        !app.help.open,
         "second Esc, with no filter left, closes the overlay"
     );
 }
@@ -984,22 +1005,331 @@ fn repeat_count_caps_and_ignores_non_repeatable_actions() {
     assert_eq!(repeat_count(Action::ToggleStage, Some(5)), 1);
 }
 
+// -- Which-key `pending_since` tracking: FR-11/FR-12 regression pins --------
+//
+// `dispatch_key` itself is untouched by the which-key feature — these tests
+// drive the exact `had_pending`/`dispatch_key`/`update_pending_since` triple
+// the real event loop uses (see `event_loop`) and check only `pending_since`,
+// never re-asserting outcomes (cursor position, resolved action, ...) the
+// count-prefix tests above already pin. That split is the proof that adding
+// the popup left the state machine byte-identical.
+
+#[test]
+fn pending_since_is_set_the_moment_g_goes_pending_and_clears_once_gd_resolves() {
+    let mut app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+    let mut pending = None;
+    let mut pending_count: Option<usize> = None;
+    let mut pending_since: Option<Instant> = None;
+
+    let had_pending = pending.is_some();
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+    );
+    update_pending_since(
+        had_pending,
+        pending.is_some(),
+        &mut pending_since,
+        Instant::now(),
+    );
+    assert!(pending.is_some(), "g must start a pending sequence");
+    assert!(
+        pending_since.is_some(),
+        "pending_since must be set the moment the prefix goes pending"
+    );
+
+    let had_pending = pending.is_some();
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+    );
+    update_pending_since(
+        had_pending,
+        pending.is_some(),
+        &mut pending_since,
+        Instant::now(),
+    );
+    assert_eq!(pending, None, "gd must still resolve and clear pending");
+    assert_eq!(
+        pending_since, None,
+        "pending_since must clear the instant the prefix resolves"
+    );
+}
+
+#[test]
+fn pending_since_clears_on_esc_and_on_an_unbound_second_key() {
+    for second in [KeyCode::Esc, KeyCode::F(12)] {
+        let mut app = App::new(vec![sample_file()]);
+        let keymap = Keymap::default_map();
+        let mut pending = None;
+        let mut pending_count: Option<usize> = None;
+        let mut pending_since: Option<Instant> = None;
+
+        let had_pending = pending.is_some();
+        dispatch_key(
+            &mut app,
+            &keymap,
+            &mut pending,
+            &mut pending_count,
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+        );
+        update_pending_since(
+            had_pending,
+            pending.is_some(),
+            &mut pending_since,
+            Instant::now(),
+        );
+        assert!(pending_since.is_some());
+
+        let had_pending = pending.is_some();
+        dispatch_key(
+            &mut app,
+            &keymap,
+            &mut pending,
+            &mut pending_count,
+            KeyEvent::new(second, KeyModifiers::NONE),
+        );
+        update_pending_since(
+            had_pending,
+            pending.is_some(),
+            &mut pending_since,
+            Instant::now(),
+        );
+        assert_eq!(pending, None, "{second:?} must cancel the pending prefix");
+        assert_eq!(
+            pending_since, None,
+            "{second:?} must clear pending_since too"
+        );
+    }
+}
+
+/// A leading count prefix (`3g`) must put `pending_since` on exactly the
+/// same schedule as a bare `g` (FR-12): the timer tracks `pending` alone,
+/// never `pending_count`.
+#[test]
+fn pending_since_is_unaffected_by_a_leading_count_prefix() {
+    let mut app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+    let mut pending = None;
+    let mut pending_count: Option<usize> = None;
+    let mut pending_since: Option<Instant> = None;
+
+    press_digits(&mut app, &keymap, &mut pending, &mut pending_count, "3");
+    assert_eq!(
+        pending_since, None,
+        "a bare digit never starts a which-key prefix"
+    );
+
+    let had_pending = pending.is_some();
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+    );
+    update_pending_since(
+        had_pending,
+        pending.is_some(),
+        &mut pending_since,
+        Instant::now(),
+    );
+    assert!(
+        pending_since.is_some(),
+        "3g's g still goes pending exactly like a bare g"
+    );
+}
+
+/// A fluent `gd` (the continuation typed well before any threshold check
+/// would run) can never make the popup show: `pending` is already `None` by
+/// the time the next frame's `should_show` call would evaluate it, no
+/// matter how large an elapsed is injected.
+#[test]
+fn a_fluent_continuation_never_makes_should_show_true() {
+    let mut app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+    let mut pending = None;
+    let mut pending_count: Option<usize> = None;
+
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+    );
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+    );
+    assert_eq!(pending, None);
+    assert!(!which_key::should_show(
+        pending,
+        Some(Duration::from_secs(5)),
+        which_key::WHICH_KEY_DELAY
+    ));
+}
+
+// -- Which-key popup rendering (FR-10, FR-12, FR-13) -------------------------
+
+/// The popup renders exactly the `(key, description)` rows
+/// `Keymap::continuations_for` returns for the pending prefix — no
+/// hand-maintained list to drift from the keymap.
+#[test]
+fn which_key_popup_shows_every_continuation_for_the_pending_prefix() {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+    let prefix = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
+
+    terminal
+        .draw(|frame| {
+            draw(
+                frame,
+                &app,
+                &keymap,
+                Some(prefix),
+                Some(Duration::from_millis(600)),
+            )
+        })
+        .unwrap();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .clone()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+
+    for (key, description) in keymap.continuations_for(keymap::Scope::Diff, prefix) {
+        assert!(content.contains(&key), "popup must show key {key:?}");
+        assert!(
+            content.contains(description),
+            "popup must show description {description:?}"
+        );
+    }
+}
+
+/// Below the delay threshold the popup never renders, regardless of which
+/// prefix is pending.
+#[test]
+fn which_key_popup_absent_below_the_delay_threshold() {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+    let prefix = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
+
+    terminal
+        .draw(|frame| {
+            draw(
+                frame,
+                &app,
+                &keymap,
+                Some(prefix),
+                Some(Duration::from_millis(100)),
+            )
+        })
+        .unwrap();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .clone()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(
+        !content.contains("Go to definition"),
+        "the popup must not render before the delay threshold"
+    );
+}
+
+/// A config remap of a `g`-prefixed action changes what the popup shows,
+/// proving the content is derived from the effective (post-config-merge)
+/// keymap rather than a hardcoded list — the same guarantee FR-13 asks for,
+/// exercised through the real render path this time.
+#[test]
+fn which_key_popup_reflects_a_config_remap() {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let app = App::new(vec![sample_file()]);
+
+    let mut keys = crate::config::KeysConfig::default();
+    keys.diff.insert(
+        "goto-definition".to_string(),
+        vec![crate::config::keys::KeySeqSpec::Two(
+            crate::config::keys::ChordSpec {
+                code: KeyCode::Char('g'),
+                mods: KeyModifiers::NONE,
+            },
+            crate::config::keys::ChordSpec {
+                code: KeyCode::Char('x'),
+                mods: KeyModifiers::NONE,
+            },
+        )],
+    );
+    let (keymap, warnings) = keymap_config::effective_keymap(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    let prefix = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
+
+    terminal
+        .draw(|frame| {
+            draw(
+                frame,
+                &app,
+                &keymap,
+                Some(prefix),
+                Some(Duration::from_millis(600)),
+            )
+        })
+        .unwrap();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .clone()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(
+        content.contains("gx"),
+        "the remapped gx must appear in the popup"
+    );
+    assert!(
+        !content.contains("gd "),
+        "the old gd binding must no longer appear"
+    );
+}
+
 /// Closing the help overlay (either `?` or the overlay's own Close action)
 /// always resets an in-progress or locked filter, so reopening starts clean.
 #[test]
 fn closing_help_resets_the_filter() {
     let mut app = App::new(vec![sample_file()]);
     app.apply(Action::ToggleHelp);
-    assert!(app.help_open);
-    app.help_search = Some(("foo".to_string(), true));
+    assert!(app.help.open);
+    app.help.search = Some(("foo".to_string(), true));
 
     app.apply(Action::ToggleHelp);
-    assert!(!app.help_open);
-    assert_eq!(app.help_search, None, "closing help must clear the filter");
+    assert!(!app.help.open);
+    assert_eq!(app.help.search, None, "closing help must clear the filter");
 
     app.apply(Action::ToggleHelp);
     assert_eq!(
-        app.help_search, None,
+        app.help.search, None,
         "reopening help must start with no filter"
     );
 }
@@ -1012,12 +1342,12 @@ fn help_filter_narrows_rendered_bindings_to_matching_rows() {
     let backend = TestBackend::new(120, 50);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true;
-    app.help_search = Some(("quit".to_string(), false));
+    app.help.open = true;
+    app.help.search = Some(("quit".to_string(), false));
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let content: String = terminal
         .backend()
@@ -1042,12 +1372,12 @@ fn help_filter_shows_no_matches_message_when_nothing_matches() {
     let backend = TestBackend::new(120, 50);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true;
-    app.help_search = Some(("zzznomatchzzz".to_string(), false));
+    app.help.open = true;
+    app.help.search = Some(("zzznomatchzzz".to_string(), false));
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let content: String = terminal
         .backend()
@@ -1059,6 +1389,150 @@ fn help_filter_shows_no_matches_message_when_nothing_matches() {
         .collect();
     assert!(content.contains("no matches for"));
     assert!(content.contains("zzznomatchzzz"));
+}
+
+// -- Tabbed help overlay: This context (default) / All keys -----------------
+
+/// `?` always opens on the This context tab, showing only the origin's own
+/// scope (Diff, from the diff view) plus Works everywhere — panel-scope
+/// content (e.g. the branch/worktree switcher opener) is absent until the
+/// user switches tabs.
+#[test]
+fn help_opens_on_this_context_tab_showing_only_the_origin_scope() {
+    let backend = TestBackend::new(100, 300);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    app.apply(Action::ToggleHelp);
+    assert_eq!(app.help.tab, help::HelpTab::ThisContext);
+    let keymap = Keymap::default_map();
+
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
+        .unwrap();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .clone()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(content.contains("This context"));
+    assert!(content.contains("All keys"));
+    assert!(content.contains("Move cursor down"), "Diff scope must show");
+    assert!(content.contains("Works everywhere"));
+    assert!(
+        !content.contains("Open branch/worktree switcher"),
+        "Panel-scope rows must not show on This context from the diff view"
+    );
+}
+
+/// From the focused git panel, This context shows the Panel-scope bindings
+/// (and Works everywhere) but no Diff-scope rows — the mirror image of
+/// `help_opens_on_this_context_tab_showing_only_the_origin_scope`.
+#[test]
+fn help_this_context_from_the_panel_shows_only_panel_scope() {
+    let backend = TestBackend::new(100, 300);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    app.mode = Mode::Panel {
+        cursor: 0,
+        tab: PanelTab::Changes,
+    };
+    app.apply(Action::ToggleHelp);
+    assert_eq!(
+        app.help.origin,
+        ModeOrigin::Panel {
+            cursor: 0,
+            tab: PanelTab::Changes,
+        }
+    );
+    let keymap = Keymap::default_map();
+
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
+        .unwrap();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .clone()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(content.contains("Open branch/worktree switcher"));
+    assert!(content.contains("Works everywhere"));
+    assert!(
+        !content.contains("Move cursor down"),
+        "Diff-scope rows must not show on This context from the git panel"
+    );
+}
+
+/// Switching tabs resets a locked filter and the scroll position (FR-4): a
+/// filter that narrows This context to a handful of rows is gone once `Tab`
+/// switches to All keys, which then renders complete (including
+/// modal-section/panel-scope content This context never carries).
+#[test]
+fn help_filter_resets_and_other_tab_renders_complete_after_switching() {
+    let backend = TestBackend::new(100, 300);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    app.apply(Action::ToggleHelp);
+    app.help.scroll.set(7);
+    app.help.search = Some(("stage".to_string(), false));
+    let keymap = Keymap::default_map();
+
+    // The locked filter narrows This context: matching rows show, unrelated
+    // ones (and the panel-scope switcher opener, off-tab regardless) don't.
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
+        .unwrap();
+    let narrowed: String = terminal
+        .backend()
+        .buffer()
+        .clone()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(narrowed.contains("Stage/unstage file under cursor"));
+    assert!(!narrowed.contains("Move cursor down"));
+
+    let mut pending = None;
+    let mut pending_count: Option<usize> = None;
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+    );
+    assert_eq!(app.help.tab, help::HelpTab::AllKeys, "Tab must switch tabs");
+    assert_eq!(
+        app.help.search, None,
+        "switching tabs must reset the filter"
+    );
+    assert_eq!(app.help.scroll.get(), 0, "switching tabs must reset scroll");
+
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
+        .unwrap();
+    let full: String = terminal
+        .backend()
+        .buffer()
+        .clone()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(
+        full.contains("Move cursor down"),
+        "the new tab must render unfiltered/complete"
+    );
+    assert!(
+        full.contains("Branch/worktree switcher"),
+        "All keys' modal sections must be present now that the filter reset"
+    );
 }
 
 /// An annotation present on the selected file renders both its inline
@@ -1088,7 +1562,7 @@ fn annotation_renders_inline_and_in_list_panel() {
 
     let keymap = Keymap::default_map();
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
 
     let buffer = terminal.backend().buffer().clone();
@@ -1126,7 +1600,7 @@ fn staging_panel_indicator_and_footer_render() {
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
 
     let buffer = terminal.backend().buffer().clone();
@@ -1156,7 +1630,7 @@ fn sidebar_staged_indicator_renders_when_panel_focused() {
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
 
     let buffer = terminal.backend().buffer().clone();
@@ -1175,7 +1649,7 @@ fn empty_staging_panel_shows_hint() {
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
 
     let buffer = terminal.backend().buffer().clone();
@@ -1207,7 +1681,7 @@ fn empty_staging_panel_hint_reflects_a_remapped_toggle_stage_key() {
     assert!(warnings.is_empty());
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
 
     let buffer = terminal.backend().buffer().clone();
@@ -1241,7 +1715,7 @@ fn empty_list_panel_hint_reflects_a_remapped_compose_key() {
     assert!(warnings.is_empty());
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
 
     let buffer = terminal.backend().buffer().clone();
@@ -1273,7 +1747,7 @@ fn syntax_highlighted_span_renders_with_token_color() {
 
     let keymap = Keymap::default_map();
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
 
     let buffer = terminal.backend().buffer().clone();
@@ -1303,7 +1777,7 @@ fn search_mode_renders_prompt_and_confirmed_match_is_highlighted() {
     app.search_input = "n".to_string();
     let keymap = Keymap::default_map();
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -1320,7 +1794,7 @@ fn search_mode_renders_prompt_and_confirmed_match_is_highlighted() {
     assert_ne!(app.view.cursor, app.search.matches[1]);
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let has_match_bg = buffer
@@ -1350,7 +1824,7 @@ fn column_cursor_renders_distinct_background_on_the_cursor_cell() {
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let has_cursor_bg = buffer
@@ -1395,7 +1869,7 @@ fn peek_overlay_renders_canned_references_and_preview() {
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -1418,7 +1892,7 @@ fn peek_overlay_renders_hover_text() {
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -1548,7 +2022,9 @@ fn focused_pane_border_emphasis_follows_the_toggle() {
 
     // Diff focused (Normal): the sidebar is hidden entirely, so the diff
     // pane spans the full width with its border emphasized.
-    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
+    terminal
+        .draw(|f| draw(f, &app, &keymap, None, None))
+        .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
     assert!(
@@ -1565,7 +2041,9 @@ fn focused_pane_border_emphasis_follows_the_toggle() {
     // moves to the panel border.
     app.apply(Action::FocusGitPanel);
     assert!(matches!(app.mode, Mode::Panel { .. }));
-    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
+    terminal
+        .draw(|f| draw(f, &app, &keymap, None, None))
+        .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
     assert!(
@@ -1582,7 +2060,9 @@ fn focused_pane_border_emphasis_follows_the_toggle() {
     // Toggling back to the diff hides the sidebar again.
     app.apply(Action::FocusGitPanel);
     assert!(matches!(app.mode, Mode::Normal));
-    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
+    terminal
+        .draw(|f| draw(f, &app, &keymap, None, None))
+        .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
     assert!(
@@ -1631,7 +2111,9 @@ fn sidebar_rect_and_render_scale_with_terminal_width_when_panel_focused() {
         });
         app.apply(Action::FocusGitPanel);
         let keymap = Keymap::default_map();
-        terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
+        terminal
+            .draw(|f| draw(f, &app, &keymap, None, None))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
 
         let panel_start = width - expected_sidebar;
@@ -2175,7 +2657,7 @@ fn review_markers_render_on_sidebar_and_section_headers_with_banner_count() {
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -2224,7 +2706,7 @@ fn empty_accepted_panel_shows_review_appropriate_hint() {
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -2279,7 +2761,7 @@ fn accepted_panel_lists_accepted_files_and_space_un_accepts() {
     let mut pending_count: Option<usize> = None;
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -2325,7 +2807,7 @@ fn staging_panel_is_unchanged_outside_a_review_session() {
     let keymap = Keymap::default_map();
 
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -2565,7 +3047,7 @@ fn q_is_inert_while_help_overlay_open() {
     let mut pending: Option<KeyEvent> = None;
     let mut pending_count: Option<usize> = None;
     let mut app = panel_smoke_app();
-    app.help_open = true;
+    app.help.open = true;
     let flow = dispatch_key(
         &mut app,
         &keymap,
@@ -2577,7 +3059,7 @@ fn q_is_inert_while_help_overlay_open() {
         matches!(flow, Flow::Continue),
         "q must not quit while help is open"
     );
-    assert!(app.help_open, "q must not close the help overlay");
+    assert!(app.help.open, "q must not close the help overlay");
     dispatch_key(
         &mut app,
         &keymap,
@@ -2585,7 +3067,7 @@ fn q_is_inert_while_help_overlay_open() {
         &mut pending_count,
         KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
     );
-    assert!(!app.help_open, "? still closes the help overlay");
+    assert!(!app.help.open, "? still closes the help overlay");
 }
 
 /// `@` toggles the command-log pane from *both* the diff view (Normal)
@@ -2616,7 +3098,9 @@ fn at_toggles_command_log_from_both_scopes_and_renders_in_bottom_slot() {
     // It renders in the bottom slot with the failed entry and its stderr.
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
+    terminal
+        .draw(|f| draw(f, &app, &keymap, None, None))
+        .unwrap();
     let content: String = terminal
         .backend()
         .buffer()
@@ -2675,7 +3159,9 @@ fn running_indicator_renders_while_a_remote_op_is_in_flight() {
 
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
+    terminal
+        .draw(|f| draw(f, &app, &keymap, None, None))
+        .unwrap();
     let content: String = terminal
         .backend()
         .buffer()
@@ -2702,7 +3188,9 @@ fn context_footer_strip_renders_when_nothing_else_occupies_the_footer() {
 
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
+    terminal
+        .draw(|f| draw(f, &app, &keymap, None, None))
+        .unwrap();
     let content: String = terminal
         .backend()
         .buffer()
@@ -2739,7 +3227,9 @@ fn status_message_replaces_the_context_footer_strip() {
 
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
+    terminal
+        .draw(|f| draw(f, &app, &keymap, None, None))
+        .unwrap();
     let content: String = terminal
         .backend()
         .buffer()
@@ -2775,7 +3265,9 @@ fn config_warning_notice_renders_in_the_footer_without_blocking_the_diff() {
 
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
+    terminal
+        .draw(|f| draw(f, &app, &keymap, None, None))
+        .unwrap();
     let content: String = terminal
         .backend()
         .buffer()
@@ -2836,7 +3328,9 @@ fn dismiss_config_warning_hides_the_notice() {
 
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
+    terminal
+        .draw(|f| draw(f, &app, &keymap, None, None))
+        .unwrap();
     let content: String = terminal
         .backend()
         .buffer()
@@ -2916,7 +3410,9 @@ fn capture_task_03_smoke_transcript() {
                 KeyEvent::new(code, KeyModifiers::NONE),
             );
         }
-        terminal.draw(|f| draw(f, app, &keymap, None)).unwrap();
+        terminal
+            .draw(|f| draw(f, app, &keymap, None, None))
+            .unwrap();
         let buf = terminal.backend().buffer().clone();
         let text: String = buf.content().iter().map(|c| c.symbol()).collect();
         let pane = if app.git_panel_focused() {
@@ -3221,7 +3717,9 @@ fn capture_task_04_smoke_transcript() {
     app2.command_log_open = true;
     let backend = TestBackend::new(100, 40);
     let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| draw(f, &app2, &keymap, None)).unwrap();
+    terminal
+        .draw(|f| draw(f, &app2, &keymap, None, None))
+        .unwrap();
     let frame: String = terminal
         .backend()
         .buffer()
@@ -3282,7 +3780,7 @@ fn scrolling_a_5k_line_multibuffer_renders_fast() {
     let start = std::time::Instant::now();
     loop {
         terminal
-            .draw(|frame| draw(frame, &app, &keymap, None))
+            .draw(|frame| draw(frame, &app, &keymap, None, None))
             .unwrap();
         frames += 1;
         if app.view.cursor >= app.view.max_cursor() || frames > 2000 {
@@ -3317,7 +3815,7 @@ fn dump_frame_if_requested(label: &str, app: &App, keymap: &Keymap) {
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|frame| draw(frame, app, keymap, None))
+        .draw(|frame| draw(frame, app, keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let w = buffer.area.width as usize;

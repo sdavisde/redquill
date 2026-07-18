@@ -169,6 +169,51 @@ fn overriding_a_review_launcher_action_replaces_its_default_keys_rather_than_app
     );
 }
 
+// -- Help overlay's tab-switch actions are config-remappable -----------------
+
+#[test]
+fn overriding_the_help_next_tab_action_replaces_its_default_keys_rather_than_appending() {
+    let keys = keys_with(
+        "help",
+        "next-tab",
+        one(KeyCode::Char('n'), KeyModifiers::NONE),
+    );
+    let (effective, warnings) = effective_modal_keys(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+    let rows: Vec<_> = effective
+        .help
+        .iter()
+        .filter(|b| b.action == modal_keys::HelpAction::NextTab)
+        .collect();
+    assert_eq!(rows.len(), 1, "must have exactly one row, not appended");
+    assert_eq!(rows[0].key_label(), "n");
+
+    // Tab/`l` are unbound for NextTab here, but the rest of the table (e.g.
+    // PrevTab on Shift-Tab/`h`) is untouched.
+    assert_eq!(
+        modal_keys::resolve(
+            &effective.help,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)
+        ),
+        None
+    );
+    assert_eq!(
+        modal_keys::resolve(
+            &effective.help,
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)
+        ),
+        Some(modal_keys::HelpAction::NextTab)
+    );
+    assert_eq!(
+        modal_keys::resolve(
+            &effective.help,
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE)
+        ),
+        Some(modal_keys::HelpAction::PrevTab)
+    );
+}
+
 // -- Keep: unlisted actions are untouched ------------------------------------
 
 #[test]
@@ -593,6 +638,8 @@ fn example_config_documents_every_modal_action_exactly_once() {
             HelpAction::Top,
             HelpAction::Bottom,
             HelpAction::Search,
+            HelpAction::NextTab,
+            HelpAction::PrevTab,
         ],
         help_action_name,
         help_action_from_name,
