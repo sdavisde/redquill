@@ -238,6 +238,137 @@ fn panel_overrides_do_not_affect_diff_scope_and_vice_versa() {
     );
 }
 
+// -- `[keys.global]` merge semantics -----------------------------------------
+
+#[test]
+fn global_override_replaces_the_default_key_rather_than_appending() {
+    let mut keys = KeysConfig::default();
+    keys.global.insert(
+        "toggle-command-log".to_string(),
+        one(KeyCode::Char('L'), KeyModifiers::NONE),
+    );
+    let (km, warnings) = effective_keymap(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+    let rows = find(&km, Scope::Global, Action::ToggleCommandLog);
+    assert_eq!(rows.len(), 1, "must have exactly one binding, not appended");
+    assert_eq!(rows[0].key_label(), "L");
+
+    // The default `@` is gone from both scopes it used to reach through the
+    // Global fallback; `L` reaches them instead.
+    for scope in [Scope::Diff, Scope::Panel] {
+        assert_eq!(
+            km.lookup_in(
+                scope,
+                crossterm::event::KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE)
+            ),
+            None
+        );
+        assert_eq!(
+            km.lookup_in(
+                scope,
+                crossterm::event::KeyEvent::new(KeyCode::Char('L'), KeyModifiers::NONE)
+            ),
+            Some(Action::ToggleCommandLog)
+        );
+    }
+}
+
+#[test]
+fn global_empty_array_unbinds_the_action_in_every_scope() {
+    let mut keys = KeysConfig::default();
+    keys.global
+        .insert("dismiss-config-warning".to_string(), Vec::new());
+    let (km, warnings) = effective_keymap(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    assert!(find(&km, Scope::Global, Action::DismissConfigWarning).is_empty());
+    for scope in [Scope::Diff, Scope::Panel] {
+        assert_eq!(
+            km.lookup_in(
+                scope,
+                crossterm::event::KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE)
+            ),
+            None
+        );
+    }
+}
+
+#[test]
+fn global_unknown_action_name_is_a_warning_and_does_not_touch_the_keymap() {
+    let mut keys = KeysConfig::default();
+    keys.global.insert(
+        "not-a-real-action".to_string(),
+        one(KeyCode::Char('J'), KeyModifiers::NONE),
+    );
+    let (km, warnings) = effective_keymap(&keys);
+    assert_eq!(warnings.len(), 1);
+    match &warnings[0] {
+        crate::config::ConfigWarning::InvalidValue { section, key, .. } => {
+            assert_eq!(section, "keys.global");
+            assert_eq!(key, "not-a-real-action");
+        }
+        other => panic!("expected InvalidValue, got {other:?}"),
+    }
+    assert_eq!(km.bindings().len(), Keymap::default_map().bindings().len());
+}
+
+/// Collision checking stays per scope: rebinding `dismiss-config-warning`
+/// onto `?` collides with `Global`'s own `toggle-help` default (both rows
+/// live in `Scope::Global`), so the default `?` row is dropped with a
+/// warning and the user's binding wins.
+#[test]
+fn global_override_colliding_with_another_global_default_wins_with_a_warning() {
+    let mut keys = KeysConfig::default();
+    keys.global.insert(
+        "dismiss-config-warning".to_string(),
+        one(KeyCode::Char('?'), KeyModifiers::NONE),
+    );
+    let (km, warnings) = effective_keymap(&keys);
+    assert_eq!(warnings.len(), 1, "expected exactly one collision warning");
+    assert_eq!(
+        km.lookup_in(
+            Scope::Global,
+            crossterm::event::KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE)
+        ),
+        Some(Action::DismissConfigWarning),
+        "user override must win the collision"
+    );
+    assert!(
+        find(&km, Scope::Global, Action::ToggleHelp).is_empty(),
+        "the colliding default (ToggleHelp on `?`) must be dropped"
+    );
+}
+
+/// A `[keys.diff]` override reusing a key already claimed by a `Global`
+/// default is shadowing, not a collision — no warning, and the Diff-scope
+/// override wins in Diff scope while Panel scope still gets the Global row.
+#[test]
+fn a_diff_override_reusing_a_global_default_key_shadows_without_a_warning() {
+    let mut keys = KeysConfig::default();
+    keys.diff.insert(
+        "next-hunk".to_string(),
+        one(KeyCode::Char('@'), KeyModifiers::NONE),
+    );
+    let (km, warnings) = effective_keymap(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    assert_eq!(
+        km.lookup_in(
+            Scope::Diff,
+            crossterm::event::KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE)
+        ),
+        Some(Action::NextHunk),
+        "the Diff-scope override shadows the Global default"
+    );
+    assert_eq!(
+        km.lookup_in(
+            Scope::Panel,
+            crossterm::event::KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE)
+        ),
+        Some(Action::ToggleCommandLog),
+        "Panel scope still falls back to the untouched Global default"
+    );
+}
+
 // -- No config: effective keymap is byte-identical to default_map ------------
 
 #[test]

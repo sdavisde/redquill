@@ -1,4 +1,4 @@
-//! Merges the `[keys.diff]`/`[keys.panel]` config section
+//! Merges the `[keys.diff]`/`[keys.panel]`/`[keys.global]` config sections
 //! (`crate::config::KeysConfig`) onto `Keymap::default_map()` to produce the
 //! effective startup keymap. Built exactly once, from
 //! [`super::run`], before the event loop starts — the keymap is then
@@ -11,13 +11,16 @@
 //! import `crate::ui` (see that module's doc).
 //!
 //! **Merge semantics**: an action named in
-//! `[keys.diff]`/`[keys.panel]` gets *exactly* the listed keys — its
-//! default keys for that action in that scope are dropped, not appended to;
-//! an action not named keeps its defaults untouched; an empty list
-//! (`= []`) unbinds the action entirely; if a user-provided key sequence
-//! collides with another binding already in the same scope (a default, or
-//! an earlier-applied override), the user binding wins and the colliding
-//! entry is dropped, with one [`ConfigWarning`] recorded per collision. An
+//! `[keys.diff]`/`[keys.panel]`/`[keys.global]` gets *exactly* the listed
+//! keys — its default keys for that action in that scope are dropped, not
+//! appended to; an action not named keeps its defaults untouched; an empty
+//! list (`= []`) unbinds the action entirely; if a user-provided key
+//! sequence collides with another binding already in the same scope (a
+//! default, or an earlier-applied override), the user binding wins and the
+//! colliding entry is dropped, with one [`ConfigWarning`] recorded per
+//! collision — collisions are checked per scope only, so a `[keys.diff]`
+//! override reusing a key already claimed by a `Global` default is
+//! shadowing (silent, by design — see `Scope::Global`), not a collision. An
 //! unknown action name is itself an invalid value (entry ignored, one
 //! warning), per the same contract every other section uses.
 
@@ -29,11 +32,11 @@ use crate::config::keys::KeySeqSpec;
 use super::keymap::{Action, Binding, KeySeq, Keymap, Scope, action_from_name, action_name};
 
 /// Builds the effective startup keymap: [`Keymap::default_map`] with
-/// `[keys.diff]`/`[keys.panel]` overrides applied, plus every warning the
-/// merge produced (unknown action names, same-scope collisions). The
-/// caller ([`super::run`]) appends these to the config-load warnings
-/// already on `App` (from `crate::config::load`, collected before the
-/// keymap is built).
+/// `[keys.diff]`/`[keys.panel]`/`[keys.global]` overrides applied, plus
+/// every warning the merge produced (unknown action names, same-scope
+/// collisions). The caller ([`super::run`]) appends these to the
+/// config-load warnings already on `App` (from `crate::config::load`,
+/// collected before the keymap is built).
 pub(crate) fn effective_keymap(keys: &crate::config::KeysConfig) -> (Keymap, Vec<ConfigWarning>) {
     let default = Keymap::default_map();
     let all: Vec<Binding> = default.bindings().to_vec();
@@ -71,10 +74,14 @@ pub(crate) fn effective_keymap(keys: &crate::config::KeysConfig) -> (Keymap, Vec
         "keys.panel",
         &mut warnings,
     ));
-    // `Scope::Global` rows have no config-driven overrides yet, so they
-    // pass through unchanged, exactly like every row did before `[keys.*]`
-    // config existed at all.
-    bindings.extend(global_defaults);
+    bindings.extend(apply_overrides(
+        Scope::Global,
+        global_defaults,
+        &keys.global,
+        &all,
+        "keys.global",
+        &mut warnings,
+    ));
     (Keymap::from_bindings(bindings), warnings)
 }
 

@@ -181,8 +181,8 @@ pub struct Config {
     pub search: SearchConfig,
     pub editor: EditorConfig,
     pub lsp: LspConfig,
-    /// `[keys.diff]`/`[keys.panel]`: raw, not-yet-resolved main-
-    /// keymap overrides. See [`KeysConfig`]'s doc for why action-name
+    /// `[keys.diff]`/`[keys.panel]`/`[keys.global]`: raw, not-yet-resolved
+    /// main-keymap overrides. See [`KeysConfig`]'s doc for why action-name
     /// resolution and the actual merge onto `Keymap::default_map()` live
     /// ui-side (`crate::ui::keymap_config`) rather than here.
     pub keys: KeysConfig,

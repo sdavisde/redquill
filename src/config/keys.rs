@@ -1,4 +1,4 @@
-//! `[keys.diff]`/`[keys.panel]` config: the key-string
+//! `[keys.diff]`/`[keys.panel]`/`[keys.global]` config: the key-string
 //! grammar plus the raw partial-override section data. Config-side, so this
 //! module knows nothing about `crate::ui::keymap::{Action, Keymap, Binding,
 //! KeySeq}` — only crossterm's `KeyCode`/`KeyModifiers` (already a
@@ -160,7 +160,7 @@ pub fn parse_key_string(s: &str) -> Result<KeySeqSpec, KeyGrammarError> {
 }
 
 /// The `[keys.<mode>]` table names for every modal mode, besides the main
-/// keymap's `diff`/`panel`. Plain string literals —
+/// keymap's `diff`/`panel`/`global`. Plain string literals —
 /// this module must never import `crate::ui` (see the module doc) — so this
 /// list is the config-side half of the contract; `crate::ui::modal_keys`'s
 /// `MODAL_MODE_NAMES` is the ui-side half, and
@@ -181,23 +181,24 @@ const MODAL_MODE_NAMES: &[&str] = &[
     "project-search-results",
 ];
 
-/// `[keys.diff]`/`[keys.panel]`/`[keys.<mode>]`: raw action-name ->
-/// key-string(s) overrides, already grammar-validated (an unparseable key
-/// string is dropped with a warning at parse time — see
+/// `[keys.diff]`/`[keys.panel]`/`[keys.global]`/`[keys.<mode>]`: raw
+/// action-name -> key-string(s) overrides, already grammar-validated (an
+/// unparseable key string is dropped with a warning at parse time — see
 /// [`KeysConfig::from_value`]) but *not* yet resolved to a real action —
 /// that needs the bijective name tables in `crate::ui::keymap`/
 /// `crate::ui::modal_keys`, which this module must never import (see the
 /// module doc). An empty `Vec` for an action name means "unbind" (the config
 /// author wrote `= []`); an action name absent from its map keeps its
 /// default untouched. `modal` holds every `[keys.<mode>]` table besides
-/// `diff`/`panel`, keyed by mode name (one of [`MODAL_MODE_NAMES`]) — a
-/// single map rather than one field per mode, since
+/// `diff`/`panel`/`global`, keyed by mode name (one of [`MODAL_MODE_NAMES`])
+/// — a single map rather than one field per mode, since
 /// `crate::ui::modal_keys_config` (the edge module resolving these) already
 /// needs one generic merge function reusable across all twelve modes.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct KeysConfig {
     pub diff: BTreeMap<String, Vec<KeySeqSpec>>,
     pub panel: BTreeMap<String, Vec<KeySeqSpec>>,
+    pub global: BTreeMap<String, Vec<KeySeqSpec>>,
     pub modal: BTreeMap<String, BTreeMap<String, Vec<KeySeqSpec>>>,
 }
 
@@ -217,6 +218,7 @@ impl KeysConfig {
             let target: &mut BTreeMap<String, Vec<KeySeqSpec>> = match section_key.as_str() {
                 "diff" => &mut cfg.diff,
                 "panel" => &mut cfg.panel,
+                "global" => &mut cfg.global,
                 other if MODAL_MODE_NAMES.contains(&other) => {
                     cfg.modal.entry(other.to_string()).or_default()
                 }
