@@ -284,7 +284,7 @@ fn render_frame(app: &App, keymap: &Keymap) -> String {
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|frame| draw(frame, app, keymap, None, None))
+        .draw(|frame| draw(frame, app, keymap, None))
         .unwrap();
     terminal
         .backend()
@@ -307,7 +307,7 @@ fn dump_frame(label: &str, app: &App, keymap: &Keymap) {
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|frame| draw(frame, app, keymap, None, None))
+        .draw(|frame| draw(frame, app, keymap, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let w = buffer.area.width as usize;
