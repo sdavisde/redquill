@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.14.0](https://github.com/sdavisde/redquill/compare/v0.13.0...v0.14.0) (2026-07-18)
+
+
+### Features
+
+* curated common-workflows header resolves live to keys ([684e9d9](https://github.com/sdavisde/redquill/commit/684e9d9bc406361fff74297e687b5643b5762066))
+* derive which-key prefixes and continuations from the keymap table ([e82355f](https://github.com/sdavisde/redquill/commit/e82355f129ac9ee1a086b23b5abf24d9b49e6f0c))
+* shrink the help overlay's height cap from ~4/5 to ~3/5 ([ed680d4](https://github.com/sdavisde/redquill/commit/ed680d46771c64e8eb5fb1ea8f152f39723207ae))
+* split the ? help overlay into This context / All keys tabs ([f534d00](https://github.com/sdavisde/redquill/commit/f534d00c77d01a9511e939bbf622b9e82a0446e0))
+* which-key popup for pending g/z prefixes ([4912ca1](https://github.com/sdavisde/redquill/commit/4912ca1267e9365d05a5ea97fc5aeb0e8cb9e752))
+
+
+### Bug Fixes
+
+* help-overlay scrollbar thumb now reaches the track bottom ([2f1b589](https://github.com/sdavisde/redquill/commit/2f1b5894e684caf394dcd00e7a1ee2872235ec6f))
+
 ## [0.13.0](https://github.com/sdavisde/redquill/compare/v0.12.0...v0.13.0) (2026-07-18)
 
 
