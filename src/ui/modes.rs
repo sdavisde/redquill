@@ -160,7 +160,9 @@ pub(super) fn handle_search_key(app: &mut App, key: KeyEvent) {
 /// `Enter` opens the cursor's file). Unlike the other modal handlers this one
 /// stays keymap-driven — panel navigation is a first-class, scoped part of
 /// the keymap, not an ad-hoc match — so anything not bound in panel scope is
-/// ignored (the review-loop keys never fire while the panel is focused).
+/// ignored. The per-file keys (`Space`/`S`/`d`) route through
+/// [`panel_file_action`], which gates on the highlighted row and translates
+/// stage gestures to accept gestures during a review session.
 ///
 /// The focused git panel is a first-class view rather than an overlay, so the
 /// quit family (`q`/`Q`/Ctrl-C) quits from it just as from the diff view —
@@ -189,11 +191,64 @@ pub(super) fn handle_panel_key(
             app.open_confirm_remote_op_modal(app.remote_push_op());
             Flow::Continue
         }
+        Some(
+            action @ (Action::ToggleStage
+            | Action::StageFile
+            | Action::ToggleAccept
+            | Action::AcceptFile
+            | Action::ToggleDefer),
+        ) => {
+            panel_file_action(app, action);
+            Flow::Continue
+        }
         Some(action) => {
             app.apply(action);
             Flow::Continue
         }
         None => Flow::Continue,
+    }
+}
+
+/// Routes the panel's per-file keys (stage / accept / defer) to the
+/// highlighted row. Only Changes-tab file rows act: the History tab has no
+/// file rows, so the keys are inert there, and a directory row hints
+/// instead of recursively applying. `panel_follow` keeps the diff cursor on
+/// the highlighted file, so the existing cursor-file operations already
+/// target the right file; it is re-run here defensively before acting.
+/// Review sessions translate the stage gestures to their accept
+/// counterparts, mirroring the diff view's dispatch translation, and the
+/// stage path forces the whole-file gesture — the diff cursor's row kind is
+/// follow-sync bookkeeping, not a user gesture.
+fn panel_file_action(app: &mut App, action: super::Action) {
+    use super::Action;
+    use super::app::PanelTab;
+    use super::git_panel::{PanelRow, navigable_rows};
+    if app.panel_tab() == PanelTab::History {
+        return;
+    }
+    match navigable_rows(app).get(app.panel_cursor()) {
+        Some(PanelRow::File(_)) => {}
+        Some(PanelRow::Dir(_)) => {
+            app.set_status_message("directory rows can't take file actions");
+            return;
+        }
+        None => return,
+    }
+    app.panel_follow();
+    let action = if app.in_review_session() {
+        match action {
+            Action::ToggleStage => Action::ToggleAccept,
+            Action::StageFile => Action::AcceptFile,
+            other => other,
+        }
+    } else {
+        action
+    };
+    match action {
+        Action::ToggleStage => super::staging::toggle_stage_whole_file(app),
+        // `StageFile` is already a whole-file gesture keyed off the cursor
+        // file; the accept/defer handlers self-guard on the session kind.
+        other => app.apply(other),
     }
 }
 

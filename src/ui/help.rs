@@ -408,14 +408,27 @@ fn diff_group_sections(
         .collect()
 }
 
-/// The focused-git-panel section: every `Scope::Panel` binding, in keymap
-/// order. Panel-scope rows carry no capability gating today (see
-/// [`binding_hidden`]'s doc), so unlike the other two builders this one takes
-/// no gating flags.
-fn panel_section(bindings: &[Binding]) -> Section {
+/// The focused-git-panel section: every `Scope::Panel` binding not hidden by
+/// capability gating, in keymap order — the panel's per-file rows
+/// (stage/accept/defer) obey the same [`binding_hidden`] rules as their
+/// diff-scope counterparts.
+fn panel_section(
+    bindings: &[Binding],
+    staging_allowed: bool,
+    code_intel_allowed: bool,
+    review_session: bool,
+) -> Section {
     let rows = bindings
         .iter()
         .filter(|b| b.scope == Scope::Panel)
+        .filter(|b| {
+            !binding_hidden(
+                b.action,
+                staging_allowed,
+                code_intel_allowed,
+                review_session,
+            )
+        })
         .map(|b| (b.key_label(), b.description))
         .collect();
     ("Git panel (focused)", rows)
@@ -432,7 +445,9 @@ fn panel_section(bindings: &[Binding]) -> Section {
 const WORKFLOW_ENTRIES: [(&str, Action); 5] = [
     ("Review a branch or commit", Action::OpenReviewLauncher),
     ("Comment on a line", Action::Compose),
-    ("Stage this hunk", Action::ToggleStage),
+    // Phrased for both scopes: the diff view stages the hunk under the
+    // cursor, the git panel stages the highlighted file.
+    ("Stage the change under the cursor", Action::ToggleStage),
     ("Search the diff", Action::Search),
     ("Quit and copy annotations", Action::Quit),
 ];
@@ -535,7 +550,12 @@ fn this_context_sections(
             code_intel_allowed,
             review_session,
         ),
-        ModeOrigin::Panel { .. } => vec![panel_section(bindings)],
+        ModeOrigin::Panel { .. } => vec![panel_section(
+            bindings,
+            staging_allowed,
+            code_intel_allowed,
+            review_session,
+        )],
     };
     sections.push(global_section(
         bindings,
@@ -569,7 +589,12 @@ fn all_keys_sections(
         code_intel_allowed,
         review_session,
     ));
-    sections.push(panel_section(bindings));
+    sections.push(panel_section(
+        bindings,
+        staging_allowed,
+        code_intel_allowed,
+        review_session,
+    ));
     sections.extend(modal_sections(modal_keys, review_session));
     sections
 }
@@ -1172,6 +1197,10 @@ mod tests {
         for binding in bindings
             .iter()
             .filter(|b| matches!(b.scope, Scope::Panel | Scope::Global))
+            // Capability-hidden rows (here: the review-only accept/defer
+            // rows, since the flags say "no review session") are gated out
+            // of the section exactly like their diff-scope counterparts.
+            .filter(|b| !binding_hidden(b.action, true, true, false))
         {
             assert!(
                 rows.iter()
@@ -1291,26 +1320,30 @@ mod tests {
 
     /// Capability gating hides a header entry exactly like a regular help
     /// row (FR-9): staging disallowed on a read-only target hides "Stage
-    /// this hunk" (`Action::ToggleStage`), even though it's bound.
+    /// the change under the cursor" (`Action::ToggleStage`), even though
+    /// it's bound.
     #[test]
     fn workflow_rows_hides_a_capability_gated_entry() {
         let keymap = Keymap::default_map();
         let rows = workflow_rows(ModeOrigin::Normal, &keymap, false, true, true);
         assert!(
-            !rows.iter().any(|r| r.phrase == "Stage this hunk"),
+            !rows
+                .iter()
+                .any(|r| r.phrase == "Stage the change under the cursor"),
             "staging entry must be hidden when staging_allowed is false"
         );
         assert_eq!(rows.len(), WORKFLOW_ENTRIES.len() - 1);
     }
 
-    /// Panel origin resolves in `Scope::Panel`: the three Diff-only entries
-    /// (Compose/ToggleStage/Search) have no Panel or Global binding, so they
-    /// drop out entirely, while the two `Scope::Global` entries (the
-    /// launcher, quit) still resolve — the header never claims a key means
-    /// something it doesn't in the panel (plain `c` commits staged changes
-    /// there, it doesn't open Compose).
+    /// Panel origin resolves in `Scope::Panel`: the two Diff-only entries
+    /// (Compose/Search) have no Panel or Global binding, so they drop out
+    /// entirely, while the launcher/quit (`Scope::Global`) and the stage
+    /// entry (Space stages the highlighted file in panel scope too) still
+    /// resolve — the header never claims a key means something it doesn't
+    /// in the panel (plain `c` commits staged changes there, it doesn't
+    /// open Compose).
     #[test]
-    fn workflow_rows_for_panel_origin_keeps_only_global_entries() {
+    fn workflow_rows_for_panel_origin_keeps_panel_resolvable_entries() {
         let keymap = Keymap::default_map();
         let origin = ModeOrigin::Panel {
             cursor: 0,
@@ -1320,7 +1353,11 @@ mod tests {
         let phrases: Vec<&str> = rows.iter().map(|r| r.phrase).collect();
         assert_eq!(
             phrases,
-            vec!["Review a branch or commit", "Quit and copy annotations"]
+            vec![
+                "Review a branch or commit",
+                "Stage the change under the cursor",
+                "Quit and copy annotations"
+            ]
         );
     }
 

@@ -3629,3 +3629,116 @@ fn journey_r_from_panel_mid_list_history_tab_opens_launcher_and_esc_restores_cur
         &keymap,
     );
 }
+
+// -- Panel file actions: review-session translation through real dispatch ----
+
+/// Presses one key through `dispatch_key` with no pending prefix/count.
+fn press_one(app: &mut App, keymap: &Keymap, code: KeyCode) {
+    let mut pending = None;
+    let mut pending_count = None;
+    let _ = dispatch_key(
+        app,
+        keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(code, KeyModifiers::NONE),
+    );
+}
+
+/// From the focused git panel during a review session, `Space`/`S`
+/// translate to the accept gestures and `d` toggle-defers — the same
+/// translation the diff view's dispatch applies, now reachable without
+/// leaving the panel.
+#[test]
+fn panel_keys_translate_to_accept_and_defer_in_a_review_session() {
+    let mut app = App::new(vec![sample_file()]); // src/main.rs
+    app.target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+    let keymap = Keymap::default_map();
+    press_one(&mut app, &keymap, KeyCode::Char('`'));
+    assert!(matches!(app.mode, Mode::Panel { .. }));
+    press_one(&mut app, &keymap, KeyCode::Char('j')); // Dir("src") -> File
+    press_one(&mut app, &keymap, KeyCode::Char(' '));
+    assert_eq!(app.review_status("src/main.rs"), ReviewStatus::Accepted);
+    press_one(&mut app, &keymap, KeyCode::Char(' '));
+    assert_eq!(app.review_status("src/main.rs"), ReviewStatus::Unreviewed);
+    press_one(&mut app, &keymap, KeyCode::Char('S'));
+    assert_eq!(app.review_status("src/main.rs"), ReviewStatus::Accepted);
+    press_one(&mut app, &keymap, KeyCode::Char('d'));
+    assert_eq!(
+        app.review_status("src/main.rs"),
+        ReviewStatus::Deferred,
+        "d replaces the accepted status with deferred"
+    );
+    assert!(
+        matches!(app.mode, Mode::Panel { .. }),
+        "the panel keeps focus across every gesture"
+    );
+}
+
+/// Outside a review session the panel's `d` stays a total no-op, exactly
+/// like the diff view's unconditional `d` binding.
+#[test]
+fn panel_d_stays_inert_outside_a_review_session_through_dispatch() {
+    let mut app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+    press_one(&mut app, &keymap, KeyCode::Char('`'));
+    press_one(&mut app, &keymap, KeyCode::Char('j'));
+    press_one(&mut app, &keymap, KeyCode::Char('d'));
+    assert!(app.review_states.is_empty());
+    assert!(app.status_message.is_none());
+}
+
+/// The `?` overlay from the focused git panel documents the panel's
+/// per-file keys with the same mutual exclusion as the diff view: a plain
+/// session shows the stage rows and hides accept/defer; a review session
+/// (read-only target) shows accept/defer and hides the stage rows.
+#[test]
+fn help_from_the_panel_swaps_stage_rows_for_accept_rows_in_a_review_session() {
+    let keymap = Keymap::default_map();
+    let render_help = |app: &App| -> String {
+        let backend = TestBackend::new(100, 300);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw(frame, app, &keymap, None))
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .clone()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect()
+    };
+
+    let mut app = App::new(vec![sample_file()]);
+    app.mode = Mode::Panel {
+        cursor: 0,
+        tab: PanelTab::Changes,
+    };
+    app.apply(Action::ToggleHelp);
+    let plain = render_help(&app);
+    assert!(plain.contains("Stage the highlighted file"));
+    assert!(plain.contains("Stage/unstage the highlighted file"));
+    assert!(!plain.contains("Accept/un-accept the highlighted file"));
+    assert!(!plain.contains("Defer/un-defer the highlighted file"));
+
+    let mut review = App::new(vec![sample_file()]);
+    review.target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+    review.mode = Mode::Panel {
+        cursor: 0,
+        tab: PanelTab::Changes,
+    };
+    review.apply(Action::ToggleHelp);
+    let reviewing = render_help(&review);
+    assert!(reviewing.contains("Accept/un-accept the highlighted file"));
+    assert!(reviewing.contains("Accept the highlighted file"));
+    assert!(reviewing.contains("Defer/un-defer the highlighted file"));
+    assert!(!reviewing.contains("Stage the highlighted file"));
+}

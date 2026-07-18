@@ -34,7 +34,7 @@ Precondition (workspace hygiene, not a task): the uncommitted which-key withdraw
 
 ## Tasks
 
-### [ ] 1.0 Panel file actions — stage, unstage, accept, defer from the git panel (FR-1..FR-5)
+### [~] 1.0 Panel file actions — stage, unstage, accept, defer from the git panel (FR-1..FR-5)
 
 Route `Space`/`S` (and in review sessions `d`) from the panel's highlighted file row to the existing stage/accept/defer operations — zero new git-layer code.
 
@@ -47,17 +47,17 @@ Route `Space`/`S` (and in review sessions `d`) from the panel's highlighted file
 
 #### 1.0 Tasks
 
-- [ ] 1.1 Confirm the which-key withdrawal precondition is met (working tree clean of `src/ui/*` changes); if not, stop and coordinate with the user before touching shared files.
-- [ ] 1.2 Refactor `src/ui/staging.rs::toggle_stage`: relax the `Mode::Normal | Visual` early-return to legitimately admit panel invocations (include `Mode::Panel`, or extract the file-targeted core the guard wraps). Behavior-preserving for existing paths — identical test counts, zero assertion edits; commit as `refactor:` on its own.
-- [ ] 1.3 TDD: add failing dispatch tests (in `src/ui/git_panel_tests.rs` and `src/ui/mod_tests.rs`) for panel `Space` toggle-stage and `S` stage-file on a highlighted file row in working-tree mode, asserting the staged marker updates via the existing refresh path (FR-1).
-- [ ] 1.4 Add `Scope::Panel` keymap rows `Space` → `ToggleStage` and `S` → `StageFile` in `src/ui/keymap.rs` with footer hints, and route them in `src/ui/modes.rs::handle_panel_key`, relying on `panel_follow`'s existing cursor sync. Panel invocations must force the whole-file gesture (`StageGesture::WholeFile`) — never the hunk/line gesture the diff cursor's row kind would otherwise imply (FR-1).
-- [ ] 1.5 Mirror the diff view's review-session translation for panel scope (`ToggleStage`→`ToggleAccept`, `StageFile`→`AcceptFile` when `in_review_session()`), add the panel `d` → `ToggleDefer` row, and add panel review phantom rows for help/footer documentation following the existing diff-scope pattern in `src/ui/keymap.rs` (~677–697); assert tri-state markers (`●`/`~`) update immediately (FR-2).
-- [ ] 1.6 Gate the new keys: no-op with a status-line hint on `PanelRow::Dir`, inert on the History tab, inert with hidden hints when `app.target.staging_mode()` is read-only — reusing the diff view's capability-gating checks (FR-3).
-- [ ] 1.7 Remove the deliberate suppression of review-status hints in `src/ui/footer.rs::panel_hints` (~208–211) and capability-gate panel hints like `normal_hints`/`visual_hints`; cover with `src/ui/footer_tests.rs` (FR-4).
-- [ ] 1.8 Add the new rows to the `?` help overlay's panel section via the shared tables, extend config-remap coverage, and keep bidirectional drift tests passing in `src/ui/keymap_config_tests.rs` (FR-5).
-- [ ] 1.9 Produce the CLI journey transcript on a scratch tempdir repo (working-tree staging flow + review-session accept flow) and persist it to `docs/specs/11-spec-panel-action-parity/proofs/` (FR-1, FR-2).
-- [ ] 1.10 Run all four cargo gates plus perf tripwires; commit the behavior change as `feat:` separate from 1.2's refactor.
-- [ ] 1.11 **USER UI CHECKPOINT:** write `proofs/demo-1-panel-actions.md` — a script that builds a scratch repo (setup commands included) and lists the exact key sequence: `cargo run`, `` ` ``, `j` to a file, `Space` (stages, marker updates), `Space` (unstages), `S`; then `--review` on a scratch branch: accept two files, `d`-defer one, watch `●`/`~` update; also verify a directory row shows the hint and the History tab is inert. Pause here — the user runs it and their verdict is recorded in the file before 1.0 is checked off.
+- [x] 1.1 Confirm the which-key withdrawal precondition is met (working tree clean of `src/ui/*` changes); if not, stop and coordinate with the user before touching shared files.
+- [x] 1.2 Refactor `src/ui/staging.rs::toggle_stage`: relax the `Mode::Normal | Visual` early-return to legitimately admit panel invocations (include `Mode::Panel`, or extract the file-targeted core the guard wraps). Behavior-preserving for existing paths — identical test counts, zero assertion edits; commit as `refactor:` on its own.
+- [x] 1.3 TDD: add failing dispatch tests (in `src/ui/git_panel_tests.rs` and `src/ui/mod_tests.rs`) for panel `Space` toggle-stage and `S` stage-file on a highlighted file row in working-tree mode, asserting the staged marker updates via the existing refresh path (FR-1).
+- [x] 1.4 Add `Scope::Panel` keymap rows `Space` → `ToggleStage` and `S` → `StageFile` in `src/ui/keymap.rs` with footer hints, and route them in `src/ui/modes.rs::handle_panel_key`, relying on `panel_follow`'s existing cursor sync. Panel invocations must force the whole-file gesture (`StageGesture::WholeFile`) — never the hunk/line gesture the diff cursor's row kind would otherwise imply (FR-1).
+- [x] 1.5 Mirror the diff view's review-session translation for panel scope (`ToggleStage`→`ToggleAccept`, `StageFile`→`AcceptFile` when `in_review_session()`), add the panel `d` → `ToggleDefer` row, and add panel review phantom rows for help/footer documentation following the existing diff-scope pattern in `src/ui/keymap.rs` (~677–697); assert tri-state markers (`●`/`~`) update immediately (FR-2).
+- [x] 1.6 Gate the new keys: no-op with a status-line hint on `PanelRow::Dir`, inert on the History tab, inert with hidden hints when `app.target.staging_mode()` is read-only — reusing the diff view's capability-gating checks (FR-3).
+- [x] 1.7 Remove the deliberate suppression of review-status hints in `src/ui/footer.rs::panel_hints` (~208–211) and capability-gate panel hints like `normal_hints`/`visual_hints`; cover with `src/ui/footer_tests.rs` (FR-4).
+- [x] 1.8 Add the new rows to the `?` help overlay's panel section via the shared tables, extend config-remap coverage, and keep bidirectional drift tests passing in `src/ui/keymap_config_tests.rs` (FR-5).
+- [x] 1.9 Produce the CLI journey transcript on a scratch tempdir repo (working-tree staging flow + review-session accept flow) and persist it to `docs/specs/11-spec-panel-action-parity/proofs/` (FR-1, FR-2).
+- [x] 1.10 Run all four cargo gates plus perf tripwires; commit the behavior change as `feat:` separate from 1.2's refactor.
+- [~] 1.11 **USER UI CHECKPOINT:** write `proofs/demo-1-panel-actions.md` — a script that builds a scratch repo (setup commands included) and lists the exact key sequence: `cargo run`, `` ` ``, `j` to a file, `Space` (stages, marker updates), `Space` (unstages), `S`; then `--review` on a scratch branch: accept two files, `d`-defer one, watch `●`/`~` update; also verify a directory row shows the hint and the History tab is inert. Pause here — the user runs it and their verdict is recorded in the file before 1.0 is checked off.
 
 ### [ ] 2.0 Panel coherence — `Esc` leaves, `s` and `/` reach through (FR-6..FR-8)
 

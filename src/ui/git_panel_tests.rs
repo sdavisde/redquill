@@ -657,3 +657,534 @@ fn refocusing_the_panel_remembers_the_last_active_tab() {
     app.toggle_git_panel(); // refocus
     assert_eq!(app.panel_tab(), PanelTab::History);
 }
+
+// -- Panel file actions: stage/unstage/accept/defer the highlighted row ------
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+/// A modified tracked file's porcelain status: fully staged or fully
+/// unstaged, the two states the panel-action tests flip between.
+fn modified_status(path: &str, staged: bool) -> crate::git::FileStatus {
+    use crate::git::{ChangeKind, StatusCode};
+    let (staged_code, unstaged_code) = if staged {
+        (StatusCode::Modified, StatusCode::Unmodified)
+    } else {
+        (StatusCode::Unmodified, StatusCode::Modified)
+    };
+    crate::git::FileStatus {
+        kind: ChangeKind::Ordinary,
+        staged: staged_code,
+        unstaged: unstaged_code,
+        path: path.to_string(),
+        orig_path: None,
+    }
+}
+
+/// A recording `StageOps` fake whose `stage_file`/`unstage_file` also flip
+/// the path's entry in the shared status vec, so a post-gesture
+/// `App::refresh` observes the same index change a real `git add` would
+/// produce and the staged markers update through the real path.
+struct PanelOps {
+    calls: Rc<RefCell<Vec<String>>>,
+    diff: Vec<RawFilePatch>,
+    status: Rc<RefCell<Vec<crate::git::FileStatus>>>,
+}
+
+impl super::super::stage_ops::StageOps for PanelOps {
+    fn diff(
+        &self,
+        _target: &crate::git::DiffTarget,
+    ) -> Result<Vec<RawFilePatch>, crate::git::GitError> {
+        Ok(self.diff.clone())
+    }
+    fn status(&self) -> Result<Vec<crate::git::FileStatus>, crate::git::GitError> {
+        Ok(self.status.borrow().clone())
+    }
+    fn stage_file(&self, path: &str) -> Result<(), crate::git::GitError> {
+        self.calls.borrow_mut().push(format!("stage-file {path}"));
+        let mut status = self.status.borrow_mut();
+        if let Some(entry) = status.iter_mut().find(|s| s.path == path) {
+            *entry = modified_status(path, true);
+        }
+        Ok(())
+    }
+    fn unstage_file(&self, path: &str) -> Result<(), crate::git::GitError> {
+        self.calls.borrow_mut().push(format!("unstage-file {path}"));
+        let mut status = self.status.borrow_mut();
+        if let Some(entry) = status.iter_mut().find(|s| s.path == path) {
+            *entry = modified_status(path, false);
+        }
+        Ok(())
+    }
+    fn apply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+        self.calls.borrow_mut().push("apply-hunk".to_string());
+        Ok(())
+    }
+    fn unapply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+        self.calls.borrow_mut().push("unapply-hunk".to_string());
+        Ok(())
+    }
+    fn read_worktree_file(&self, _path: &str) -> Option<Vec<u8>> {
+        None
+    }
+    fn show_file(&self, _spec: &str) -> Option<String> {
+        None
+    }
+}
+
+fn raw_file(path: &str) -> RawFilePatch {
+    RawFilePatch {
+        path: path.to_string(),
+        old_path: None,
+        raw: format!(
+            "diff --git a/{path} b/{path}\n\
+             index 111..222 100644\n\
+             --- a/{path}\n\
+             +++ b/{path}\n\
+             @@ -1,1 +1,1 @@\n\
+             -old\n\
+             +new\n"
+        ),
+        is_binary: false,
+    }
+}
+
+/// An app over two modified files under `src/`, wired to a recording
+/// [`PanelOps`] and refreshed through the real path so patches, staged
+/// states, and the panel tree all come from the fake backend.
+fn panel_actions_app() -> (App, Rc<RefCell<Vec<String>>>) {
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let status = Rc::new(RefCell::new(vec![
+        modified_status("src/a.rs", false),
+        modified_status("src/b.rs", false),
+    ]));
+    let mut app = App::new(Vec::new());
+    app.stage_ops = Some(Box::new(PanelOps {
+        calls: calls.clone(),
+        diff: vec![raw_file("src/a.rs"), raw_file("src/b.rs")],
+        status,
+    }));
+    app.refresh();
+    assert_eq!(app.view.files.len(), 2, "fixture must load both files");
+    (app, calls)
+}
+
+/// Presses one key through the real dispatch path (the same entry point the
+/// event loop uses), so panel-scope resolution and routing are exercised
+/// end to end.
+fn press(app: &mut App, code: KeyCode) {
+    let keymap = Keymap::default_map();
+    let mut pending = None;
+    let mut pending_count = None;
+    let _ = super::super::dispatch_key(
+        app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(code, KeyModifiers::NONE),
+    );
+}
+
+#[test]
+fn panel_space_stages_the_highlighted_file_as_a_whole_file_gesture() {
+    let (mut app, calls) = panel_actions_app();
+    app.apply(Action::FocusGitPanel);
+    press(&mut app, KeyCode::Char('j')); // Dir("src") -> File(src/a.rs)
+    // Park the diff cursor on a body line of the followed file: a
+    // cursor-derived gesture would stage a hunk here, so the assertion
+    // below proves the panel forces the whole-file gesture.
+    app.view.cursor += 2;
+    press(&mut app, KeyCode::Char(' '));
+    assert_eq!(
+        calls.borrow().as_slice(),
+        ["stage-file src/a.rs"],
+        "panel Space must stage the whole highlighted file, never a hunk"
+    );
+    assert_eq!(
+        app.staged_states.get("src/a.rs"),
+        Some(&StagedState::Full),
+        "the staged state must update through the existing refresh path"
+    );
+    assert!(
+        matches!(app.mode, Mode::Panel { .. }),
+        "focus stays in the panel"
+    );
+    assert!(
+        render_panel(&app).contains('\u{25cf}'),
+        "the staged dot must appear on the panel row"
+    );
+}
+
+#[test]
+fn panel_shift_s_stages_and_a_second_press_unstages() {
+    let (mut app, calls) = panel_actions_app();
+    app.apply(Action::FocusGitPanel);
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('S'));
+    assert_eq!(calls.borrow().as_slice(), ["stage-file src/a.rs"]);
+    assert_eq!(app.staged_states.get("src/a.rs"), Some(&StagedState::Full));
+    press(&mut app, KeyCode::Char('S'));
+    assert_eq!(
+        calls.borrow().as_slice(),
+        ["stage-file src/a.rs", "unstage-file src/a.rs"],
+        "S on a fully staged file must unstage it, matching the diff view"
+    );
+    assert_eq!(
+        app.staged_states.get("src/a.rs"),
+        None,
+        "the staged marker state clears after the unstage"
+    );
+}
+
+#[test]
+fn panel_space_on_a_directory_row_is_a_no_op_with_a_hint() {
+    let (mut app, calls) = panel_actions_app();
+    app.apply(Action::FocusGitPanel); // cursor 0 = Dir("src")
+    press(&mut app, KeyCode::Char(' '));
+    assert!(calls.borrow().is_empty(), "no staging call on a directory");
+    assert!(
+        app.status_message.is_some(),
+        "a directory row must hint instead of acting"
+    );
+}
+
+#[test]
+fn panel_file_keys_are_inert_on_the_history_tab() {
+    let (mut app, calls) = panel_actions_app();
+    app.apply(Action::FocusGitPanel);
+    press(&mut app, KeyCode::Tab); // -> History tab
+    assert_eq!(app.panel_tab(), PanelTab::History);
+    for key in [KeyCode::Char(' '), KeyCode::Char('S'), KeyCode::Char('d')] {
+        press(&mut app, key);
+    }
+    assert!(
+        calls.borrow().is_empty(),
+        "History rows take no file actions"
+    );
+    assert!(app.status_message.is_none(), "inert means no hint either");
+}
+
+#[test]
+fn panel_file_keys_are_inert_with_a_message_on_a_read_only_target() {
+    let (mut app, calls) = panel_actions_app();
+    app.target = crate::git::DiffTarget::Range("main..feature".to_string());
+    app.apply(Action::FocusGitPanel);
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char(' '));
+    assert!(calls.borrow().is_empty());
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("read-only diff target"),
+        "the diff view's read-only hint is reused, not duplicated"
+    );
+}
+
+/// A review-session app over two files under `src/`; accept/defer state is
+/// in-memory, so no git backend is needed.
+fn review_panel_app() -> App {
+    let mut app = App::new(vec![sample_file("src/a.rs"), sample_file("src/b.rs")]);
+    app.target = crate::git::DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+    app
+}
+
+#[test]
+fn panel_space_toggle_accepts_the_highlighted_file_in_a_review_session() {
+    let mut app = review_panel_app();
+    app.apply(Action::FocusGitPanel);
+    press(&mut app, KeyCode::Char('j')); // Dir("src") -> File(src/a.rs)
+    press(&mut app, KeyCode::Char(' '));
+    assert_eq!(
+        app.review_status("src/a.rs"),
+        ReviewStatus::Accepted,
+        "panel Space must translate to accept during a review session"
+    );
+    assert!(
+        render_panel(&app).contains('\u{25cf}'),
+        "the accepted marker must update immediately"
+    );
+    press(&mut app, KeyCode::Char(' '));
+    assert_eq!(
+        app.review_status("src/a.rs"),
+        ReviewStatus::Unreviewed,
+        "a second Space un-accepts, mirroring the diff view's toggle"
+    );
+}
+
+#[test]
+fn panel_shift_s_accepts_in_a_review_session() {
+    let mut app = review_panel_app();
+    app.apply(Action::FocusGitPanel);
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('S'));
+    assert_eq!(app.review_status("src/a.rs"), ReviewStatus::Accepted);
+}
+
+#[test]
+fn panel_d_toggle_defers_in_a_review_session() {
+    let mut app = review_panel_app();
+    app.apply(Action::FocusGitPanel);
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('d'));
+    assert_eq!(app.review_status("src/a.rs"), ReviewStatus::Deferred);
+    assert!(
+        render_panel(&app).contains('~'),
+        "the deferred marker must update immediately"
+    );
+    press(&mut app, KeyCode::Char('d'));
+    assert_eq!(app.review_status("src/a.rs"), ReviewStatus::Unreviewed);
+}
+
+#[test]
+fn panel_d_outside_a_review_session_is_a_total_no_op() {
+    let (mut app, calls) = panel_actions_app();
+    app.apply(Action::FocusGitPanel);
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('d'));
+    assert!(calls.borrow().is_empty());
+    assert!(app.status_message.is_none());
+    assert!(app.review_states.is_empty());
+}
+
+// -- Journey: panel file actions over a real scratch repo --------------------
+
+/// Runs a git command inside the scratch tempdir, asserting success. Fixture
+/// plumbing only — every invocation is pinned to `dir`, never the host repo.
+fn scratch_git(dir: &std::path::Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .expect("failed to spawn git");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn scratch_write(dir: &std::path::Path, rel: &str, contents: &str) {
+    let path = dir.join(rel);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(path, contents).unwrap();
+}
+
+/// Renders the panel to a framed multi-line snapshot for the journey log.
+fn panel_frame(app: &App) -> String {
+    let width = 44u16;
+    let backend = TestBackend::new(width, 16);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let area = Rect::new(0, 0, width, 16);
+    terminal
+        .draw(|frame| render(frame, area, app, &Keymap::default_map()))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let symbols: Vec<&str> = buffer.content().iter().map(|c| c.symbol()).collect();
+    symbols
+        .chunks(width as usize)
+        .map(|row| row.concat().trim_end().to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Journey driver: a scratch tempdir repo, the real `GitRunner` backend, and
+/// the real dispatch path, key by key — first the working-tree staging flow,
+/// then a review-session triage. Every logged step is asserted, so this is a
+/// regression test as well as the transcript generator
+/// (`cargo test panel_actions_journey_transcript -- --nocapture` captures
+/// the persisted proof).
+#[test]
+fn panel_actions_journey_transcript() {
+    let mut log = String::new();
+    let mut step = |title: &str, body: &str| {
+        log.push_str(&format!("\n=== {title} ===\n{body}\n"));
+    };
+
+    // -- Scratch repo: two modified tracked files under src/ ---------------
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path();
+    scratch_git(dir, &["init", "-q", "-b", "main"]);
+    scratch_git(dir, &["config", "user.name", "redquill test"]);
+    scratch_git(dir, &["config", "user.email", "test@redquill.invalid"]);
+    scratch_write(dir, "src/a.rs", "fn a() {}\n");
+    scratch_write(dir, "src/b.rs", "fn b() {}\n");
+    scratch_git(dir, &["add", "."]);
+    scratch_git(dir, &["commit", "-q", "-m", "base"]);
+    scratch_write(dir, "src/a.rs", "fn a() { changed(); }\n");
+    scratch_write(dir, "src/b.rs", "fn b() { changed(); }\n");
+
+    let runner = crate::git::GitRunner::discover_in(dir).expect("discover scratch repo");
+    let mut app = App::new(Vec::new());
+    app.stage_ops = Some(Box::new(runner));
+    app.refresh();
+    assert_eq!(app.view.files.len(), 2);
+    step(
+        "journey A: launch on the scratch working tree",
+        &format!(
+            "repo: {} files modified, nothing staged\nstaged_states: {:?}",
+            app.view.files.len(),
+            app.staged_states
+        ),
+    );
+
+    press(&mut app, KeyCode::Char('`'));
+    assert!(matches!(app.mode, Mode::Panel { .. }));
+    press(&mut app, KeyCode::Char('j')); // Dir("src") -> File(src/a.rs)
+    step(
+        "press ` then j: panel focused, src/a.rs highlighted",
+        &panel_frame(&app),
+    );
+
+    press(&mut app, KeyCode::Char(' '));
+    assert_eq!(app.staged_states.get("src/a.rs"), Some(&StagedState::Full));
+    step(
+        "press Space: src/a.rs stages, marker updates in place",
+        &format!(
+            "status: {:?}\n{}",
+            app.status_message.as_deref(),
+            panel_frame(&app)
+        ),
+    );
+
+    press(&mut app, KeyCode::Char('S'));
+    assert_eq!(app.staged_states.get("src/a.rs"), None);
+    step(
+        "press S: fully staged file unstages (toggle parity with the diff view)",
+        &format!(
+            "status: {:?}\n{}",
+            app.status_message.as_deref(),
+            panel_frame(&app)
+        ),
+    );
+
+    press(&mut app, KeyCode::Char('S'));
+    assert_eq!(app.staged_states.get("src/a.rs"), Some(&StagedState::Full));
+    step(
+        "press S again: src/a.rs stages back",
+        &format!("staged_states: {:?}", app.staged_states),
+    );
+
+    press(&mut app, KeyCode::Char('k')); // back to Dir("src")
+    press(&mut app, KeyCode::Char(' '));
+    assert!(app.status_message.is_some());
+    step(
+        "press k then Space on the src/ directory row: hinted no-op",
+        &format!("status: {:?}", app.status_message.as_deref()),
+    );
+
+    // The index write really happened in the scratch repo, nowhere else.
+    let staged = std::process::Command::new("git")
+        .current_dir(dir)
+        .args(["diff", "--cached", "--name-only"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&staged.stdout).trim(),
+        "src/a.rs",
+        "the scratch repo's index holds exactly the staged file"
+    );
+    step(
+        "scratch repo check: git diff --cached --name-only",
+        String::from_utf8_lossy(&staged.stdout).trim(),
+    );
+
+    // -- Journey B: review-session triage over a feature branch ------------
+    let tmp2 = tempfile::TempDir::new().unwrap();
+    let dir2 = tmp2.path();
+    scratch_git(dir2, &["init", "-q", "-b", "main"]);
+    scratch_git(dir2, &["config", "user.name", "redquill test"]);
+    scratch_git(dir2, &["config", "user.email", "test@redquill.invalid"]);
+    scratch_write(dir2, "src/one.rs", "fn one() {}\n");
+    scratch_write(dir2, "src/two.rs", "fn two() {}\n");
+    scratch_write(dir2, "notes.md", "notes\n");
+    scratch_git(dir2, &["add", "."]);
+    scratch_git(dir2, &["commit", "-q", "-m", "base"]);
+    scratch_git(dir2, &["switch", "-q", "-c", "feature"]);
+    scratch_write(dir2, "src/one.rs", "fn one() { reviewed(); }\n");
+    scratch_write(dir2, "src/two.rs", "fn two() { reviewed(); }\n");
+    scratch_write(dir2, "notes.md", "notes\nmore notes\n");
+    scratch_git(dir2, &["add", "."]);
+    scratch_git(dir2, &["commit", "-q", "-m", "feature work"]);
+
+    let runner2 = crate::git::GitRunner::discover_in(dir2).expect("discover review repo");
+    let mut review = App::new(Vec::new());
+    review.stage_ops = Some(Box::new(runner2));
+    review.target = crate::git::DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "feature".to_string(),
+    };
+    review.refresh();
+    assert_eq!(review.view.files.len(), 3);
+    step(
+        "journey B: review session over feature (3 changed files vs main)",
+        &format!("files: {:?}", {
+            let mut paths: Vec<&str> = review.view.files.iter().map(|f| f.path.as_str()).collect();
+            paths.sort();
+            paths
+        }),
+    );
+
+    press(&mut review, KeyCode::Char('`'));
+    press(&mut review, KeyCode::Char('j')); // notes.md (root file sorts after src/? follow the tree)
+    // Walk the panel until src/one.rs is highlighted, logging nothing —
+    // tree order is directories first, so land explicitly.
+    let rows = navigable_rows(&review);
+    let one_index = rows
+        .iter()
+        .position(|r| matches!(r, PanelRow::File(i) if review.view.files[*i].path == "src/one.rs"))
+        .expect("src/one.rs must be a panel row");
+    while review.panel_cursor() < one_index {
+        press(&mut review, KeyCode::Char('j'));
+    }
+    press(&mut review, KeyCode::Char(' '));
+    assert_eq!(review.review_status("src/one.rs"), ReviewStatus::Accepted);
+    step(
+        "press Space on src/one.rs: accepted, ● appears",
+        &panel_frame(&review),
+    );
+
+    press(&mut review, KeyCode::Char('j'));
+    press(&mut review, KeyCode::Char('S'));
+    assert_eq!(review.review_status("src/two.rs"), ReviewStatus::Accepted);
+    step(
+        "press j then S on src/two.rs: accepted, second ●",
+        &panel_frame(&review),
+    );
+
+    let notes_index = navigable_rows(&review)
+        .iter()
+        .position(|r| matches!(r, PanelRow::File(i) if review.view.files[*i].path == "notes.md"))
+        .expect("notes.md must be a panel row");
+    while review.panel_cursor() != notes_index {
+        let down = review.panel_cursor() < notes_index;
+        press(
+            &mut review,
+            if down {
+                KeyCode::Char('j')
+            } else {
+                KeyCode::Char('k')
+            },
+        );
+    }
+    press(&mut review, KeyCode::Char('d'));
+    assert_eq!(review.review_status("notes.md"), ReviewStatus::Deferred);
+    step(
+        "press d on notes.md: deferred, ~ appears",
+        &panel_frame(&review),
+    );
+    assert_eq!(review.review_progress(), (2, 3));
+    step(
+        "review progress",
+        &format!("accepted {} of {} files, 1 deferred", 2, 3),
+    );
+
+    if std::env::var("RQ_JOURNEY_DUMP").is_ok() {
+        eprintln!("{log}");
+    }
+}

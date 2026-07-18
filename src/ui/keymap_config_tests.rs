@@ -514,3 +514,61 @@ fn no_overrides_yields_the_default_map_unchanged() {
         assert_eq!(a.scope, b.scope);
     }
 }
+
+// -- Panel file-action rows: remap coverage ----------------------------------
+
+/// The panel's per-file rows are ordinary `[keys.panel]` actions:
+/// `toggle-stage`, `stage-file`, and `toggle-defer` all remap cleanly, and
+/// diff scope's own rows for the same actions are untouched.
+#[test]
+fn panel_overrides_remap_the_file_action_rows() {
+    let mut keys = KeysConfig::default();
+    keys.panel.insert(
+        "toggle-stage".to_string(),
+        one(KeyCode::Char('x'), KeyModifiers::NONE),
+    );
+    keys.panel.insert(
+        "stage-file".to_string(),
+        one(KeyCode::Char('y'), KeyModifiers::NONE),
+    );
+    keys.panel.insert(
+        "toggle-defer".to_string(),
+        one(KeyCode::Char('X'), KeyModifiers::NONE),
+    );
+    let (km, warnings) = effective_keymap(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+    let ev = |code| crossterm::event::KeyEvent::new(code, KeyModifiers::NONE);
+    assert_eq!(
+        km.lookup_in(Scope::Panel, ev(KeyCode::Char('x'))),
+        Some(Action::ToggleStage)
+    );
+    assert_eq!(
+        km.lookup_in(Scope::Panel, ev(KeyCode::Char('y'))),
+        Some(Action::StageFile)
+    );
+    assert_eq!(
+        km.lookup_in(Scope::Panel, ev(KeyCode::Char('X'))),
+        Some(Action::ToggleDefer)
+    );
+    // With ToggleStage remapped off Space, the panel's Space now resolves
+    // to the review phantom row — whose handler self-guards outside review
+    // sessions — exactly like diff scope's own Space after the same remap.
+    assert_eq!(
+        km.lookup_in(Scope::Panel, ev(KeyCode::Char(' '))),
+        Some(Action::ToggleAccept)
+    );
+    // Diff scope's rows for the same actions are untouched.
+    assert_eq!(
+        km.lookup_in(Scope::Diff, ev(KeyCode::Char(' '))),
+        Some(Action::ToggleStage)
+    );
+    assert_eq!(
+        km.lookup_in(Scope::Diff, ev(KeyCode::Char('S'))),
+        Some(Action::StageFile)
+    );
+    assert_eq!(
+        km.lookup_in(Scope::Diff, ev(KeyCode::Char('d'))),
+        Some(Action::ToggleDefer)
+    );
+}

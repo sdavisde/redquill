@@ -196,19 +196,37 @@ fn normal_hints(
 }
 
 /// The focused-git-panel idle strip: every [`Scope::Panel`] row tagged with a
-/// [`FooterHint`]. Panel bindings are never staging mutations or code-intel
-/// requests, so nothing is gated on either capability.
+/// [`FooterHint`], capability-gated the same way [`normal_hints`] is —
+/// `staging_allowed` hides the stage rows on a read-only target and
+/// `review_session` swaps them for the accept/defer rows. Panel bindings
+/// carry no code-intel requests, so that capability stays ungated.
 ///
 /// `push_publishes` relabels the [`Action::RemotePush`] hint to `publish`
 /// when the branch has no upstream (see `App::push_publishes`) — a
 /// presentation-side relabel in the [`visual_hints`] mold, because the static
 /// table can't carry a state-dependent label; the key and its promotion still
 /// come from the table.
-fn panel_hints(km: &Keymap, push_publishes: bool, review_session: bool) -> Vec<FooterEntry> {
-    // Review-status bindings are diff-scope only, so `review_session` never
-    // actually changes what this call returns; passed through for signature
-    // consistency with `normal_hints`.
-    let mut entries = keymap_hints(km, Scope::Panel, true, true, review_session);
+fn panel_hints(
+    km: &Keymap,
+    push_publishes: bool,
+    staging_allowed: bool,
+    review_session: bool,
+    changes_tab: bool,
+) -> Vec<FooterEntry> {
+    // Capability-gated like `normal_hints`: a read-only target hides the
+    // stage rows, and outside a review session the accept/defer rows hide —
+    // the same mutual exclusion the help overlay applies. The History tab
+    // has no file rows for the per-file keys to act on, so `changes_tab`
+    // hides both families there (inapplicable keys are omitted, not
+    // inert-but-listed); the `q end review` synthetic below stays, since
+    // ending the review works from either tab.
+    let mut entries = keymap_hints(
+        km,
+        Scope::Panel,
+        staging_allowed && changes_tab,
+        true,
+        review_session && changes_tab,
+    );
     if push_publishes
         && let Some(hint) = km
             .bindings()
@@ -225,7 +243,7 @@ fn panel_hints(km: &Keymap, push_publishes: bool, review_session: bool) -> Vec<F
     // only during a review session.
     if review_session && let Some(key) = find_key(km, Scope::Panel, Action::Quit, "q") {
         entries.push(FooterEntry {
-            rank: 9,
+            rank: 12,
             key,
             label: "end review",
         });
@@ -422,7 +440,13 @@ pub(super) fn build_hints(
             review_session,
         ),
         Mode::Visual { .. } => visual_hints(km, staging_allowed),
-        Mode::Panel { .. } => panel_hints(km, push_publishes, review_session),
+        Mode::Panel { tab, .. } => panel_hints(
+            km,
+            push_publishes,
+            staging_allowed,
+            review_session,
+            tab == super::app::PanelTab::Changes,
+        ),
         Mode::List => modal_hints(&modal_keys.list),
         // Review sessions repurpose `Mode::Staging` as the accepted-files
         // panel — see `super::help::modal_sections`'s identical swap for

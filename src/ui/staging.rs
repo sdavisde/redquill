@@ -38,14 +38,24 @@ pub(super) fn toggle_stage(app: &mut App) {
     if !matches!(app.mode, Mode::Normal | Mode::Visual { .. }) {
         return;
     }
-    toggle_stage_at_cursor(app);
+    toggle_stage_at_cursor(app, false);
+}
+
+/// The git panel's whole-file `space` gesture: same capability checks and
+/// stage/unstage direction as [`toggle_stage`], but always the whole
+/// highlighted file — the diff cursor's row kind is follow-sync
+/// bookkeeping here, not a user gesture, so it must never pick the
+/// granularity.
+pub(super) fn toggle_stage_whole_file(app: &mut App) {
+    toggle_stage_at_cursor(app, true);
 }
 
 /// The mode-independent core [`toggle_stage`] wraps: capability checks,
 /// gesture resolution against the cursor row, and the apply/refresh
 /// epilogue. Split from the mode guard so other entry points can route
-/// here legitimately instead of spoofing a mode.
-fn toggle_stage_at_cursor(app: &mut App) {
+/// here legitimately instead of spoofing a mode. `force_whole_file`
+/// bypasses cursor-row resolution entirely.
+fn toggle_stage_at_cursor(app: &mut App, force_whole_file: bool) {
     if app.target.staging_mode() == StagingMode::ReadOnly {
         app.set_status_message("read-only diff target");
         return;
@@ -65,7 +75,7 @@ fn toggle_stage_at_cursor(app: &mut App) {
         .patches
         .get(app.view.file_of_cursor())
         .is_none_or(|p| p.is_none());
-    let gesture = if synthetic {
+    let gesture = if synthetic || force_whole_file {
         StageGesture::WholeFile
     } else {
         match app.mode {

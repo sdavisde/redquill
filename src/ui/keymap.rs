@@ -769,7 +769,7 @@ impl Keymap {
                     FocusGitPanel,
                     "Close git panel",
                 )
-                .footer(7, "close"),
+                .footer(10, "close"),
                 p(
                     KeySeq::one(Char('j'), none),
                     PanelCursorDown,
@@ -788,25 +788,63 @@ impl Keymap {
                     "Open file / fold directory (History tab: open the commit)",
                 )
                 .footer(2, "open"),
+                // File actions on the highlighted panel row — same verbs as
+                // the diff view's whole-file gestures, routed through
+                // `modes::handle_panel_key`.
+                p(
+                    KeySeq::one(Char(' '), none),
+                    ToggleStage,
+                    "Stage the highlighted file",
+                )
+                .footer(3, "stage"),
+                p(
+                    KeySeq::one(Char('S'), none),
+                    StageFile,
+                    "Stage/unstage the highlighted file",
+                )
+                .footer(4, "stage file"),
+                // These rows exist so the help overlay/footer can document
+                // Space/`S`'s review-session meaning in panel scope too;
+                // dispatch translates them (see `modes::handle_panel_key`),
+                // mirroring the diff-scope rows above. `ToggleDefer` is
+                // bound directly and self-guards outside review sessions.
+                p(
+                    KeySeq::one(Char(' '), none),
+                    ToggleAccept,
+                    "Accept/un-accept the highlighted file",
+                )
+                .footer(3, "accept"),
+                p(
+                    KeySeq::one(Char('S'), none),
+                    AcceptFile,
+                    "Accept the highlighted file",
+                )
+                .footer(4, "accept file"),
+                p(
+                    KeySeq::one(Char('d'), none),
+                    ToggleDefer,
+                    "Defer/un-defer the highlighted file",
+                )
+                .footer(5, "defer"),
                 p(
                     KeySeq::one(Tab, none),
                     TogglePanelTab,
                     "Switch Changes / History tab",
                 )
-                .footer(8, "tab"),
+                .footer(11, "tab"),
                 p(
                     KeySeq::one(Char('f'), none),
                     RemoteFetch,
                     "Fetch from remote",
                 )
-                .footer(3, "fetch"),
-                p(KeySeq::one(Char('p'), none), RemotePull, "Pull from remote").footer(4, "pull"),
+                .footer(6, "fetch"),
+                p(KeySeq::one(Char('p'), none), RemotePull, "Pull from remote").footer(7, "pull"),
                 p(
                     KeySeq::one(Char('P'), none),
                     RemotePush,
                     "Push to remote (publishes an unpublished branch)",
                 )
-                .footer(5, "push"),
+                .footer(8, "push"),
                 // Plain `c` is free in panel scope: `Compose` binds it in
                 // diff scope only, so the same physical key can commit here
                 // without touching the annotate gesture.
@@ -815,7 +853,7 @@ impl Keymap {
                     CommitStaged,
                     "Commit staged changes",
                 )
-                .footer(6, "commit"),
+                .footer(9, "commit"),
                 // `?`/`@`/`!`/the quit family are bound in `Scope::Global`
                 // (see the block below) — the panel's footer strip can still
                 // promise a working `? help` escape hatch (see
@@ -1612,10 +1650,11 @@ mod tests {
         assert_eq!(km.lookup_in(Scope::Diff, enter), None);
     }
 
-    /// A diff-only binding (`space` → stage) is invisible in panel scope, so
-    /// the focused panel never fires review-loop actions.
+    /// `Space` now stages in *both* scopes (its own row per scope, so the
+    /// panel's whole-file routing can differ from the diff's cursor-derived
+    /// gesture), while `s` (staging panel) stays diff-only.
     #[test]
-    fn diff_only_bindings_do_not_resolve_in_panel_scope() {
+    fn space_stages_in_both_scopes_and_s_remains_diff_only() {
         let km = Keymap::default_map();
         assert_eq!(
             km.lookup_in(Scope::Diff, key(KeyCode::Char(' '), KeyModifiers::NONE)),
@@ -1623,12 +1662,37 @@ mod tests {
         );
         assert_eq!(
             km.lookup_in(Scope::Panel, key(KeyCode::Char(' '), KeyModifiers::NONE)),
-            None
+            Some(Action::ToggleStage)
         );
-        // `s` (staging panel) is likewise diff-only.
+        // `s` (staging panel) is still diff-only.
         assert_eq!(
             km.lookup_in(Scope::Panel, key(KeyCode::Char('s'), KeyModifiers::NONE)),
             None
+        );
+    }
+
+    /// The panel's per-file rows resolve to the stage/defer actions;
+    /// the review phantom rows (`ToggleAccept`/`AcceptFile`) share those
+    /// keys for help/footer documentation only, exactly like diff scope's
+    /// own phantom rows, so a plain lookup must yield the stage actions.
+    #[test]
+    fn panel_space_s_and_d_resolve_to_stage_and_defer_actions() {
+        let km = Keymap::default_map();
+        assert_eq!(
+            km.lookup_in(Scope::Panel, key(KeyCode::Char(' '), KeyModifiers::NONE)),
+            Some(Action::ToggleStage)
+        );
+        assert_eq!(
+            km.lookup_in(Scope::Panel, key(KeyCode::Char('S'), KeyModifiers::NONE)),
+            Some(Action::StageFile)
+        );
+        assert_eq!(
+            km.lookup_in(Scope::Panel, key(KeyCode::Char('S'), KeyModifiers::SHIFT)),
+            Some(Action::StageFile)
+        );
+        assert_eq!(
+            km.lookup_in(Scope::Panel, key(KeyCode::Char('d'), KeyModifiers::NONE)),
+            Some(Action::ToggleDefer)
         );
     }
 

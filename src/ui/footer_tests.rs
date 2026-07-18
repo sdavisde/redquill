@@ -175,17 +175,85 @@ fn visual_mode_hints_exclude_stage_lines_when_not_allowed() {
 #[test]
 fn panel_mode_hints_match_the_curated_list_in_order() {
     let km = Keymap::default_map();
-    let entries = panel_hints(&km, false, false);
+    let entries = panel_hints(&km, false, true, false, true);
     assert_eq!(
         keys(&entries),
-        vec!["j/k", "Enter", "f", "p", "P", "c", "`", "Tab", "?"]
+        vec![
+            "j/k", "Enter", "Space", "S", "f", "p", "P", "c", "`", "Tab", "?"
+        ]
     );
     assert_eq!(
         labels(&entries),
         vec![
-            "move", "open", "fetch", "pull", "push", "commit", "close", "tab", "help"
+            "move",
+            "open",
+            "stage",
+            "stage file",
+            "fetch",
+            "pull",
+            "push",
+            "commit",
+            "close",
+            "tab",
+            "help"
         ]
     );
+}
+
+/// A read-only target (commit view, range) hides the panel's stage hints,
+/// exactly like the diff view's own strip — inert keys are omitted, not
+/// advertised.
+#[test]
+fn panel_mode_hints_hide_stage_rows_on_a_read_only_target() {
+    let km = Keymap::default_map();
+    let entries = panel_hints(&km, false, false, false, true);
+    assert!(!labels(&entries).contains(&"stage"));
+    assert!(!labels(&entries).contains(&"stage file"));
+    assert_eq!(
+        keys(&entries),
+        vec!["j/k", "Enter", "f", "p", "P", "c", "`", "Tab", "?"]
+    );
+}
+
+/// During a review session the stage hints swap for accept/defer — the
+/// deliberate suppression of review-status hints in panel scope is gone,
+/// and the same mutual exclusion the help overlay applies keeps the two
+/// families from ever showing together (a review target is read-only, so
+/// `staging_allowed` is false).
+#[test]
+fn panel_mode_hints_show_accept_and_defer_during_a_review_session() {
+    let km = Keymap::default_map();
+    let entries = panel_hints(&km, false, false, true, true);
+    let labels = labels(&entries);
+    assert!(labels.contains(&"accept"));
+    assert!(labels.contains(&"accept file"));
+    assert!(labels.contains(&"defer"));
+    assert!(!labels.contains(&"stage"));
+    assert!(!labels.contains(&"stage file"));
+    let keys = keys(&entries);
+    assert!(keys.contains(&"Space".to_string()));
+    assert!(keys.contains(&"S".to_string()));
+    assert!(keys.contains(&"d".to_string()));
+}
+
+/// The History tab has no file rows, so the per-file hints hide there —
+/// both the stage family and, during a review session, the accept/defer
+/// family — while the tab-agnostic hints (including the review `q end
+/// review` synthetic) stay.
+#[test]
+fn panel_mode_hints_hide_file_actions_on_the_history_tab() {
+    let km = Keymap::default_map();
+    let entries = panel_hints(&km, false, true, false, false);
+    assert_eq!(
+        keys(&entries),
+        vec!["j/k", "Enter", "f", "p", "P", "c", "`", "Tab", "?"]
+    );
+    let review_entries = panel_hints(&km, false, false, true, false);
+    let review_labels = labels(&review_entries);
+    assert!(!review_labels.contains(&"accept"));
+    assert!(!review_labels.contains(&"accept file"));
+    assert!(!review_labels.contains(&"defer"));
+    assert!(review_labels.contains(&"end review"));
 }
 
 /// The panel strip's review-session synthetic `q end review` hint — same
@@ -194,11 +262,11 @@ fn panel_mode_hints_match_the_curated_list_in_order() {
 #[test]
 fn panel_mode_hints_gain_q_end_review_during_a_review_session() {
     let km = Keymap::default_map();
-    let entries = panel_hints(&km, false, true);
+    let entries = panel_hints(&km, false, false, true, true);
     assert!(labels(&entries).contains(&"end review"));
     assert!(keys(&entries).contains(&"q".to_string()));
     assert_eq!(labels(&entries).last(), Some(&"help"), "help stays last");
-    let without = panel_hints(&km, false, false);
+    let without = panel_hints(&km, false, false, false, true);
     assert!(!labels(&without).contains(&"end review"));
 }
 
@@ -209,15 +277,27 @@ fn panel_mode_hints_gain_q_end_review_during_a_review_session() {
 #[test]
 fn panel_push_hint_relabels_to_publish_on_an_unpublished_branch() {
     let km = Keymap::default_map();
-    let entries = panel_hints(&km, true, false);
+    let entries = panel_hints(&km, true, true, false, true);
     assert_eq!(
         keys(&entries),
-        vec!["j/k", "Enter", "f", "p", "P", "c", "`", "Tab", "?"]
+        vec![
+            "j/k", "Enter", "Space", "S", "f", "p", "P", "c", "`", "Tab", "?"
+        ]
     );
     assert_eq!(
         labels(&entries),
         vec![
-            "move", "open", "fetch", "pull", "publish", "commit", "close", "tab", "help"
+            "move",
+            "open",
+            "stage",
+            "stage file",
+            "fetch",
+            "pull",
+            "publish",
+            "commit",
+            "close",
+            "tab",
+            "help"
         ]
     );
 }
@@ -477,7 +557,7 @@ fn pending_prefix_is_ignored_outside_normal_and_visual() {
         &km,
         &ModalKeymaps::default(),
     );
-    assert_eq!(panel, panel_hints(&km, false, false));
+    assert_eq!(panel, panel_hints(&km, false, true, false, true));
 }
 
 #[test]
