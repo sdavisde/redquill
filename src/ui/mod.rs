@@ -354,11 +354,12 @@ fn dispatch_key(
         Mode::List => modes::handle_list_key(app, key),
         Mode::Staging => modes::handle_staging_key(app, key),
         Mode::Panel { .. } => {
-            // `?` opens help from the focused git panel too (see the
-            // panel-scope `ToggleHelp` row in keymap.rs); once open it
-            // shadows panel dispatch exactly like the Normal/Visual overlay
-            // case above, so `j`/`k`/Esc scroll/close the overlay rather than
-            // moving the panel cursor underneath it.
+            // `?` opens help from the focused git panel too (its
+            // `ToggleHelp` binding resolves in every scope — see
+            // `keymap::Scope::Global`); once open it shadows panel dispatch
+            // exactly like the Normal/Visual overlay case above, so
+            // `j`/`k`/Esc scroll/close the overlay rather than moving the
+            // panel cursor underneath it.
             if app.help_open {
                 handle_help_key(app, key);
                 return Flow::Continue;

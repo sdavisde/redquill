@@ -559,7 +559,7 @@ fn table_derived_hints_use_real_key_labels() {
         let real_labels: Vec<String> = km
             .bindings()
             .iter()
-            .filter(|b| b.scope == scope)
+            .filter(|b| b.scope == scope || b.scope == Scope::Global)
             .map(|b| b.key_label())
             .collect();
         let entries = keymap_hints(&km, scope, true, true, true);
@@ -708,8 +708,8 @@ fn visual_stage_lines_actually_does_something() {
     assert!(app.status_message.is_some(), "Visual Space must act");
 }
 
-/// `?` genuinely toggles help from the focused git panel now (see the new
-/// panel-scope `ToggleHelp` binding in keymap.rs), and once open, `j`/`k`
+/// `?` genuinely toggles help from the focused git panel too (its
+/// `ToggleHelp` binding resolves in every scope), and once open, `j`/`k`
 /// scroll the overlay rather than moving the panel cursor underneath it.
 #[test]
 fn panel_help_hint_is_real_and_shadows_panel_dispatch() {

@@ -273,8 +273,8 @@ fn empty_working_tree_target_shows_welcome_state() {
     let content = rendered_content(&app, &keymap);
 
     assert!(content.contains("No uncommitted changes"));
-    // Hints come from the table: FocusGitPanel is bound to `` ` `` and
-    // ToggleHelp to `?` in Scope::Diff by default (see `keymap.rs`).
+    // Hints come from the table: FocusGitPanel is bound to `` ` `` in
+    // Scope::Diff, ToggleHelp to `?` (resolved through the Global fallback).
     assert!(content.contains("open the git panel"));
     assert!(content.contains("switch to the History tab"));
     assert!(content.contains("open help"));
@@ -394,7 +394,7 @@ fn multibuffer_renders_for_a_range_target() {
 /// toggle.
 #[test]
 fn help_overlay_hides_staging_rows_on_a_range_target() {
-    let backend = TestBackend::new(100, 44);
+    let backend = TestBackend::new(100, 55);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
     app.help_open = true;
@@ -442,7 +442,7 @@ fn help_overlay_shows_staging_rows_on_the_working_tree_target() {
 /// this also proves the "Review" group actually reaches the screen.
 #[test]
 fn help_overlay_shows_review_rows_and_hides_staging_rows_during_a_review_session() {
-    let backend = TestBackend::new(100, 55);
+    let backend = TestBackend::new(100, 65);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
     app.help_open = true;
@@ -543,7 +543,7 @@ fn help_overlay_lists_remote_and_command_log_bindings() {
         .map(|c| c.symbol())
         .collect();
 
-    // Command-log toggle (Panels group, diff scope).
+    // Command-log toggle ("Works everywhere" section, Scope::Global).
     assert!(content.contains("Toggle command log pane"));
     // Remote ops (Git panel focused section, panel scope).
     assert!(content.contains("Fetch from remote"));
@@ -554,6 +554,54 @@ fn help_overlay_lists_remote_and_command_log_bindings() {
     assert!(content.contains("Open branch/worktree switcher"));
     assert!(content.contains("Branch/worktree switcher"));
     assert!(content.contains("Switch to the selected branch/worktree"));
+}
+
+/// Every `Scope::Global` binding renders exactly once, under its own
+/// "Works everywhere" section, ahead of the per-scope sections — not
+/// duplicated once per scope the way it rendered before.
+#[test]
+fn help_overlay_lists_global_bindings_once_in_a_works_everywhere_section() {
+    let backend = TestBackend::new(100, 300);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    app.help_open = true;
+    let keymap = Keymap::default_map();
+
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .clone()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+
+    assert!(content.contains("Works everywhere"));
+    let works_idx = content.find("Works everywhere").unwrap();
+    let panels_idx = content.find("Panels").expect("Panels section must render");
+    assert!(
+        works_idx < panels_idx,
+        "the Works everywhere section must render before the per-scope sections"
+    );
+
+    // One line per `Scope::Global` binding, in default_map(): `?`/`@`/`!`/
+    // `q` each once, `Quit and discard annotations` twice (`Q` and Ctrl-C).
+    for (description, expected_count) in [
+        ("Toggle help", 1),
+        ("Toggle command log pane", 1),
+        ("Dismiss config warning notice", 1),
+        ("Quit and emit annotations", 1),
+        ("Quit and discard annotations", 2),
+    ] {
+        assert_eq!(
+            content.matches(description).count(),
+            expected_count,
+            "unexpected occurrence count for {description:?}"
+        );
+    }
 }
 
 /// On a terminal too short for the whole binding list, the help overlay

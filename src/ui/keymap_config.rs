@@ -48,6 +48,11 @@ pub(crate) fn effective_keymap(keys: &crate::config::KeysConfig) -> (Keymap, Vec
         .filter(|b| b.scope == Scope::Panel)
         .copied()
         .collect();
+    let global_defaults: Vec<Binding> = all
+        .iter()
+        .filter(|b| b.scope == Scope::Global)
+        .copied()
+        .collect();
 
     let mut warnings = Vec::new();
     let mut bindings = apply_overrides(
@@ -66,6 +71,10 @@ pub(crate) fn effective_keymap(keys: &crate::config::KeysConfig) -> (Keymap, Vec
         "keys.panel",
         &mut warnings,
     ));
+    // `Scope::Global` rows have no config-driven overrides yet, so they
+    // pass through unchanged, exactly like every row did before `[keys.*]`
+    // config existed at all.
+    bindings.extend(global_defaults);
     (Keymap::from_bindings(bindings), warnings)
 }
 

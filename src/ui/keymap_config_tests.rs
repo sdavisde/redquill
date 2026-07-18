@@ -58,22 +58,24 @@ fn overriding_an_action_with_multiple_keys_binds_all_of_them() {
                 mods: KeyModifiers::NONE,
             }),
             KeySeqSpec::One(ChordSpec {
-                code: KeyCode::Char('c'),
-                mods: KeyModifiers::CONTROL,
+                code: KeyCode::Char('k'),
+                mods: KeyModifiers::NONE,
             }),
         ],
     );
     let (km, warnings) = effective_keymap(&keys);
-    // `q` was already Quit's default; `ctrl-c` was QuitDiscard's default —
-    // overriding `quit` to include `ctrl-c` collides with QuitDiscard's
-    // claim on it (user wins, one warning) and Quit now has both keys.
+    // `q`'s default is now `Scope::Global`, so this override doesn't collide
+    // with anything within Diff scope on that key; `k` is CursorUp's
+    // Diff-scope default, so overriding `quit` to include `k` collides with
+    // it (user wins, one warning) and Quit's Diff-scope override ends up
+    // with both keys.
     assert_eq!(warnings.len(), 1, "expected exactly one collision warning");
     let rows = find(&km, Scope::Diff, Action::Quit);
     assert_eq!(rows.len(), 2);
     assert_eq!(
         km.lookup_in(
             Scope::Diff,
-            crossterm::event::KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
+            crossterm::event::KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE)
         ),
         Some(Action::Quit)
     );

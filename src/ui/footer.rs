@@ -53,11 +53,13 @@ fn sort_for_display(mut entries: Vec<FooterEntry>) -> Vec<FooterEntry> {
     entries
 }
 
-/// Groups `km`'s bindings in `scope` that carry a [`FooterHint`], merging
-/// rows that share an identical hint (same rank *and* label) into one entry
-/// whose key text joins both rows' key labels with `/` (the `j`/`k` "move"
-/// pairing). `staging_allowed`/`code_intel_allowed`/`review_session` hide the
-/// same capability-gated rows the help overlay hides (see
+/// Groups `km`'s bindings in `scope` (plus any `Scope::Global` row — a
+/// "works everywhere" key must show up in every scope's footer strip, not
+/// just one) that carry a [`FooterHint`], merging rows that share an
+/// identical hint (same rank *and* label) into one entry whose key text
+/// joins both rows' key labels with `/` (the `j`/`k` "move" pairing).
+/// `staging_allowed`/`code_intel_allowed`/`review_session` hide the same
+/// capability-gated rows the help overlay hides (see
 /// [`super::help::binding_hidden`]) — `staging_allowed` is `false` on a
 /// read-only diff range, `code_intel_allowed` is `false` whenever the
 /// target's new side isn't the live working tree, `review_session` is
@@ -70,7 +72,11 @@ fn keymap_hints(
     review_session: bool,
 ) -> Vec<FooterEntry> {
     let mut grouped: Vec<(FooterHint, Vec<String>)> = Vec::new();
-    for b in km.bindings().iter().filter(|b| b.scope == scope) {
+    for b in km
+        .bindings()
+        .iter()
+        .filter(|b| b.scope == scope || b.scope == Scope::Global)
+    {
         if super::help::binding_hidden(
             b.action,
             staging_allowed,
@@ -126,14 +132,18 @@ fn modal_hints<A: Copy + Clone>(table: &[ModalBinding<A>]) -> Vec<FooterEntry> {
     )
 }
 
-/// The key label of the binding matching `scope`/`action` whose own
-/// `key_label()` equals `want` — used to disambiguate two rows sharing an
-/// `Action` (`ToggleHelp` has both a `?` and an `Esc` row) without depending
-/// on table order. `None` if no such row exists.
+/// The key label of the binding matching `scope` (or `Scope::Global`) /
+/// `action` whose own `key_label()` equals `want` — used to disambiguate two
+/// rows sharing an `Action` (`ToggleHelp` has both a `?` and an `Esc` row)
+/// without depending on table order. `None` if no such row exists.
 fn find_key(km: &Keymap, scope: Scope, action: Action, want: &str) -> Option<String> {
     km.bindings()
         .iter()
-        .find(|b| b.scope == scope && b.action == action && b.key_label() == want)
+        .find(|b| {
+            (b.scope == scope || b.scope == Scope::Global)
+                && b.action == action
+                && b.key_label() == want
+        })
         .map(|b| b.key_label())
 }
 

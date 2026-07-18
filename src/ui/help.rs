@@ -312,6 +312,35 @@ pub fn render(
 
     let mut lines: Vec<Line> = Vec::new();
     let mut any_match = false;
+
+    // "Works everywhere" bindings (`Scope::Global`): rendered once, ahead
+    // of every per-scope section, rather than once per scope. The
+    // per-scope loops below filter on `b.scope ==
+    // Scope::Diff`/`Scope::Panel` respectively, so a `Global` row can never
+    // also land in one of those sections — no duplication to guard against
+    // here.
+    let global_bindings: Vec<&Binding> = bindings
+        .iter()
+        .filter(|b| b.scope == Scope::Global)
+        .filter(|b| {
+            !binding_hidden(
+                b.action,
+                staging_allowed,
+                code_intel_allowed,
+                review_session,
+            )
+        })
+        .filter(|b| row_matches(&b.key_label(), b.description, query))
+        .collect();
+    if !global_bindings.is_empty() {
+        any_match = true;
+        lines.push(section_header("Works everywhere", theme));
+        for b in global_bindings {
+            lines.push(key_line(&b.key_label(), b.description, key_width, theme));
+        }
+        lines.push(Line::from(""));
+    }
+
     for group in GROUP_ORDER {
         let group_bindings: Vec<&Binding> = bindings
             .iter()
