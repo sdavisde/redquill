@@ -373,7 +373,7 @@ fn a_diff_override_reusing_a_global_default_key_shadows_without_a_warning() {
 
 /// `[keys.global] open-review-launcher = "L"` remaps the Review launcher off
 /// its default `R`, reachable from both table-driven scopes via the Global
-/// fallback (FR-3/FR-4 interplay, spec 09).
+/// fallback.
 #[test]
 fn global_override_remaps_open_review_launcher() {
     let mut keys = KeysConfig::default();
@@ -405,7 +405,7 @@ fn global_override_remaps_open_review_launcher() {
 
 /// `[keys.diff] refresh = "F"` remaps refresh off its post-rebind default
 /// `r`, proving the diff-scope override still applies cleanly to the moved
-/// binding (FR-3/FR-4 interplay, spec 09).
+/// binding.
 #[test]
 fn diff_override_remaps_refresh_off_its_post_rebind_default() {
     let mut keys = KeysConfig::default();

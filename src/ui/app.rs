@@ -109,7 +109,7 @@ pub enum Mode {
     /// pressed from, restored exactly on `Esc` via [`ModeOrigin::restore`]
     /// (mirrors [`Mode::EndReview`]'s identical origin-restore contract).
     /// Supersedes [`Mode::ReviewBranch`] as the sole in-app entry point for
-    /// starting a branch review (spec 09).
+    /// starting a branch review.
     ReviewLauncher {
         tab: LauncherTab,
         cursor: usize,
@@ -433,7 +433,7 @@ pub struct App {
     /// guidance for state that must outlive mode exit.
     pub(super) last_panel_tab: PanelTab,
     /// Which Review launcher tab reopening lands on, for the lifetime of the
-    /// process (see [`Mode::ReviewLauncher`], FR-6 of spec 09). The same
+    /// process (see [`Mode::ReviewLauncher`]). The same
     /// "must survive mode exit" exception `last_panel_tab` documents: the
     /// launcher's own `tab` field lives in the mode and would go stale the
     /// instant it closes, so remembering "where you left off" needs a

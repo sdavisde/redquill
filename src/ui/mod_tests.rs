@@ -3302,9 +3302,9 @@ fn scrolling_a_5k_line_multibuffer_renders_fast() {
 
 // -- Review launcher journeys: `R` opens it from anywhere, `Esc` restores ---
 //
-// Journey B (spec 09): `R` from the diff view and from the git panel (cursor
-// mid-list on the non-default History tab) both open the Review launcher;
-// `Esc` restores the exact prior focus either way.
+// `R` from the diff view and from the git panel (cursor mid-list on the
+// non-default History tab) both open the Review launcher; `Esc` restores the
+// exact prior focus either way.
 
 /// Prints a rendered frame's non-blank rows to stderr when
 /// `REDQUILL_PROOF_DUMP` is set — the proof-capture convention this file's
@@ -3331,7 +3331,7 @@ fn dump_frame_if_requested(label: &str, app: &App, keymap: &Keymap) {
     }
 }
 
-/// Journey B, diff-view leg: from `Mode::Normal`, `R` opens the launcher
+/// Diff-view leg: from `Mode::Normal`, `R` opens the launcher
 /// (landing on Branches, the default tab) and `Esc` restores the exact prior
 /// mode. Driven through the real `dispatch_key` pipeline, the same handler
 /// the blocking event loop calls.
@@ -3376,10 +3376,10 @@ fn journey_r_from_diff_view_opens_launcher_and_esc_restores() {
     dump_frame_if_requested("Esc restores the diff view", &app, &keymap);
 }
 
-/// Journey B, git-panel leg: with the panel focused on the History tab and
+/// Git-panel leg: with the panel focused on the History tab and
 /// its cursor mid-list (neither the top nor the last loaded row), `R` opens
 /// the launcher and `Esc` restores the panel with its cursor and tab exactly
-/// intact — the non-default-tab case FR-5 calls out explicitly.
+/// intact — the non-default-tab case.
 #[test]
 fn journey_r_from_panel_mid_list_history_tab_opens_launcher_and_esc_restores_cursor_and_tab() {
     let mut app = App::new(vec![sample_file()]);

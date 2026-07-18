@@ -4,8 +4,8 @@
 //! tempdirs, per this repo's testing convention — never the host repo. The
 //! modal itself opens via a direct `App::open_review_branch_modal()` call
 //! rather than a keypress: its panel-scope `R` binding moved to the Review
-//! launcher's global `R` (spec 09), so this file now exercises the confirm/
-//! reroot machinery the launcher's Branches tab will drive once migrated.
+//! launcher's global `R`, so this file now exercises the confirm/reroot
+//! machinery the launcher's Branches tab will drive once migrated.
 //!
 //! Lives beside `git_switch_integration_tests.rs`/`review_guard_integration_tests.rs`
 //! for the identical reason those files document: `dispatch_key`,
