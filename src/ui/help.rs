@@ -421,6 +421,93 @@ fn panel_section(bindings: &[Binding]) -> Section {
     ("Git panel (focused)", rows)
 }
 
+/// The common-workflows header's curated content (FR-6): an intent phrase
+/// paired with the `Action` it triggers. Kept to a target of 5 entries (hard
+/// cap 7, enforced by
+/// [`tests::workflow_entries_are_bound_in_the_default_keymap_and_within_the_cap`])
+/// so a new user can scan the whole thing at a glance. Every entry here must
+/// resolve to a real binding in the *default* keymap — that same test fails
+/// the build if a curation edit orphans one; a user's own remap or unbind
+/// only ever degrades this at runtime (see [`workflow_rows`]), never here.
+const WORKFLOW_ENTRIES: [(&str, Action); 5] = [
+    ("Review a branch or commit", Action::OpenReviewLauncher),
+    ("Comment on a line", Action::Compose),
+    ("Stage this hunk", Action::ToggleStage),
+    ("Search the diff", Action::Search),
+    ("Quit and copy annotations", Action::Quit),
+];
+
+/// One resolved common-workflows row: a curated intent phrase paired with the
+/// key label(s) that trigger it in the *effective*, current-context keymap
+/// (FR-7) — built by [`workflow_rows`]. `pub(super)` so
+/// `super::keymap_config_tests`' remap-display test (FR-7) can inspect a
+/// resolved row directly rather than re-deriving this shape.
+pub(super) struct WorkflowRow {
+    pub(super) phrase: &'static str,
+    pub(super) key: String,
+}
+
+/// Resolves [`WORKFLOW_ENTRIES`] against the effective keymap for the
+/// overlay's `origin`, in table order. Two things can drop an entry, both
+/// deliberate graceful degradation rather than a stale or wrong row (FR-8,
+/// FR-9):
+///
+/// - `origin` picks the scope its action must resolve in — [`Scope::Diff`]
+///   for `Normal`/`Visual`, [`Scope::Panel`] for `Panel`, mirroring
+///   [`this_context_sections`]'s own origin-to-scope mapping, so the header
+///   never shows a key that means something else in the mode `?` was opened
+///   from (e.g. plain `c` is `CommitStaged` in the git panel, not `Compose`).
+///   [`Keymap::label_for`] still falls back to [`Scope::Global`] within that
+///   scope, so `Scope::Global` entries (the launcher, quit) resolve from
+///   either origin.
+/// - the same [`binding_hidden`] capability gating as regular help rows
+///   (staging on a read-only target, code-intel off-target, review-only
+///   actions outside a session) hides an inapplicable entry (FR-9).
+///
+/// An entry a user has unbound in their config resolves to `None` from
+/// [`Keymap::label_for`] and is silently omitted — the graceful half of
+/// FR-8; the build-breaking half (a curated entry unbound in the *default*
+/// keymap) is a separate drift test, not this function's job.
+pub(super) fn workflow_rows(
+    origin: ModeOrigin,
+    keymap: &Keymap,
+    staging_allowed: bool,
+    code_intel_allowed: bool,
+    review_session: bool,
+) -> Vec<WorkflowRow> {
+    let scope = match origin {
+        ModeOrigin::Normal | ModeOrigin::Visual { .. } => Scope::Diff,
+        ModeOrigin::Panel { .. } => Scope::Panel,
+    };
+    WORKFLOW_ENTRIES
+        .iter()
+        .filter(|(_, action)| {
+            !binding_hidden(*action, staging_allowed, code_intel_allowed, review_session)
+        })
+        .filter_map(|&(phrase, action)| {
+            keymap
+                .label_for(scope, action)
+                .map(|key| WorkflowRow { phrase, key })
+        })
+        .collect()
+}
+
+/// A common-workflows row: intent phrase left, key right (FR-7's Design
+/// Considerations) — the mirror image of [`key_line`]'s key-left layout,
+/// which is what visually sets the header apart from the sections below it.
+fn workflow_line(phrase: &str, key: &str, phrase_width: usize, theme: &Theme) -> Line<'static> {
+    Line::from(vec![
+        Span::raw(format!("{phrase:<phrase_width$}")),
+        Span::raw("   "),
+        Span::styled(
+            key.to_string(),
+            Style::default()
+                .fg(theme.help_key)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ])
+}
+
 /// The "This context" tab's sections: the bindings that apply to the
 /// mode/scope `?` was opened from (`origin`), followed by the "Works
 /// everywhere" global section. Every [`ModeOrigin`] variant maps to exactly
@@ -429,9 +516,11 @@ fn panel_section(bindings: &[Binding]) -> Section {
 /// section — so this always renders a proper subset of
 /// [`all_keys_sections`]'s content, never a duplicate or a divergent set.
 ///
-/// A workflows-header slot belongs at the front of this list too (per the
-/// spec's common-workflows unit), but it isn't added until that unit lands;
-/// until then this tab starts directly with the origin's own bindings.
+/// The common-workflows header (FR-6/FR-7) renders above these sections but
+/// isn't part of this `Vec<Section>` — its phrase-left/key-right layout is
+/// deliberately not the (key, description) shape [`Section`] rows share, so
+/// [`render`] builds it separately via [`workflow_rows`] and prepends its
+/// lines before this function's output.
 fn this_context_sections(
     origin: ModeOrigin,
     bindings: &[Binding],
@@ -570,6 +659,40 @@ pub fn render(
 
     let mut lines: Vec<Line> = Vec::new();
 
+    // The common-workflows header (FR-6/FR-7) sits above the sections below,
+    // "This context" only — it names an origin/scope, which "All keys"
+    // deliberately spans every scope at once, so there's no single context
+    // for the header to resolve keys against there. The `/` filter narrows
+    // it exactly like a section (query matched against phrase or key,
+    // dropped entirely when nothing matches), which is why its row count
+    // feeds `any_match` below rather than being computed separately.
+    let workflow_rows_filtered: Vec<WorkflowRow> = if state.tab == HelpTab::ThisContext {
+        workflow_rows(
+            tables.origin,
+            tables.keymap,
+            staging_allowed,
+            code_intel_allowed,
+            review_session,
+        )
+        .into_iter()
+        .filter(|row| row_matches(&row.key, row.phrase, query))
+        .collect()
+    } else {
+        Vec::new()
+    };
+    if !workflow_rows_filtered.is_empty() {
+        let phrase_width = workflow_rows_filtered
+            .iter()
+            .map(|row| row.phrase.chars().count())
+            .max()
+            .unwrap_or(0);
+        lines.push(section_header("Common workflows", theme));
+        for row in &workflow_rows_filtered {
+            lines.push(workflow_line(row.phrase, &row.key, phrase_width, theme));
+        }
+        lines.push(Line::from(""));
+    }
+
     let filtered_sections: Vec<(&str, Vec<(&str, &str)>)> = sections
         .iter()
         .map(|(title, rows)| {
@@ -582,7 +705,7 @@ pub fn render(
         })
         .filter(|(_, rows)| !rows.is_empty())
         .collect();
-    let any_match = !filtered_sections.is_empty();
+    let any_match = !filtered_sections.is_empty() || !workflow_rows_filtered.is_empty();
     for (i, (title, rows)) in filtered_sections.iter().enumerate() {
         lines.push(section_header(title, theme));
         for (key, desc) in rows {
@@ -957,6 +1080,122 @@ mod tests {
                 .iter()
                 .any(|(_, d)| *d == "Stage/unstage file under cursor"),
             "staging rows must be hidden when staging_allowed is false"
+        );
+    }
+
+    // -- Common-workflows header: WORKFLOW_ENTRIES / workflow_rows ---------
+
+    /// FR-8's build-breaking drift test: every curated entry's `Action` must
+    /// have a binding somewhere in the *default* keymap, and the table must
+    /// stay within FR-6's hard cap of 7. A curation typo (an `Action` no
+    /// longer bound by default) fails this test rather than silently
+    /// vanishing from the header at runtime.
+    #[test]
+    fn workflow_entries_are_bound_in_the_default_keymap_and_within_the_cap() {
+        assert!(
+            WORKFLOW_ENTRIES.len() <= 7,
+            "FR-6 hard cap: at most 7 curated entries, got {}",
+            WORKFLOW_ENTRIES.len()
+        );
+        let keymap = Keymap::default_map();
+        for (phrase, action) in WORKFLOW_ENTRIES {
+            assert!(
+                keymap.bindings().iter().any(|b| b.action == action),
+                "curated entry {phrase:?} maps to {action:?}, which has no \
+                 binding in the default keymap"
+            );
+        }
+    }
+
+    /// `workflow_rows` resolves every curated entry, in table order, to the
+    /// default keymap's key for its action — the happy path FR-7 exists for.
+    #[test]
+    fn workflow_rows_resolves_every_entry_in_order_for_normal_origin() {
+        let keymap = Keymap::default_map();
+        let rows = workflow_rows(ModeOrigin::Normal, &keymap, true, true, true);
+        assert_eq!(rows.len(), WORKFLOW_ENTRIES.len());
+        for (row, &(phrase, action)) in rows.iter().zip(WORKFLOW_ENTRIES.iter()) {
+            assert_eq!(row.phrase, phrase);
+            assert_eq!(row.key, keymap.label_for(Scope::Diff, action).unwrap());
+        }
+    }
+
+    /// A `[keys.global]` remap of a curated entry's action changes the key
+    /// `workflow_rows` displays — FR-7's live-resolution promise, proved
+    /// against the effective (post-config-merge) keymap rather than the
+    /// compiled-in default.
+    #[test]
+    fn workflow_rows_reflects_a_remapped_action() {
+        let mut keys = crate::config::KeysConfig::default();
+        keys.global.insert(
+            "open-review-launcher".to_string(),
+            vec![crate::config::keys::KeySeqSpec::One(
+                crate::config::keys::ChordSpec {
+                    code: crossterm::event::KeyCode::Char('L'),
+                    mods: crossterm::event::KeyModifiers::NONE,
+                },
+            )],
+        );
+        let (keymap, warnings) = super::super::keymap_config::effective_keymap(&keys);
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        let rows = workflow_rows(ModeOrigin::Normal, &keymap, true, true, true);
+        let row = rows
+            .iter()
+            .find(|r| r.phrase == "Review a branch or commit")
+            .expect("the launcher entry must still resolve after the remap");
+        assert_eq!(row.key, "L");
+    }
+
+    /// An entry whose action a user has unbound entirely (`[keys.diff]
+    /// compose = []`) is omitted from the header rather than shown with a
+    /// stale or blank key — FR-8's graceful-degradation half.
+    #[test]
+    fn workflow_rows_omits_an_entry_unbound_in_the_effective_keymap() {
+        let mut keys = crate::config::KeysConfig::default();
+        keys.diff.insert("compose".to_string(), Vec::new());
+        let (keymap, warnings) = super::super::keymap_config::effective_keymap(&keys);
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        let rows = workflow_rows(ModeOrigin::Normal, &keymap, true, true, true);
+        assert!(
+            !rows.iter().any(|r| r.phrase == "Comment on a line"),
+            "an unbound action's entry must not render"
+        );
+        // Every other curated entry is untouched by this one unbind.
+        assert_eq!(rows.len(), WORKFLOW_ENTRIES.len() - 1);
+    }
+
+    /// Capability gating hides a header entry exactly like a regular help
+    /// row (FR-9): staging disallowed on a read-only target hides "Stage
+    /// this hunk" (`Action::ToggleStage`), even though it's bound.
+    #[test]
+    fn workflow_rows_hides_a_capability_gated_entry() {
+        let keymap = Keymap::default_map();
+        let rows = workflow_rows(ModeOrigin::Normal, &keymap, false, true, true);
+        assert!(
+            !rows.iter().any(|r| r.phrase == "Stage this hunk"),
+            "staging entry must be hidden when staging_allowed is false"
+        );
+        assert_eq!(rows.len(), WORKFLOW_ENTRIES.len() - 1);
+    }
+
+    /// Panel origin resolves in `Scope::Panel`: the three Diff-only entries
+    /// (Compose/ToggleStage/Search) have no Panel or Global binding, so they
+    /// drop out entirely, while the two `Scope::Global` entries (the
+    /// launcher, quit) still resolve — the header never claims a key means
+    /// something it doesn't in the panel (plain `c` commits staged changes
+    /// there, it doesn't open Compose).
+    #[test]
+    fn workflow_rows_for_panel_origin_keeps_only_global_entries() {
+        let keymap = Keymap::default_map();
+        let origin = ModeOrigin::Panel {
+            cursor: 0,
+            tab: super::super::app::PanelTab::Changes,
+        };
+        let rows = workflow_rows(origin, &keymap, true, true, true);
+        let phrases: Vec<&str> = rows.iter().map(|r| r.phrase).collect();
+        assert_eq!(
+            phrases,
+            vec!["Review a branch or commit", "Quit and copy annotations"]
         );
     }
 

@@ -442,6 +442,64 @@ fn diff_override_remaps_refresh_off_its_post_rebind_default() {
     );
 }
 
+// -- Common-workflows header reflects `[keys.*]` overrides (FR-7) -----------
+
+/// A `[keys.global]` remap of the Review launcher changes the key the
+/// common-workflows header displays for "Review a branch or commit" — the
+/// header resolves against the effective (post-config-merge) keymap `help`
+/// builds this module's `effective_keymap` from, not the compiled-in
+/// default.
+#[test]
+fn keys_global_override_changes_the_workflows_header_key() {
+    let mut keys = KeysConfig::default();
+    keys.global.insert(
+        "open-review-launcher".to_string(),
+        one(KeyCode::Char('L'), KeyModifiers::NONE),
+    );
+    let (km, warnings) = effective_keymap(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+    let rows = super::super::help::workflow_rows(
+        super::super::app::ModeOrigin::Normal,
+        &km,
+        true,
+        true,
+        true,
+    );
+    let row = rows
+        .iter()
+        .find(|r| r.phrase == "Review a branch or commit")
+        .expect("the launcher entry must still resolve after the remap");
+    assert_eq!(row.key, "L");
+}
+
+/// A `[keys.diff]` remap of `compose` changes the key shown for "Comment on
+/// a line" — proving the diff-scope override path, not just the global one
+/// above.
+#[test]
+fn keys_diff_override_changes_the_workflows_header_key() {
+    let mut keys = KeysConfig::default();
+    keys.diff.insert(
+        "compose".to_string(),
+        one(KeyCode::Char('C'), KeyModifiers::NONE),
+    );
+    let (km, warnings) = effective_keymap(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+    let rows = super::super::help::workflow_rows(
+        super::super::app::ModeOrigin::Normal,
+        &km,
+        true,
+        true,
+        true,
+    );
+    let row = rows
+        .iter()
+        .find(|r| r.phrase == "Comment on a line")
+        .expect("the compose entry must still resolve after the remap");
+    assert_eq!(row.key, "C");
+}
+
 // -- No config: effective keymap is byte-identical to default_map ------------
 
 #[test]
