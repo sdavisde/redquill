@@ -844,7 +844,12 @@ pub fn render(
     frame.render_widget(Paragraph::new(lines).scroll((offset, 0)), text_area);
 
     if scrollable {
-        let mut sb_state = ScrollbarState::new(total as usize)
+        // Scale the state to the scrollable range (`max_scroll`), not the
+        // full content length: `position` can only ever reach `max_scroll`
+        // (see the clamp above), so scaling the track to `total` instead
+        // left the thumb short of the bottom no matter how far down the
+        // clamped offset went.
+        let mut sb_state = ScrollbarState::new(max_scroll as usize)
             .position(offset as usize)
             .viewport_content_length(list_h as usize);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
@@ -967,6 +972,126 @@ mod tests {
     fn help_tab_toggles_between_the_two_tabs() {
         assert_eq!(HelpTab::ThisContext.toggled(), HelpTab::AllKeys);
         assert_eq!(HelpTab::AllKeys.toggled(), HelpTab::ThisContext);
+    }
+
+    // -- Scrollbar thumb travel --------------------------------------------
+
+    /// Renders the overlay at a fixed size with the given scroll offset
+    /// (`render` clamps it to the content, so `u16::MAX` is a legitimate way
+    /// to ask for "the end") and returns the resulting buffer.
+    fn render_help_at_scroll(offset: u16) -> ratatui::buffer::Buffer {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let keymap = Keymap::default_map();
+        let modal_keys = ModalKeymaps::default();
+        let theme = Theme::default();
+        let tables = HelpTables {
+            keymap: &keymap,
+            modal_keys: &modal_keys,
+            origin: ModeOrigin::Normal,
+        };
+        let scroll = Cell::new(offset);
+        let viewport = Cell::new(0);
+        // All keys is the full reference, long enough that a 100x22 terminal
+        // forces scrolling.
+        let state = HelpViewState {
+            scroll: &scroll,
+            viewport: &viewport,
+            search: None,
+            tab: HelpTab::AllKeys,
+        };
+
+        let backend = TestBackend::new(100, 22);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                render(frame, area, &tables, &theme, true, true, true, &state);
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    /// The symbol at `(x, y)`, or `""` if out of bounds — a thin wrapper over
+    /// [`ratatui::buffer::Buffer::cell`] since the tests below only ever look
+    /// at cells they've already located within the buffer.
+    fn symbol_at(buffer: &ratatui::buffer::Buffer, x: u16, y: u16) -> &str {
+        buffer.cell((x, y)).map_or("", |cell| cell.symbol())
+    }
+
+    /// The (x, y) of the first cell in `buffer` whose symbol is `symbol` —
+    /// used to locate the popup's rounded-border corners without duplicating
+    /// `render`'s own width/height arithmetic.
+    fn find_symbol(buffer: &ratatui::buffer::Buffer, symbol: &str) -> (u16, u16) {
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                if symbol_at(buffer, x, y) == symbol {
+                    return (x, y);
+                }
+            }
+        }
+        panic!("symbol {symbol:?} not found in rendered buffer");
+    }
+
+    /// Locates the scrollbar's track column and its top/bottom rows from the
+    /// popup's rounded-border corners: chrome is border(1) + subtitle(1) +
+    /// spacer(1) = 3 rows above the list, and the scrollbar sits one column
+    /// in from the right border (the block's horizontal padding).
+    fn scrollbar_track(buffer: &ratatui::buffer::Buffer) -> (u16, u16, u16) {
+        let (_, top) = find_symbol(buffer, "\u{256d}"); // ╭
+        let (right, _) = find_symbol(buffer, "\u{256e}"); // ╮
+        let (_, bottom) = find_symbol(buffer, "\u{2570}"); // ╰
+        let col = right - 2;
+        let list_top = top + 3;
+        let list_bottom = bottom - 1;
+        (col, list_top, list_bottom)
+    }
+
+    const THUMB: &str = "\u{2588}"; // █ (block::FULL)
+
+    /// At scroll offset 0 the thumb sits at the very top of the track — the
+    /// inverse of the bottom-of-track proof below, pinning both ends of the
+    /// travel range this bug report was about.
+    #[test]
+    fn help_overlay_scrollbar_thumb_is_at_track_top_when_scroll_offset_is_zero() {
+        let buffer = render_help_at_scroll(0);
+        let (col, list_top, list_bottom) = scrollbar_track(&buffer);
+
+        assert_eq!(
+            symbol_at(&buffer, col, list_top),
+            THUMB,
+            "offset 0 must put the thumb at the track's top cell"
+        );
+        assert_ne!(
+            symbol_at(&buffer, col, list_bottom),
+            THUMB,
+            "offset 0 must not already show the thumb at the track's bottom cell"
+        );
+    }
+
+    /// Scrolled all the way to the bottom (`G`/`End` sets `scroll` to
+    /// `max_scroll`, and `render` clamps any larger value to that same
+    /// bound), the scrollbar thumb must reach the last cell of the track —
+    /// the bug this test was written to catch: with `ScrollbarState` built as
+    /// `new(total).position(offset)`, the track is scaled to `total` while
+    /// `position` can only ever reach `total - list_h`, so the thumb never
+    /// reaches bottom no matter how far the offset is clamped.
+    #[test]
+    fn help_overlay_scrollbar_thumb_reaches_track_bottom_when_scrolled_to_the_end() {
+        let buffer = render_help_at_scroll(u16::MAX);
+        let (col, list_top, list_bottom) = scrollbar_track(&buffer);
+
+        assert_eq!(
+            symbol_at(&buffer, col, list_bottom),
+            THUMB,
+            "scrolled to the end, the thumb must reach the track's bottom cell"
+        );
+        assert_ne!(
+            symbol_at(&buffer, col, list_top),
+            THUMB,
+            "scrolled to the end, the track's top cell must no longer show the thumb"
+        );
     }
 
     // -- this_context_sections / all_keys_sections ------------------------
