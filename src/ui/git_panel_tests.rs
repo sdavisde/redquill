@@ -950,6 +950,42 @@ fn panel_d_outside_a_review_session_is_a_total_no_op() {
     assert!(app.review_states.is_empty());
 }
 
+// -- Panel coherence: Esc leaves, s and / reach through (spec 11 Unit 2) -----
+
+/// `Esc` closes the focused panel back to `Normal`, without touching any
+/// staging state — the highlighted file's follow-sync is left exactly as
+/// `panel_follow` set it, and no git op runs.
+#[test]
+fn panel_esc_closes_the_panel_without_touching_staging_state() {
+    let (mut app, calls) = panel_actions_app();
+    app.apply(Action::FocusGitPanel);
+    press(&mut app, KeyCode::Char('j')); // Dir("src") -> File(src/a.rs)
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.mode, Mode::Normal, "Esc closes the panel to Normal");
+    assert!(calls.borrow().is_empty(), "Esc must not run any staging op");
+}
+
+/// `s` from the focused panel reaches the staging panel — closing the git
+/// panel first, exactly as if the user had pressed `` ` `` then `s`, rather
+/// than no-oping because `toggle_staging_panel` guards against `Mode::Panel`.
+#[test]
+fn panel_s_reaches_the_staging_panel_with_the_index_it_would_show_from_normal() {
+    let (mut app, _calls) = panel_actions_app();
+    app.apply(Action::FocusGitPanel);
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('S')); // stage src/a.rs first, so the staging panel isn't empty
+    press(&mut app, KeyCode::Char('s'));
+    assert_eq!(app.mode, Mode::Staging, "s must open the staging panel");
+    assert_eq!(
+        app.staged
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["src/a.rs"],
+        "the staging panel shows the same index a Normal-mode s would"
+    );
+}
+
 // -- Journey: panel file actions over a real scratch repo --------------------
 
 /// Runs a git command inside the scratch tempdir, asserting success. Fixture
@@ -1182,6 +1218,123 @@ fn panel_actions_journey_transcript() {
     step(
         "review progress",
         &format!("accepted {} of {} files, 1 deferred", 2, 3),
+    );
+
+    if std::env::var("RQ_JOURNEY_DUMP").is_ok() {
+        eprintln!("{log}");
+    }
+}
+
+// -- Journey: panel coherence (Esc/s// reach through) over a scratch repo ----
+
+/// Journey driver for spec 11 Unit 2: `` ` `` opens the panel, `Esc` backs
+/// out to `Normal`; `` ` `` again, `/` opens search, typing a query and
+/// confirming lands the cursor on a real match; `` ` `` again, `s` reaches
+/// the staging panel with the index it would show from `Normal`. Every
+/// logged step is asserted against a real scratch tempdir repo and the real
+/// `GitRunner` backend, driven through the real `dispatch_key` path
+/// (`RQ_JOURNEY_DUMP=1 cargo test --lib panel_coherence_journey_transcript
+/// -- --nocapture` captures the persisted proof).
+#[test]
+fn panel_coherence_journey_transcript() {
+    let mut log = String::new();
+    let mut step = |title: &str, body: &str| {
+        log.push_str(&format!("\n=== {title} ===\n{body}\n"));
+    };
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path();
+    scratch_git(dir, &["init", "-q", "-b", "main"]);
+    scratch_git(dir, &["config", "user.name", "redquill test"]);
+    scratch_git(dir, &["config", "user.email", "test@redquill.invalid"]);
+    scratch_write(dir, "src/a.rs", "fn a() {}\n");
+    scratch_write(dir, "src/b.rs", "fn b() {}\n");
+    scratch_git(dir, &["add", "."]);
+    scratch_git(dir, &["commit", "-q", "-m", "base"]);
+    scratch_write(dir, "src/a.rs", "fn a() { changed(); }\n");
+    scratch_write(dir, "src/b.rs", "fn b() { changed(); }\n");
+
+    let runner = crate::git::GitRunner::discover_in(dir).expect("discover scratch repo");
+    let mut app = App::new(Vec::new());
+    app.stage_ops = Some(Box::new(runner));
+    app.refresh();
+    assert_eq!(app.view.files.len(), 2);
+    step(
+        "launch on the scratch working tree",
+        &format!("{} files modified", app.view.files.len()),
+    );
+
+    // -- `Esc` backs the panel out to Normal --------------------------------
+    press(&mut app, KeyCode::Char('`'));
+    assert!(matches!(app.mode, Mode::Panel { .. }));
+    step("press `: panel focused", &panel_frame(&app));
+
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.mode, Mode::Normal, "Esc must close the panel to Normal");
+    step(
+        "press Esc: panel closes, back to Normal",
+        &format!("mode: {:?}", app.mode),
+    );
+
+    // -- `/` reaches search, landing on a real match -------------------------
+    press(&mut app, KeyCode::Char('`'));
+    assert!(matches!(app.mode, Mode::Panel { .. }));
+    press(&mut app, KeyCode::Char('/'));
+    assert_eq!(
+        app.mode,
+        Mode::Search,
+        "/ must open search, not no-op inside the panel"
+    );
+    step(
+        "press ` then /: panel closed first, search input active",
+        &format!("mode: {:?}", app.mode),
+    );
+
+    for ch in "changed".chars() {
+        press(&mut app, KeyCode::Char(ch));
+    }
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(
+        app.mode,
+        Mode::Normal,
+        "confirming search returns to Normal"
+    );
+    assert_eq!(app.search.pattern.as_deref(), Some("changed"));
+    assert!(
+        !app.search.matches.is_empty(),
+        "the typed query must match real diff content"
+    );
+    step(
+        "type changed, Enter: confirmed, cursor lands on a real match",
+        &format!(
+            "pattern: {:?}, matches: {}, status: {:?}",
+            app.search.pattern,
+            app.search.matches.len(),
+            app.status_message.as_deref()
+        ),
+    );
+
+    // -- `s` reaches the staging panel ---------------------------------------
+    press(&mut app, KeyCode::Char('`'));
+    assert!(matches!(app.mode, Mode::Panel { .. }));
+    press(&mut app, KeyCode::Char('j')); // Dir("src") -> File(src/a.rs)
+    press(&mut app, KeyCode::Char('S')); // stage src/a.rs, so the panel isn't empty
+    press(&mut app, KeyCode::Char('s'));
+    assert_eq!(
+        app.mode,
+        Mode::Staging,
+        "s must open the staging panel, not no-op inside the panel"
+    );
+    step(
+        "press ` j S then s: staged src/a.rs, then s opens the staging panel",
+        &format!(
+            "mode: {:?}, staged: {:?}",
+            app.mode,
+            app.staged
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>()
+        ),
     );
 
     if std::env::var("RQ_JOURNEY_DUMP").is_ok() {

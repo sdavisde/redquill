@@ -572,3 +572,105 @@ fn panel_overrides_remap_the_file_action_rows() {
         Some(Action::ToggleDefer)
     );
 }
+
+// -- Panel coherence: Esc leaves, s and / reach through (spec 11 Unit 2) ----
+
+/// Remapping `focus-git-panel` in `[keys.panel]` replaces *every* default
+/// panel row for that action — both `` ` `` and `Esc` — with the configured
+/// key(s), the same "an action named in config gets exactly the listed
+/// keys" contract every other action follows (see
+/// `overriding_an_action_replaces_its_default_keys_rather_than_appending`).
+/// A user who wants to keep two keys for it must list both.
+#[test]
+fn panel_override_of_focus_git_panel_replaces_both_default_keys() {
+    let mut keys = KeysConfig::default();
+    keys.panel.insert(
+        "focus-git-panel".to_string(),
+        one(KeyCode::Char('x'), KeyModifiers::NONE),
+    );
+    let (km, warnings) = effective_keymap(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+    let ev = |code| crossterm::event::KeyEvent::new(code, KeyModifiers::NONE);
+    assert_eq!(
+        km.lookup_in(Scope::Panel, ev(KeyCode::Char('x'))),
+        Some(Action::FocusGitPanel)
+    );
+    assert_eq!(km.lookup_in(Scope::Panel, ev(KeyCode::Char('`'))), None);
+    assert_eq!(km.lookup_in(Scope::Panel, ev(KeyCode::Esc)), None);
+    // Diff scope's own `` ` `` row (a different action's row entirely —
+    // `Scope::Diff`'s `FocusGitPanel` binding is untouched by a
+    // `[keys.panel]` override).
+    assert_eq!(
+        km.lookup_in(Scope::Diff, ev(KeyCode::Char('`'))),
+        Some(Action::FocusGitPanel)
+    );
+}
+
+/// `[keys.panel]` can remap `Esc` and `` ` `` independently, since they're
+/// two separate table rows sharing one action — listing both keys under the
+/// same override keeps both reachable under new keys.
+#[test]
+fn panel_override_of_focus_git_panel_can_list_both_keys() {
+    let mut keys = KeysConfig::default();
+    keys.panel.insert(
+        "focus-git-panel".to_string(),
+        vec![
+            KeySeqSpec::One(ChordSpec {
+                code: KeyCode::Char('x'),
+                mods: KeyModifiers::NONE,
+            }),
+            KeySeqSpec::One(ChordSpec {
+                code: KeyCode::Char('y'),
+                mods: KeyModifiers::NONE,
+            }),
+        ],
+    );
+    let (km, warnings) = effective_keymap(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+    let ev = |code| crossterm::event::KeyEvent::new(code, KeyModifiers::NONE);
+    assert_eq!(
+        km.lookup_in(Scope::Panel, ev(KeyCode::Char('x'))),
+        Some(Action::FocusGitPanel)
+    );
+    assert_eq!(
+        km.lookup_in(Scope::Panel, ev(KeyCode::Char('y'))),
+        Some(Action::FocusGitPanel)
+    );
+}
+
+/// `s`/`/` remap independently in `[keys.panel]`, exactly like the other
+/// panel-scope rows — the coherence keys are ordinary config-remappable
+/// table entries, not a special case.
+#[test]
+fn panel_overrides_remap_the_coherence_rows() {
+    let mut keys = KeysConfig::default();
+    keys.panel.insert(
+        "toggle-staging-panel".to_string(),
+        one(KeyCode::Char('x'), KeyModifiers::NONE),
+    );
+    keys.panel.insert(
+        "search".to_string(),
+        one(KeyCode::Char('y'), KeyModifiers::NONE),
+    );
+    let (km, warnings) = effective_keymap(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+    let ev = |code| crossterm::event::KeyEvent::new(code, KeyModifiers::NONE);
+    assert_eq!(
+        km.lookup_in(Scope::Panel, ev(KeyCode::Char('x'))),
+        Some(Action::ToggleStagingPanel)
+    );
+    assert_eq!(
+        km.lookup_in(Scope::Panel, ev(KeyCode::Char('y'))),
+        Some(Action::Search)
+    );
+    // The defaults are gone from panel scope...
+    assert_eq!(km.lookup_in(Scope::Panel, ev(KeyCode::Char('s'))), None);
+    // ...but diff scope's own `/` row (a separate table entry) is untouched.
+    assert_eq!(
+        km.lookup_in(Scope::Diff, ev(KeyCode::Char('/'))),
+        Some(Action::Search)
+    );
+}

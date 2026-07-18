@@ -156,11 +156,11 @@ pub(super) fn handle_search_key(app: &mut App, key: KeyEvent) {
 
 /// Handles one key event while [`super::Mode::Panel`] is active (the git
 /// panel holds focus): keys resolve through the [`super::Keymap`] table in
-/// panel scope (`` ` `` toggles focus back, `j`/`k` move the panel cursor,
-/// `Enter` opens the cursor's file). Unlike the other modal handlers this one
-/// stays keymap-driven — panel navigation is a first-class, scoped part of
-/// the keymap, not an ad-hoc match — so anything not bound in panel scope is
-/// ignored. The per-file keys (`Space`/`S`/`d`) route through
+/// panel scope (`` ` ``/`Esc` toggle/close focus back, `j`/`k` move the panel
+/// cursor, `Enter` opens the cursor's file). Unlike the other modal handlers
+/// this one stays keymap-driven — panel navigation is a first-class, scoped
+/// part of the keymap, not an ad-hoc match — so anything not bound in panel
+/// scope is ignored. The per-file keys (`Space`/`S`/`d`) route through
 /// [`panel_file_action`], which gates on the highlighted row and translates
 /// stage gestures to accept gestures during a review session.
 ///
@@ -171,8 +171,13 @@ pub(super) fn handle_search_key(app: &mut App, key: KeyEvent) {
 /// `p`/`P` (pull/push) additionally open the confirm modal instead of
 /// running immediately whenever [`super::app::App::in_review_session`] holds
 /// — `f` (fetch) is untouched, since reviewers are expected to fetch freely.
-/// Every other action still runs through the unchanged generic
-/// `app.apply(action)` path.
+///
+/// `s` closes the panel before opening the staging panel (`ToggleStagingPanel`
+/// otherwise no-ops while `Mode::Panel` is active — see `staging.rs`'s
+/// doc); `/` needs no such shim, since `enter_search` overwrites `self.mode`
+/// unconditionally and so already behaves as if the panel were closed first.
+/// `Esc`/`` ` `` (`FocusGitPanel`) and every other action run through the
+/// unchanged generic `app.apply(action)` path.
 pub(super) fn handle_panel_key(
     app: &mut App,
     key: KeyEvent,
@@ -199,6 +204,11 @@ pub(super) fn handle_panel_key(
             | Action::ToggleDefer),
         ) => {
             panel_file_action(app, action);
+            Flow::Continue
+        }
+        Some(Action::ToggleStagingPanel) => {
+            app.toggle_git_panel();
+            app.apply(Action::ToggleStagingPanel);
             Flow::Continue
         }
         Some(action) => {

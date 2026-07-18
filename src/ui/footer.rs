@@ -240,10 +240,11 @@ fn panel_hints(
         entry.label = "publish";
     }
     // See `normal_hints`'s identical synthetic entry for why this exists
-    // only during a review session.
+    // only during a review session. Rank 14 sits after the coherence rows
+    // (`s`/`/` at 12/13), the highest ranks in the panel strip.
     if review_session && let Some(key) = find_key(km, Scope::Panel, Action::Quit, "q") {
         entries.push(FooterEntry {
-            rank: 12,
+            rank: 14,
             key,
             label: "end review",
         });

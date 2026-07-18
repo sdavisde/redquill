@@ -695,14 +695,11 @@ fn dead_end_journey_reaches_the_newest_commit_in_a_handful_of_keys() {
     eprintln!("=== 6.1 after ` then Tab (History tab) ===\n{history_view}");
 
     // Discoverability of step 3, signal 1: the always-visible footer strip
-    // (bottom row) already promises `Enter open file` while the panel is
+    // (now two rows, since spec 11 Unit 2 added the panel's `Esc`/`s`/`/`
+    // coherence hints) already promises `Enter open file` while the panel is
     // focused — no overlay needed.
     assert!(
-        history_view
-            .lines()
-            .last()
-            .unwrap_or("")
-            .contains("Enter open"),
+        history_view.contains("Enter open"),
         "the panel footer must promise Enter opens the highlighted row:\n{history_view}"
     );
     // Discoverability of step 3, signal 2: the `?` overlay's Git-panel

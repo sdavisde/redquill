@@ -3742,3 +3742,85 @@ fn help_from_the_panel_swaps_stage_rows_for_accept_rows_in_a_review_session() {
     assert!(reviewing.contains("Defer/un-defer the highlighted file"));
     assert!(!reviewing.contains("Stage the highlighted file"));
 }
+
+// -- Panel coherence: Esc leaves, s and / reach through (spec 11 Unit 2) -----
+
+/// `Esc` from the focused git panel closes it, landing back in `Normal` —
+/// the same destination `` ` `` already reaches, just via the app's
+/// universal "back out" key instead of the panel-specific toggle.
+#[test]
+fn panel_esc_closes_the_panel_to_normal() {
+    let mut app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+    press_one(&mut app, &keymap, KeyCode::Char('`'));
+    assert!(matches!(app.mode, Mode::Panel { .. }));
+    press_one(&mut app, &keymap, KeyCode::Esc);
+    assert_eq!(app.mode, Mode::Normal, "Esc must close the panel to Normal");
+}
+
+/// An open help overlay shadows panel dispatch entirely (the existing
+/// `dispatch_key` arm at the top of the `Mode::Panel` match), so `Esc` while
+/// help is open over the panel closes help first, leaving the panel
+/// focused underneath — a second `Esc` is then needed to leave the panel.
+#[test]
+fn panel_esc_is_shadowed_by_an_open_help_overlay() {
+    let mut app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+    press_one(&mut app, &keymap, KeyCode::Char('`'));
+    press_one(&mut app, &keymap, KeyCode::Char('?'));
+    assert!(app.help.open, "? must open help over the focused panel");
+    press_one(&mut app, &keymap, KeyCode::Esc);
+    assert!(!app.help.open, "Esc closes the help overlay first");
+    assert!(
+        matches!(app.mode, Mode::Panel { .. }),
+        "the panel stays focused underneath the help overlay Esc closed"
+    );
+    press_one(&mut app, &keymap, KeyCode::Esc);
+    assert_eq!(
+        app.mode,
+        Mode::Normal,
+        "a second Esc, with help already closed, now closes the panel"
+    );
+}
+
+/// `s` from the focused panel behaves as if the panel were closed first: it
+/// lands in the staging panel exactly like the diff view's own `s`, rather
+/// than doing nothing (`toggle_staging_panel` no-ops while `Mode::Panel` is
+/// active — see `staging.rs`).
+#[test]
+fn panel_s_reaches_the_staging_panel() {
+    let mut app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+    press_one(&mut app, &keymap, KeyCode::Char('`'));
+    press_one(&mut app, &keymap, KeyCode::Char('s'));
+    assert_eq!(
+        app.mode,
+        Mode::Staging,
+        "s must open the staging panel, not no-op inside the git panel"
+    );
+}
+
+/// `/` from the focused panel behaves as if the panel were closed first: it
+/// lands in `Mode::Search`, exactly where the diff view's own `/` lands, and
+/// confirming a match returns focus to `Normal` — the panel is not restored.
+#[test]
+fn panel_slash_reaches_search_and_confirm_lands_in_normal() {
+    let mut app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+    press_one(&mut app, &keymap, KeyCode::Char('`'));
+    press_one(&mut app, &keymap, KeyCode::Char('/'));
+    assert_eq!(
+        app.mode,
+        Mode::Search,
+        "/ must open search, not no-op inside the git panel"
+    );
+    press_one(&mut app, &keymap, KeyCode::Char('n'));
+    press_one(&mut app, &keymap, KeyCode::Char('e'));
+    press_one(&mut app, &keymap, KeyCode::Char('w'));
+    press_one(&mut app, &keymap, KeyCode::Enter);
+    assert_eq!(
+        app.mode,
+        Mode::Normal,
+        "confirming a search returns to Normal, not back to the panel"
+    );
+}

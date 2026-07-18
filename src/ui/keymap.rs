@@ -770,6 +770,12 @@ impl Keymap {
                     "Close git panel",
                 )
                 .footer(10, "close"),
+                // `Esc` is a second route to the same close — the app's
+                // universal "back out" key backs out of the panel too,
+                // exactly like it closes every other overlay/mode. Same
+                // action, same footer hint (merges with the row above into
+                // one "`/Esc close" entry), so the two never drift apart.
+                p(KeySeq::one(Esc, none), FocusGitPanel, "Close git panel").footer(10, "close"),
                 p(
                     KeySeq::one(Char('j'), none),
                     PanelCursorDown,
@@ -864,6 +870,30 @@ impl Keymap {
                     OpenSwitcher,
                     "Open branch/worktree switcher",
                 ),
+                // `s`/`/` reach through to the staging panel and search
+                // exactly as they do from the diff view — routed in
+                // `modes::handle_panel_key` to behave as if the git panel
+                // were closed first (`toggle_staging_panel` otherwise
+                // no-ops while `Mode::Panel` is active; `enter_search`
+                // doesn't care about the prior mode, so it needs no special
+                // routing, but the row still lives here for help/footer
+                // coverage and config-remap parity with `s`).
+                p(
+                    KeySeq::one(Char('s'), none),
+                    ToggleStagingPanel,
+                    "Open the staging panel",
+                )
+                .footer(12, "staging panel"),
+                // Distinct description text from the diff-scope `Search` row
+                // (both bind the identical action/gesture) so the two rows
+                // never read as a textual duplicate in "All keys"/config
+                // diffing — see `help.rs`'s scope-isolation tests.
+                p(
+                    KeySeq::one(Char('/'), none),
+                    Search,
+                    "Search the diff from the git panel",
+                )
+                .footer(13, "search"),
                 // -- Global scope: resolved from both Diff and Panel (see
                 // `Keymap::scope_chain`) — "works everywhere" keys defined
                 // once rather than duplicated per scope.
@@ -1652,9 +1682,10 @@ mod tests {
 
     /// `Space` now stages in *both* scopes (its own row per scope, so the
     /// panel's whole-file routing can differ from the diff's cursor-derived
-    /// gesture), while `s` (staging panel) stays diff-only.
+    /// gesture); `s` now reaches the staging panel from panel scope too
+    /// (spec 11 Unit 2), so it's no longer diff-only.
     #[test]
-    fn space_stages_in_both_scopes_and_s_remains_diff_only() {
+    fn space_stages_in_both_scopes_and_s_now_opens_the_staging_panel_from_panel_scope() {
         let km = Keymap::default_map();
         assert_eq!(
             km.lookup_in(Scope::Diff, key(KeyCode::Char(' '), KeyModifiers::NONE)),
@@ -1664,10 +1695,40 @@ mod tests {
             km.lookup_in(Scope::Panel, key(KeyCode::Char(' '), KeyModifiers::NONE)),
             Some(Action::ToggleStage)
         );
-        // `s` (staging panel) is still diff-only.
         assert_eq!(
             km.lookup_in(Scope::Panel, key(KeyCode::Char('s'), KeyModifiers::NONE)),
-            None
+            Some(Action::ToggleStagingPanel)
+        );
+    }
+
+    /// `Esc` closes the focused git panel — the same action `` ` `` already
+    /// runs, so pressing either key backs out to `Normal` (spec 11 FR-6). The
+    /// `` ` `` toggle is untouched.
+    #[test]
+    fn esc_also_closes_the_panel_in_panel_scope() {
+        let km = Keymap::default_map();
+        assert_eq!(
+            km.lookup_in(Scope::Panel, key(KeyCode::Esc, KeyModifiers::NONE)),
+            Some(Action::FocusGitPanel)
+        );
+        assert_eq!(
+            km.lookup_in(Scope::Panel, key(KeyCode::Char('`'), KeyModifiers::NONE)),
+            Some(Action::FocusGitPanel)
+        );
+    }
+
+    /// `/` reaches search from the focused panel too (spec 11 FR-7) — the
+    /// diff-scope row is untouched.
+    #[test]
+    fn slash_opens_search_from_panel_scope() {
+        let km = Keymap::default_map();
+        assert_eq!(
+            km.lookup_in(Scope::Panel, key(KeyCode::Char('/'), KeyModifiers::NONE)),
+            Some(Action::Search)
+        );
+        assert_eq!(
+            km.lookup_in(Scope::Diff, key(KeyCode::Char('/'), KeyModifiers::NONE)),
+            Some(Action::Search)
         );
     }
 

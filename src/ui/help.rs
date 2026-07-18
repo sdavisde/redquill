@@ -1335,13 +1335,14 @@ mod tests {
         assert_eq!(rows.len(), WORKFLOW_ENTRIES.len() - 1);
     }
 
-    /// Panel origin resolves in `Scope::Panel`: the two Diff-only entries
-    /// (Compose/Search) have no Panel or Global binding, so they drop out
-    /// entirely, while the launcher/quit (`Scope::Global`) and the stage
-    /// entry (Space stages the highlighted file in panel scope too) still
-    /// resolve — the header never claims a key means something it doesn't
-    /// in the panel (plain `c` commits staged changes there, it doesn't
-    /// open Compose).
+    /// Panel origin resolves in `Scope::Panel`: the Diff-only `Compose`
+    /// entry has no Panel or Global binding, so it drops out entirely, while
+    /// the launcher/quit (`Scope::Global`), the stage entry (Space stages
+    /// the highlighted file in panel scope too), and — since spec 11 Unit 2
+    /// bound panel `/` to `Search` — the search entry all still resolve —
+    /// the header never claims a key means something it doesn't in the
+    /// panel (plain `c` commits staged changes there, it doesn't open
+    /// Compose).
     #[test]
     fn workflow_rows_for_panel_origin_keeps_panel_resolvable_entries() {
         let keymap = Keymap::default_map();
@@ -1356,6 +1357,7 @@ mod tests {
             vec![
                 "Review a branch or commit",
                 "Stage the change under the cursor",
+                "Search the diff",
                 "Quit and copy annotations"
             ]
         );

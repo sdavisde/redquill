@@ -179,7 +179,7 @@ fn panel_mode_hints_match_the_curated_list_in_order() {
     assert_eq!(
         keys(&entries),
         vec![
-            "j/k", "Enter", "Space", "S", "f", "p", "P", "c", "`", "Tab", "?"
+            "j/k", "Enter", "Space", "S", "f", "p", "P", "c", "`/Esc", "Tab", "s", "/", "?"
         ]
     );
     assert_eq!(
@@ -195,6 +195,8 @@ fn panel_mode_hints_match_the_curated_list_in_order() {
             "commit",
             "close",
             "tab",
+            "staging panel",
+            "search",
             "help"
         ]
     );
@@ -202,7 +204,8 @@ fn panel_mode_hints_match_the_curated_list_in_order() {
 
 /// A read-only target (commit view, range) hides the panel's stage hints,
 /// exactly like the diff view's own strip — inert keys are omitted, not
-/// advertised.
+/// advertised. `Esc`/`s`/`/` stay: they're coherence keys, not per-file
+/// gestures, so a read-only target doesn't touch them.
 #[test]
 fn panel_mode_hints_hide_stage_rows_on_a_read_only_target() {
     let km = Keymap::default_map();
@@ -211,7 +214,9 @@ fn panel_mode_hints_hide_stage_rows_on_a_read_only_target() {
     assert!(!labels(&entries).contains(&"stage file"));
     assert_eq!(
         keys(&entries),
-        vec!["j/k", "Enter", "f", "p", "P", "c", "`", "Tab", "?"]
+        vec![
+            "j/k", "Enter", "f", "p", "P", "c", "`/Esc", "Tab", "s", "/", "?"
+        ]
     );
 }
 
@@ -238,15 +243,17 @@ fn panel_mode_hints_show_accept_and_defer_during_a_review_session() {
 
 /// The History tab has no file rows, so the per-file hints hide there —
 /// both the stage family and, during a review session, the accept/defer
-/// family — while the tab-agnostic hints (including the review `q end
-/// review` synthetic) stay.
+/// family — while the tab-agnostic hints (including `Esc`/`s`/`/` and the
+/// review `q end review` synthetic) stay.
 #[test]
 fn panel_mode_hints_hide_file_actions_on_the_history_tab() {
     let km = Keymap::default_map();
     let entries = panel_hints(&km, false, true, false, false);
     assert_eq!(
         keys(&entries),
-        vec!["j/k", "Enter", "f", "p", "P", "c", "`", "Tab", "?"]
+        vec![
+            "j/k", "Enter", "f", "p", "P", "c", "`/Esc", "Tab", "s", "/", "?"
+        ]
     );
     let review_entries = panel_hints(&km, false, false, true, false);
     let review_labels = labels(&review_entries);
@@ -281,7 +288,7 @@ fn panel_push_hint_relabels_to_publish_on_an_unpublished_branch() {
     assert_eq!(
         keys(&entries),
         vec![
-            "j/k", "Enter", "Space", "S", "f", "p", "P", "c", "`", "Tab", "?"
+            "j/k", "Enter", "Space", "S", "f", "p", "P", "c", "`/Esc", "Tab", "s", "/", "?"
         ]
     );
     assert_eq!(
@@ -297,6 +304,8 @@ fn panel_push_hint_relabels_to_publish_on_an_unpublished_branch() {
             "commit",
             "close",
             "tab",
+            "staging panel",
+            "search",
             "help"
         ]
     );
