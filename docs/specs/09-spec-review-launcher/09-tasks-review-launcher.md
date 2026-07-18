@@ -78,7 +78,7 @@ This is the scope-migration slice, deliberately separated from the launcher beha
 - [x] 1.5 Add the `[keys.global]` config section: `KeysConfig` in `src/config/keys.rs` gains a `global` field; `keymap_config.rs` applies it with the same merge semantics as `[keys.diff]`/`[keys.panel]`. Tests in `keymap_config_tests.rs`/`keys_tests.rs`: exact-keys replacement, `= []` unbinds, unknown-action warning, same-scope collision → user wins (FR-3). Separate `feat:` commit — this is the behavior change layered on the refactor.
 - [x] 1.6 Run all four gates; capture the `?` overlay showing the "works everywhere" section into `docs/specs/09-spec-review-launcher/proofs/`; commit.
 
-### [ ] 2.0 Launcher shell: global `R` opens the tabbed Review launcher, `Esc` restores the exact origin, refresh moves to `r`
+### [x] 2.0 Launcher shell: global `R` opens the tabbed Review launcher, `Esc` restores the exact origin, refresh moves to `r`
 
 Covers: FR-4, FR-5, FR-6, FR-7 (launcher key table, footer hints, config-remappable set, launcher help section)
 
@@ -101,7 +101,7 @@ Note: after this task the launcher's tabs are navigable but `Enter` is inert (Br
 - [x] 2.5 Rebind (single `feat:` commit): add the `OpenReviewLauncher` action with kebab-case `action_name` round-trip (`"open-review-launcher"`); bind `R` in `Scope::Global`; move diff-scope `Refresh` from `R` (~687) to `r` (verified free — only the `gr` two-key sequence uses `r` today); delete the panel-scope `R` `OpenReviewBranch` row (~816) and retire the `OpenReviewBranch` action from the keymap table (the modal itself dies in 3.0). Add a config test for `[keys.global]` remap of `open-review-launcher` and `[keys.diff]` remap of refresh on `r` (FR-3/FR-4 interplay).
 - [x] 2.6 Trip-hazard sub-task — rewrite the stale test pins: `keymap.rs` ~1128/1132 (`R` ± SHIFT → `Refresh`) and ~1136 (`r` → `None`) now assert the new bindings; verify the `action_names_are_total_and_bijective` test (~1821) covers the new action. Add free-text-context tests proving `R` still inserts a literal character in compose, commit-message, search, and finder modes (they bypass the keymap table) (FR-4).
 - [x] 2.7 Render `src/ui/review_launcher_modal.rs` styled like `switcher_modal.rs`: centered overlay, tab headers with active-tab highlight, list area (placeholder content until 3.0/4.0), footer hints from the effective launcher table, and a per-tab Enter-outcome hint line ("start branch review" vs "review commit (read-only)") per the spec's Design Considerations.
-- [ ] 2.8 Run gates; capture the journey transcript — `R` from the diff view and from the git panel (cursor mid-list on a non-default tab), `Esc` restores the exact prior focus — into `proofs/`; commit.
+- [x] 2.8 Run gates; capture the journey transcript — `R` from the diff view and from the git panel (cursor mid-list on a non-default tab), `Esc` restores the exact prior focus — into `proofs/`; commit.
 
 ### [ ] 3.0 Branches tab: migrate branch review into the launcher, retire `Mode::ReviewBranch`, block in-session starts with a hint
 

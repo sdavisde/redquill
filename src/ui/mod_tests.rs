@@ -4,10 +4,12 @@ use super::*;
 use crate::annotate::{Classification, Target};
 use crate::config::SidebarSide;
 use crate::diff::FileDiff;
-use crate::git::{DiffTarget, RawFilePatch, RemoteOp};
+use crate::git::{CommitLogEntry, DiffTarget, RawFilePatch, RemoteOp};
 use crate::highlight::TokenKind;
 use crate::lsp::SourceLocation;
 use crate::review::ReviewStatus;
+use crate::ui::app::{ModeOrigin, PanelTab};
+use crate::ui::review_launcher::LauncherTab;
 use crossterm::event::KeyModifiers;
 use ratatui::backend::TestBackend;
 
@@ -3295,5 +3297,170 @@ fn scrolling_a_5k_line_multibuffer_renders_fast() {
     assert!(
         per_frame < std::time::Duration::from_millis(50),
         "ms/frame {per_frame:?} too slow over {frames} frames / {total_rows} rows"
+    );
+}
+
+// -- Review launcher journeys: `R` opens it from anywhere, `Esc` restores ---
+//
+// Journey B (spec 09): `R` from the diff view and from the git panel (cursor
+// mid-list on the non-default History tab) both open the Review launcher;
+// `Esc` restores the exact prior focus either way.
+
+/// Prints a rendered frame's non-blank rows to stderr when
+/// `REDQUILL_PROOF_DUMP` is set — the proof-capture convention this file's
+/// other render tests already use inline, factored out once here since both
+/// journey tests below need it.
+fn dump_frame_if_requested(label: &str, app: &App, keymap: &Keymap) {
+    if std::env::var_os("REDQUILL_PROOF_DUMP").is_none() {
+        return;
+    }
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| draw(frame, app, keymap, None))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let w = buffer.area.width as usize;
+    let symbols: Vec<&str> = buffer.content().iter().map(|c| c.symbol()).collect();
+    eprintln!("-- {label} --");
+    for row in symbols.chunks(w) {
+        let line = row.concat();
+        if !line.trim().is_empty() {
+            eprintln!("{line}");
+        }
+    }
+}
+
+/// Journey B, diff-view leg: from `Mode::Normal`, `R` opens the launcher
+/// (landing on Branches, the default tab) and `Esc` restores the exact prior
+/// mode. Driven through the real `dispatch_key` pipeline, the same handler
+/// the blocking event loop calls.
+#[test]
+fn journey_r_from_diff_view_opens_launcher_and_esc_restores() {
+    let mut app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
+
+    assert_eq!(app.mode, Mode::Normal);
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE),
+    );
+    assert_eq!(
+        app.mode,
+        Mode::ReviewLauncher {
+            tab: LauncherTab::Branches,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        },
+        "R from the diff view opens the launcher on the default tab"
+    );
+    dump_frame_if_requested(
+        "R from the diff view opens the Review launcher",
+        &app,
+        &keymap,
+    );
+
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    );
+    assert_eq!(app.mode, Mode::Normal, "Esc restores the exact prior focus");
+    dump_frame_if_requested("Esc restores the diff view", &app, &keymap);
+}
+
+/// Journey B, git-panel leg: with the panel focused on the History tab and
+/// its cursor mid-list (neither the top nor the last loaded row), `R` opens
+/// the launcher and `Esc` restores the panel with its cursor and tab exactly
+/// intact — the non-default-tab case FR-5 calls out explicitly.
+#[test]
+fn journey_r_from_panel_mid_list_history_tab_opens_launcher_and_esc_restores_cursor_and_tab() {
+    let mut app = App::new(vec![sample_file()]);
+    app.mode = Mode::Panel {
+        cursor: 0,
+        tab: PanelTab::History,
+    };
+    app.history = vec![
+        CommitLogEntry {
+            sha: "aaa1111full".to_string(),
+            short_sha: "aaa1111".to_string(),
+            subject: "third".to_string(),
+            author_name: "Dev".to_string(),
+            timestamp: 1_700_000_002,
+        },
+        CommitLogEntry {
+            sha: "bbb2222full".to_string(),
+            short_sha: "bbb2222".to_string(),
+            subject: "second".to_string(),
+            author_name: "Dev".to_string(),
+            timestamp: 1_700_000_001,
+        },
+        CommitLogEntry {
+            sha: "ccc3333full".to_string(),
+            short_sha: "ccc3333".to_string(),
+            subject: "first".to_string(),
+            author_name: "Dev".to_string(),
+            timestamp: 1_700_000_000,
+        },
+    ];
+    app.history_exhausted = true;
+    app.panel_move_down(); // cursor -> 1, mid-list
+    assert_eq!(app.panel_cursor(), 1);
+
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
+
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE),
+    );
+    assert_eq!(
+        app.mode,
+        Mode::ReviewLauncher {
+            tab: LauncherTab::Branches,
+            cursor: 0,
+            origin: ModeOrigin::Panel {
+                cursor: 1,
+                tab: PanelTab::History,
+            },
+        },
+        "R from the panel captures its cursor/tab as the restore origin"
+    );
+    dump_frame_if_requested(
+        "R from the git panel (History tab, cursor mid-list) opens the Review launcher",
+        &app,
+        &keymap,
+    );
+
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    );
+    assert_eq!(
+        app.mode,
+        Mode::Panel {
+            cursor: 1,
+            tab: PanelTab::History,
+        },
+        "Esc restores the panel with its cursor and tab exactly intact"
+    );
+    dump_frame_if_requested(
+        "Esc restores the git panel, cursor and tab intact",
+        &app,
+        &keymap,
     );
 }
