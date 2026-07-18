@@ -728,9 +728,9 @@ fn panel_help_hint_is_real_and_shadows_panel_dispatch() {
         &mut pending_count,
         key(KeyCode::Char('?')),
     );
-    assert!(app.help_open, "`?` must open help from the panel");
+    assert!(app.help.open, "`?` must open help from the panel");
     assert!(matches!(app.mode, Mode::Panel { .. }), "mode stays Panel");
-    let scroll_before = app.help_scroll.get();
+    let scroll_before = app.help.scroll.get();
     dispatch_key(
         &mut app,
         &keymap,
@@ -739,7 +739,7 @@ fn panel_help_hint_is_real_and_shadows_panel_dispatch() {
         key(KeyCode::Char('j')),
     );
     assert!(
-        app.help_scroll.get() > scroll_before,
+        app.help.scroll.get() > scroll_before,
         "j must scroll help, not move the panel cursor, while help is open over the panel"
     );
     dispatch_key(
@@ -749,7 +749,7 @@ fn panel_help_hint_is_real_and_shadows_panel_dispatch() {
         &mut pending_count,
         KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
     );
-    assert!(!app.help_open, "Esc must close help");
+    assert!(!app.help.open, "Esc must close help");
     assert!(
         matches!(app.mode, Mode::Panel { .. }),
         "closing help returns to the panel, not Normal"
@@ -831,7 +831,7 @@ fn footer_height_matches_wrap_hints_row_count() {
             code_intel_allowed: true,
             push_publishes: false,
             viewing_commit: false,
-            help_open: a.help_open,
+            help_open: a.help.open,
             project_search_focus: a.project_search_focus(),
             review_session: false,
         },

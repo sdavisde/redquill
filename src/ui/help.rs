@@ -10,11 +10,12 @@
 //! height to a fraction of the screen and scrolls the overflow (a right-edge
 //! scrollbar shows position); `j`/`k`/arrows, PageUp/PageDown, and `g`/`G`
 //! drive it from [`super::handle_help_key`]. The scroll offset lives in
-//! [`super::app::App::help_scroll`]; this renderer clamps it to the content
-//! each frame and writes the clamped value back.
+//! [`HelpOverlayState::scroll`] (one field of the overlay's consolidated
+//! state, owned by `App`); this renderer clamps it to the content each frame
+//! and writes the clamped value back.
 //!
 //! `/` filters the list, lazygit-style (state in
-//! [`super::app::App::help_search`], driven by [`super::handle_help_key`]):
+//! [`HelpOverlayState::search`], driven by [`super::handle_help_key`]):
 //! typing narrows every section to rows whose key label or description
 //! smartcase-matches the query ([`row_matches`]), dropping sections that end
 //! up empty, and a locked-in filter shows in place of the subtitle.
@@ -29,6 +30,7 @@ use ratatui::widgets::{
     Block, BorderType, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 
+use super::app::ModeOrigin;
 use super::keymap::{Action, Binding, Keymap, Scope};
 use super::modal_keys::{ModalBinding, ModalKeymaps};
 use super::search;
@@ -175,10 +177,7 @@ fn modal_hints<A: Clone>(table: &[ModalBinding<A>]) -> Vec<(String, &'static str
 /// applies), so only one of the two ever documents itself here at a time,
 /// exactly like `Action::ToggleStage`/`Action::ToggleAccept`'s mutual
 /// exclusion in [`binding_hidden`].
-fn modal_sections(
-    modal_keys: &ModalKeymaps,
-    review_session: bool,
-) -> [(&'static str, Vec<(String, &'static str)>); 14] {
+fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 14] {
     let staging_section = if review_session {
         (
             "Accepted files panel (s, review sessions)",
@@ -237,6 +236,43 @@ fn row_matches(label: &str, description: &str, query: &str) -> bool {
         || search::smartcase_contains(description, query)
 }
 
+/// The help overlay's full state, owned by [`super::app::App`] as one field
+/// rather than four loose ones (`help_open`/`help_scroll`/`help_viewport`/
+/// `help_search`, the shape this consolidates): whether it's open, the
+/// scroll/viewport/search fields [`HelpViewState`] borrows each frame, and
+/// `origin` — the mode `?` was pressed from, captured via
+/// [`ModeOrigin::capture`] the same way [`super::app::Mode::ReviewLauncher`]
+/// captures where `R` was pressed from. Nothing reads `origin` yet; it
+/// exists so a later context-first "This context" view can pick the right
+/// table without re-deriving what mode the overlay opened over.
+pub struct HelpOverlayState {
+    /// Whether the overlay is open.
+    pub(super) open: bool,
+    /// The vertical scroll offset (see [`HelpViewState::scroll`]).
+    pub(super) scroll: Cell<u16>,
+    /// The scrollable region's height (see [`HelpViewState::viewport`]).
+    pub(super) viewport: Cell<u16>,
+    /// The `/` keybind filter (see [`HelpViewState::search`]).
+    pub(super) search: Option<(String, bool)>,
+    /// The mode/scope the overlay was opened over.
+    pub(super) origin: ModeOrigin,
+}
+
+impl HelpOverlayState {
+    /// A closed overlay with no scroll/filter and a `Normal` origin (the
+    /// harmless default a fresh [`super::app::App`] starts with; opening `?`
+    /// overwrites it with the real origin).
+    pub(super) fn new() -> Self {
+        HelpOverlayState {
+            open: false,
+            scroll: Cell::new(0),
+            viewport: Cell::new(0),
+            search: None,
+            origin: ModeOrigin::Normal,
+        }
+    }
+}
+
 /// The overlay's scroll/filter state, owned by the caller ([`App`]) and
 /// threaded through [`render`] each frame. Grouped into one struct rather
 /// than three loose parameters to keep `render`'s argument count sane.
@@ -248,7 +284,7 @@ pub struct HelpViewState<'a> {
     /// The scrollable region's height, recorded by `render` each frame so the
     /// key handler can page by a real viewport (PageUp/PageDown).
     pub viewport: &'a Cell<u16>,
-    /// Mirrors [`super::app::App::help_search`]: `Some((query, editing))`
+    /// Mirrors [`HelpOverlayState::search`]: `Some((query, editing))`
     /// filters every section to rows matching `query` (dropping sections
     /// that end up empty) and shows the query in place of the subtitle —
     /// with a live text cursor while `editing`, or a "locked" hint once
@@ -263,6 +299,85 @@ pub struct HelpViewState<'a> {
 pub struct HelpTables<'a> {
     pub keymap: &'a Keymap,
     pub modal_keys: &'a ModalKeymaps,
+}
+
+/// One titled block of `(key label, description)` rows — the shape every
+/// section builder below returns and [`render`] lays out uniformly (the same
+/// shape [`modal_sections`] already returned, since it predates this alias).
+/// Capability gating ([`binding_hidden`]) is already applied by the builders;
+/// the `/` filter is deliberately not — `render` applies [`row_matches`] to
+/// the rows each frame, since the query is the one thing that legitimately
+/// varies without re-deriving these tables.
+type Section = (&'static str, Vec<(String, &'static str)>);
+
+/// The "Works everywhere" section: every `Scope::Global` binding not hidden
+/// by capability gating, in keymap order.
+fn global_section(
+    bindings: &[Binding],
+    staging_allowed: bool,
+    code_intel_allowed: bool,
+    review_session: bool,
+) -> Section {
+    let rows = bindings
+        .iter()
+        .filter(|b| b.scope == Scope::Global)
+        .filter(|b| {
+            !binding_hidden(
+                b.action,
+                staging_allowed,
+                code_intel_allowed,
+                review_session,
+            )
+        })
+        .map(|b| (b.key_label(), b.description))
+        .collect();
+    ("Works everywhere", rows)
+}
+
+/// The diff-scope group sections, one per [`GROUP_ORDER`] entry in that
+/// order: each group's `Scope::Diff` bindings, capability-gated rows
+/// dropped, in keymap order. Empty groups are kept here — `render` drops
+/// them after applying the `/` query, the same point the other sections drop
+/// theirs — so this stays index-aligned with `GROUP_ORDER` for any future
+/// caller iterating both together.
+fn diff_group_sections(
+    bindings: &[Binding],
+    staging_allowed: bool,
+    code_intel_allowed: bool,
+    review_session: bool,
+) -> Vec<Section> {
+    GROUP_ORDER
+        .iter()
+        .map(|&group| {
+            let rows = bindings
+                .iter()
+                .filter(|b| b.scope == Scope::Diff && group_of(b.action) == group)
+                .filter(|b| {
+                    !binding_hidden(
+                        b.action,
+                        staging_allowed,
+                        code_intel_allowed,
+                        review_session,
+                    )
+                })
+                .map(|b| (b.key_label(), b.description))
+                .collect();
+            (group, rows)
+        })
+        .collect()
+}
+
+/// The focused-git-panel section: every `Scope::Panel` binding, in keymap
+/// order. Panel-scope rows carry no capability gating today (see
+/// [`binding_hidden`]'s doc), so unlike the other two builders this one takes
+/// no gating flags.
+fn panel_section(bindings: &[Binding]) -> Section {
+    let rows = bindings
+        .iter()
+        .filter(|b| b.scope == Scope::Panel)
+        .map(|b| (b.key_label(), b.description))
+        .collect();
+    ("Git panel (focused)", rows)
 }
 
 /// Renders the help overlay, centered over `area`. Bindings from the
@@ -315,53 +430,48 @@ pub fn render(
 
     // "Works everywhere" bindings (`Scope::Global`): rendered once, ahead
     // of every per-scope section, rather than once per scope. The
-    // per-scope loops below filter on `b.scope ==
+    // per-scope sections below are built from `b.scope ==
     // Scope::Diff`/`Scope::Panel` respectively, so a `Global` row can never
     // also land in one of those sections — no duplication to guard against
     // here.
-    let global_bindings: Vec<&Binding> = bindings
+    let (title, rows) = global_section(
+        bindings,
+        staging_allowed,
+        code_intel_allowed,
+        review_session,
+    );
+    let rows: Vec<(&str, &str)> = rows
         .iter()
-        .filter(|b| b.scope == Scope::Global)
-        .filter(|b| {
-            !binding_hidden(
-                b.action,
-                staging_allowed,
-                code_intel_allowed,
-                review_session,
-            )
-        })
-        .filter(|b| row_matches(&b.key_label(), b.description, query))
+        .map(|(k, d)| (k.as_str(), *d))
+        .filter(|(k, d)| row_matches(k, d, query))
         .collect();
-    if !global_bindings.is_empty() {
+    if !rows.is_empty() {
         any_match = true;
-        lines.push(section_header("Works everywhere", theme));
-        for b in global_bindings {
-            lines.push(key_line(&b.key_label(), b.description, key_width, theme));
+        lines.push(section_header(title, theme));
+        for (k, d) in &rows {
+            lines.push(key_line(k, d, key_width, theme));
         }
         lines.push(Line::from(""));
     }
 
-    for group in GROUP_ORDER {
-        let group_bindings: Vec<&Binding> = bindings
+    for (title, rows) in diff_group_sections(
+        bindings,
+        staging_allowed,
+        code_intel_allowed,
+        review_session,
+    ) {
+        let rows: Vec<(&str, &str)> = rows
             .iter()
-            .filter(|b| b.scope == Scope::Diff && group_of(b.action) == group)
-            .filter(|b| {
-                !binding_hidden(
-                    b.action,
-                    staging_allowed,
-                    code_intel_allowed,
-                    review_session,
-                )
-            })
-            .filter(|b| row_matches(&b.key_label(), b.description, query))
+            .map(|(k, d)| (k.as_str(), *d))
+            .filter(|(k, d)| row_matches(k, d, query))
             .collect();
-        if group_bindings.is_empty() {
+        if rows.is_empty() {
             continue;
         }
         any_match = true;
-        lines.push(section_header(group, theme));
-        for b in group_bindings {
-            lines.push(key_line(&b.key_label(), b.description, key_width, theme));
+        lines.push(section_header(title, theme));
+        for (k, d) in &rows {
+            lines.push(key_line(k, d, key_width, theme));
         }
         lines.push(Line::from(""));
     }
@@ -369,16 +479,17 @@ pub fn render(
     // Panel-scope bindings: shown as their own section so `` ` `` /`j`/`k`/
     // Enter are documented in the context where they apply (the git panel
     // focused), grouped by scope per this spec.
-    let panel_bindings: Vec<&Binding> = bindings
+    let (title, rows) = panel_section(bindings);
+    let rows: Vec<(&str, &str)> = rows
         .iter()
-        .filter(|b| b.scope == Scope::Panel)
-        .filter(|b| row_matches(&b.key_label(), b.description, query))
+        .map(|(k, d)| (k.as_str(), *d))
+        .filter(|(k, d)| row_matches(k, d, query))
         .collect();
-    if !panel_bindings.is_empty() {
+    if !rows.is_empty() {
         any_match = true;
-        lines.push(section_header("Git panel (focused)", theme));
-        for b in panel_bindings {
-            lines.push(key_line(&b.key_label(), b.description, key_width, theme));
+        lines.push(section_header(title, theme));
+        for (k, d) in &rows {
+            lines.push(key_line(k, d, key_width, theme));
         }
         lines.push(Line::from(""));
     }

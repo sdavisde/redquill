@@ -360,7 +360,7 @@ fn dispatch_key(
             // exactly like the Normal/Visual overlay case above, so
             // `j`/`k`/Esc scroll/close the overlay rather than moving the
             // panel cursor underneath it.
-            if app.help_open {
+            if app.help.open {
                 handle_help_key(app, key);
                 return Flow::Continue;
             }
@@ -429,8 +429,8 @@ fn dispatch_key(
             // instead. Esc always cancels an in-progress count too.
             if key.code == KeyCode::Esc && !had_pending {
                 *pending_count = None;
-                if app.help_open {
-                    app.help_open = false;
+                if app.help.open {
+                    app.help.open = false;
                 } else if matches!(app.mode, Mode::Visual { .. }) {
                     app.apply(Action::EnterVisual);
                 } else if app.viewing_file() {
@@ -565,7 +565,8 @@ fn launch_editor(
 
 /// Handles one key while the help overlay is open.
 ///
-/// Behavior depends on [`App::help_search`], a lazygit-style keybind filter:
+/// Behavior depends on [`help::HelpOverlayState::search`], a lazygit-style
+/// keybind filter:
 /// - `None` (no filter): keys resolve through [`modal_keys::HELP_KEYS`] —
 ///   `j`/`k`/arrows scroll by a line, PageUp/PageDown by a viewport,
 ///   `g`/`G`/Home/End jump to the ends, Esc/Enter/`?` close the overlay, and
@@ -587,15 +588,15 @@ fn launch_editor(
 fn handle_help_key(app: &mut App, key: KeyEvent) {
     use modal_keys::{HelpAction, HelpSearchAction};
 
-    if let Some((mut query, editing)) = app.help_search.clone() {
+    if let Some((mut query, editing)) = app.help.search.clone() {
         if editing {
             if let Some(action) = modal_keys::resolve(&app.modal_keys.help_search, key) {
                 match action {
-                    HelpSearchAction::Lock => app.help_search = Some((query, false)),
-                    HelpSearchAction::Clear => app.help_search = None,
+                    HelpSearchAction::Lock => app.help.search = Some((query, false)),
+                    HelpSearchAction::Clear => app.help.search = None,
                     HelpSearchAction::DeleteChar => {
                         query.pop();
-                        app.help_search = Some((query, true));
+                        app.help.search = Some((query, true));
                     }
                 }
                 return;
@@ -604,7 +605,7 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
             // remappable, per the free-text-mode contract.
             if let KeyCode::Char(c) = key.code {
                 query.push(c);
-                app.help_search = Some((query, true));
+                app.help.search = Some((query, true));
             }
             return;
         }
@@ -616,11 +617,11 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
         // help overlay's own `?`/`/` toggle chrome.
         match key.code {
             KeyCode::Char('/') => {
-                app.help_search = Some((query, true));
+                app.help.search = Some((query, true));
                 return;
             }
             KeyCode::Esc => {
-                app.help_search = None;
+                app.help.search = None;
                 return;
             }
             _ => {}
@@ -630,23 +631,23 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
     let Some(action) = modal_keys::resolve(&app.modal_keys.help, key) else {
         return;
     };
-    let page = app.help_viewport.get().max(1);
-    let cur = app.help_scroll.get();
+    let page = app.help.viewport.get().max(1);
+    let cur = app.help.scroll.get();
     match action {
         HelpAction::Close => {
-            app.help_open = false;
-            app.help_scroll.set(0);
-            app.help_search = None;
+            app.help.open = false;
+            app.help.scroll.set(0);
+            app.help.search = None;
         }
-        HelpAction::ScrollDown => app.help_scroll.set(cur.saturating_add(1)),
-        HelpAction::ScrollUp => app.help_scroll.set(cur.saturating_sub(1)),
-        HelpAction::PageDown => app.help_scroll.set(cur.saturating_add(page)),
-        HelpAction::PageUp => app.help_scroll.set(cur.saturating_sub(page)),
-        HelpAction::Top => app.help_scroll.set(0),
-        HelpAction::Bottom => app.help_scroll.set(u16::MAX),
+        HelpAction::ScrollDown => app.help.scroll.set(cur.saturating_add(1)),
+        HelpAction::ScrollUp => app.help.scroll.set(cur.saturating_sub(1)),
+        HelpAction::PageDown => app.help.scroll.set(cur.saturating_add(page)),
+        HelpAction::PageUp => app.help.scroll.set(cur.saturating_sub(page)),
+        HelpAction::Top => app.help.scroll.set(0),
+        HelpAction::Bottom => app.help.scroll.set(u16::MAX),
         HelpAction::Search => {
-            app.help_search = Some((String::new(), true));
-            app.help_scroll.set(0);
+            app.help.search = Some((String::new(), true));
+            app.help.scroll.set(0);
         }
     }
 }
@@ -784,7 +785,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
                 code_intel_allowed,
                 push_publishes: app.push_publishes(),
                 viewing_commit: app.viewing_commit(),
-                help_open: app.help_open,
+                help_open: app.help.open,
                 project_search_focus: app.project_search_focus(),
                 review_session: app.in_review_session(),
             },
@@ -795,16 +796,17 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
         let lines = footer::render_hint_strip(&entries, footer_area.width, &app.theme);
         frame.render_widget(ratatui::widgets::Paragraph::new(lines), footer_area);
     }
-    if app.help_open {
+    if app.help.open {
         let staging_allowed = app.target.staging_mode() != crate::git::StagingMode::ReadOnly;
         let code_intel_allowed = app.target.supports_code_intel();
         let search = app
-            .help_search
+            .help
+            .search
             .as_ref()
             .map(|(q, editing)| (q.as_str(), *editing));
         let state = help::HelpViewState {
-            scroll: &app.help_scroll,
-            viewport: &app.help_viewport,
+            scroll: &app.help.scroll,
+            viewport: &app.help.viewport,
             search,
         };
         help::render(

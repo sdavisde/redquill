@@ -2,7 +2,6 @@
 //! performs. No rendering or terminal I/O lives here — these are plain
 //! methods, unit-tested without a terminal.
 
-use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -29,6 +28,7 @@ use super::compose::ComposeState;
 use super::diff_view_state::DiffViewState;
 use super::editor::EditorLaunch;
 use super::file_finder::{FinderState, InFlightFinderLoad};
+use super::help::HelpOverlayState;
 use super::history::InFlightHistory;
 use super::keymap::Action;
 use super::lsp_ops::LspClient;
@@ -205,27 +205,15 @@ pub struct App {
     /// viewport height, and the layout choice. `App` delegates every
     /// navigation gesture here and feeds rebuilt rows back in.
     pub view: DiffViewState,
-    /// Whether the help overlay is open.
-    pub help_open: bool,
-    /// The help overlay's vertical scroll offset (top visible content line).
-    /// The key handler advances it freely; [`super::help::render`] clamps it
-    /// to the content/viewport and writes the clamped value back, so state
-    /// and view never disagree. Reset to 0 whenever the overlay toggles.
-    pub(super) help_scroll: Cell<u16>,
-    /// The help overlay's scrollable-region height, set by
-    /// [`super::help::render`] each frame so the key handler can page by a
-    /// real viewport (PageUp/PageDown) rather than a guessed constant.
-    pub(super) help_viewport: Cell<u16>,
-    /// The help overlay's keybind filter (`/`), lazygit-style. `None`: no
-    /// filter, the overlay's scroll keys dispatch normally. `Some((query,
-    /// editing))`: a filter is active; `editing` is `true` while capturing
-    /// free-text keystrokes (just after `/`, or still typing) — during which
-    /// scroll keys are inert, like `Mode::Search` — and `false` once `Enter`
-    /// locks the query in and hands control back to the scroll keys
-    /// (mirroring lazygit: `Enter` commits the filter, a subsequent `Esc`
-    /// clears it, and only a second `Esc` closes the overlay). Reset to
-    /// `None` wherever help closes or reopens.
-    pub(super) help_search: Option<(String, bool)>,
+    /// The help overlay's consolidated state: open flag, scroll/viewport
+    /// (the key handler advances scroll freely; [`super::help::render`]
+    /// clamps it to the content/viewport and writes the clamped value back,
+    /// so state and view never disagree), the `/` keybind filter (`None`: no
+    /// filter; `Some((query, editing))`: `editing` is `true` while capturing
+    /// free-text keystrokes and `false` once `Enter` locks the query in,
+    /// mirroring lazygit), and the mode/scope `?` was pressed from. Reset by
+    /// [`Action::ToggleHelp`] whenever the overlay opens or closes.
+    pub(super) help: HelpOverlayState,
     /// Annotations accumulated this session.
     pub annotations: AnnotationStore,
     /// The current interaction mode.
@@ -628,10 +616,7 @@ impl App {
         let patches = files.iter().map(|_| None).collect();
         let mut app = App {
             view: DiffViewState::new(files),
-            help_open: false,
-            help_scroll: Cell::new(0),
-            help_viewport: Cell::new(0),
-            help_search: None,
+            help: HelpOverlayState::new(),
             annotations,
             mode: Mode::Normal,
             compose: None,
@@ -923,15 +908,15 @@ impl App {
     }
 
     /// Whether a keyboard-capturing overlay is currently up: the help overlay
-    /// (`help_open`), the Compose modal, the LSP peek overlay, the
+    /// (`help.open`), the Compose modal, the LSP peek overlay, the
     /// branch/worktree switcher modal, or the commit-message modal. While
     /// one is, it shadows the diff keymap and `q` is inert — an open overlay
     /// never quits the app. A single predicate so this "is an overlay up?"
-    /// check, otherwise spread across `mode` and `help_open`, can't drift
+    /// check, otherwise spread across `mode` and `help.open`, can't drift
     /// between call sites. The command-log pane is deliberately excluded: it
     /// is a bottom pane, not a full-screen overlay, and never captures `q`.
     pub(super) fn overlay_active(&self) -> bool {
-        self.help_open
+        self.help.open
             || matches!(
                 self.mode,
                 Mode::Compose | Mode::Peek | Mode::Switcher | Mode::CommitMessage
@@ -1024,9 +1009,13 @@ impl App {
             Action::ScrollCursorTop => self.view.scroll_cursor_top(),
             Action::ScrollCursorBottom => self.view.scroll_cursor_bottom(),
             Action::ToggleHelp => {
-                self.help_open = !self.help_open;
-                self.help_scroll.set(0);
-                self.help_search = None;
+                let opening = !self.help.open;
+                self.help.open = opening;
+                self.help.scroll.set(0);
+                self.help.search = None;
+                if opening {
+                    self.help.origin = ModeOrigin::capture(self.mode);
+                }
             }
             Action::EnterVisual => self.toggle_visual(),
             Action::Compose => self.open_compose(),

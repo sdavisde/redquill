@@ -44,7 +44,7 @@ Tasks for `docs/specs/10-spec-help-discoverability/10-spec-help-discoverability.
 
 ## Tasks
 
-### [ ] 1.0 Refactor: consolidate help-overlay state and extract pure section-builders (no behavior change)
+### [x] 1.0 Refactor: consolidate help-overlay state and extract pure section-builders (no behavior change)
 
 Covers: no FR closes here — structural enabler for FR-1..FR-5 (and the FR-7/FR-9 render hooks). Exists to honor the repo rule that refactors and behavior changes never share a commit: the loose `App` fields (`help_open`, `help_scroll`, `help_viewport`, `help_search`) consolidate into one help-overlay state struct that records the mode/scope it was opened over (origin capture per spec Design Considerations), and `help.rs` section assembly is factored into pure functions taking explicit table/context arguments, ready to grow tabs without touching dispatch.
 
@@ -56,11 +56,11 @@ Covers: no FR closes here — structural enabler for FR-1..FR-5 (and the FR-7/FR
 
 #### 1.0 Tasks
 
-- [ ] 1.1 Capture the move-only baseline: run `cargo test` on a clean tree and record the total test count plus the full test-name list (`cargo test -- --list`) to a scratch note outside the repo; this is the comparison basis for sub-task 1.5.
-- [ ] 1.2 Define `HelpOverlayState` in `src/ui/help.rs` — open flag, scroll `Cell<u16>`, viewport `Cell<u16>`, search `Option<(String, bool)>`, plus an `origin` field recording the mode/scope the overlay was opened over — and replace the four loose `App` fields (`help_open`/`help_scroll`/`help_viewport`/`help_search`, `src/ui/app.rs` ~178–197) with one field, mechanically updating all readers (the `ToggleHelp` handler ~942, the open-predicate ~850, render call sites in `src/ui/mod.rs`). `origin` is written on open but read by nothing yet; render output stays byte-identical.
-- [ ] 1.3 Factor section assembly in `src/ui/help.rs` into pure functions taking explicit arguments: extract the diff-group row builder (~318), the panel-section builder (~345), and the `modal_sections` consumption into functions returning plain `(title, rows)` section data that `render` consumes. No logic changes, no new filtering, identical output order.
-- [ ] 1.4 Run all four gates (`cargo build`, `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`).
-- [ ] 1.5 Verify and record the move-only invariant: test count identical to 1.1's baseline and `git diff` shows zero assertion edits (test-side changes limited to mechanical field/path renames); state the invariant explicitly in the commit message. Capture the pre/post-identical `?` render (diff view + git panel) to `docs/specs/10-spec-help-discoverability/proofs/10-1-refactor-invisibility.txt`; commit as a pure `refactor:` commit.
+- [x] 1.1 Capture the move-only baseline: run `cargo test` on a clean tree and record the total test count plus the full test-name list (`cargo test -- --list`) to a scratch note outside the repo; this is the comparison basis for sub-task 1.5.
+- [x] 1.2 Define `HelpOverlayState` in `src/ui/help.rs` — open flag, scroll `Cell<u16>`, viewport `Cell<u16>`, search `Option<(String, bool)>`, plus an `origin` field recording the mode/scope the overlay was opened over — and replace the four loose `App` fields (`help_open`/`help_scroll`/`help_viewport`/`help_search`, `src/ui/app.rs` ~178–197) with one field, mechanically updating all readers (the `ToggleHelp` handler ~942, the open-predicate ~850, render call sites in `src/ui/mod.rs`). `origin` is written on open but read by nothing yet; render output stays byte-identical.
+- [x] 1.3 Factor section assembly in `src/ui/help.rs` into pure functions taking explicit arguments: extract the diff-group row builder (~318), the panel-section builder (~345), and the `modal_sections` consumption into functions returning plain `(title, rows)` section data that `render` consumes. No logic changes, no new filtering, identical output order.
+- [x] 1.4 Run all four gates (`cargo build`, `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`).
+- [x] 1.5 Verify and record the move-only invariant: test count identical to 1.1's baseline and `git diff` shows zero assertion edits (test-side changes limited to mechanical field/path renames); state the invariant explicitly in the commit message. Capture the pre/post-identical `?` render (diff view + git panel) to `docs/specs/10-spec-help-discoverability/proofs/10-1-refactor-invisibility.txt`; commit as a pure `refactor:` commit.
 
 ### [ ] 2.0 Context-first tabbed help overlay: `?` opens on "This context", `Tab` reaches "All keys" (Unit 1)
 

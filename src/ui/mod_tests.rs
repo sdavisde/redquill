@@ -399,7 +399,7 @@ fn help_overlay_hides_staging_rows_on_a_range_target() {
     let backend = TestBackend::new(100, 55);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true;
+    app.help.open = true;
     app.target = crate::git::DiffTarget::Range("main..HEAD".to_string());
     let keymap = Keymap::default_map();
 
@@ -424,7 +424,7 @@ fn help_overlay_shows_staging_rows_on_the_working_tree_target() {
     let backend = TestBackend::new(100, 300);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true; // target defaults to WorkingTree
+    app.help.open = true; // target defaults to WorkingTree
     let keymap = Keymap::default_map();
 
     terminal
@@ -449,7 +449,7 @@ fn help_overlay_shows_review_rows_and_hides_staging_rows_during_a_review_session
     let backend = TestBackend::new(100, 65);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true;
+    app.help.open = true;
     app.target = DiffTarget::Review {
         base: "main".to_string(),
         branch: "feature".to_string(),
@@ -492,7 +492,7 @@ fn help_overlay_hides_review_rows_outside_a_review_session() {
     let backend = TestBackend::new(100, 55);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true; // target defaults to WorkingTree
+    app.help.open = true; // target defaults to WorkingTree
     let keymap = Keymap::default_map();
 
     terminal
@@ -511,7 +511,7 @@ fn help_overlay_renders_bindings_when_open() {
     let backend = TestBackend::new(80, 20);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true;
+    app.help.open = true;
     let keymap = Keymap::default_map();
 
     terminal
@@ -532,7 +532,7 @@ fn help_overlay_lists_remote_and_command_log_bindings() {
     let backend = TestBackend::new(100, 300);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true;
+    app.help.open = true;
     let keymap = Keymap::default_map();
 
     terminal
@@ -568,7 +568,7 @@ fn help_overlay_lists_global_bindings_once_in_a_works_everywhere_section() {
     let backend = TestBackend::new(100, 300);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true;
+    app.help.open = true;
     let keymap = Keymap::default_map();
 
     terminal
@@ -619,7 +619,7 @@ fn help_overlay_scrolls_to_reveal_lower_sections() {
     let backend = TestBackend::new(100, 22);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true;
+    app.help.open = true;
     let keymap = Keymap::default_map();
 
     // First frame renders the top of the list (and records the viewport
@@ -668,40 +668,40 @@ fn help_overlay_scrolls_to_reveal_lower_sections() {
 #[test]
 fn help_filter_enter_locks_and_two_escapes_close() {
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true;
+    app.help.open = true;
     let keymap = Keymap::default_map();
     let mut pending = None;
     let mut pending_count: Option<usize> = None;
 
     let slash = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
     dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, slash);
-    assert_eq!(app.help_search, Some((String::new(), true)));
+    assert_eq!(app.help.search, Some((String::new(), true)));
 
     for c in ['q', 'u', 'i', 't'] {
         let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
         dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, key);
     }
-    assert_eq!(app.help_search, Some(("quit".to_string(), true)));
+    assert_eq!(app.help.search, Some(("quit".to_string(), true)));
 
     let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
     dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, enter);
-    assert_eq!(app.help_search, Some(("quit".to_string(), false)));
+    assert_eq!(app.help.search, Some(("quit".to_string(), false)));
     assert!(
-        app.help_open,
+        app.help.open,
         "locking the filter must not close the overlay"
     );
 
     let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
     dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, esc);
-    assert_eq!(app.help_search, None, "first Esc clears the locked filter");
+    assert_eq!(app.help.search, None, "first Esc clears the locked filter");
     assert!(
-        app.help_open,
+        app.help.open,
         "clearing the filter must not close the overlay"
     );
 
     dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, esc);
     assert!(
-        !app.help_open,
+        !app.help.open,
         "second Esc, with no filter left, closes the overlay"
     );
 }
@@ -990,16 +990,16 @@ fn repeat_count_caps_and_ignores_non_repeatable_actions() {
 fn closing_help_resets_the_filter() {
     let mut app = App::new(vec![sample_file()]);
     app.apply(Action::ToggleHelp);
-    assert!(app.help_open);
-    app.help_search = Some(("foo".to_string(), true));
+    assert!(app.help.open);
+    app.help.search = Some(("foo".to_string(), true));
 
     app.apply(Action::ToggleHelp);
-    assert!(!app.help_open);
-    assert_eq!(app.help_search, None, "closing help must clear the filter");
+    assert!(!app.help.open);
+    assert_eq!(app.help.search, None, "closing help must clear the filter");
 
     app.apply(Action::ToggleHelp);
     assert_eq!(
-        app.help_search, None,
+        app.help.search, None,
         "reopening help must start with no filter"
     );
 }
@@ -1012,8 +1012,8 @@ fn help_filter_narrows_rendered_bindings_to_matching_rows() {
     let backend = TestBackend::new(120, 50);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true;
-    app.help_search = Some(("quit".to_string(), false));
+    app.help.open = true;
+    app.help.search = Some(("quit".to_string(), false));
     let keymap = Keymap::default_map();
 
     terminal
@@ -1042,8 +1042,8 @@ fn help_filter_shows_no_matches_message_when_nothing_matches() {
     let backend = TestBackend::new(120, 50);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
-    app.help_open = true;
-    app.help_search = Some(("zzznomatchzzz".to_string(), false));
+    app.help.open = true;
+    app.help.search = Some(("zzznomatchzzz".to_string(), false));
     let keymap = Keymap::default_map();
 
     terminal
@@ -2565,7 +2565,7 @@ fn q_is_inert_while_help_overlay_open() {
     let mut pending: Option<KeyEvent> = None;
     let mut pending_count: Option<usize> = None;
     let mut app = panel_smoke_app();
-    app.help_open = true;
+    app.help.open = true;
     let flow = dispatch_key(
         &mut app,
         &keymap,
@@ -2577,7 +2577,7 @@ fn q_is_inert_while_help_overlay_open() {
         matches!(flow, Flow::Continue),
         "q must not quit while help is open"
     );
-    assert!(app.help_open, "q must not close the help overlay");
+    assert!(app.help.open, "q must not close the help overlay");
     dispatch_key(
         &mut app,
         &keymap,
@@ -2585,7 +2585,7 @@ fn q_is_inert_while_help_overlay_open() {
         &mut pending_count,
         KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
     );
-    assert!(!app.help_open, "? still closes the help overlay");
+    assert!(!app.help.open, "? still closes the help overlay");
 }
 
 /// `@` toggles the command-log pane from *both* the diff view (Normal)

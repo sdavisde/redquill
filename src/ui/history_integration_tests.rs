@@ -262,7 +262,7 @@ fn commit_view_hides_and_disarms_staging_keys() {
             code_intel_allowed,
             push_publishes: app.push_publishes(),
             viewing_commit: app.viewing_commit(),
-            help_open: app.help_open,
+            help_open: app.help.open,
             project_search_focus: app.project_search_focus(),
             review_session: app.in_review_session(),
         },
@@ -710,7 +710,7 @@ fn dead_end_journey_reaches_the_newest_commit_in_a_handful_of_keys() {
     // list, so use the overlay's own `/` filter (what a user would do) to
     // bring that row into one viewport.
     press(&mut app, &keymap, &mut pending, KeyCode::Char('?'));
-    assert!(app.help_open, "? must open the help overlay from the panel");
+    assert!(app.help.open, "? must open the help overlay from the panel");
     press(&mut app, &keymap, &mut pending, KeyCode::Char('/'));
     for ch in "open the commit".chars() {
         press(&mut app, &keymap, &mut pending, KeyCode::Char(ch));
@@ -725,7 +725,7 @@ fn dead_end_journey_reaches_the_newest_commit_in_a_handful_of_keys() {
     // the optional "learn the control" detour, not part of the 3-key path).
     press(&mut app, &keymap, &mut pending, KeyCode::Esc); // clears the filter
     press(&mut app, &keymap, &mut pending, KeyCode::Esc); // closes the overlay
-    assert!(!app.help_open, "Esc closes the overlay");
+    assert!(!app.help.open, "Esc closes the overlay");
     assert!(
         matches!(app.mode, Mode::Panel { .. }),
         "still on the focused panel after learning"
@@ -882,7 +882,7 @@ fn commit_view_help_overlay_shows_only_truthful_keys() {
     assert!(matches!(app.target, DiffTarget::Commit(_)));
 
     press(&mut app, &keymap, &mut pending, KeyCode::Char('?'));
-    assert!(app.help_open);
+    assert!(app.help.open);
     // The unfiltered top-of-overlay is the primary visible evidence: in a
     // commit view its Stage section is reduced to just `s Toggle staging
     // panel` (the panel toggle still works) and there is NO Code intelligence
