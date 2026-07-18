@@ -79,7 +79,7 @@ Make the git panel answer to the app's universal verbs: `Esc` backs out, `s` and
 - [x] 2.5 Run all four cargo gates plus perf tripwires; commit as `feat:`.
 - [~] 2.6 **USER UI CHECKPOINT:** write `proofs/demo-2-panel-coherence.md` — scratch-repo script: open panel, `Esc` backs out; open panel with help overlay up, `Esc` closes help not panel; from panel press `s` (staging panel opens) and `/` (search works, exit returns to Normal). Pause for the user's UI verdict before 2.0 is checked off.
 
-### [ ] 3.0 Edit and delete annotations from the diff view (FR-9..FR-12)
+### [~] 3.0 Edit and delete annotations from the diff view (FR-9..FR-12)
 
 Close the reverse gap: `e` edits and `x` deletes the annotation under the cursor, right where it's rendered.
 
@@ -92,11 +92,11 @@ Close the reverse gap: `e` edits and `x` deletes the annotation under the cursor
 
 #### 3.0 Tasks
 
-- [ ] 3.1 TDD: create `src/ui/annotation_overlap.rs` with a pure function selecting the overlapping annotation for a cursor position (inputs: cursor file/line/row-kind + the annotations targeting that file; rule: target start nearest above-or-at the cursor wins, ties broken by creation order, oldest first; file-level targets match only the file-header row). Failing tests first in `src/ui/annotation_overlap_tests.rs` covering `Target::Line`/`Range`/`Hunk`/`File` (and worktree variants), multi-overlap, and ties (FR-11).
-- [ ] 3.2 Add `EditAnnotation` and `DeleteAnnotation` actions with diff-scope rows `e` and `x` in `src/ui/keymap.rs` (both currently unbound), with footer hints and stable kebab-case names for config remapping (FR-12).
-- [ ] 3.3 Wire `apply` arms in `src/ui/app.rs`: `EditAnnotation` resolves the overlap and calls the existing `open_compose_for(id)`; `DeleteAnnotation` resolves and deletes via a delete-by-id core extracted from `annotation_list.rs::delete_focused_annotation` so list and diff paths share one implementation (no confirmation, matching the list). No overlap → status-line hint, no mode change (FR-9, FR-10).
-- [ ] 3.4 Dispatch tests in `src/ui/app_tests.rs` / `src/ui/mod_tests.rs`: `e` pre-fills the compose with the existing body and classification, `x` removes the annotation and the inline row disappears on rebuild, both no-op with a hint on non-overlapping lines, `c` still always composes new (FR-9, FR-10, FR-12).
-- [ ] 3.5 Help/footer coverage for `e`/`x`; config-remap and bidirectional drift tests pass (FR-12).
-- [ ] 3.6 Produce the CLI journey transcript (annotate → `e` edit → submit → `x` delete → inline row gone) and persist to `proofs/` (FR-9, FR-10).
-- [ ] 3.7 Run all four cargo gates plus perf tripwires; commit (`feat:` for bindings/wiring; the `annotation_list.rs` delete-core extraction commits separately as `refactor:` if done as a distinct move).
-- [ ] 3.8 **USER UI CHECKPOINT:** write `proofs/demo-3-annotation-roundtrip.md` — scratch-repo script: annotate a line with `c`, scroll away and back, `e` on the annotated line (compose opens pre-filled), edit and submit, see the new text inline; `x` deletes it; `e` on a bare line shows the no-op hint. Pause for the user's UI verdict before 3.0 is checked off.
+- [x] 3.1 TDD: create `src/ui/annotation_overlap.rs` with a pure function selecting the overlapping annotation for a cursor position (inputs: cursor file/line/row-kind + the annotations targeting that file; rule: target start nearest above-or-at the cursor wins, ties broken by creation order, oldest first; file-level targets match only the file-header row). Failing tests first in `src/ui/annotation_overlap_tests.rs` covering `Target::Line`/`Range`/`Hunk`/`File` (and worktree variants), multi-overlap, and ties (FR-11).
+- [x] 3.2 Add `EditAnnotation` and `DeleteAnnotation` actions with diff-scope rows `e` and `x` in `src/ui/keymap.rs` (both currently unbound), with footer hints and stable kebab-case names for config remapping (FR-12).
+- [x] 3.3 Wire `apply` arms in `src/ui/app.rs`: `EditAnnotation` resolves the overlap and calls the existing `open_compose_for(id)`; `DeleteAnnotation` resolves and deletes via a delete-by-id core extracted from `annotation_list.rs::delete_focused_annotation` so list and diff paths share one implementation (no confirmation, matching the list). No overlap → status-line hint, no mode change (FR-9, FR-10).
+- [x] 3.4 Dispatch tests in `src/ui/app_tests.rs` / `src/ui/mod_tests.rs`: `e` pre-fills the compose with the existing body and classification, `x` removes the annotation and the inline row disappears on rebuild, both no-op with a hint on non-overlapping lines, `c` still always composes new (FR-9, FR-10, FR-12).
+- [x] 3.5 Help/footer coverage for `e`/`x`; config-remap and bidirectional drift tests pass (FR-12).
+- [x] 3.6 Produce the CLI journey transcript (annotate → `e` edit → submit → `x` delete → inline row gone) and persist to `proofs/` (FR-9, FR-10).
+- [x] 3.7 Run all four cargo gates plus perf tripwires; commit (`feat:` for bindings/wiring; the `annotation_list.rs` delete-core extraction commits separately as `refactor:` if done as a distinct move).
+- [~] 3.8 **USER UI CHECKPOINT:** write `proofs/demo-3-annotation-roundtrip.md` — scratch-repo script: annotate a line with `c`, scroll away and back, `e` on the annotated line (compose opens pre-filled), edit and submit, see the new text inline; `x` deletes it; `e` on a bare line shows the no-op hint. Pause for the user's UI verdict before 3.0 is checked off.
