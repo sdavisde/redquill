@@ -993,6 +993,40 @@ impl Keymap {
         out
     }
 
+    /// The which-key prefixes: the first chord of every [`KeySeq::Two`]
+    /// binding in `scope`'s chain (see [`Keymap::scope_chain`]), each
+    /// returned once as the [`KeyEvent`] that starts it, in first-appearance
+    /// table order. Derived from the table rather than hardcoded to `g`/`z`,
+    /// so a config remap that introduces (or removes) a two-key prefix
+    /// changes this set for free — the which-key popup ([`super::which_key`])
+    /// never assumes a fixed prefix list.
+    pub fn which_key_prefixes(&self, scope: Scope) -> Vec<KeyEvent> {
+        let mut seen: Vec<KeyChord> = Vec::new();
+        let mut out = Vec::new();
+        for s in Self::scope_chain(scope).into_iter().flatten() {
+            for b in self.bindings.iter().filter(|b| b.scope == s) {
+                if let KeySeq::Two(first, _) = b.keys
+                    && !seen.contains(&first)
+                {
+                    seen.push(first);
+                    out.push(KeyEvent::new(first.code, first.mods));
+                }
+            }
+        }
+        out
+    }
+
+    /// `(key label, description)` rows for every continuation bound after a
+    /// pending `prefix`, in table order — the which-key popup's content. A
+    /// thin display mapping over [`Keymap::completions_for`], so the popup
+    /// can never list a binding dispatch itself wouldn't also resolve.
+    pub fn continuations_for(&self, scope: Scope, prefix: KeyEvent) -> Vec<(String, &'static str)> {
+        self.completions_for(scope, prefix)
+            .into_iter()
+            .map(|b| (b.key_label(), b.description))
+            .collect()
+    }
+
     /// Resolves a two-key sequence in [`Scope::Diff`]: `first` is the
     /// already-consumed pending prefix, `second` the key that completes it.
     /// `None` if no binding matches both — the caller silently cancels the
@@ -2090,6 +2124,82 @@ mod tests {
         let km = Keymap::default_map();
         let x = key(KeyCode::Char('x'), KeyModifiers::NONE);
         assert!(km.completions_for(Scope::Diff, x).is_empty());
+    }
+
+    // -- `which_key_prefixes`/`continuations_for`: which-key popup content --
+
+    #[test]
+    fn which_key_prefixes_derives_g_and_z_in_first_appearance_order() {
+        let km = Keymap::default_map();
+        let codes: Vec<KeyCode> = km
+            .which_key_prefixes(Scope::Diff)
+            .into_iter()
+            .map(|k| k.code)
+            .collect();
+        // `gg` (JumpToTop) is the table's first two-key binding, `za`
+        // (ToggleCollapse) the first `z`-prefixed one — order is
+        // first-appearance, not alphabetical.
+        assert_eq!(codes, vec![KeyCode::Char('g'), KeyCode::Char('z')]);
+    }
+
+    #[test]
+    fn continuations_for_g_lists_every_g_prefixed_binding_in_table_order() {
+        let km = Keymap::default_map();
+        let rows = km.continuations_for(Scope::Diff, key(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert_eq!(
+            rows,
+            vec![
+                ("gg".to_string(), "Jump to top of diff"),
+                ("gd".to_string(), "Go to definition"),
+                ("gr".to_string(), "Find references"),
+                ("gp".to_string(), "Open fuzzy file finder"),
+                ("g/".to_string(), "Open project search"),
+                ("gSpace".to_string(), "Open file at cursor in editor"),
+            ]
+        );
+    }
+
+    #[test]
+    fn continuations_for_z_lists_every_z_prefixed_binding_in_table_order() {
+        let km = Keymap::default_map();
+        let rows = km.continuations_for(Scope::Diff, key(KeyCode::Char('z'), KeyModifiers::NONE));
+        assert_eq!(
+            rows,
+            vec![
+                ("za".to_string(), "Collapse/expand file section"),
+                ("zz".to_string(), "Center viewport on cursor"),
+                ("zt".to_string(), "Scroll cursor to top of viewport"),
+                ("zb".to_string(), "Scroll cursor to bottom of viewport"),
+            ]
+        );
+    }
+
+    #[test]
+    fn which_key_prefixes_is_empty_for_a_scope_with_no_two_key_bindings() {
+        // Panel scope carries no two-key sequences today (see
+        // `Keymap::resolve_in`'s doc) — the which-key popup never appears
+        // there.
+        let km = Keymap::default_map();
+        assert!(km.which_key_prefixes(Scope::Panel).is_empty());
+    }
+
+    /// `continuations_for` is a thin display mapping over `completions_for`,
+    /// so the two can never drift apart for any discovered prefix — the
+    /// popup can't show a binding dispatch itself wouldn't resolve, for
+    /// every prefix the table currently defines, not just the two known
+    /// today.
+    #[test]
+    fn continuations_for_matches_completions_for_across_every_discovered_prefix() {
+        let km = Keymap::default_map();
+        for prefix in km.which_key_prefixes(Scope::Diff) {
+            let rows = km.continuations_for(Scope::Diff, prefix);
+            let expected: Vec<(String, &'static str)> = km
+                .completions_for(Scope::Diff, prefix)
+                .into_iter()
+                .map(|b| (b.key_label(), b.description))
+                .collect();
+            assert_eq!(rows, expected);
+        }
     }
 
     #[test]
