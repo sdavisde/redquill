@@ -28,7 +28,7 @@ use super::compose::ComposeState;
 use super::diff_view_state::DiffViewState;
 use super::editor::EditorLaunch;
 use super::file_finder::{FinderState, InFlightFinderLoad};
-use super::help::HelpOverlayState;
+use super::help::{HelpOverlayState, HelpTab};
 use super::history::InFlightHistory;
 use super::keymap::Action;
 use super::lsp_ops::LspClient;
@@ -1015,6 +1015,7 @@ impl App {
                 self.help.search = None;
                 if opening {
                     self.help.origin = ModeOrigin::capture(self.mode);
+                    self.help.tab = HelpTab::ThisContext;
                 }
             }
             Action::EnterVisual => self.toggle_visual(),

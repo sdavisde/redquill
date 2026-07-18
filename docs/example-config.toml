@@ -355,6 +355,8 @@ literal = false
 # top = ["g", "home"]                   # Scroll to top
 # bottom = ["G", "end"]                 # Scroll to bottom
 # search = "/"                         # Filter keybinds
+# next-tab = ["tab", "l"]               # Next tab (This context / All keys)
+# prev-tab = ["shift-tab", "h"]         # Previous tab (This context / All keys)
 #
 # [keys.help-search]                   # Help overlay's own `/` filter, while editing it
 # lock = "enter"                       # Lock in the filter (scroll keys resume)

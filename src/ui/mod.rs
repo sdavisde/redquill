@@ -649,6 +649,16 @@ fn handle_help_key(app: &mut App, key: KeyEvent) {
             app.help.search = Some((String::new(), true));
             app.help.scroll.set(0);
         }
+        HelpAction::NextTab | HelpAction::PrevTab => {
+            // Two tabs, so next and previous both just flip — see
+            // `help::HelpTab::toggled`. Switching resets the filter and
+            // scroll (FR-4's reset half) so the new tab starts unfiltered
+            // at the top rather than carrying over a position/query that
+            // may not even apply to it.
+            app.help.tab = app.help.tab.toggled();
+            app.help.search = None;
+            app.help.scroll.set(0);
+        }
     }
 }
 
@@ -808,6 +818,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
             scroll: &app.help.scroll,
             viewport: &app.help.viewport,
             search,
+            tab: app.help.tab,
         };
         help::render(
             frame,
@@ -815,6 +826,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
             &help::HelpTables {
                 keymap,
                 modal_keys: &app.modal_keys,
+                origin: app.help.origin,
             },
             &app.theme,
             staging_allowed,

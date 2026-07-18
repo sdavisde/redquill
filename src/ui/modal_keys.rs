@@ -1339,6 +1339,14 @@ pub(super) enum HelpAction {
     /// Starts filtering the keybind list (see
     /// [`super::help::HelpOverlayState::search`]).
     Search,
+    /// Switches to the next tab (see [`super::help::HelpTab::toggled`],
+    /// [`super::handle_help_key`]).
+    NextTab,
+    /// Switches to the previous tab — with exactly two tabs, identical to
+    /// `NextTab` (both toggle), but kept as its own action/key row so `h`
+    /// and `Shift-Tab` are independently remappable and the footer names
+    /// the direction the user pressed.
+    PrevTab,
 }
 
 pub(super) fn help_action_name(action: HelpAction) -> &'static str {
@@ -1351,6 +1359,8 @@ pub(super) fn help_action_name(action: HelpAction) -> &'static str {
         HelpAction::Top => "top",
         HelpAction::Bottom => "bottom",
         HelpAction::Search => "search",
+        HelpAction::NextTab => "next-tab",
+        HelpAction::PrevTab => "prev-tab",
     }
 }
 
@@ -1364,6 +1374,8 @@ pub(super) fn help_action_from_name(name: &str) -> Option<HelpAction> {
         "top" => HelpAction::Top,
         "bottom" => HelpAction::Bottom,
         "search" => HelpAction::Search,
+        "next-tab" => HelpAction::NextTab,
+        "prev-tab" => HelpAction::PrevTab,
         _ => return None,
     })
 }
@@ -1443,6 +1455,30 @@ pub(super) static HELP_KEYS: LazyLock<Vec<ModalBinding<HelpAction>>> = LazyLock:
             footer: Some(FooterHint {
                 rank: 2,
                 label: "filter",
+            }),
+        },
+        ModalBinding {
+            description: "Next tab (This context / All keys)",
+            keys: vec![
+                ModalKey::plain(KeyCode::Tab),
+                ModalKey::plain(KeyCode::Char('l')),
+            ],
+            action: HelpAction::NextTab,
+            footer: Some(FooterHint {
+                rank: 4,
+                label: "next tab",
+            }),
+        },
+        ModalBinding {
+            description: "Previous tab (This context / All keys)",
+            keys: vec![
+                ModalKey::plain(KeyCode::BackTab),
+                ModalKey::plain(KeyCode::Char('h')),
+            ],
+            action: HelpAction::PrevTab,
+            footer: Some(FooterHint {
+                rank: 5,
+                label: "prev tab",
             }),
         },
     ]
@@ -2894,6 +2930,7 @@ index 111..222 100644
 
     #[test]
     fn every_help_table_entry_drives_its_documented_action() {
+        use super::super::help::HelpTab;
         for binding in HELP_KEYS.iter() {
             for key in &binding.keys {
                 let mut app = app();
@@ -2931,6 +2968,15 @@ index 111..222 100644
                             Some((String::new(), true)),
                             "Help {label}: must start filter-editing with an empty query"
                         );
+                        assert_eq!(app.help.scroll.get(), 0, "Help {label}: must reset scroll");
+                    }
+                    HelpAction::NextTab | HelpAction::PrevTab => {
+                        assert_eq!(
+                            app.help.tab,
+                            HelpTab::AllKeys,
+                            "Help {label}: must switch tabs from the ThisContext default"
+                        );
+                        assert_eq!(app.help.search, None, "Help {label}: must reset the filter");
                         assert_eq!(app.help.scroll.get(), 0, "Help {label}: must reset scroll");
                     }
                 }

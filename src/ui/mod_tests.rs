@@ -533,6 +533,10 @@ fn help_overlay_lists_remote_and_command_log_bindings() {
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
     app.help.open = true;
+    // Panel-scope/modal-section content lives on the All keys tab now
+    // (This context, the new default, only shows the origin's own scope
+    // plus Works everywhere — see `help::this_context_sections`).
+    app.help.tab = help::HelpTab::AllKeys;
     let keymap = Keymap::default_map();
 
     terminal
@@ -569,6 +573,10 @@ fn help_overlay_lists_global_bindings_once_in_a_works_everywhere_section() {
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
     app.help.open = true;
+    // This test is about the full reference's fixed section order (Works
+    // everywhere first), which is the All keys tab's contract (FR-3); This
+    // context (the new default) intentionally orders Works everywhere last.
+    app.help.tab = help::HelpTab::AllKeys;
     let keymap = Keymap::default_map();
 
     terminal
@@ -620,6 +628,10 @@ fn help_overlay_scrolls_to_reveal_lower_sections() {
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
     app.help.open = true;
+    // The modal sections (Project search, last in `help::modal_sections`)
+    // only render on the All keys tab; This context (the new default) never
+    // includes them.
+    app.help.tab = help::HelpTab::AllKeys;
     let keymap = Keymap::default_map();
 
     // First frame renders the top of the list (and records the viewport
@@ -1059,6 +1071,150 @@ fn help_filter_shows_no_matches_message_when_nothing_matches() {
         .collect();
     assert!(content.contains("no matches for"));
     assert!(content.contains("zzznomatchzzz"));
+}
+
+// -- Tabbed help overlay: This context (default) / All keys -----------------
+
+/// `?` always opens on the This context tab, showing only the origin's own
+/// scope (Diff, from the diff view) plus Works everywhere — panel-scope
+/// content (e.g. the branch/worktree switcher opener) is absent until the
+/// user switches tabs.
+#[test]
+fn help_opens_on_this_context_tab_showing_only_the_origin_scope() {
+    let backend = TestBackend::new(100, 300);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    app.apply(Action::ToggleHelp);
+    assert_eq!(app.help.tab, help::HelpTab::ThisContext);
+    let keymap = Keymap::default_map();
+
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .clone()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(content.contains("This context"));
+    assert!(content.contains("All keys"));
+    assert!(content.contains("Move cursor down"), "Diff scope must show");
+    assert!(content.contains("Works everywhere"));
+    assert!(
+        !content.contains("Open branch/worktree switcher"),
+        "Panel-scope rows must not show on This context from the diff view"
+    );
+}
+
+/// From the focused git panel, This context shows the Panel-scope bindings
+/// (and Works everywhere) but no Diff-scope rows — the mirror image of
+/// `help_opens_on_this_context_tab_showing_only_the_origin_scope`.
+#[test]
+fn help_this_context_from_the_panel_shows_only_panel_scope() {
+    let backend = TestBackend::new(100, 300);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    app.mode = Mode::Panel {
+        cursor: 0,
+        tab: PanelTab::Changes,
+    };
+    app.apply(Action::ToggleHelp);
+    assert_eq!(
+        app.help.origin,
+        ModeOrigin::Panel {
+            cursor: 0,
+            tab: PanelTab::Changes,
+        }
+    );
+    let keymap = Keymap::default_map();
+
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .clone()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(content.contains("Open branch/worktree switcher"));
+    assert!(content.contains("Works everywhere"));
+    assert!(
+        !content.contains("Move cursor down"),
+        "Diff-scope rows must not show on This context from the git panel"
+    );
+}
+
+/// Switching tabs resets a locked filter and the scroll position (FR-4): a
+/// filter that narrows This context to a handful of rows is gone once `Tab`
+/// switches to All keys, which then renders complete (including
+/// modal-section/panel-scope content This context never carries).
+#[test]
+fn help_filter_resets_and_other_tab_renders_complete_after_switching() {
+    let backend = TestBackend::new(100, 300);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    app.apply(Action::ToggleHelp);
+    app.help.scroll.set(7);
+    app.help.search = Some(("stage".to_string(), false));
+    let keymap = Keymap::default_map();
+
+    // The locked filter narrows This context: matching rows show, unrelated
+    // ones (and the panel-scope switcher opener, off-tab regardless) don't.
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
+    let narrowed: String = terminal
+        .backend()
+        .buffer()
+        .clone()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(narrowed.contains("Stage/unstage file under cursor"));
+    assert!(!narrowed.contains("Move cursor down"));
+
+    let mut pending = None;
+    let mut pending_count: Option<usize> = None;
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+    );
+    assert_eq!(app.help.tab, help::HelpTab::AllKeys, "Tab must switch tabs");
+    assert_eq!(
+        app.help.search, None,
+        "switching tabs must reset the filter"
+    );
+    assert_eq!(app.help.scroll.get(), 0, "switching tabs must reset scroll");
+
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
+    let full: String = terminal
+        .backend()
+        .buffer()
+        .clone()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(
+        full.contains("Move cursor down"),
+        "the new tab must render unfiltered/complete"
+    );
+    assert!(
+        full.contains("Branch/worktree switcher"),
+        "All keys' modal sections must be present now that the filter reset"
+    );
 }
 
 /// An annotation present on the selected file renders both its inline

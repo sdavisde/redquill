@@ -883,6 +883,12 @@ fn commit_view_help_overlay_shows_only_truthful_keys() {
 
     press(&mut app, &keymap, &mut pending, KeyCode::Char('?'));
     assert!(app.help.open);
+    // This test's "no lies" property spans the whole keymap, not just the
+    // Diff-scope rows This context (the default tab) shows for this origin —
+    // switch to All keys so cross-scope keys like `TogglePanelTab` are in
+    // play too.
+    press(&mut app, &keymap, &mut pending, KeyCode::Tab);
+    assert_eq!(app.help.tab, help::HelpTab::AllKeys);
     // The unfiltered top-of-overlay is the primary visible evidence: in a
     // commit view its Stage section is reduced to just `s Toggle staging
     // panel` (the panel toggle still works) and there is NO Code intelligence

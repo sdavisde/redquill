@@ -302,8 +302,20 @@ fn search_mode_has_no_hint_strip() {
 #[test]
 fn help_open_hints_are_scroll_filter_close_with_no_help_entry() {
     let entries = help_open_hints(&ModalKeymaps::default());
-    assert_eq!(labels(&entries), vec!["scroll", "filter", "close"]);
-    assert_eq!(keys(&entries), vec!["j / Down", "/", "Esc / Enter / ?"]);
+    assert_eq!(
+        labels(&entries),
+        vec!["scroll", "filter", "close", "next tab", "prev tab"]
+    );
+    assert_eq!(
+        keys(&entries),
+        vec![
+            "j / Down",
+            "/",
+            "Esc / Enter / ?",
+            "Tab / l",
+            "Shift-Tab / h"
+        ]
+    );
 }
 
 #[test]
@@ -329,7 +341,10 @@ fn help_open_takes_precedence_over_the_mode_strip() {
         &km,
         &ModalKeymaps::default(),
     );
-    assert_eq!(labels(&entries), vec!["scroll", "filter", "close"]);
+    assert_eq!(
+        labels(&entries),
+        vec!["scroll", "filter", "close", "next tab", "prev tab"]
+    );
 }
 
 // -- Pending two-key prefix ------------------------------------------------

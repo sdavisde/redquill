@@ -19,6 +19,13 @@
 //! typing narrows every section to rows whose key label or description
 //! smartcase-matches the query ([`row_matches`]), dropping sections that end
 //! up empty, and a locked-in filter shows in place of the subtitle.
+//!
+//! Two tabs ([`HelpOverlayState::tab`]) share this chrome: **This context**
+//! (default on open) is [`this_context_sections`] — only the bindings for the
+//! mode/scope `?` was pressed from, plus "Works everywhere"; **All keys** is
+//! [`all_keys_sections`], the full reference described above. `Tab`/`l` and
+//! `Shift-Tab`/`h` switch tabs (see [`super::modal_keys::HELP_KEYS`]),
+//! resetting the filter and scroll each time.
 
 use std::cell::Cell;
 
@@ -236,15 +243,40 @@ fn row_matches(label: &str, description: &str, query: &str) -> bool {
         || search::smartcase_contains(description, query)
 }
 
+/// The help overlay's two tabs: "This context" (default on open) shows only
+/// the bindings that apply to the mode/scope `?` was opened from, plus the
+/// "Works everywhere" global section; "All keys" is the pre-existing full
+/// grouped reference across every scope and mode, unchanged in content
+/// (FR-3). With exactly two tabs, `Tab`/`l` (next) and `Shift-Tab`/`h`
+/// (previous) both just flip between them — see [`HelpTab::toggled`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HelpTab {
+    #[default]
+    ThisContext,
+    AllKeys,
+}
+
+impl HelpTab {
+    /// The other tab. One method serves both `next` and `previous`
+    /// dispatch since a two-tab pair has no third state to distinguish them.
+    pub(super) fn toggled(self) -> HelpTab {
+        match self {
+            HelpTab::ThisContext => HelpTab::AllKeys,
+            HelpTab::AllKeys => HelpTab::ThisContext,
+        }
+    }
+}
+
 /// The help overlay's full state, owned by [`super::app::App`] as one field
 /// rather than four loose ones (`help_open`/`help_scroll`/`help_viewport`/
 /// `help_search`, the shape this consolidates): whether it's open, the
-/// scroll/viewport/search fields [`HelpViewState`] borrows each frame, and
+/// scroll/viewport/search fields [`HelpViewState`] borrows each frame,
 /// `origin` — the mode `?` was pressed from, captured via
 /// [`ModeOrigin::capture`] the same way [`super::app::Mode::ReviewLauncher`]
-/// captures where `R` was pressed from. Nothing reads `origin` yet; it
-/// exists so a later context-first "This context" view can pick the right
-/// table without re-deriving what mode the overlay opened over.
+/// captures where `R` was pressed from — and `tab`, the active
+/// [`HelpTab`]. `origin` picks which bindings the "This context" tab shows
+/// (see [`this_context_sections`]); switching tabs resets `search` to `None`
+/// and `scroll` to `0` (see [`super::handle_help_key`]).
 pub struct HelpOverlayState {
     /// Whether the overlay is open.
     pub(super) open: bool,
@@ -256,12 +288,16 @@ pub struct HelpOverlayState {
     pub(super) search: Option<(String, bool)>,
     /// The mode/scope the overlay was opened over.
     pub(super) origin: ModeOrigin,
+    /// The active tab.
+    pub(super) tab: HelpTab,
 }
 
 impl HelpOverlayState {
-    /// A closed overlay with no scroll/filter and a `Normal` origin (the
-    /// harmless default a fresh [`super::app::App`] starts with; opening `?`
-    /// overwrites it with the real origin).
+    /// A closed overlay with no scroll/filter, a `Normal` origin, and the
+    /// `ThisContext` tab (the harmless defaults a fresh [`super::app::App`]
+    /// starts with; opening `?` overwrites `origin` with the real one and
+    /// always lands on `ThisContext` — see [`super::app::App::apply`]'s
+    /// `ToggleHelp` arm).
     pub(super) fn new() -> Self {
         HelpOverlayState {
             open: false,
@@ -269,13 +305,14 @@ impl HelpOverlayState {
             viewport: Cell::new(0),
             search: None,
             origin: ModeOrigin::Normal,
+            tab: HelpTab::ThisContext,
         }
     }
 }
 
-/// The overlay's scroll/filter state, owned by the caller ([`App`]) and
+/// The overlay's scroll/filter/tab state, owned by the caller ([`App`]) and
 /// threaded through [`render`] each frame. Grouped into one struct rather
-/// than three loose parameters to keep `render`'s argument count sane.
+/// than loose parameters to keep `render`'s argument count sane.
 pub struct HelpViewState<'a> {
     /// The vertical scroll offset (advanced by [`super::handle_help_key`]);
     /// `render` clamps it to the (possibly filtered) content and writes the
@@ -290,15 +327,19 @@ pub struct HelpViewState<'a> {
     /// with a live text cursor while `editing`, or a "locked" hint once
     /// `Enter` has confirmed it. `None` renders the unfiltered list.
     pub search: Option<(&'a str, bool)>,
+    /// The active tab (see [`HelpOverlayState::tab`]).
+    pub tab: HelpTab,
 }
 
-/// The two tables the overlay renders from, bundled to keep [`render`]'s
-/// argument count under clippy's `too_many_arguments` threshold: the main
-/// keymap and every modal mode's effective table (`app`'s post-`[keys.*]`
-/// -override tables) are always passed together.
+/// The two tables the overlay renders from, plus the origin the overlay
+/// opened over, bundled to keep [`render`]'s argument count under clippy's
+/// `too_many_arguments` threshold: the main keymap, every modal mode's
+/// effective table (`app`'s post-`[keys.*]`-override tables), and the
+/// mode/scope `?` was pressed from are always passed together.
 pub struct HelpTables<'a> {
     pub keymap: &'a Keymap,
     pub modal_keys: &'a ModalKeymaps,
+    pub origin: ModeOrigin,
 }
 
 /// One titled block of `(key label, description)` rows — the shape every
@@ -380,10 +421,100 @@ fn panel_section(bindings: &[Binding]) -> Section {
     ("Git panel (focused)", rows)
 }
 
-/// Renders the help overlay, centered over `area`. Bindings from the
-/// [`Keymap`] table are grouped Navigation / Annotate / Stage / Review /
-/// Panels / Quit, with Compose-mode and List-mode hints appended below
-/// (those modes bypass the table entirely, so they aren't in it).
+/// The "This context" tab's sections: the bindings that apply to the
+/// mode/scope `?` was opened from (`origin`), followed by the "Works
+/// everywhere" global section. Every [`ModeOrigin`] variant maps to exactly
+/// one scope — `Normal`/`Visual` both read the `Scope::Diff` groups (in
+/// [`GROUP_ORDER`] order), `Panel` reads the single `Scope::Panel`
+/// section — so this always renders a proper subset of
+/// [`all_keys_sections`]'s content, never a duplicate or a divergent set.
+///
+/// A workflows-header slot belongs at the front of this list too (per the
+/// spec's common-workflows unit), but it isn't added until that unit lands;
+/// until then this tab starts directly with the origin's own bindings.
+fn this_context_sections(
+    origin: ModeOrigin,
+    bindings: &[Binding],
+    staging_allowed: bool,
+    code_intel_allowed: bool,
+    review_session: bool,
+) -> Vec<Section> {
+    let mut sections = match origin {
+        ModeOrigin::Normal | ModeOrigin::Visual { .. } => diff_group_sections(
+            bindings,
+            staging_allowed,
+            code_intel_allowed,
+            review_session,
+        ),
+        ModeOrigin::Panel { .. } => vec![panel_section(bindings)],
+    };
+    sections.push(global_section(
+        bindings,
+        staging_allowed,
+        code_intel_allowed,
+        review_session,
+    ));
+    sections
+}
+
+/// The "All keys" tab's sections: today's full grouped reference — "Works
+/// everywhere" first, then every [`GROUP_ORDER`] diff-scope group, the
+/// focused-panel section, and the modal-mode hint sections — unchanged in
+/// content from before the tabbed overlay existed (FR-3).
+fn all_keys_sections(
+    bindings: &[Binding],
+    modal_keys: &ModalKeymaps,
+    staging_allowed: bool,
+    code_intel_allowed: bool,
+    review_session: bool,
+) -> Vec<Section> {
+    let mut sections = vec![global_section(
+        bindings,
+        staging_allowed,
+        code_intel_allowed,
+        review_session,
+    )];
+    sections.extend(diff_group_sections(
+        bindings,
+        staging_allowed,
+        code_intel_allowed,
+        review_session,
+    ));
+    sections.push(panel_section(bindings));
+    sections.extend(modal_sections(modal_keys, review_session));
+    sections
+}
+
+/// The "This context │ All keys" tab bar, active tab emphasized — mirrors
+/// [`super::switcher_modal::tab_bar`] / [`super::review_launcher_modal::tab_bar`]
+/// for idiom consistency across this repo's tabbed overlays. Rendered as an
+/// additional centered block title alongside the overlay's existing
+/// left "keybinds" / right "esc close" titles, so the chrome the spec calls
+/// out to keep ("centered, scrollable, `/` filter line") costs no extra row.
+fn tab_bar(active: HelpTab, theme: &Theme) -> Line<'static> {
+    let active_style = Style::default()
+        .fg(theme.help_key)
+        .add_modifier(Modifier::BOLD);
+    let inactive_style = Style::default().fg(theme.footer_text);
+    let (context_style, all_style) = match active {
+        HelpTab::ThisContext => (active_style, inactive_style),
+        HelpTab::AllKeys => (inactive_style, active_style),
+    };
+    Line::from(vec![
+        Span::styled("This context", context_style),
+        Span::styled(" \u{2502} ", Style::default().fg(theme.footer_text)),
+        Span::styled("All keys", all_style),
+    ])
+}
+
+/// Renders the help overlay, centered over `area`. `state.tab` picks which
+/// sections show: [`HelpTab::ThisContext`] (default on open) is
+/// [`this_context_sections`] — just the bindings for the mode/scope `?` was
+/// pressed from, plus "Works everywhere"; [`HelpTab::AllKeys`] is
+/// [`all_keys_sections`] — the full grouped reference (Works everywhere /
+/// Navigation / Annotate / Stage / Review / Search / Panels / Code
+/// intelligence / Git panel / Quit, then the modal-mode sections). The `/`
+/// filter narrows whichever tab is active.
 /// `staging_allowed` is `false` on a read-only range target, hiding the
 /// inert file/hunk staging gestures; `code_intel_allowed` is `false`
 /// whenever the target's new side isn't the live working tree, hiding the
@@ -392,7 +523,7 @@ fn panel_section(bindings: &[Binding]) -> Section {
 /// for how the three combine.
 ///
 /// The box caps its height to ~4/5 of `area` and scrolls the overflow; see
-/// [`HelpViewState`] for the scroll/filter fields `state` carries.
+/// [`HelpViewState`] for the scroll/filter/tab fields `state` carries.
 #[allow(clippy::too_many_arguments)]
 pub fn render(
     frame: &mut Frame,
@@ -410,106 +541,51 @@ pub fn render(
     let query = search.map_or("", |(q, _)| q);
     let editing = search.is_some_and(|(_, editing)| editing);
 
-    let sections = modal_sections(tables.modal_keys, review_session);
     let bindings = tables.keymap.bindings();
-    // Column width is computed from the unfiltered rows, so it never jumps
-    // around as the query narrows what's actually shown.
-    let key_width = bindings
+    let sections: Vec<Section> = match state.tab {
+        HelpTab::ThisContext => this_context_sections(
+            tables.origin,
+            bindings,
+            staging_allowed,
+            code_intel_allowed,
+            review_session,
+        ),
+        HelpTab::AllKeys => all_keys_sections(
+            bindings,
+            tables.modal_keys,
+            staging_allowed,
+            code_intel_allowed,
+            review_session,
+        ),
+    };
+    // Column width is computed from the active tab's unfiltered rows, so it
+    // never jumps around as the query narrows what's actually shown, and
+    // "This context" (a strict subset) isn't stretched to "All keys"' wider
+    // labels.
+    let key_width = sections
         .iter()
-        .map(|b| b.key_label().len())
-        .chain(
-            sections
-                .iter()
-                .flat_map(|(_, hints)| hints.iter().map(|(k, _)| k.len())),
-        )
+        .flat_map(|(_, rows)| rows.iter().map(|(k, _)| k.len()))
         .max()
         .unwrap_or(0);
 
     let mut lines: Vec<Line> = Vec::new();
-    let mut any_match = false;
-
-    // "Works everywhere" bindings (`Scope::Global`): rendered once, ahead
-    // of every per-scope section, rather than once per scope. The
-    // per-scope sections below are built from `b.scope ==
-    // Scope::Diff`/`Scope::Panel` respectively, so a `Global` row can never
-    // also land in one of those sections — no duplication to guard against
-    // here.
-    let (title, rows) = global_section(
-        bindings,
-        staging_allowed,
-        code_intel_allowed,
-        review_session,
-    );
-    let rows: Vec<(&str, &str)> = rows
-        .iter()
-        .map(|(k, d)| (k.as_str(), *d))
-        .filter(|(k, d)| row_matches(k, d, query))
-        .collect();
-    if !rows.is_empty() {
-        any_match = true;
-        lines.push(section_header(title, theme));
-        for (k, d) in &rows {
-            lines.push(key_line(k, d, key_width, theme));
-        }
-        lines.push(Line::from(""));
-    }
-
-    for (title, rows) in diff_group_sections(
-        bindings,
-        staging_allowed,
-        code_intel_allowed,
-        review_session,
-    ) {
-        let rows: Vec<(&str, &str)> = rows
-            .iter()
-            .map(|(k, d)| (k.as_str(), *d))
-            .filter(|(k, d)| row_matches(k, d, query))
-            .collect();
-        if rows.is_empty() {
-            continue;
-        }
-        any_match = true;
-        lines.push(section_header(title, theme));
-        for (k, d) in &rows {
-            lines.push(key_line(k, d, key_width, theme));
-        }
-        lines.push(Line::from(""));
-    }
-
-    // Panel-scope bindings: shown as their own section so `` ` `` /`j`/`k`/
-    // Enter are documented in the context where they apply (the git panel
-    // focused), grouped by scope per this spec.
-    let (title, rows) = panel_section(bindings);
-    let rows: Vec<(&str, &str)> = rows
-        .iter()
-        .map(|(k, d)| (k.as_str(), *d))
-        .filter(|(k, d)| row_matches(k, d, query))
-        .collect();
-    if !rows.is_empty() {
-        any_match = true;
-        lines.push(section_header(title, theme));
-        for (k, d) in &rows {
-            lines.push(key_line(k, d, key_width, theme));
-        }
-        lines.push(Line::from(""));
-    }
 
     let filtered_sections: Vec<(&str, Vec<(&str, &str)>)> = sections
         .iter()
-        .map(|(title, hints)| {
-            let hints: Vec<(&str, &str)> = hints
+        .map(|(title, rows)| {
+            let rows: Vec<(&str, &str)> = rows
                 .iter()
-                .filter(|(k, d)| row_matches(k, d, query))
                 .map(|(k, d)| (k.as_str(), *d))
+                .filter(|(k, d)| row_matches(k, d, query))
                 .collect();
-            (*title, hints)
+            (*title, rows)
         })
-        .filter(|(_, hints)| !hints.is_empty())
+        .filter(|(_, rows)| !rows.is_empty())
         .collect();
-    for (i, (title, hints)) in filtered_sections.iter().enumerate() {
-        any_match = true;
+    let any_match = !filtered_sections.is_empty();
+    for (i, (title, rows)) in filtered_sections.iter().enumerate() {
         lines.push(section_header(title, theme));
-        for (key, desc) in hints {
+        for (key, desc) in rows {
             lines.push(key_line(key, desc, key_width, theme));
         }
         if i + 1 < filtered_sections.len() {
@@ -537,7 +613,7 @@ pub fn render(
         }
         _ => "available commands and configured shortcuts".to_string(),
     };
-    let footer = "j/k scroll  \u{00b7}  pgup/pgdn page  \u{00b7}  g/G ends  \u{00b7}  / filter  \u{00b7}  esc close";
+    let footer = "j/k scroll  \u{00b7}  pgup/pgdn page  \u{00b7}  g/G ends  \u{00b7}  / filter  \u{00b7}  tab/shift-tab tabs  \u{00b7}  esc close";
     let total = lines.len() as u16;
 
     // Width: fit the widest content line (or the subtitle/footer), plus a
@@ -581,6 +657,7 @@ pub fn render(
             ))
             .left_aligned(),
         )
+        .title_top(tab_bar(state.tab, theme).centered())
         .title_top(Line::from(Span::styled(" esc close ", pill)).right_aligned())
         .title_bottom(
             Line::from(Span::styled(
@@ -752,6 +829,159 @@ mod tests {
         ] {
             assert!(binding_hidden(action, true, false, false));
             assert!(!binding_hidden(action, true, false, true));
+        }
+    }
+
+    // -- HelpTab ---------------------------------------------------------
+
+    #[test]
+    fn help_tab_defaults_to_this_context() {
+        assert_eq!(HelpTab::default(), HelpTab::ThisContext);
+        assert_eq!(HelpOverlayState::new().tab, HelpTab::ThisContext);
+    }
+
+    #[test]
+    fn help_tab_toggles_between_the_two_tabs() {
+        assert_eq!(HelpTab::ThisContext.toggled(), HelpTab::AllKeys);
+        assert_eq!(HelpTab::AllKeys.toggled(), HelpTab::ThisContext);
+    }
+
+    // -- this_context_sections / all_keys_sections ------------------------
+
+    fn all_rows(sections: &[Section]) -> Vec<(String, &'static str)> {
+        sections
+            .iter()
+            .flat_map(|(_, rows)| rows.iter().cloned())
+            .collect()
+    }
+
+    /// Normal/Visual origin: with nothing capability-hidden, "This context"
+    /// shows every `Scope::Diff` binding plus every `Scope::Global` binding,
+    /// and nothing from `Scope::Panel` — a `Panel`-only action (e.g.
+    /// `RemoteFetch`) must be absent. (Capability gating itself is covered
+    /// separately by `this_context_sections_apply_capability_gating`.)
+    #[test]
+    fn this_context_sections_for_normal_origin_is_diff_scope_plus_global() {
+        let keymap = Keymap::default_map();
+        let bindings = keymap.bindings();
+        let sections = this_context_sections(ModeOrigin::Normal, bindings, true, true, true);
+        let rows = all_rows(&sections);
+
+        for binding in bindings
+            .iter()
+            .filter(|b| matches!(b.scope, Scope::Diff | Scope::Global))
+        {
+            assert!(
+                rows.iter()
+                    .any(|(k, d)| k == &binding.key_label() && *d == binding.description),
+                "Normal origin must show {:?} ({})",
+                binding.action,
+                binding.key_label()
+            );
+        }
+        assert!(
+            bindings
+                .iter()
+                .filter(|b| b.scope == Scope::Panel)
+                .all(|b| !rows
+                    .iter()
+                    .any(|(k, d)| k == &b.key_label() && *d == b.description)),
+            "Normal origin must not show any Scope::Panel binding"
+        );
+    }
+
+    /// Visual origin renders identically to Normal — both read the
+    /// `Scope::Diff` groups per FR-2.
+    #[test]
+    fn this_context_sections_for_visual_origin_matches_normal() {
+        let keymap = Keymap::default_map();
+        let bindings = keymap.bindings();
+        let normal = this_context_sections(ModeOrigin::Normal, bindings, true, true, false);
+        let visual = this_context_sections(
+            ModeOrigin::Visual { anchor: 3 },
+            bindings,
+            true,
+            true,
+            false,
+        );
+        assert_eq!(all_rows(&normal), all_rows(&visual));
+    }
+
+    /// Panel origin: "This context" shows every `Scope::Panel` binding plus
+    /// every `Scope::Global` binding, and nothing from `Scope::Diff` — a
+    /// diff-only action (e.g. `CursorDown`) must be absent.
+    #[test]
+    fn this_context_sections_for_panel_origin_is_panel_scope_plus_global() {
+        let keymap = Keymap::default_map();
+        let bindings = keymap.bindings();
+        let origin = ModeOrigin::Panel {
+            cursor: 0,
+            tab: super::super::app::PanelTab::Changes,
+        };
+        let sections = this_context_sections(origin, bindings, true, true, false);
+        let rows = all_rows(&sections);
+
+        for binding in bindings
+            .iter()
+            .filter(|b| matches!(b.scope, Scope::Panel | Scope::Global))
+        {
+            assert!(
+                rows.iter()
+                    .any(|(k, d)| k == &binding.key_label() && *d == binding.description),
+                "Panel origin must show {:?} ({})",
+                binding.action,
+                binding.key_label()
+            );
+        }
+        assert!(
+            bindings
+                .iter()
+                .filter(|b| b.scope == Scope::Diff)
+                .all(|b| !rows
+                    .iter()
+                    .any(|(k, d)| k == &b.key_label() && *d == b.description)),
+            "Panel origin must not show any Scope::Diff binding"
+        );
+    }
+
+    /// Capability gating still applies on "This context": a hidden action
+    /// (staging disallowed) is absent even though it's `Scope::Diff`.
+    #[test]
+    fn this_context_sections_apply_capability_gating() {
+        let keymap = Keymap::default_map();
+        let bindings = keymap.bindings();
+        let sections = this_context_sections(ModeOrigin::Normal, bindings, false, true, false);
+        let rows = all_rows(&sections);
+        assert!(
+            !rows
+                .iter()
+                .any(|(_, d)| *d == "Stage/unstage file under cursor"),
+            "staging rows must be hidden when staging_allowed is false"
+        );
+    }
+
+    /// "All keys" is a strict superset of "This context" for any origin —
+    /// every row the tab shows is also somewhere on the full reference.
+    #[test]
+    fn all_keys_sections_is_a_superset_of_this_context_sections() {
+        let keymap = Keymap::default_map();
+        let modal_keys = ModalKeymaps::default();
+        let bindings = keymap.bindings();
+        let all_keys_rows = all_rows(&all_keys_sections(bindings, &modal_keys, true, true, true));
+        for origin in [
+            ModeOrigin::Normal,
+            ModeOrigin::Panel {
+                cursor: 0,
+                tab: super::super::app::PanelTab::Changes,
+            },
+        ] {
+            let context_rows = all_rows(&this_context_sections(origin, bindings, true, true, true));
+            for (k, d) in &context_rows {
+                assert!(
+                    all_keys_rows.iter().any(|(ak, ad)| ak == k && ad == d),
+                    "This context row {k:?} ({d:?}) for {origin:?} must also appear on All keys"
+                );
+            }
         }
     }
 }
