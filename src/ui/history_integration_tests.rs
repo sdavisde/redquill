@@ -894,7 +894,9 @@ fn commit_view_help_overlay_shows_only_truthful_keys() {
     // panel` (the panel toggle still works) and there is NO Code intelligence
     // section at all — the inert file/hunk-stage and gd/gr/K keys are simply
     // gone, not listed-but-dead.
-    let overlay_top = screenshot(&app, &keymap, 100, 55);
+    // Tall enough that the overlay's ~3/5-of-screen cap still reaches past
+    // Navigation/Annotate into the Stage section.
+    let overlay_top = screenshot(&app, &keymap, 100, 74);
     eprintln!("=== 6.3 commit-view ? overlay (unfiltered, top) ===\n{overlay_top}");
 
     // The diff-line stage gestures live in the top viewport's Stage section

@@ -396,7 +396,9 @@ fn multibuffer_renders_for_a_range_target() {
 /// toggle.
 #[test]
 fn help_overlay_hides_staging_rows_on_a_range_target() {
-    let backend = TestBackend::new(100, 55);
+    // Tall enough that the overlay's ~3/5-of-screen cap still fits the whole
+    // This context list (workflow header + Navigation..Quit groups).
+    let backend = TestBackend::new(100, 74);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
     app.help.open = true;
@@ -446,7 +448,9 @@ fn help_overlay_shows_staging_rows_on_the_working_tree_target() {
 /// this also proves the "Review" group actually reaches the screen.
 #[test]
 fn help_overlay_shows_review_rows_and_hides_staging_rows_during_a_review_session() {
-    let backend = TestBackend::new(100, 65);
+    // Tall enough that the overlay's ~3/5-of-screen cap still fits the whole
+    // This context list (workflow header + Navigation..Quit groups).
+    let backend = TestBackend::new(100, 87);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
     app.help.open = true;
@@ -508,7 +512,9 @@ fn help_overlay_hides_review_rows_outside_a_review_session() {
 
 #[test]
 fn help_overlay_renders_bindings_when_open() {
-    let backend = TestBackend::new(80, 20);
+    // Tall enough that the overlay's ~3/5-of-screen cap still reaches past
+    // the workflow header into the Navigation group.
+    let backend = TestBackend::new(80, 27);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
     app.help.open = true;
@@ -624,7 +630,10 @@ fn help_overlay_lists_global_bindings_once_in_a_works_everywhere_section() {
 /// `help::modal_sections`) while scrolling the first off-screen.
 #[test]
 fn help_overlay_scrolls_to_reveal_lower_sections() {
-    let backend = TestBackend::new(100, 22);
+    // Tall enough that the overlay's ~3/5-of-screen cap still reaches past
+    // the "Works everywhere" section into Navigation, while staying far
+    // short of the full All keys reference so scrolling is still forced.
+    let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
     app.help.open = true;

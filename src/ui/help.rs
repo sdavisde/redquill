@@ -611,7 +611,7 @@ fn tab_bar(active: HelpTab, theme: &Theme) -> Line<'static> {
 /// review session, hiding the accept/defer gestures — see [`binding_hidden`]
 /// for how the three combine.
 ///
-/// The box caps its height to ~4/5 of `area` and scrolls the overflow; see
+/// The box caps its height to ~3/5 of `area` and scrolls the overflow; see
 /// [`HelpViewState`] for the scroll/filter/tab fields `state` carries.
 #[allow(clippy::too_many_arguments)]
 pub fn render(
@@ -755,11 +755,11 @@ pub fn render(
 
     // Height: borders (2) + subtitle (1) + spacer (1) = 4 rows of chrome
     // around the list (the footer hint rides the bottom border, costing no
-    // row). Cap to ~4/5 of the screen so it reads as a floating panel and
+    // row). Cap to ~3/5 of the screen so it reads as a floating panel and
     // scrolls rather than filling every row.
     let chrome = 4u16;
     let desired = total.saturating_add(chrome);
-    let cap = (area.height.saturating_mul(4) / 5).max(chrome + 1);
+    let cap = (area.height.saturating_mul(3) / 5).max(chrome + 1);
     let height = desired.min(cap).min(area.height.saturating_sub(2));
     let popup = centered(area, width, height);
 
