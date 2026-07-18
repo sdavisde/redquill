@@ -17,8 +17,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use super::App;
 use super::modal_keys::{
     self, AcceptedPanelAction, CommitMessageAction, ComposeAction, ConfirmRemoteOpAction,
-    EndReviewAction, FinderAction, ListAction, PeekAction, ProjectSearchInputAction,
-    ProjectSearchResultsAction, ReviewBranchAction, SearchAction, StagingAction, SwitcherAction,
+    EndReviewAction, FinderAction, LauncherAction, ListAction, PeekAction,
+    ProjectSearchInputAction, ProjectSearchResultsAction, ReviewBranchAction, SearchAction,
+    StagingAction, SwitcherAction,
 };
 
 /// Handles one key event while [`super::Mode::Compose`] is active. Resolves
@@ -348,6 +349,25 @@ pub(super) fn handle_review_branch_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// Handles one key event while [`super::Mode::ReviewLauncher`] is active
+/// (the Review launcher modal, `R`, `Scope::Global`): `Tab`/`Shift-Tab`/
+/// `h`/`l`/arrows switch between the Branches and Commits tabs, `j`/`k`/
+/// arrows move the cursor, `Enter` confirms the highlighted row (inert until
+/// the Branches/Commits tabs are wired up to real data), `Esc` closes the
+/// modal back to the mode `R` was pressed from.
+pub(super) fn handle_review_launcher_key(app: &mut App, key: KeyEvent) {
+    let Some(action) = modal_keys::resolve(&app.modal_keys.review_launcher, key) else {
+        return;
+    };
+    match action {
+        LauncherAction::ToggleTab => app.review_launcher_switch_tab(),
+        LauncherAction::MoveDown => app.review_launcher_move_down(),
+        LauncherAction::MoveUp => app.review_launcher_move_up(),
+        LauncherAction::Confirm => app.review_launcher_confirm(),
+        LauncherAction::Close => app.close_review_launcher(),
+    }
+}
+
 /// Handles one key event while [`super::Mode::EndReview`] is active (`q` in
 /// a review session opens this modal instead of quitting — see
 /// [`super::quit_action`]): `p` pauses (quits, emitting annotations through
@@ -477,6 +497,69 @@ index 111..222 100644
         app.search_input.push('x');
         handle_search_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::Normal);
+    }
+
+    // -- `R` stays a literal character in every free-text mode ---------------
+    //
+    // `R` moved from a diff-scope Refresh binding to a `Scope::Global`
+    // Review-launcher binding, but every free-text mode bypasses the keymap
+    // table entirely (see each handler's own doc above), so none of them are
+    // affected: an unresolved, unmodified `Char` always inserts, regardless
+    // of what the outer keymap does with that same key.
+
+    #[test]
+    fn r_types_a_literal_character_in_compose_mode() {
+        let mut app = App::new(vec![sample_file()]);
+        app.apply(crate::ui::Action::Compose);
+        assert_eq!(app.mode, Mode::Compose, "cursor must land on a real target");
+        handle_compose_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE),
+        );
+        assert_eq!(
+            app.compose.as_ref().map(|c| c.buffer.text()).as_deref(),
+            Some("R")
+        );
+    }
+
+    #[test]
+    fn r_types_a_literal_character_in_commit_message_mode() {
+        let mut app = App::new(vec![sample_file()]);
+        app.commit_message = Some(crate::ui::commit_message::CommitMessageState::new(0));
+        app.mode = Mode::CommitMessage;
+        handle_commit_message_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE),
+        );
+        assert_eq!(
+            app.commit_message
+                .as_ref()
+                .map(|c| c.buffer.text())
+                .as_deref(),
+            Some("R")
+        );
+    }
+
+    #[test]
+    fn r_types_a_literal_character_in_search_mode() {
+        let mut app = App::new(vec![sample_file()]);
+        app.mode = Mode::Search;
+        handle_search_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE),
+        );
+        assert_eq!(app.search_input, "R");
+    }
+
+    #[test]
+    fn r_types_a_literal_character_in_finder_mode() {
+        let mut app = App::new(vec![sample_file()]);
+        app.open_finder();
+        handle_finder_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE),
+        );
+        assert_eq!(app.finder.as_ref().map(|f| f.query.as_str()), Some("R"));
     }
 
     /// An open overlay never quits the app, so `q` is inert while the Peek

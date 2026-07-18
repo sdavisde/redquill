@@ -414,10 +414,12 @@ fn help_overlay_hides_staging_rows_on_a_range_target() {
     assert!(content.contains("Toggle staging panel"));
 }
 
-/// On the working-tree target every staging gesture is listed.
+/// On the working-tree target every staging gesture is listed. A tall
+/// terminal avoids the overlay clipping its lower sections (the launcher's
+/// own section pushed "Toggle staging panel" out of a shorter viewport).
 #[test]
 fn help_overlay_shows_staging_rows_on_the_working_tree_target() {
-    let backend = TestBackend::new(100, 55);
+    let backend = TestBackend::new(100, 300);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
     app.help_open = true; // target defaults to WorkingTree

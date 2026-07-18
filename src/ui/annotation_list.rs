@@ -23,6 +23,7 @@ impl App {
             | Mode::Peek
             | Mode::Switcher
             | Mode::ReviewBranch
+            | Mode::ReviewLauncher { .. }
             | Mode::CommitMessage
             | Mode::Finder
             | Mode::ProjectSearch

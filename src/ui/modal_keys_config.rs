@@ -74,6 +74,14 @@ pub(super) fn effective_modal_keys(
             modal_keys::switcher_action_from_name,
             &mut warnings,
         ),
+        review_launcher: apply_modal_overrides(
+            modal_keys::REVIEW_LAUNCHER_KEYS.clone(),
+            overrides_for("review-launcher"),
+            "keys.review-launcher",
+            modal_keys::launcher_action_name,
+            modal_keys::launcher_action_from_name,
+            &mut warnings,
+        ),
         help: apply_modal_overrides(
             modal_keys::HELP_KEYS.clone(),
             overrides_for("help"),
@@ -148,9 +156,9 @@ pub(super) fn effective_modal_keys(
     };
 
     // Every mode name the config actually provided a table for that isn't
-    // one of the twelve known modes was already flagged (unknown key) at
+    // one of the thirteen known modes was already flagged (unknown key) at
     // parse time in `crate::config::keys::KeysConfig::from_value`, which
-    // hardcodes the same twelve names — see that module's `MODAL_MODE_NAMES`
+    // hardcodes the same thirteen names — see that module's `MODAL_MODE_NAMES`
     // doc and this module's tests for the cross-check that the two lists
     // agree.
     (keymaps, warnings)

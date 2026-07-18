@@ -130,10 +130,18 @@ pub enum Action {
     CommitStaged,
     /// Open the branch/worktree switcher modal (panel scope).
     OpenSwitcher,
-    /// Open the review-branch modal (panel scope): lists local branches
-    /// (excluding the one currently checked out) so the user can start a
-    /// review session in place, without leaving the app.
+    /// Open the review-branch modal. No longer bound to any key as of the
+    /// Review launcher's global `R` (see [`Action::OpenReviewLauncher`]):
+    /// `super::app::Mode::ReviewBranch` itself is retired in a follow-up
+    /// spec, so this variant is kept only so that mode's existing
+    /// dispatch/help wiring still compiles until then.
     OpenReviewBranch,
+    /// Open the Review launcher modal (`R`, works everywhere —
+    /// [`Scope::Global`]): a tabbed overlay hosting branch review and
+    /// single-commit review behind one entry point (see
+    /// [`super::review_launcher::LauncherTab`]), superseding
+    /// [`Action::OpenReviewBranch`]'s panel-only entry.
+    OpenReviewLauncher,
     /// Open the fuzzy file finder overlay (`gp`, diff scope).
     OpenFileFinder,
     /// Open the full-screen Project Search view (`g/`, diff scope).
@@ -147,7 +155,8 @@ pub enum Action {
     /// Toggle the command-log pane (bound in both scopes).
     ToggleCommandLog,
     /// Re-read the working tree and rebuild the diff, picking up edits made
-    /// outside redquill (e.g. by an agent) since the last refresh.
+    /// outside redquill (e.g. by an agent) since the last refresh (`r`, diff
+    /// scope).
     Refresh,
     /// Quit, emitting annotations to stdout.
     Quit,
@@ -232,6 +241,7 @@ pub(crate) fn action_name(action: Action) -> &'static str {
         CommitStaged => "commit-staged",
         OpenSwitcher => "open-switcher",
         OpenReviewBranch => "open-review-branch",
+        OpenReviewLauncher => "open-review-launcher",
         OpenFileFinder => "open-file-finder",
         OpenProjectSearch => "open-project-search",
         OpenEditor => "open-editor",
@@ -301,6 +311,7 @@ pub(crate) fn action_from_name(name: &str) -> Option<Action> {
         "commit-staged" => CommitStaged,
         "open-switcher" => OpenSwitcher,
         "open-review-branch" => OpenReviewBranch,
+        "open-review-launcher" => OpenReviewLauncher,
         "open-file-finder" => OpenFileFinder,
         "open-project-search" => OpenProjectSearch,
         "open-editor" => OpenEditor,
@@ -700,9 +711,11 @@ impl Keymap {
                 .footer(8, "git panel"),
                 // `@` and `!` are bound in `Scope::Global` (see the block at
                 // the end of this table) — both are "works everywhere" keys,
-                // not diff-specific.
+                // not diff-specific. `R` (uppercase) is Global too now — the
+                // Review launcher — so `Refresh` moved to lowercase `r` to
+                // free it up.
                 d(
-                    KeySeq::one(Char('R'), none),
+                    KeySeq::one(Char('r'), none),
                     Refresh,
                     "Refresh diff from working tree",
                 ),
@@ -821,11 +834,6 @@ impl Keymap {
                     OpenSwitcher,
                     "Open branch/worktree switcher",
                 ),
-                p(
-                    KeySeq::one(Char('R'), none),
-                    OpenReviewBranch,
-                    "Open review-branch modal (start a review in place)",
-                ),
                 // -- Global scope: resolved from both Diff and Panel (see
                 // `Keymap::scope_chain`) — "works everywhere" keys defined
                 // once rather than duplicated per scope.
@@ -833,6 +841,14 @@ impl Keymap {
                 // overlay, so the quit family works here exactly as in the
                 // diff view.
                 g(KeySeq::one(Char('?'), none), ToggleHelp, "Toggle help").footer(0, "help"),
+                // Supersedes the old panel-only review-branch entry (`R`,
+                // panel scope) — reachable from anywhere now, not just the
+                // focused git panel.
+                g(
+                    KeySeq::one(Char('R'), none),
+                    OpenReviewLauncher,
+                    "Open Review launcher (branches / commits)",
+                ),
                 g(
                     KeySeq::one(Char('@'), none),
                     ToggleCommandLog,
@@ -1183,18 +1199,24 @@ mod tests {
     }
 
     #[test]
-    fn shift_r_resolves_to_refresh_regardless_of_shift_bit() {
+    fn shift_r_opens_the_review_launcher_and_lowercase_r_refreshes() {
         let km = Keymap::default_map();
+        // `R` is now `Scope::Global` (the Review launcher), regardless of
+        // whether the terminal also sets the SHIFT bit; `Diff`-scope
+        // `lookup` falls back to it (see `Keymap::scope_chain`).
         assert_eq!(
             km.lookup(key(KeyCode::Char('R'), KeyModifiers::NONE)),
-            Some(Action::Refresh)
+            Some(Action::OpenReviewLauncher)
         );
         assert_eq!(
             km.lookup(key(KeyCode::Char('R'), KeyModifiers::SHIFT)),
+            Some(Action::OpenReviewLauncher)
+        );
+        // Lowercase `r` refreshes now (freed up from Refresh's old `R`).
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('r'), KeyModifiers::NONE)),
             Some(Action::Refresh)
         );
-        // Lowercase `r` is unbound (only `gr` uses `r`, as a sequence tail).
-        assert_eq!(km.lookup(key(KeyCode::Char('r'), KeyModifiers::NONE)), None);
     }
 
     #[test]

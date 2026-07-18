@@ -1,7 +1,11 @@
 //! Real-git integration tests for the review-branch modal's in-app entry
-//! path, driven through the actual key-dispatch pipeline
-//! (`` ` `` -> `R` -> `Enter`) against throwaway repositories built
-//! in tempdirs, per this repo's testing convention — never the host repo.
+//! path, driven through the actual key-dispatch pipeline for focus and
+//! confirm (`` ` `` -> `Enter`) against throwaway repositories built in
+//! tempdirs, per this repo's testing convention — never the host repo. The
+//! modal itself opens via a direct `App::open_review_branch_modal()` call
+//! rather than a keypress: its panel-scope `R` binding moved to the Review
+//! launcher's global `R` (spec 09), so this file now exercises the confirm/
+//! reroot machinery the launcher's Branches tab will drive once migrated.
 //!
 //! Lives beside `git_switch_integration_tests.rs`/`review_guard_integration_tests.rs`
 //! for the identical reason those files document: `dispatch_key`,
@@ -229,7 +233,7 @@ fn review_branch_modal_lists_local_branches_excluding_the_current_one() {
 
     press(&mut app, &keymap, &mut pending, KeyCode::Char('`')); // focus git panel
     assert!(matches!(app.mode, Mode::Panel { .. }));
-    press(&mut app, &keymap, &mut pending, KeyCode::Char('R')); // open review-branch modal
+    app.open_review_branch_modal(); // panel-scope `R` moved to the Review launcher's global `R`
     assert_eq!(app.mode, Mode::ReviewBranch);
 
     let branches = &app.review_branch_modal.as_ref().unwrap().branches;
@@ -294,7 +298,7 @@ fn review_branch_modal_reroots_into_a_bannered_review_session_with_persisted_mar
     let mut pending: Option<KeyEvent> = None;
 
     press(&mut app, &keymap, &mut pending, KeyCode::Char('`'));
-    press(&mut app, &keymap, &mut pending, KeyCode::Char('R'));
+    app.open_review_branch_modal(); // panel-scope `R` moved to the Review launcher's global `R`
     assert_eq!(app.mode, Mode::ReviewBranch);
     press(&mut app, &keymap, &mut pending, KeyCode::Enter); // confirm on `feature`
 
@@ -360,7 +364,7 @@ fn review_branch_modal_surfaces_a_worktree_add_failure_without_mutating_state() 
     let mut pending: Option<KeyEvent> = None;
 
     press(&mut app, &keymap, &mut pending, KeyCode::Char('`'));
-    press(&mut app, &keymap, &mut pending, KeyCode::Char('R'));
+    app.open_review_branch_modal(); // panel-scope `R` moved to the Review launcher's global `R`
     assert_eq!(app.mode, Mode::ReviewBranch);
 
     let before_root = app.repo_root.clone();

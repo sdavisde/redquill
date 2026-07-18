@@ -58,6 +58,7 @@ mod render_glue;
 mod review_banner;
 mod review_branch;
 mod review_branch_modal;
+mod review_launcher;
 mod review_ops;
 mod review_session;
 mod rows;
@@ -370,6 +371,7 @@ fn dispatch_key(
         Mode::Peek => modes::handle_peek_key(app, key),
         Mode::Switcher => modes::handle_switcher_key(app, key),
         Mode::ReviewBranch => modes::handle_review_branch_key(app, key),
+        Mode::ReviewLauncher { .. } => modes::handle_review_launcher_key(app, key),
         Mode::CommitMessage => modes::handle_commit_message_key(app, key),
         Mode::Finder => modes::handle_finder_key(app, key),
         Mode::ProjectSearch => modes::handle_project_search_key(app, key),

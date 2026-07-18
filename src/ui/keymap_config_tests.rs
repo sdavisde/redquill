@@ -369,6 +369,79 @@ fn a_diff_override_reusing_a_global_default_key_shadows_without_a_warning() {
     );
 }
 
+// -- Review launcher rebind: `[keys.global]`/`[keys.diff]` remap ------------
+
+/// `[keys.global] open-review-launcher = "L"` remaps the Review launcher off
+/// its default `R`, reachable from both table-driven scopes via the Global
+/// fallback (FR-3/FR-4 interplay, spec 09).
+#[test]
+fn global_override_remaps_open_review_launcher() {
+    let mut keys = KeysConfig::default();
+    keys.global.insert(
+        "open-review-launcher".to_string(),
+        one(KeyCode::Char('L'), KeyModifiers::NONE),
+    );
+    let (km, warnings) = effective_keymap(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+    for scope in [Scope::Diff, Scope::Panel] {
+        assert_eq!(
+            km.lookup_in(
+                scope,
+                crossterm::event::KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE)
+            ),
+            None,
+            "the default R is gone"
+        );
+        assert_eq!(
+            km.lookup_in(
+                scope,
+                crossterm::event::KeyEvent::new(KeyCode::Char('L'), KeyModifiers::NONE)
+            ),
+            Some(Action::OpenReviewLauncher)
+        );
+    }
+}
+
+/// `[keys.diff] refresh = "F"` remaps refresh off its post-rebind default
+/// `r`, proving the diff-scope override still applies cleanly to the moved
+/// binding (FR-3/FR-4 interplay, spec 09).
+#[test]
+fn diff_override_remaps_refresh_off_its_post_rebind_default() {
+    let mut keys = KeysConfig::default();
+    keys.diff.insert(
+        "refresh".to_string(),
+        one(KeyCode::Char('F'), KeyModifiers::NONE),
+    );
+    let (km, warnings) = effective_keymap(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+    assert_eq!(
+        km.lookup_in(
+            Scope::Diff,
+            crossterm::event::KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)
+        ),
+        None,
+        "the default r is gone"
+    );
+    assert_eq!(
+        km.lookup_in(
+            Scope::Diff,
+            crossterm::event::KeyEvent::new(KeyCode::Char('F'), KeyModifiers::NONE)
+        ),
+        Some(Action::Refresh)
+    );
+    // The Review launcher's own R (Global) is untouched by a Diff-scope
+    // override of an unrelated action.
+    assert_eq!(
+        km.lookup_in(
+            Scope::Diff,
+            crossterm::event::KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE)
+        ),
+        Some(Action::OpenReviewLauncher)
+    );
+}
+
 // -- No config: effective keymap is byte-identical to default_map ------------
 
 #[test]

@@ -36,6 +36,7 @@ use super::peek::{PeekKind, PeekState};
 use super::project_search::ProjectSearchState;
 use super::refresh::InFlightRefresh;
 use super::review_branch::ReviewBranchState;
+use super::review_launcher::LauncherTab;
 use super::rows::Row;
 use super::search::SearchState;
 use super::stage_ops::{ReviewSnapshot, StageOps, StagedFile, StagedState};
@@ -100,6 +101,20 @@ pub enum Mode {
     /// and ensures a managed worktree exists instead of switching onto an
     /// already-checked-out ref.
     ReviewBranch,
+    /// The Review launcher modal (`R`, `Scope::Global`) is open: a tabbed
+    /// overlay (see [`super::review_launcher::LauncherTab`]) hosting branch
+    /// review and single-commit review behind one entry point, reachable
+    /// from anywhere rather than only the focused git panel. `tab` and
+    /// `cursor` are this open's navigation state; `origin` is where `R` was
+    /// pressed from, restored exactly on `Esc` via [`ModeOrigin::restore`]
+    /// (mirrors [`Mode::EndReview`]'s identical origin-restore contract).
+    /// Supersedes [`Mode::ReviewBranch`] as the sole in-app entry point for
+    /// starting a branch review (spec 09).
+    ReviewLauncher {
+        tab: LauncherTab,
+        cursor: usize,
+        origin: ModeOrigin,
+    },
     /// The commit-message modal (`c`, panel scope) is open.
     CommitMessage,
     /// The fuzzy file finder overlay (`gp`) is open. The read-only file view
@@ -417,6 +432,14 @@ pub struct App {
     /// documented exception in `docs/rust-best-practices.md`'s state-design
     /// guidance for state that must outlive mode exit.
     pub(super) last_panel_tab: PanelTab,
+    /// Which Review launcher tab reopening lands on, for the lifetime of the
+    /// process (see [`Mode::ReviewLauncher`], FR-6 of spec 09). The same
+    /// "must survive mode exit" exception `last_panel_tab` documents: the
+    /// launcher's own `tab` field lives in the mode and would go stale the
+    /// instant it closes, so remembering "where you left off" needs a
+    /// struct field. Defaults to [`LauncherTab::default`] (Branches), so the
+    /// first open of a session always lands there.
+    pub(super) last_launcher_tab: LauncherTab,
     /// The set of collapsed directory keys in the git panel's file tree (see
     /// [`super::file_tree`]). An `App` field rather than [`Mode::Panel`]
     /// state because a folded directory must stay folded across the panel
@@ -632,6 +655,7 @@ impl App {
             history_generation: 0,
             history_tasks: BackgroundTasks::new(),
             last_panel_tab: PanelTab::default(),
+            last_launcher_tab: LauncherTab::default(),
             panel_collapsed_dirs: HashSet::new(),
             active_commit: None,
             suspended_view: None,
@@ -1000,6 +1024,7 @@ impl App {
             Action::CommitStaged => self.open_commit_message(),
             Action::OpenSwitcher => self.open_switcher(),
             Action::OpenReviewBranch => self.open_review_branch_modal(),
+            Action::OpenReviewLauncher => self.open_review_launcher(),
             Action::OpenFileFinder => self.open_finder(),
             Action::OpenProjectSearch => self.open_project_search(),
             Action::ToggleCommandLog => self.toggle_command_log(),
