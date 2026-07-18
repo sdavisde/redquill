@@ -103,6 +103,8 @@ Covers: FR-6 (curated const table, target 5 / hard cap 7, intent phrase → `Act
 
 ### [x] 4.0 Which-key popup: pause on a pending `g`/`z` prefix reveals its continuations (Unit 3)
 
+**Amendment (2026-07-18): shipped, then withdrawn.** This parent task landed (commits `e82355f`, `4912ca1`) and closed FR-10..FR-13 as described below. After dogfooding, the operator withdrew the popup: the pre-existing footer pending-prefix strip (`Keymap::completions_for` / `pending_hints`, `src/ui/footer.rs`) already renders the same continuations instantly and with capability gating the popup lacked, making it duplicative. The popup code (`src/ui/which_key.rs`, the `pending_since`/`update_pending_since` plumbing in `src/ui/mod.rs`, `Keymap::which_key_prefixes`/`continuations_for` in `src/ui/keymap.rs`, and their tests) was removed in a follow-up `refactor:` commit. The `[x]` checkboxes below are left intact — they record what was built and verified, not what remains shipped.
+
 Covers: FR-10 (prefixes derived from the keymap's `KeySeq::Two` sequences, not hardcoded; popup after ~500 ms compile-time delay listing bound continuations with descriptions from the effective keymap), FR-11 (pending-prefix state machine byte-identical; dismissal exactly mirrors existing prefix resolution; delay check piggybacks on the existing render tick — stored `Instant` compared on tick, no threads/timers), FR-12 (effective keymap reflected, count-prefixed chords like `3g` show the same continuations), FR-13 (drift test: popup contents equal the keymap's two-key bindings for that prefix). Popup anchored near the footer per spec Design Considerations; renders only while a prefix is pending (perf tripwires unaffected).
 
 #### 4.0 Proof Artifact(s)
