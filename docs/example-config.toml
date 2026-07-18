@@ -292,10 +292,11 @@ literal = false
 #
 # Every modal mode — a mode that handles its own keys directly instead of
 # going through the main keymap (the annotation list, the staging panel,
-# the LSP peek overlay, the branch/worktree switcher, the help overlay's
-# scroll keys and its own `/` filter, Compose, the commit-message modal,
-# the diff-view `/` search input, the fuzzy file finder, and the two
-# Project Search focuses) — has its own `[keys.<mode>]` table, with the
+# the LSP peek overlay, the branch/worktree switcher, the Review launcher,
+# the help overlay's scroll keys and its own `/` filter, Compose, the
+# commit-message modal, the diff-view `/` search input, the fuzzy file
+# finder, and the two Project Search focuses) — has its own
+# `[keys.<mode>]` table, with the
 # identical grammar and merge semantics as `[keys.diff]`/`[keys.panel]`
 # above: `action-name = "<key>"` or `= ["<key>", ...]`, an override
 # replaces that action's default keys entirely, an unlisted action keeps
@@ -308,7 +309,7 @@ literal = false
 # only the *control* keys listed below (Enter/Esc/arrows/Backspace/...)
 # are actions.
 #
-# The twelve mode names and their complete action lists, each showing its
+# The thirteen mode names and their complete action lists, each showing its
 # default key(s):
 #
 # [keys.list]                          # Annotation list panel (`a`)
@@ -336,6 +337,13 @@ literal = false
 # move-down = ["j", "down"]             # Move selection down
 # move-up = ["k", "up"]                 # Move selection up
 # confirm = "enter"                    # Switch to the selected branch/worktree
+# close = "esc"                        # Close
+#
+# [keys.review-launcher]               # Review launcher (`R`, works everywhere, spec 09)
+# toggle-tab = ["tab", "shift-tab", "h", "l", "left", "right"]  # Switch tab
+# move-down = ["j", "down"]             # Move selection down
+# move-up = ["k", "up"]                 # Move selection up
+# confirm = "enter"                    # Confirm the highlighted row
 # close = "esc"                        # Close
 #
 # [keys.help]                          # Help overlay scroll/close/filter-open keys

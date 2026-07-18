@@ -15,8 +15,8 @@ use crate::annotate::Side;
 use crate::config::{Config, ConfigWarning};
 use crate::diff::FileDiff;
 use crate::git::{
-    BranchStatus, CommitLogEntry, CommitSummary, DiffTarget, RawFilePatch, RemoteOp, StagingMode,
-    StashEntry, commit_command_line, remote_command,
+    BranchStatus, CommitLogEntry, CommitSummary, DiffTarget, LocalBranch, RawFilePatch, RemoteOp,
+    StagingMode, StashEntry, commit_command_line, remote_command,
 };
 use crate::highlight::Highlighter;
 use crate::lsp::RequestId;
@@ -35,7 +35,7 @@ use super::lsp_ops::LspClient;
 use super::peek::{PeekKind, PeekState};
 use super::project_search::ProjectSearchState;
 use super::refresh::InFlightRefresh;
-use super::review_branch::ReviewBranchState;
+use super::review_launcher::{InFlightLauncherCommits, LauncherTab};
 use super::rows::Row;
 use super::search::SearchState;
 use super::stage_ops::{ReviewSnapshot, StageOps, StagedFile, StagedState};
@@ -91,15 +91,22 @@ pub enum Mode {
     Peek,
     /// The branch/worktree switcher modal (`b`, panel scope) is open.
     Switcher,
-    /// The review-branch modal (`R`, panel scope) is open: lists local
-    /// branches (excluding the one currently checked out) so the user can
-    /// start a review session in place, styled and behaved like
-    /// [`Mode::Switcher`]'s Branches tab (see
-    /// [`super::review_branch::ReviewBranchState`]). Its own mode rather
-    /// than a third switcher tab, since confirming here resolves a base ref
-    /// and ensures a managed worktree exists instead of switching onto an
-    /// already-checked-out ref.
-    ReviewBranch,
+    /// The Review launcher modal (`R`, `Scope::Global`) is open: a tabbed
+    /// overlay (see [`super::review_launcher::LauncherTab`]) hosting branch
+    /// review and single-commit review behind one entry point, reachable
+    /// from anywhere rather than only the focused git panel. `tab` and
+    /// `cursor` are this open's navigation state; `origin` is where `R` was
+    /// pressed from, restored exactly on `Esc` via [`ModeOrigin::restore`]
+    /// (mirrors [`Mode::EndReview`]'s identical origin-restore contract).
+    /// The sole in-app entry point for starting a branch review — confirming
+    /// on the Branches tab resolves a base ref and ensures a managed
+    /// worktree exists instead of switching onto an already-checked-out ref,
+    /// which is why this isn't a third [`Mode::Switcher`] tab.
+    ReviewLauncher {
+        tab: LauncherTab,
+        cursor: usize,
+        origin: ModeOrigin,
+    },
     /// The commit-message modal (`c`, panel scope) is open.
     CommitMessage,
     /// The fuzzy file finder overlay (`gp`) is open. The read-only file view
@@ -120,17 +127,14 @@ pub enum Mode {
     /// The end-review modal (`q` in a review session) is open: pause /
     /// finish / cancel. `origin` is where `q` was pressed from — `Cancel`
     /// restores it exactly. This is the state-design exception documented
-    /// on [`EndReviewOrigin`]: it would ordinarily be a struct field ("must
+    /// on [`ModeOrigin`]: it would ordinarily be a struct field ("must
     /// survive mode exit"), but since it only matters for *this* mode's
     /// lifetime, carrying it as the variant's own payload keeps it from
     /// going stale as a field while every other mode is active. `cursor` is
     /// the `j`/`k`-highlighted option (0 = Pause, 1 = Finish, 2 = Cancel —
     /// the modal's display order), reset to `0` on open; the pre-existing
     /// `p`/`f`/`c` mnemonics dispatch immediately regardless of `cursor`.
-    EndReview {
-        origin: EndReviewOrigin,
-        cursor: usize,
-    },
+    EndReview { origin: ModeOrigin, cursor: usize },
     /// The pull/push confirm modal (`p`/`P` in a review session) is open:
     /// confirming this specific remote-writing op against the branch under
     /// review is the confirm-first guard `p`/`P` gain during a review (`f`
@@ -150,18 +154,45 @@ pub enum Mode {
     },
 }
 
-/// Where `q` was pressed from, carried by [`Mode::EndReview`] so its Cancel
-/// gesture can restore the exact prior mode. A dedicated small enum rather
-/// than `Box<Mode>` recursion: [`Mode`] derives `Copy` (every call site that
+/// Where a modal-launching gesture was pressed from, so closing that modal
+/// can restore the exact prior mode: [`Mode::EndReview`]'s Cancel (`q` was
+/// pressed from here) and [`Mode::ReviewLauncher`]'s `Esc` (`R` was pressed
+/// from here) both carry one of these rather than a parallel enum each,
+/// since the payloads are identical. A dedicated small enum rather than
+/// `Box<Mode>` recursion: [`Mode`] derives `Copy` (every call site that
 /// matches `app.mode` by value depends on that), and a `Box` field would
-/// remove it crate-wide. `q` is only ever intercepted from these three
-/// contexts (see [`super::quit_action`]/[`super::modes::handle_panel_key`]),
-/// so this closed enum covers every case.
+/// remove it crate-wide. Every capturing gesture is only ever intercepted
+/// from these contexts (see [`super::quit_action`]/
+/// [`super::modes::handle_panel_key`]/[`super::review_launcher`]), so this
+/// closed enum covers every case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EndReviewOrigin {
+pub enum ModeOrigin {
     Normal,
     Visual { anchor: usize },
     Panel { cursor: usize, tab: PanelTab },
+}
+
+impl ModeOrigin {
+    /// Captures `mode` as an origin to restore to later: `Visual`/`Panel`
+    /// keep their payload, every other mode collapses to `Normal` — the
+    /// same fallback [`super::end_review::App::open_end_review_modal`]'s
+    /// inline match used before this was factored out here.
+    pub(super) fn capture(mode: Mode) -> ModeOrigin {
+        match mode {
+            Mode::Visual { anchor } => ModeOrigin::Visual { anchor },
+            Mode::Panel { cursor, tab } => ModeOrigin::Panel { cursor, tab },
+            _ => ModeOrigin::Normal,
+        }
+    }
+
+    /// The mode this origin restores to.
+    pub(super) fn restore(self) -> Mode {
+        match self {
+            ModeOrigin::Normal => Mode::Normal,
+            ModeOrigin::Visual { anchor } => Mode::Visual { anchor },
+            ModeOrigin::Panel { cursor, tab } => Mode::Panel { cursor, tab },
+        }
+    }
 }
 
 /// The TUI's full state: the per-view diff state (files, selection, rows,
@@ -314,14 +345,14 @@ pub struct App {
     /// [`Mode::Switcher`] is active (see [`App::open_switcher`] /
     /// [`App::close_switcher`]).
     pub switcher: Option<SwitcherState>,
-    /// The review-branch modal's state, `Some` only while
-    /// [`Mode::ReviewBranch`] is active (see
-    /// [`super::review_branch::App::open_review_branch_modal`] /
-    /// [`super::review_branch::App::close_review_branch_modal`]). Named
+    /// The Review launcher's Branches tab: local branches read fresh on
+    /// every launcher open and every switch onto the tab (see
+    /// [`super::review_launcher`]), excluding the one currently checked out
+    /// — identical to the retired review-branch modal's filter. Named
     /// distinctly from [`App::review_branch`] (the *existing* method naming
     /// the branch under review) so the field and the predicate can never be
     /// confused at a call site.
-    pub review_branch_modal: Option<ReviewBranchState>,
+    pub(super) launcher_branches: Vec<LocalBranch>,
     /// The LSP client backing `gd`/`gr`/`K`, created lazily on first use
     /// against `repo_root`. `None` until then. `pub(super)` for the
     /// code-intelligence module.
@@ -393,6 +424,45 @@ pub struct App {
     /// documented exception in `docs/rust-best-practices.md`'s state-design
     /// guidance for state that must outlive mode exit.
     pub(super) last_panel_tab: PanelTab,
+    /// Which Review launcher tab reopening lands on, for the lifetime of the
+    /// process (see [`Mode::ReviewLauncher`]). The same
+    /// "must survive mode exit" exception `last_panel_tab` documents: the
+    /// launcher's own `tab` field lives in the mode and would go stale the
+    /// instant it closes, so remembering "where you left off" needs a
+    /// struct field. Defaults to [`LauncherTab::default`] (Branches), so the
+    /// first open of a session always lands there.
+    pub(super) last_launcher_tab: LauncherTab,
+    /// The Review launcher Commits tab's ahead-of-base list (see
+    /// [`super::review_launcher`]): loaded once per open/toggle rather than
+    /// paginated, since a sane review range is small — never accumulated
+    /// page by page the way `history` is. Empty either because nothing was
+    /// requested yet, a fetch is still in flight, or the range genuinely
+    /// has nothing ahead of the base; [`App::launcher_commits_loaded`]
+    /// disambiguates the first two from the third.
+    pub(super) launcher_commits: Vec<CommitLogEntry>,
+    /// Whether a fetch for `launcher_commits` has completed at least once
+    /// (even to an empty result) — the loading-placeholder discriminator,
+    /// collapsed into one flag since this list is never paginated (unlike
+    /// `history_exhausted`, which only means "no *more* pages").
+    pub(super) launcher_commits_loaded: bool,
+    /// The single background ahead-of-base fetch in flight, if any
+    /// (single-flight, mirroring [`InFlightHistory`]).
+    pub(super) launcher_commits_in_flight: Option<InFlightLauncherCommits>,
+    /// Bumped to invalidate a straggling ahead-of-base fetch spawned before
+    /// the bump (mirrors `history_generation`: stays at `0` in production
+    /// today, exists for a future invalidation point and is exercised
+    /// directly by tests).
+    pub(super) launcher_commits_generation: u64,
+    /// The background-task poller ahead-of-base fetches run through,
+    /// separate from `history_tasks` so their results are drained
+    /// independently (see [`App::poll_launcher_commits`]).
+    pub(super) launcher_commits_tasks: BackgroundTasks<Option<Vec<CommitLogEntry>>>,
+    /// Whether the Commits tab shows the full recent-HEAD log (`history`,
+    /// the same source the History tab loads) instead of the ahead-of-base
+    /// list (`launcher_commits`) — the `a` "all commits" toggle. Remembered
+    /// for the process lifetime alongside `last_launcher_tab`, the same
+    /// "must survive mode exit" exception that field documents.
+    pub(super) launcher_all_commits: bool,
     /// The set of collapsed directory keys in the git panel's file tree (see
     /// [`super::file_tree`]). An `App` field rather than [`Mode::Panel`]
     /// state because a folded directory must stay folded across the panel
@@ -592,7 +662,7 @@ impl App {
             repo_root: None,
             peek: None,
             switcher: None,
-            review_branch_modal: None,
+            launcher_branches: Vec::new(),
             lsp: None,
             pending_lsp: None,
             background: BackgroundTasks::new(),
@@ -608,6 +678,13 @@ impl App {
             history_generation: 0,
             history_tasks: BackgroundTasks::new(),
             last_panel_tab: PanelTab::default(),
+            last_launcher_tab: LauncherTab::default(),
+            launcher_commits: Vec::new(),
+            launcher_commits_loaded: false,
+            launcher_commits_in_flight: None,
+            launcher_commits_generation: 0,
+            launcher_commits_tasks: BackgroundTasks::new(),
+            launcher_all_commits: false,
             panel_collapsed_dirs: HashSet::new(),
             active_commit: None,
             suspended_view: None,
@@ -975,7 +1052,7 @@ impl App {
             Action::RemotePush => self.request_remote_op(self.remote_push_op()),
             Action::CommitStaged => self.open_commit_message(),
             Action::OpenSwitcher => self.open_switcher(),
-            Action::OpenReviewBranch => self.open_review_branch_modal(),
+            Action::OpenReviewLauncher => self.open_review_launcher(),
             Action::OpenFileFinder => self.open_finder(),
             Action::OpenProjectSearch => self.open_project_search(),
             Action::ToggleCommandLog => self.toggle_command_log(),

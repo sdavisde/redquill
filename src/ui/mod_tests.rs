@@ -4,10 +4,12 @@ use super::*;
 use crate::annotate::{Classification, Target};
 use crate::config::SidebarSide;
 use crate::diff::FileDiff;
-use crate::git::{DiffTarget, RawFilePatch, RemoteOp};
+use crate::git::{CommitLogEntry, DiffTarget, RawFilePatch, RemoteOp};
 use crate::highlight::TokenKind;
 use crate::lsp::SourceLocation;
 use crate::review::ReviewStatus;
+use crate::ui::app::{ModeOrigin, PanelTab};
+use crate::ui::review_launcher::LauncherTab;
 use crossterm::event::KeyModifiers;
 use ratatui::backend::TestBackend;
 
@@ -273,8 +275,8 @@ fn empty_working_tree_target_shows_welcome_state() {
     let content = rendered_content(&app, &keymap);
 
     assert!(content.contains("No uncommitted changes"));
-    // Hints come from the table: FocusGitPanel is bound to `` ` `` and
-    // ToggleHelp to `?` in Scope::Diff by default (see `keymap.rs`).
+    // Hints come from the table: FocusGitPanel is bound to `` ` `` in
+    // Scope::Diff, ToggleHelp to `?` (resolved through the Global fallback).
     assert!(content.contains("open the git panel"));
     assert!(content.contains("switch to the History tab"));
     assert!(content.contains("open help"));
@@ -394,7 +396,7 @@ fn multibuffer_renders_for_a_range_target() {
 /// toggle.
 #[test]
 fn help_overlay_hides_staging_rows_on_a_range_target() {
-    let backend = TestBackend::new(100, 44);
+    let backend = TestBackend::new(100, 55);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
     app.help_open = true;
@@ -414,10 +416,12 @@ fn help_overlay_hides_staging_rows_on_a_range_target() {
     assert!(content.contains("Toggle staging panel"));
 }
 
-/// On the working-tree target every staging gesture is listed.
+/// On the working-tree target every staging gesture is listed. A tall
+/// terminal avoids the overlay clipping its lower sections (the launcher's
+/// own section pushed "Toggle staging panel" out of a shorter viewport).
 #[test]
 fn help_overlay_shows_staging_rows_on_the_working_tree_target() {
-    let backend = TestBackend::new(100, 55);
+    let backend = TestBackend::new(100, 300);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
     app.help_open = true; // target defaults to WorkingTree
@@ -442,7 +446,7 @@ fn help_overlay_shows_staging_rows_on_the_working_tree_target() {
 /// this also proves the "Review" group actually reaches the screen.
 #[test]
 fn help_overlay_shows_review_rows_and_hides_staging_rows_during_a_review_session() {
-    let backend = TestBackend::new(100, 55);
+    let backend = TestBackend::new(100, 65);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
     app.help_open = true;
@@ -543,7 +547,7 @@ fn help_overlay_lists_remote_and_command_log_bindings() {
         .map(|c| c.symbol())
         .collect();
 
-    // Command-log toggle (Panels group, diff scope).
+    // Command-log toggle ("Works everywhere" section, Scope::Global).
     assert!(content.contains("Toggle command log pane"));
     // Remote ops (Git panel focused section, panel scope).
     assert!(content.contains("Fetch from remote"));
@@ -554,6 +558,55 @@ fn help_overlay_lists_remote_and_command_log_bindings() {
     assert!(content.contains("Open branch/worktree switcher"));
     assert!(content.contains("Branch/worktree switcher"));
     assert!(content.contains("Switch to the selected branch/worktree"));
+}
+
+/// Every `Scope::Global` binding renders exactly once, under its own
+/// "Works everywhere" section, ahead of the per-scope sections — not
+/// duplicated once per scope the way it rendered before.
+#[test]
+fn help_overlay_lists_global_bindings_once_in_a_works_everywhere_section() {
+    let backend = TestBackend::new(100, 300);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(vec![sample_file()]);
+    app.help_open = true;
+    let keymap = Keymap::default_map();
+
+    terminal
+        .draw(|frame| draw(frame, &app, &keymap, None))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+    if std::env::var_os("REDQUILL_PROOF_DUMP").is_some() {
+        let w = buffer.area.width as usize;
+        let symbols: Vec<&str> = buffer.content().iter().map(|c| c.symbol()).collect();
+        for row in symbols.chunks(w) {
+            eprintln!("{}", row.concat());
+        }
+    }
+
+    assert!(content.contains("Works everywhere"));
+    let works_idx = content.find("Works everywhere").unwrap();
+    let panels_idx = content.find("Panels").expect("Panels section must render");
+    assert!(
+        works_idx < panels_idx,
+        "the Works everywhere section must render before the per-scope sections"
+    );
+
+    // One line per `Scope::Global` binding, in default_map(): `?`/`@`/`!`/
+    // `q` each once, `Quit and discard annotations` twice (`Q` and Ctrl-C).
+    for (description, expected_count) in [
+        ("Toggle help", 1),
+        ("Toggle command log pane", 1),
+        ("Dismiss config warning notice", 1),
+        ("Quit and emit annotations", 1),
+        ("Quit and discard annotations", 2),
+    ] {
+        assert_eq!(
+            content.matches(description).count(),
+            expected_count,
+            "unexpected occurrence count for {description:?}"
+        );
+    }
 }
 
 /// On a terminal too short for the whole binding list, the help overlay
@@ -3244,5 +3297,170 @@ fn scrolling_a_5k_line_multibuffer_renders_fast() {
     assert!(
         per_frame < std::time::Duration::from_millis(50),
         "ms/frame {per_frame:?} too slow over {frames} frames / {total_rows} rows"
+    );
+}
+
+// -- Review launcher journeys: `R` opens it from anywhere, `Esc` restores ---
+//
+// `R` from the diff view and from the git panel (cursor mid-list on the
+// non-default History tab) both open the Review launcher; `Esc` restores the
+// exact prior focus either way.
+
+/// Prints a rendered frame's non-blank rows to stderr when
+/// `REDQUILL_PROOF_DUMP` is set — the proof-capture convention this file's
+/// other render tests already use inline, factored out once here since both
+/// journey tests below need it.
+fn dump_frame_if_requested(label: &str, app: &App, keymap: &Keymap) {
+    if std::env::var_os("REDQUILL_PROOF_DUMP").is_none() {
+        return;
+    }
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| draw(frame, app, keymap, None))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let w = buffer.area.width as usize;
+    let symbols: Vec<&str> = buffer.content().iter().map(|c| c.symbol()).collect();
+    eprintln!("-- {label} --");
+    for row in symbols.chunks(w) {
+        let line = row.concat();
+        if !line.trim().is_empty() {
+            eprintln!("{line}");
+        }
+    }
+}
+
+/// Diff-view leg: from `Mode::Normal`, `R` opens the launcher
+/// (landing on Branches, the default tab) and `Esc` restores the exact prior
+/// mode. Driven through the real `dispatch_key` pipeline, the same handler
+/// the blocking event loop calls.
+#[test]
+fn journey_r_from_diff_view_opens_launcher_and_esc_restores() {
+    let mut app = App::new(vec![sample_file()]);
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
+
+    assert_eq!(app.mode, Mode::Normal);
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE),
+    );
+    assert_eq!(
+        app.mode,
+        Mode::ReviewLauncher {
+            tab: LauncherTab::Branches,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        },
+        "R from the diff view opens the launcher on the default tab"
+    );
+    dump_frame_if_requested(
+        "R from the diff view opens the Review launcher",
+        &app,
+        &keymap,
+    );
+
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    );
+    assert_eq!(app.mode, Mode::Normal, "Esc restores the exact prior focus");
+    dump_frame_if_requested("Esc restores the diff view", &app, &keymap);
+}
+
+/// Git-panel leg: with the panel focused on the History tab and
+/// its cursor mid-list (neither the top nor the last loaded row), `R` opens
+/// the launcher and `Esc` restores the panel with its cursor and tab exactly
+/// intact — the non-default-tab case.
+#[test]
+fn journey_r_from_panel_mid_list_history_tab_opens_launcher_and_esc_restores_cursor_and_tab() {
+    let mut app = App::new(vec![sample_file()]);
+    app.mode = Mode::Panel {
+        cursor: 0,
+        tab: PanelTab::History,
+    };
+    app.history = vec![
+        CommitLogEntry {
+            sha: "aaa1111full".to_string(),
+            short_sha: "aaa1111".to_string(),
+            subject: "third".to_string(),
+            author_name: "Dev".to_string(),
+            timestamp: 1_700_000_002,
+        },
+        CommitLogEntry {
+            sha: "bbb2222full".to_string(),
+            short_sha: "bbb2222".to_string(),
+            subject: "second".to_string(),
+            author_name: "Dev".to_string(),
+            timestamp: 1_700_000_001,
+        },
+        CommitLogEntry {
+            sha: "ccc3333full".to_string(),
+            short_sha: "ccc3333".to_string(),
+            subject: "first".to_string(),
+            author_name: "Dev".to_string(),
+            timestamp: 1_700_000_000,
+        },
+    ];
+    app.history_exhausted = true;
+    app.panel_move_down(); // cursor -> 1, mid-list
+    assert_eq!(app.panel_cursor(), 1);
+
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
+
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE),
+    );
+    assert_eq!(
+        app.mode,
+        Mode::ReviewLauncher {
+            tab: LauncherTab::Branches,
+            cursor: 0,
+            origin: ModeOrigin::Panel {
+                cursor: 1,
+                tab: PanelTab::History,
+            },
+        },
+        "R from the panel captures its cursor/tab as the restore origin"
+    );
+    dump_frame_if_requested(
+        "R from the git panel (History tab, cursor mid-list) opens the Review launcher",
+        &app,
+        &keymap,
+    );
+
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    );
+    assert_eq!(
+        app.mode,
+        Mode::Panel {
+            cursor: 1,
+            tab: PanelTab::History,
+        },
+        "Esc restores the panel with its cursor and tab exactly intact"
+    );
+    dump_frame_if_requested(
+        "Esc restores the git panel, cursor and tab intact",
+        &app,
+        &keymap,
     );
 }

@@ -56,8 +56,8 @@ mod project_search_view;
 mod refresh;
 mod render_glue;
 mod review_banner;
-mod review_branch;
-mod review_branch_modal;
+mod review_launcher;
+mod review_launcher_modal;
 mod review_ops;
 mod review_session;
 mod rows;
@@ -354,11 +354,12 @@ fn dispatch_key(
         Mode::List => modes::handle_list_key(app, key),
         Mode::Staging => modes::handle_staging_key(app, key),
         Mode::Panel { .. } => {
-            // `?` opens help from the focused git panel too (see the
-            // panel-scope `ToggleHelp` row in keymap.rs); once open it
-            // shadows panel dispatch exactly like the Normal/Visual overlay
-            // case above, so `j`/`k`/Esc scroll/close the overlay rather than
-            // moving the panel cursor underneath it.
+            // `?` opens help from the focused git panel too (its
+            // `ToggleHelp` binding resolves in every scope — see
+            // `keymap::Scope::Global`); once open it shadows panel dispatch
+            // exactly like the Normal/Visual overlay case above, so
+            // `j`/`k`/Esc scroll/close the overlay rather than moving the
+            // panel cursor underneath it.
             if app.help_open {
                 handle_help_key(app, key);
                 return Flow::Continue;
@@ -368,7 +369,7 @@ fn dispatch_key(
         Mode::Search => modes::handle_search_key(app, key),
         Mode::Peek => modes::handle_peek_key(app, key),
         Mode::Switcher => modes::handle_switcher_key(app, key),
-        Mode::ReviewBranch => modes::handle_review_branch_key(app, key),
+        Mode::ReviewLauncher { .. } => modes::handle_review_launcher_key(app, key),
         Mode::CommitMessage => modes::handle_commit_message_key(app, key),
         Mode::Finder => modes::handle_finder_key(app, key),
         Mode::ProjectSearch => modes::handle_project_search_key(app, key),
@@ -829,8 +830,8 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     if matches!(app.mode, Mode::Switcher) {
         switcher_modal::render(frame, area, app);
     }
-    if matches!(app.mode, Mode::ReviewBranch) {
-        review_branch_modal::render(frame, area, app);
+    if matches!(app.mode, Mode::ReviewLauncher { .. }) {
+        review_launcher_modal::render(frame, area, app);
     }
     if matches!(app.mode, Mode::CommitMessage) {
         commit_modal::render(frame, area, app);
@@ -1031,6 +1032,9 @@ fn event_loop(
         // Drain any completed History-tab commit-log page fetch, same
         // cadence as the other pollers.
         app.poll_history();
+        // Drain any completed Review launcher Commits-tab ahead-of-base
+        // fetch, same cadence as the other pollers.
+        app.poll_launcher_commits();
         // Drain any completed fuzzy-finder candidate-list load, same
         // cadence as the other pollers.
         app.poll_finder();
@@ -1089,5 +1093,5 @@ mod review_guard_integration_tests;
 mod review_persistence_integration_tests;
 
 #[cfg(test)]
-#[path = "review_branch_integration_tests.rs"]
-mod review_branch_integration_tests;
+#[path = "review_launcher_integration_tests.rs"]
+mod review_launcher_integration_tests;

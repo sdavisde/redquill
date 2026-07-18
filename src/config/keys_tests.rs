@@ -262,6 +262,24 @@ fn keys_section_parses_string_and_array_values() {
     );
 }
 
+#[test]
+fn keys_section_parses_the_global_table() {
+    let toml = r#"
+        [global]
+        toggle-command-log = "ctrl-l"
+        quit = []
+    "#;
+    let raw: toml::Table = toml.parse().unwrap();
+    let mut warnings = Vec::new();
+    let cfg = KeysConfig::from_value(toml::Value::Table(raw), &mut warnings);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    assert_eq!(
+        cfg.global.get("toggle-command-log"),
+        Some(&vec![one_spec(KeyCode::Char('l'), KeyModifiers::CONTROL)])
+    );
+    assert_eq!(cfg.global.get("quit"), Some(&Vec::new()));
+}
+
 fn one_spec(code: KeyCode, mods: KeyModifiers) -> KeySeqSpec {
     KeySeqSpec::One(ChordSpec { code, mods })
 }

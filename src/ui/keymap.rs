@@ -130,10 +130,12 @@ pub enum Action {
     CommitStaged,
     /// Open the branch/worktree switcher modal (panel scope).
     OpenSwitcher,
-    /// Open the review-branch modal (panel scope): lists local branches
-    /// (excluding the one currently checked out) so the user can start a
-    /// review session in place, without leaving the app.
-    OpenReviewBranch,
+    /// Open the Review launcher modal (`R`, works everywhere —
+    /// [`Scope::Global`]): a tabbed overlay hosting branch review and
+    /// single-commit review behind one entry point (see
+    /// [`super::review_launcher::LauncherTab`]), the sole in-app entry point
+    /// for starting a branch review.
+    OpenReviewLauncher,
     /// Open the fuzzy file finder overlay (`gp`, diff scope).
     OpenFileFinder,
     /// Open the full-screen Project Search view (`g/`, diff scope).
@@ -147,7 +149,8 @@ pub enum Action {
     /// Toggle the command-log pane (bound in both scopes).
     ToggleCommandLog,
     /// Re-read the working tree and rebuild the diff, picking up edits made
-    /// outside redquill (e.g. by an agent) since the last refresh.
+    /// outside redquill (e.g. by an agent) since the last refresh (`r`, diff
+    /// scope).
     Refresh,
     /// Quit, emitting annotations to stdout.
     Quit,
@@ -231,7 +234,7 @@ pub(crate) fn action_name(action: Action) -> &'static str {
         RemotePush => "remote-push",
         CommitStaged => "commit-staged",
         OpenSwitcher => "open-switcher",
-        OpenReviewBranch => "open-review-branch",
+        OpenReviewLauncher => "open-review-launcher",
         OpenFileFinder => "open-file-finder",
         OpenProjectSearch => "open-project-search",
         OpenEditor => "open-editor",
@@ -300,7 +303,7 @@ pub(crate) fn action_from_name(name: &str) -> Option<Action> {
         "remote-push" => RemotePush,
         "commit-staged" => CommitStaged,
         "open-switcher" => OpenSwitcher,
-        "open-review-branch" => OpenReviewBranch,
+        "open-review-launcher" => OpenReviewLauncher,
         "open-file-finder" => OpenFileFinder,
         "open-project-search" => OpenProjectSearch,
         "open-editor" => OpenEditor,
@@ -368,12 +371,25 @@ impl KeyChord {
 /// [`Scope::Panel`]. Resolution filters by scope so the same physical key
 /// (`j`, `` ` ``) can mean different things depending on which pane is
 /// focused, and so the focus toggle is bindable in both directions.
+///
+/// [`Scope::Global`] is a third, orthogonal scope for "works
+/// everywhere" keys (`?` help, `@` command log, `!` dismiss warning, the
+/// quit family): rather than duplicating one row per scope, a `Global`
+/// binding is defined once and consulted from both [`Scope::Diff`] and
+/// [`Scope::Panel`] queries as a fallback *after* that scope's own rows —
+/// see [`Keymap::scope_chain`], the single place this resolution order is
+/// expressed. A scope-specific row always shadows a `Global` row bound to
+/// the same key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
     /// The diff view (Normal/Visual): every pre-existing binding.
     Diff,
     /// The git panel while it holds focus.
     Panel,
+    /// Bindings that resolve identically from every table-driven scope.
+    /// Consulted as a fallback after the active scope's own rows — see the
+    /// enum doc and [`Keymap::scope_chain`].
+    Global,
 }
 
 /// The key sequence a [`Binding`] triggers on: one key (every binding
@@ -508,6 +524,16 @@ impl Keymap {
             scope: Scope::Panel,
             footer: None,
         };
+        // "Works everywhere" rows: resolved from both `Diff` and `Panel`
+        // (see `Scope::Global`/`Keymap::scope_chain`), defined once instead
+        // of duplicated per scope.
+        let g = |keys: KeySeq, action: Action, description: &'static str| Binding {
+            keys,
+            action,
+            description,
+            scope: Scope::Global,
+            footer: None,
+        };
         Keymap {
             bindings: vec![
                 d(KeySeq::one(Char('j'), none), CursorDown, "Move cursor down").footer(1, "move"),
@@ -601,13 +627,15 @@ impl Keymap {
                     ScrollCursorBottom,
                     "Scroll cursor to bottom of viewport",
                 ),
-                d(KeySeq::one(Char('?'), none), ToggleHelp, "Toggle help").footer(0, "help"),
-                // This row's `Action` (`ToggleHelp`) only tells the table
-                // Esc is *bound*, so the overlay lists it; the actual
-                // dispatch is a hand-written cascade in `mod.rs`'s
-                // `dispatch_key` (close help / cancel a Visual selection /
-                // return from a commit view opened via the History tab) —
-                // the same multi-duty-single-key pattern Visual-cancel uses.
+                // `?` itself is bound in `Scope::Global` (see the block at
+                // the end of this table) — it's a "works everywhere" key,
+                // not diff-specific. This row's `Action` (`ToggleHelp`) only
+                // tells the table Esc is *bound*, so the overlay lists it;
+                // the actual dispatch is a hand-written cascade in
+                // `mod.rs`'s `dispatch_key` (close help / cancel a Visual
+                // selection / return from a commit view opened via the
+                // History tab) — the same multi-duty-single-key pattern
+                // Visual-cancel uses.
                 d(
                     KeySeq::one(Esc, none),
                     ToggleHelp,
@@ -673,18 +701,13 @@ impl Keymap {
                     "Open git panel",
                 )
                 .footer(8, "git panel"),
+                // `@` and `!` are bound in `Scope::Global` (see the block at
+                // the end of this table) — both are "works everywhere" keys,
+                // not diff-specific. `R` (uppercase) is Global too now — the
+                // Review launcher — so `Refresh` moved to lowercase `r` to
+                // free it up.
                 d(
-                    KeySeq::one(Char('@'), none),
-                    ToggleCommandLog,
-                    "Toggle command log pane",
-                ),
-                d(
-                    KeySeq::one(Char('!'), none),
-                    DismissConfigWarning,
-                    "Dismiss config warning notice",
-                ),
-                d(
-                    KeySeq::one(Char('R'), none),
+                    KeySeq::one(Char('r'), none),
                     Refresh,
                     "Refresh diff from working tree",
                 ),
@@ -735,21 +758,11 @@ impl Keymap {
                     "Open file at cursor in editor",
                 ),
                 d(KeySeq::one(Char('K'), none), Hover, "Hover docs"),
-                d(
-                    KeySeq::one(Char('q'), none),
-                    Quit,
-                    "Quit and emit annotations",
-                ),
-                d(
-                    KeySeq::one(Char('Q'), none),
-                    QuitDiscard,
-                    "Quit and discard annotations",
-                ),
-                d(
-                    KeySeq::one(Char('c'), ctrl),
-                    QuitDiscard,
-                    "Quit and discard annotations",
-                ),
+                // The quit family (`q`/`Q`/Ctrl-C) is bound in `Scope::Global`
+                // (see the block at the end of this table): the focused git
+                // panel is a first-class view, not an overlay, so quitting
+                // must work identically from both it and the diff view —
+                // one row per key rather than a duplicate per scope.
                 // -- Panel scope: resolved only while the git panel is focused.
                 p(
                     KeySeq::one(Char('`'), none),
@@ -803,43 +816,52 @@ impl Keymap {
                     "Commit staged changes",
                 )
                 .footer(6, "commit"),
-                // `?` toggles help while the panel is focused too, so the
-                // panel's footer strip can promise a working `? help` escape
-                // hatch (see `super::footer`).
-                p(KeySeq::one(Char('?'), none), ToggleHelp, "Toggle help").footer(0, "help"),
+                // `?`/`@`/`!`/the quit family are bound in `Scope::Global`
+                // (see the block below) — the panel's footer strip can still
+                // promise a working `? help` escape hatch (see
+                // `super::footer`), it's just sourced from the Global row
+                // rather than a panel-scope duplicate.
                 p(
                     KeySeq::one(Char('b'), none),
                     OpenSwitcher,
                     "Open branch/worktree switcher",
                 ),
-                p(
+                // -- Global scope: resolved from both Diff and Panel (see
+                // `Keymap::scope_chain`) — "works everywhere" keys defined
+                // once rather than duplicated per scope.
+                // The focused git panel is a first-class view, not an
+                // overlay, so the quit family works here exactly as in the
+                // diff view.
+                g(KeySeq::one(Char('?'), none), ToggleHelp, "Toggle help").footer(0, "help"),
+                // Supersedes the old panel-only review-branch entry (`R`,
+                // panel scope) — reachable from anywhere now, not just the
+                // focused git panel.
+                g(
                     KeySeq::one(Char('R'), none),
-                    OpenReviewBranch,
-                    "Open review-branch modal (start a review in place)",
+                    OpenReviewLauncher,
+                    "Open Review launcher (branches / commits)",
                 ),
-                p(
+                g(
                     KeySeq::one(Char('@'), none),
                     ToggleCommandLog,
                     "Toggle command log pane",
                 ),
-                p(
+                g(
                     KeySeq::one(Char('!'), none),
                     DismissConfigWarning,
                     "Dismiss config warning notice",
                 ),
-                // The focused git panel is a first-class view, not an overlay,
-                // so the quit family works here exactly as in the diff view.
-                p(
+                g(
                     KeySeq::one(Char('q'), none),
                     Quit,
                     "Quit and emit annotations",
                 ),
-                p(
+                g(
                     KeySeq::one(Char('Q'), none),
                     QuitDiscard,
                     "Quit and discard annotations",
                 ),
-                p(
+                g(
                     KeySeq::one(Char('c'), ctrl),
                     QuitDiscard,
                     "Quit and discard annotations",
@@ -861,21 +883,46 @@ impl Keymap {
         &self.bindings
     }
 
-    /// The display label of the first binding for `action` within `scope`
-    /// (e.g. `"Space"` for [`Action::ToggleStage`] in [`Scope::Diff`]), or
-    /// `None` if `action` isn't bound there (a config override unbound it,
-    /// or the action was never bound in that scope to begin with). Every
-    /// place that spells a main-keymap action's key out in prose — rather
-    /// than rendering the [`Keymap`] table directly, like the help overlay
-    /// and footer already do — reads through this, so a remap or unbind can
-    /// never leave stale key text on screen: see `super::welcome`'s
-    /// next-step hints, `super::git_panel`'s remote-op line, and the
-    /// staging/list panels' empty-state hints.
+    /// The scopes consulted, in priority order, for a `scope`-parameterized
+    /// query (`lookup_in`, `starts_sequence_in`, `completions_for`,
+    /// `label_for`; `resolve_in` inherits it by composing the first two):
+    /// `scope` itself first — so a scope-specific row shadows a `Global` row
+    /// bound to the same key — then [`Scope::Global`] as a fallback. A
+    /// direct query *of* [`Scope::Global`] has nothing broader to fall back
+    /// to, so it searches only itself. This is the single place the
+    /// "active scope, then Global" rule is expressed; every
+    /// method below composes through it so the rule can't drift between
+    /// them. A fixed-size array (not a `Vec`) so the per-keystroke hot path
+    /// stays allocation-free.
+    fn scope_chain(scope: Scope) -> [Option<Scope>; 2] {
+        if scope == Scope::Global {
+            [Some(Scope::Global), None]
+        } else {
+            [Some(scope), Some(Scope::Global)]
+        }
+    }
+
+    /// The display label of the first binding for `action` within `scope`,
+    /// falling back to [`Scope::Global`] (e.g. `"Space"` for
+    /// [`Action::ToggleStage`] in [`Scope::Diff`]), or `None` if `action`
+    /// isn't bound there at all (a config override unbound it, or the
+    /// action was never bound in that scope or `Global` to begin with).
+    /// Every place that spells a main-keymap action's key out in prose —
+    /// rather than rendering the [`Keymap`] table directly, like the help
+    /// overlay and footer already do — reads through this, so a remap or
+    /// unbind can never leave stale key text on screen: see
+    /// `super::welcome`'s next-step hints, `super::git_panel`'s remote-op
+    /// line, and the staging/list panels' empty-state hints.
     pub(crate) fn label_for(&self, scope: Scope, action: Action) -> Option<String> {
-        self.bindings
-            .iter()
-            .find(|b| b.scope == scope && b.action == action)
-            .map(Binding::key_label)
+        Self::scope_chain(scope)
+            .into_iter()
+            .flatten()
+            .find_map(|s| {
+                self.bindings
+                    .iter()
+                    .find(|b| b.scope == s && b.action == action)
+                    .map(Binding::key_label)
+            })
     }
 
     /// Resolves a single key event to an [`Action`] in [`Scope::Diff`],
@@ -887,14 +934,21 @@ impl Keymap {
         self.lookup_in(Scope::Diff, key)
     }
 
-    /// Resolves a single key event within `scope`. Bindings in other scopes
-    /// are invisible here, so the same physical key resolves differently
-    /// depending on which pane is focused.
+    /// Resolves a single key event within `scope`, falling back to
+    /// [`Scope::Global`] when `scope` has no row for `key` (see
+    /// [`Keymap::scope_chain`]) — a scope-specific binding always shadows a
+    /// `Global` one bound to the same key, so the same physical key can
+    /// still mean different things depending on which pane is focused.
     pub fn lookup_in(&self, scope: Scope, key: KeyEvent) -> Option<Action> {
-        self.bindings.iter().find_map(|b| match b.keys {
-            KeySeq::One(chord) if b.scope == scope && chord.matches(key) => Some(b.action),
-            _ => None,
-        })
+        Self::scope_chain(scope)
+            .into_iter()
+            .flatten()
+            .find_map(|s| {
+                self.bindings.iter().find_map(|b| match b.keys {
+                    KeySeq::One(chord) if b.scope == s && chord.matches(key) => Some(b.action),
+                    _ => None,
+                })
+            })
     }
 
     /// Whether `key` is the first key of some bound two-key sequence in
@@ -903,25 +957,40 @@ impl Keymap {
         self.starts_sequence_in(Scope::Diff, key)
     }
 
-    /// Whether `key` starts a bound two-key sequence within `scope`.
+    /// Whether `key` starts a bound two-key sequence within `scope` or
+    /// [`Scope::Global`] (see [`Keymap::scope_chain`]).
     pub fn starts_sequence_in(&self, scope: Scope, key: KeyEvent) -> bool {
-        self.bindings.iter().any(|b| {
-            b.scope == scope && matches!(b.keys, KeySeq::Two(first, _) if first.matches(key))
+        Self::scope_chain(scope).into_iter().flatten().any(|s| {
+            self.bindings.iter().any(|b| {
+                b.scope == s && matches!(b.keys, KeySeq::Two(first, _) if first.matches(key))
+            })
         })
     }
 
-    /// All two-key bindings in `scope` whose first chord matches `prefix` —
-    /// the pending-prefix completions [`super::footer`] shows while a
-    /// sequence is in progress (e.g. after `z`: just `za`; after `g`: `gd`
-    /// and `gr`). Table-driven so a newly bound two-key sequence shows up
-    /// here automatically, never hardcoded per-prefix.
+    /// All two-key bindings in `scope` (plus [`Scope::Global`], per
+    /// [`Keymap::scope_chain`]) whose first chord matches `prefix` — the
+    /// pending-prefix completions [`super::footer`] shows while a sequence
+    /// is in progress (e.g. after `z`: just `za`; after `g`: `gd` and `gr`).
+    /// Table-driven so a newly bound two-key sequence shows up here
+    /// automatically, never hardcoded per-prefix. When a `Global` sequence
+    /// shares its exact two-chord key with a `scope`-specific one (the
+    /// shadowing case), only the `scope`-specific row is returned, matching
+    /// dispatch.
     pub fn completions_for(&self, scope: Scope, prefix: KeyEvent) -> Vec<&Binding> {
-        self.bindings
-            .iter()
-            .filter(|b| {
-                b.scope == scope && matches!(b.keys, KeySeq::Two(first, _) if first.matches(prefix))
-            })
-            .collect()
+        let mut out: Vec<&Binding> = Vec::new();
+        let mut claimed: Vec<KeySeq> = Vec::new();
+        for s in Self::scope_chain(scope).into_iter().flatten() {
+            for b in self.bindings.iter().filter(|b| {
+                b.scope == s && matches!(b.keys, KeySeq::Two(first, _) if first.matches(prefix))
+            }) {
+                if claimed.contains(&b.keys) {
+                    continue;
+                }
+                claimed.push(b.keys);
+                out.push(b);
+            }
+        }
+        out
     }
 
     /// Resolves a two-key sequence in [`Scope::Diff`]: `first` is the
@@ -1122,18 +1191,24 @@ mod tests {
     }
 
     #[test]
-    fn shift_r_resolves_to_refresh_regardless_of_shift_bit() {
+    fn shift_r_opens_the_review_launcher_and_lowercase_r_refreshes() {
         let km = Keymap::default_map();
+        // `R` is now `Scope::Global` (the Review launcher), regardless of
+        // whether the terminal also sets the SHIFT bit; `Diff`-scope
+        // `lookup` falls back to it (see `Keymap::scope_chain`).
         assert_eq!(
             km.lookup(key(KeyCode::Char('R'), KeyModifiers::NONE)),
-            Some(Action::Refresh)
+            Some(Action::OpenReviewLauncher)
         );
         assert_eq!(
             km.lookup(key(KeyCode::Char('R'), KeyModifiers::SHIFT)),
+            Some(Action::OpenReviewLauncher)
+        );
+        // Lowercase `r` refreshes now (freed up from Refresh's old `R`).
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('r'), KeyModifiers::NONE)),
             Some(Action::Refresh)
         );
-        // Lowercase `r` is unbound (only `gr` uses `r`, as a sequence tail).
-        assert_eq!(km.lookup(key(KeyCode::Char('r'), KeyModifiers::NONE)), None);
     }
 
     #[test]
@@ -1595,6 +1670,229 @@ mod tests {
         );
     }
 
+    // -- Scope::Global: behavior pin + resolution mechanics ------------------
+
+    /// Behavior pin: `?`/`@`/`!`/the quit family resolve to the same action
+    /// from both `Scope::Diff` and `Scope::Panel`, regardless of whether
+    /// that's backed by a duplicate row per scope or a single shared row —
+    /// this must hold unchanged before and after any row migration between
+    /// the two.
+    #[test]
+    fn cross_scope_duplicated_bindings_resolve_identically() {
+        let km = Keymap::default_map();
+        for scope in [Scope::Diff, Scope::Panel] {
+            assert_eq!(
+                km.lookup_in(scope, key(KeyCode::Char('?'), KeyModifiers::NONE)),
+                Some(Action::ToggleHelp),
+                "`?` must resolve to ToggleHelp in {scope:?}"
+            );
+            assert_eq!(
+                km.lookup_in(scope, key(KeyCode::Char('@'), KeyModifiers::NONE)),
+                Some(Action::ToggleCommandLog),
+                "`@` must resolve to ToggleCommandLog in {scope:?}"
+            );
+            assert_eq!(
+                km.lookup_in(scope, key(KeyCode::Char('!'), KeyModifiers::NONE)),
+                Some(Action::DismissConfigWarning),
+                "`!` must resolve to DismissConfigWarning in {scope:?}"
+            );
+            assert_eq!(
+                km.lookup_in(scope, key(KeyCode::Char('q'), KeyModifiers::NONE)),
+                Some(Action::Quit),
+                "`q` must resolve to Quit in {scope:?}"
+            );
+            assert_eq!(
+                km.lookup_in(scope, key(KeyCode::Char('Q'), KeyModifiers::NONE)),
+                Some(Action::QuitDiscard),
+                "`Q` must resolve to QuitDiscard in {scope:?}"
+            );
+            assert_eq!(
+                km.lookup_in(scope, key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+                Some(Action::QuitDiscard),
+                "Ctrl-C must resolve to QuitDiscard in {scope:?}"
+            );
+        }
+    }
+
+    /// Drift check, the mirror image of the pin above: every actual
+    /// `Scope::Global` row in the default table dispatches identically from
+    /// both `Diff` and `Panel`, not just the five hand-picked keys — this
+    /// would catch a future `Global` addition that only works from one
+    /// scope.
+    #[test]
+    fn every_global_binding_dispatches_from_both_diff_and_panel_scope() {
+        let km = Keymap::default_map();
+        for b in km.bindings().iter().filter(|b| b.scope == Scope::Global) {
+            let KeySeq::One(chord) = b.keys else {
+                continue;
+            };
+            let ev = key(chord.code, chord.mods);
+            assert_eq!(
+                km.lookup_in(Scope::Diff, ev),
+                Some(b.action),
+                "Global binding {:?} ({}) must dispatch from Diff scope",
+                b.action,
+                b.key_label()
+            );
+            assert_eq!(
+                km.lookup_in(Scope::Panel, ev),
+                Some(b.action),
+                "Global binding {:?} ({}) must dispatch from Panel scope",
+                b.action,
+                b.key_label()
+            );
+        }
+    }
+
+    #[test]
+    fn lookup_in_falls_back_to_global_when_the_active_scope_has_no_row_for_the_key() {
+        let km = Keymap::from_bindings(vec![Binding {
+            keys: KeySeq::one(KeyCode::Char('x'), KeyModifiers::NONE),
+            action: Action::ToggleCommandLog,
+            description: "test",
+            scope: Scope::Global,
+            footer: None,
+        }]);
+        let x = key(KeyCode::Char('x'), KeyModifiers::NONE);
+        assert_eq!(km.lookup_in(Scope::Diff, x), Some(Action::ToggleCommandLog));
+        assert_eq!(
+            km.lookup_in(Scope::Panel, x),
+            Some(Action::ToggleCommandLog)
+        );
+    }
+
+    #[test]
+    fn a_scope_specific_binding_shadows_a_global_one_for_the_same_key() {
+        let km = Keymap::from_bindings(vec![
+            Binding {
+                keys: KeySeq::one(KeyCode::Char('x'), KeyModifiers::NONE),
+                action: Action::ToggleCommandLog,
+                description: "global",
+                scope: Scope::Global,
+                footer: None,
+            },
+            Binding {
+                keys: KeySeq::one(KeyCode::Char('x'), KeyModifiers::NONE),
+                action: Action::CursorDown,
+                description: "diff-specific",
+                scope: Scope::Diff,
+                footer: None,
+            },
+        ]);
+        let x = key(KeyCode::Char('x'), KeyModifiers::NONE);
+        // Diff scope: the Diff-specific row shadows the Global one.
+        assert_eq!(km.lookup_in(Scope::Diff, x), Some(Action::CursorDown));
+        // Panel scope: no Panel-specific row for `x`, so Global answers.
+        assert_eq!(
+            km.lookup_in(Scope::Panel, x),
+            Some(Action::ToggleCommandLog)
+        );
+    }
+
+    #[test]
+    fn querying_global_scope_directly_does_not_fall_back_further() {
+        let km = Keymap::from_bindings(vec![Binding {
+            keys: KeySeq::one(KeyCode::Char('x'), KeyModifiers::NONE),
+            action: Action::CursorDown,
+            description: "diff-only",
+            scope: Scope::Diff,
+            footer: None,
+        }]);
+        assert_eq!(
+            km.lookup_in(Scope::Global, key(KeyCode::Char('x'), KeyModifiers::NONE)),
+            None
+        );
+    }
+
+    #[test]
+    fn starts_sequence_in_consults_global_scope_too() {
+        let km = Keymap::from_bindings(vec![Binding {
+            keys: KeySeq::two(
+                KeyCode::Char('g'),
+                KeyModifiers::NONE,
+                KeyCode::Char('x'),
+                KeyModifiers::NONE,
+            ),
+            action: Action::ToggleCommandLog,
+            description: "test",
+            scope: Scope::Global,
+            footer: None,
+        }]);
+        let g = key(KeyCode::Char('g'), KeyModifiers::NONE);
+        assert!(km.starts_sequence_in(Scope::Diff, g));
+        assert!(km.starts_sequence_in(Scope::Panel, g));
+    }
+
+    #[test]
+    fn completions_for_merges_scope_and_global_and_scope_shadows_global_on_a_shared_sequence() {
+        let km = Keymap::from_bindings(vec![
+            Binding {
+                keys: KeySeq::two(
+                    KeyCode::Char('g'),
+                    KeyModifiers::NONE,
+                    KeyCode::Char('a'),
+                    KeyModifiers::NONE,
+                ),
+                action: Action::ToggleCommandLog,
+                description: "global-ga",
+                scope: Scope::Global,
+                footer: None,
+            },
+            Binding {
+                keys: KeySeq::two(
+                    KeyCode::Char('g'),
+                    KeyModifiers::NONE,
+                    KeyCode::Char('b'),
+                    KeyModifiers::NONE,
+                ),
+                action: Action::DismissConfigWarning,
+                description: "global-gb",
+                scope: Scope::Global,
+                footer: None,
+            },
+            Binding {
+                keys: KeySeq::two(
+                    KeyCode::Char('g'),
+                    KeyModifiers::NONE,
+                    KeyCode::Char('a'),
+                    KeyModifiers::NONE,
+                ),
+                action: Action::CursorDown,
+                description: "diff-ga-shadow",
+                scope: Scope::Diff,
+                footer: None,
+            },
+        ]);
+        let actions: Vec<Action> = km
+            .completions_for(Scope::Diff, key(KeyCode::Char('g'), KeyModifiers::NONE))
+            .into_iter()
+            .map(|b| b.action)
+            .collect();
+        assert_eq!(actions.len(), 2, "expected `gb` plus the shadowing `ga`");
+        assert!(actions.contains(&Action::CursorDown));
+        assert!(actions.contains(&Action::DismissConfigWarning));
+        assert!(!actions.contains(&Action::ToggleCommandLog));
+    }
+
+    #[test]
+    fn label_for_falls_back_to_global_when_the_scope_has_no_row_for_the_action() {
+        let km = Keymap::from_bindings(vec![Binding {
+            keys: KeySeq::one(KeyCode::Char('?'), KeyModifiers::NONE),
+            action: Action::ToggleHelp,
+            description: "help",
+            scope: Scope::Global,
+            footer: None,
+        }]);
+        assert_eq!(
+            km.label_for(Scope::Diff, Action::ToggleHelp),
+            Some("?".to_string())
+        );
+        assert_eq!(
+            km.label_for(Scope::Panel, Action::ToggleHelp),
+            Some("?".to_string())
+        );
+    }
+
     // -- Switcher modal -------------------------------------------------------
 
     /// `b` opens the switcher only in panel scope; in diff scope it stays
@@ -1691,20 +1989,29 @@ mod tests {
     #[test]
     fn help_toggle_is_promoted_with_rank_zero_in_both_scopes() {
         let km = Keymap::default_map();
+        // `?` is a single `Scope::Global` row (not one per scope), so its
+        // `FooterHint` promotion applies uniformly wherever it resolves —
+        // both `Diff` and `Panel`, via `Keymap::lookup_in`'s scope-then-
+        // global fallback.
+        let question_mark = km
+            .bindings()
+            .iter()
+            .find(|b| {
+                b.scope == Scope::Global && b.action == Action::ToggleHelp && b.key_label() == "?"
+            })
+            .expect("no `?` ToggleHelp binding");
+        assert_eq!(
+            question_mark.footer,
+            Some(FooterHint {
+                rank: 0,
+                label: "help"
+            })
+        );
         for scope in [Scope::Diff, Scope::Panel] {
-            let question_mark = km
-                .bindings()
-                .iter()
-                .find(|b| {
-                    b.scope == scope && b.action == Action::ToggleHelp && b.key_label() == "?"
-                })
-                .unwrap_or_else(|| panic!("no `?` ToggleHelp binding in {scope:?}"));
             assert_eq!(
-                question_mark.footer,
-                Some(FooterHint {
-                    rank: 0,
-                    label: "help"
-                })
+                km.lookup_in(scope, key(KeyCode::Char('?'), KeyModifiers::NONE)),
+                Some(Action::ToggleHelp),
+                "`?` must resolve to ToggleHelp in {scope:?} via the Global fallback"
             );
         }
         // The diff-scope `Esc` row (Close help) is deliberately *not*

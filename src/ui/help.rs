@@ -62,10 +62,10 @@ fn group_of(action: Action) -> &'static str {
         ToggleAccept | AcceptFile | ToggleDefer => "Review",
         Search | SearchNext | SearchPrev | SearchWordForward | SearchWordBackward => "Search",
         ToggleList | ToggleHelp | FocusGitPanel | ToggleCommandLog | Refresh | OpenFileFinder
-        | OpenProjectSearch | OpenEditor | DismissConfigWarning => "Panels",
+        | OpenProjectSearch | OpenEditor | DismissConfigWarning | OpenReviewLauncher => "Panels",
         GotoDefinition | GotoReferences | Hover => "Code intelligence",
         PanelCursorDown | PanelCursorUp | PanelSelect | TogglePanelTab | RemoteFetch
-        | RemotePull | RemotePush | CommitStaged | OpenSwitcher | OpenReviewBranch => "Git panel",
+        | RemotePull | RemotePush | CommitStaged | OpenSwitcher => "Git panel",
         Quit | QuitDiscard => "Quit",
     }
 }
@@ -198,8 +198,8 @@ fn modal_sections(
             modal_hints(&modal_keys.switcher),
         ),
         (
-            "Review branch (R, git panel)",
-            modal_hints(&modal_keys.review_branch),
+            "Review launcher (R, works everywhere)",
+            modal_hints(&modal_keys.review_launcher),
         ),
         (
             "Commit message (c, git panel)",
@@ -312,6 +312,35 @@ pub fn render(
 
     let mut lines: Vec<Line> = Vec::new();
     let mut any_match = false;
+
+    // "Works everywhere" bindings (`Scope::Global`): rendered once, ahead
+    // of every per-scope section, rather than once per scope. The
+    // per-scope loops below filter on `b.scope ==
+    // Scope::Diff`/`Scope::Panel` respectively, so a `Global` row can never
+    // also land in one of those sections — no duplication to guard against
+    // here.
+    let global_bindings: Vec<&Binding> = bindings
+        .iter()
+        .filter(|b| b.scope == Scope::Global)
+        .filter(|b| {
+            !binding_hidden(
+                b.action,
+                staging_allowed,
+                code_intel_allowed,
+                review_session,
+            )
+        })
+        .filter(|b| row_matches(&b.key_label(), b.description, query))
+        .collect();
+    if !global_bindings.is_empty() {
+        any_match = true;
+        lines.push(section_header("Works everywhere", theme));
+        for b in global_bindings {
+            lines.push(key_line(&b.key_label(), b.description, key_width, theme));
+        }
+        lines.push(Line::from(""));
+    }
+
     for group in GROUP_ORDER {
         let group_bindings: Vec<&Binding> = bindings
             .iter()

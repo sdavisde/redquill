@@ -35,7 +35,7 @@ fn modal_mode_names_match_config_keys_hardcoded_list() {
     // and the count must match exactly (a name accepted by config that the
     // ui list doesn't know about would still slip past this check only if
     // it also appeared in `effective_modal_keys`'s match below, which is
-    // exhaustive over the twelve `ModalKeymaps` fields — so a name drifting
+    // exhaustive over the thirteen `ModalKeymaps` fields — so a name drifting
     // out of sync in either direction fails this test or fails to compile).
     let toml = modal_keys::MODAL_MODE_NAMES
         .iter()
@@ -69,6 +69,10 @@ fn no_overrides_yields_every_default_table_unchanged() {
     same(&effective.staging, &modal_keys::STAGING_KEYS);
     same(&effective.peek, &modal_keys::PEEK_KEYS);
     same(&effective.switcher, &modal_keys::SWITCHER_KEYS);
+    same(
+        &effective.review_launcher,
+        &modal_keys::REVIEW_LAUNCHER_KEYS,
+    );
     same(&effective.help, &modal_keys::HELP_KEYS);
     same(&effective.help_search, &modal_keys::HELP_SEARCH_HINTS);
     same(&effective.compose, &modal_keys::COMPOSE_HINTS);
@@ -119,6 +123,49 @@ fn overriding_a_staging_action_replaces_its_default_keys_rather_than_appending()
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)
         ),
         Some(modal_keys::StagingAction::Unstage)
+    );
+}
+
+#[test]
+fn overriding_a_review_launcher_action_replaces_its_default_keys_rather_than_appending() {
+    let keys = keys_with(
+        "review-launcher",
+        "close",
+        one(KeyCode::Char('q'), KeyModifiers::NONE),
+    );
+    let (effective, warnings) = effective_modal_keys(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+    let rows: Vec<_> = effective
+        .review_launcher
+        .iter()
+        .filter(|b| b.action == modal_keys::LauncherAction::Close)
+        .collect();
+    assert_eq!(rows.len(), 1, "must have exactly one row, not appended");
+    assert_eq!(rows[0].key_label(), "q");
+
+    // Esc is unbound for Close here, but the rest of the table (e.g.
+    // ToggleTab on Tab) is untouched.
+    assert_eq!(
+        modal_keys::resolve(
+            &effective.review_launcher,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
+        ),
+        None
+    );
+    assert_eq!(
+        modal_keys::resolve(
+            &effective.review_launcher,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)
+        ),
+        Some(modal_keys::LauncherAction::Close)
+    );
+    assert_eq!(
+        modal_keys::resolve(
+            &effective.review_launcher,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)
+        ),
+        Some(modal_keys::LauncherAction::ToggleTab)
     );
 }
 
@@ -520,6 +567,19 @@ fn example_config_documents_every_modal_action_exactly_once() {
         ],
         switcher_action_name,
         switcher_action_from_name,
+    );
+    assert_doc_block_matches(
+        &blocks,
+        "review-launcher",
+        &[
+            LauncherAction::ToggleTab,
+            LauncherAction::MoveDown,
+            LauncherAction::MoveUp,
+            LauncherAction::Confirm,
+            LauncherAction::Close,
+        ],
+        launcher_action_name,
+        launcher_action_from_name,
     );
     assert_doc_block_matches(
         &blocks,

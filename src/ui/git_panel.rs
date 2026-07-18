@@ -381,7 +381,12 @@ fn panel_title(branch: Option<&BranchStatus>, tab: PanelTab, theme: &Theme) -> L
 /// [`super::time_format::relative_time`] stays pure and independently
 /// testable); `content_width` is the list's inner width in cells. Long
 /// subjects are left to ratatui's own clipping.
-fn history_item(
+/// Renders one commit-log row: subject with a leading unpushed/pushed dot
+/// and a right-aligned short sha on the first line, author + relative time
+/// on the second. Shared beyond the git panel's own History tab by the
+/// Review launcher's Commits tab (see `review_launcher_modal`), so both
+/// surfaces render commits identically.
+pub(super) fn history_item(
     entry: &CommitLogEntry,
     unpushed: bool,
     now: i64,
@@ -667,7 +672,7 @@ impl App {
             | Mode::Search
             | Mode::Peek
             | Mode::Switcher
-            | Mode::ReviewBranch
+            | Mode::ReviewLauncher { .. }
             | Mode::CommitMessage
             | Mode::Finder
             | Mode::ProjectSearch
@@ -828,10 +833,18 @@ impl App {
                 return;
             }
         };
-        // The commit's header metadata is already in `self.history` (it was
-        // clicked from there), so opening a commit needs no extra git call
-        // just to populate the header block.
-        let header = self.history.iter().find(|c| c.sha == sha).cloned();
+        // The commit's header metadata is already in one of the lists it
+        // could have been clicked from — the History tab's `history`, or
+        // the Review launcher Commits tab's ahead-of-base `launcher_commits`
+        // (the launcher's all-commits toggle reads `history` itself, so
+        // that source is already covered) — so opening a commit needs no
+        // extra git call just to populate the header block.
+        let header = self
+            .history
+            .iter()
+            .chain(self.launcher_commits.iter())
+            .find(|c| c.sha == sha)
+            .cloned();
 
         if self.suspended_view.is_none() {
             let new_view = DiffViewState::new(snapshot.files);
