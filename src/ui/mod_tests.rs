@@ -570,14 +570,15 @@ fn help_overlay_lists_global_bindings_once_in_a_works_everywhere_section() {
     terminal
         .draw(|frame| draw(frame, &app, &keymap, None))
         .unwrap();
-    let content: String = terminal
-        .backend()
-        .buffer()
-        .clone()
-        .content()
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
+    let buffer = terminal.backend().buffer().clone();
+    let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+    if std::env::var_os("REDQUILL_PROOF_DUMP").is_some() {
+        let w = buffer.area.width as usize;
+        let symbols: Vec<&str> = buffer.content().iter().map(|c| c.symbol()).collect();
+        for row in symbols.chunks(w) {
+            eprintln!("{}", row.concat());
+        }
+    }
 
     assert!(content.contains("Works everywhere"));
     let works_idx = content.find("Works everywhere").unwrap();

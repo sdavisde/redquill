@@ -55,7 +55,7 @@ Tasks for `09-spec-review-launcher.md` (FR-1..FR-14). Each parent task is a thin
 
 ## Tasks
 
-### [ ] 1.0 `Scope::Global` keymap scope: define global bindings once, dispatch scope-then-global, render a "works everywhere" help section
+### [x] 1.0 `Scope::Global` keymap scope: define global bindings once, dispatch scope-then-global, render a "works everywhere" help section
 
 Covers: FR-1, FR-2, FR-3, FR-7 (global "works everywhere" help-section clause only — the launcher's own table lands in 2.0)
 
@@ -76,7 +76,7 @@ This is the scope-migration slice, deliberately separated from the launcher beha
 - [x] 1.3 Migrate the ten duplicated rows to five single `Global` rows: delete the diff rows (~604, 677, 682, 739, 744) and panel rows (~809, 821, 826, 833, 838), add `Global` equivalents preserving descriptions and `.footer()` hints. The review-session `q` → EndReview translation stays where it lives in dispatch, untouched (FR-2). The 1.1 pin tests and the full suite must pass unchanged. Commit as `refactor:` with the move-only invariant stated (identical resolution behavior, zero assertion edits in 1.1's pins).
 - [x] 1.4 Sweep `help.rs` for the silent-drop trip hazard: the section builders use scope-equality *filters* (`b.scope == Scope::Diff` ~318, `== Scope::Panel` ~345), so `Global` rows vanish from help without a compile error. Add a "works everywhere" section rendered from `Scope::Global` bindings (placed before the per-scope sections), keep the per-scope sections free of duplicates, and verify `footer.rs` still renders the migrated rows' hints. Extend the bidirectional drift tests to cover `Scope::Global`: every Global binding appears in help, and every "works everywhere" entry dispatches from both scopes (FR-7 clause). Deviation: landed in the same commit as 1.2/1.3 rather than its own, because the row migration alone breaks pre-existing help/footer tests (the section is what keeps them green) — see commit message.
 - [x] 1.5 Add the `[keys.global]` config section: `KeysConfig` in `src/config/keys.rs` gains a `global` field; `keymap_config.rs` applies it with the same merge semantics as `[keys.diff]`/`[keys.panel]`. Tests in `keymap_config_tests.rs`/`keys_tests.rs`: exact-keys replacement, `= []` unbinds, unknown-action warning, same-scope collision → user wins (FR-3). Separate `feat:` commit — this is the behavior change layered on the refactor.
-- [ ] 1.6 Run all four gates; capture the `?` overlay showing the "works everywhere" section into `docs/specs/09-spec-review-launcher/proofs/`; commit.
+- [x] 1.6 Run all four gates; capture the `?` overlay showing the "works everywhere" section into `docs/specs/09-spec-review-launcher/proofs/`; commit.
 
 ### [ ] 2.0 Launcher shell: global `R` opens the tabbed Review launcher, `Esc` restores the exact origin, refresh moves to `r`
 
