@@ -76,7 +76,7 @@ Make the git panel answer to the app's universal verbs: `Esc` backs out, `s` and
 - [x] 2.2 Add `Scope::Panel` rows in `src/ui/keymap.rs`: `Esc` closing the panel (reuse or introduce the appropriate action so the `` ` `` toggle stays untouched), `s` → `ToggleStagingPanel`, `/` → `Search`; route in `handle_panel_key` so each behaves as if the panel were closed first (FR-6, FR-7).
 - [x] 2.3 Help/footer coverage for the three rows via the shared tables; config-remap and bidirectional drift tests pass in `src/ui/keymap_config_tests.rs` (FR-8).
 - [x] 2.4 Produce the CLI journey transcript (`` ` `` → `Esc`; `` ` `` → `/` → query → match) and persist to `proofs/` (FR-6, FR-7).
-- [~] 2.5 Run all four cargo gates plus perf tripwires; commit as `feat:`.
+- [x] 2.5 Run all four cargo gates plus perf tripwires; commit as `feat:`.
 - [~] 2.6 **USER UI CHECKPOINT:** write `proofs/demo-2-panel-coherence.md` — scratch-repo script: open panel, `Esc` backs out; open panel with help overlay up, `Esc` closes help not panel; from panel press `s` (staging panel opens) and `/` (search works, exit returns to Normal). Pause for the user's UI verdict before 2.0 is checked off.
 
 ### [ ] 3.0 Edit and delete annotations from the diff view (FR-9..FR-12)
