@@ -528,7 +528,7 @@ fn opening_a_commit_with_an_empty_diff_shows_commit_appropriate_welcome_wording(
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
+        .draw(|frame| draw(frame, &app, &keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
@@ -562,7 +562,7 @@ fn screenshot(app: &App, keymap: &Keymap, w: u16, h: u16) -> String {
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|frame| draw(frame, app, keymap, None))
+        .draw(|frame| draw(frame, app, keymap, None, None))
         .unwrap();
     let buffer = terminal.backend().buffer().clone();
     let mut out = String::new();

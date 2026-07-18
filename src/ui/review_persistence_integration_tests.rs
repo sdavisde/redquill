@@ -277,7 +277,7 @@ fn resume_staleness_re_accept_and_finish_round_trip_against_real_git() {
         let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|frame| draw(frame, &app, &keymap, None))
+            .draw(|frame| draw(frame, &app, &keymap, None, None))
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
         let w = buffer.area.width as usize;
@@ -463,7 +463,7 @@ fn annotate_pause_resume_restores_and_finish_emits_the_complete_set_once() {
         let backend = TestBackend::new(100, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|frame| draw(frame, &app, &keymap, None))
+            .draw(|frame| draw(frame, &app, &keymap, None, None))
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
         let w = buffer.area.width as usize;
