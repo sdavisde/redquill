@@ -150,6 +150,82 @@ fn repo_with_two_feature_branches() -> TempDir {
     tmp
 }
 
+/// A repo on `feature` (checked out, clean), one commit ahead of `main` —
+/// the Commits tab's ahead-of-base source (FR-11) reads the *current*
+/// checkout, so this fixture puts the fresh commit exactly where the
+/// Journey A transcript needs it: one keystroke (`Enter`) away from the
+/// cursor's resting place (row 0, newest first).
+fn repo_on_feature_with_a_fresh_commit_ahead_of_main() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    assert_inside_tempdir(dir, &tmp);
+    git(dir, &["init", "-q", "-b", "main"]);
+    configure_identity(dir);
+    write(dir, "a.rs", "fn a() {}\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "initial"]);
+    git(dir, &["checkout", "-qb", "feature"]);
+    write(dir, "a.rs", "fn a() { changed(); }\n");
+    git(dir, &["commit", "-aq", "-m", "agent: fix the thing"]);
+    tmp
+}
+
+/// A repo with two commits ahead of `main` on the checked-out `feature`
+/// branch — for asserting newest-first ordering (a single-commit fixture
+/// can't distinguish ordering from "the only commit").
+fn repo_on_feature_with_two_commits_ahead_of_main() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    assert_inside_tempdir(dir, &tmp);
+    git(dir, &["init", "-q", "-b", "main"]);
+    configure_identity(dir);
+    write(dir, "a.rs", "fn a() {}\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "base commit"]);
+    git(dir, &["checkout", "-qb", "feature"]);
+    write(dir, "a.rs", "fn a() { one(); }\n");
+    git(dir, &["commit", "-aq", "-m", "feature commit one"]);
+    write(dir, "a.rs", "fn a() { two(); }\n");
+    git(dir, &["commit", "-aq", "-m", "feature commit two"]);
+    tmp
+}
+
+/// A repo on `main` (checked out, clean) with a single commit and no other
+/// branches — the current branch *is* the auto-resolved base, so the
+/// Commits tab's ahead-of-base source is empty (Journey C's precondition).
+fn repo_on_the_base_branch_with_no_other_history() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    assert_inside_tempdir(dir, &tmp);
+    git(dir, &["init", "-q", "-b", "main"]);
+    configure_identity(dir);
+    write(dir, "a.rs", "fn a() {}\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "initial commit"]);
+    tmp
+}
+
+/// Polls `app.poll_launcher_commits()` until the Commits tab's ahead-of-base
+/// fetch lands (or a 5s deadline, generous for a background thread doing
+/// nothing more than a local `git log`).
+fn drain_launcher_commits(app: &mut App) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.launcher_commits_in_flight.is_some() && std::time::Instant::now() < deadline {
+        app.poll_launcher_commits();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// Polls `app.poll_history()` until the History tab's (and, via the `a`
+/// toggle, the Commits tab's all-commits source's) first page lands.
+fn drain_history(app: &mut App) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.history_in_flight.is_some() && std::time::Instant::now() < deadline {
+        app.poll_history();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 /// Same as [`repo_with_feature_branch`], except `feature` is already checked
 /// out in a second, unmanaged worktree — the shape that makes `git worktree
 /// add` (and therefore the launcher's confirm gesture) fail.
@@ -651,6 +727,246 @@ fn esc_without_confirming_restores_the_panel_origin_cursor_and_tab() {
         app.mode
     );
     assert!(matches!(app.target, DiffTarget::WorkingTree));
+
+    drop(tmp);
+}
+
+// -- Scenarios: Commits tab ahead-of-base data (FR-11) -----------------------
+
+#[test]
+fn launcher_commits_tab_lists_commits_ahead_of_base_newest_first() {
+    let tmp = repo_on_feature_with_two_commits_ahead_of_main();
+    let dir = tmp.path();
+    let mut app = app_for(dir);
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('R'));
+    assert!(matches!(
+        app.mode,
+        Mode::ReviewLauncher {
+            tab: LauncherTab::Branches,
+            ..
+        }
+    ));
+    press(&mut app, &keymap, &mut pending, KeyCode::Tab); // -> Commits
+    assert!(matches!(
+        app.mode,
+        Mode::ReviewLauncher {
+            tab: LauncherTab::Commits,
+            ..
+        }
+    ));
+    drain_launcher_commits(&mut app);
+
+    assert_eq!(
+        app.launcher_commits
+            .iter()
+            .map(|c| c.subject.as_str())
+            .collect::<Vec<_>>(),
+        vec!["feature commit two", "feature commit one"],
+        "ahead-of-base, newest first"
+    );
+
+    let content = render_frame(&app, &keymap);
+    assert!(content.contains("feature commit two"));
+    dump_frame(
+        "Commits tab populated with ahead-of-base commits",
+        &app,
+        &keymap,
+    );
+
+    drop(tmp);
+}
+
+// -- Scenarios: Journey A — R, Enter opens the newest commit, Esc returns ----
+
+#[test]
+fn launcher_commits_tab_enter_opens_the_newest_commit_and_esc_restores_the_prior_view() {
+    let tmp = repo_on_feature_with_a_fresh_commit_ahead_of_main();
+    let dir = tmp.path();
+    let mut app = app_for(dir);
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    // The launcher's first-ever open of a process lands on Branches (FR-6);
+    // Journey A's 2-keystroke claim is the steady state once the launcher
+    // already remembers the Commits tab from earlier use this session — a
+    // legitimate precondition under FR-6's process-lifetime tab memory, not
+    // a claim about the very first `R` ever pressed.
+    app.last_launcher_tab = LauncherTab::Commits;
+
+    assert_eq!(app.mode, Mode::Normal, "starts in the diff view");
+
+    // Keystroke 1: `R` opens the launcher straight onto Commits.
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('R'));
+    assert!(matches!(
+        app.mode,
+        Mode::ReviewLauncher {
+            tab: LauncherTab::Commits,
+            origin: ModeOrigin::Normal,
+            ..
+        }
+    ));
+    drain_launcher_commits(&mut app);
+    assert_eq!(
+        app.launcher_commits
+            .iter()
+            .map(|c| c.subject.as_str())
+            .collect::<Vec<_>>(),
+        vec!["agent: fix the thing"]
+    );
+    dump_frame(
+        "Journey A: R opens the launcher on Commits, fresh commit listed",
+        &app,
+        &keymap,
+    );
+
+    // Keystroke 2: `Enter` opens the newest (only) commit.
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter);
+    assert_eq!(
+        app.mode,
+        Mode::Normal,
+        "opening a commit view returns focus to the diff"
+    );
+    assert!(app.viewing_commit(), "a commit view must now be open");
+    assert!(
+        matches!(&app.target, DiffTarget::Commit(_)),
+        "got {:?}",
+        app.target
+    );
+    let opened = app
+        .active_commit
+        .clone()
+        .expect("commit header must be set");
+    assert_eq!(opened.subject, "agent: fix the thing");
+    let commit_view = render_frame(&app, &keymap);
+    assert!(commit_view.contains("a.rs"), "the commit's diff must show");
+    dump_frame(
+        "Journey A: after Enter, the fresh commit's diff",
+        &app,
+        &keymap,
+    );
+
+    // `Esc` returns to the exact prior view.
+    press(&mut app, &keymap, &mut pending, KeyCode::Esc);
+    assert!(!app.viewing_commit());
+    assert_eq!(app.mode, Mode::Normal);
+    assert!(matches!(app.target, DiffTarget::WorkingTree));
+    dump_frame("Journey A: Esc restores the prior view", &app, &keymap);
+
+    drop(tmp);
+}
+
+// -- Scenarios: Journey C — empty state, `a` expands -------------------------
+
+#[test]
+fn launcher_commits_tab_shows_the_empty_state_hint_and_a_expands_to_all_commits() {
+    let tmp = repo_on_the_base_branch_with_no_other_history();
+    let dir = tmp.path();
+    let mut app = app_for(dir);
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('R'));
+    press(&mut app, &keymap, &mut pending, KeyCode::Tab); // -> Commits
+    assert!(matches!(
+        app.mode,
+        Mode::ReviewLauncher {
+            tab: LauncherTab::Commits,
+            ..
+        }
+    ));
+    drain_launcher_commits(&mut app);
+    assert!(
+        app.launcher_commits.is_empty(),
+        "the current branch IS the base — nothing ahead of itself"
+    );
+
+    let content = render_frame(&app, &keymap);
+    assert!(
+        content.contains("no commits ahead of base"),
+        "must show the empty-state hint:\n{content}"
+    );
+    assert!(
+        content.contains("all commits"),
+        "the hint (and footer) must name the toggle:\n{content}"
+    );
+    dump_frame(
+        "Journey C: Commits tab empty-state hint on the base branch",
+        &app,
+        &keymap,
+    );
+
+    // `a` expands to the full recent-HEAD log.
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('a'));
+    assert!(app.launcher_all_commits);
+    drain_history(&mut app);
+
+    let expanded = render_frame(&app, &keymap);
+    assert!(
+        expanded.contains("initial commit"),
+        "the full log must show the base's own commit:\n{expanded}"
+    );
+    dump_frame("Journey C: a expands to the full log", &app, &keymap);
+
+    drop(tmp);
+}
+
+// -- Scenarios: commit peek during an active review session (FR-14) ---------
+
+#[test]
+fn launcher_commits_tab_enter_opens_a_commit_during_an_active_review_session() {
+    let tmp = repo_with_feature_branch();
+    let dir = tmp.path();
+    let mut app = app_for(dir);
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    // Start a branch review of `feature` first (Journey B's own path).
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('R'));
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter); // confirm on `feature`
+    assert!(matches!(app.target, DiffTarget::Review { .. }));
+    assert!(app.in_review_session());
+    let review_target = app.target.clone();
+
+    // Peek at a commit from the Commits tab while the session stays active.
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('R'));
+    press(&mut app, &keymap, &mut pending, KeyCode::Tab); // -> Commits
+    drain_launcher_commits(&mut app);
+    assert_eq!(
+        app.launcher_commits
+            .iter()
+            .map(|c| c.subject.as_str())
+            .collect::<Vec<_>>(),
+        vec!["feature tip"],
+        "ahead-of-base from inside the reviewed worktree's own history"
+    );
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter); // open the commit
+
+    assert!(app.viewing_commit(), "a commit view must be open");
+    assert!(matches!(&app.target, DiffTarget::Commit(_)));
+    dump_frame(
+        "peeking a commit mid-review-session via the Commits tab",
+        &app,
+        &keymap,
+    );
+
+    // `Esc` restores the review session's own suspended diff view exactly —
+    // not just any `Mode::Normal`, the specific `DiffTarget::Review` the
+    // session was rerooted onto.
+    press(&mut app, &keymap, &mut pending, KeyCode::Esc);
+    assert!(!app.viewing_commit());
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(
+        app.target, review_target,
+        "Esc must restore the review session, not just Normal mode"
+    );
+    assert!(
+        app.in_review_session(),
+        "the review session itself must be untouched by the peek"
+    );
 
     drop(tmp);
 }

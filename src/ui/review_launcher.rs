@@ -14,13 +14,27 @@
 //! `Enter` behavior land in follow-up work; until then its cursor never
 //! moves off zero (see [`App::review_launcher_row_count`]).
 
-use crate::git::{DiffTarget, GitRunner};
+use crate::git::{CommitLogEntry, CommitLogRange, DiffTarget, GitRunner};
 
 use super::app::{App, Mode, ModeOrigin};
+use super::background::TaskId;
 use super::review_session::{
     ensure_review_worktree, load_reconciled_review_state, resolve_review_base,
     resolve_review_state_path,
 };
+
+/// A background ahead-of-base commit-log fetch awaiting completion. Mirrors
+/// [`super::history::InFlightHistory`]'s shape exactly — the Commits tab's
+/// ahead-of-base source reuses the identical single-flight +
+/// generation-guard discipline the History tab pioneered, just against a
+/// single-shot (never paginated) fetch rather than a page sequence.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct InFlightLauncherCommits {
+    /// The background task delivering the ahead-of-base commit list.
+    pub(super) id: TaskId,
+    /// The generation captured when this fetch was spawned.
+    pub(super) generation: u64,
+}
 
 /// Which tab of the Review launcher is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -63,8 +77,9 @@ impl App {
             cursor: 0,
             origin,
         };
-        if tab == LauncherTab::Branches {
-            self.load_launcher_branches();
+        match tab {
+            LauncherTab::Branches => self.load_launcher_branches(),
+            LauncherTab::Commits => self.ensure_launcher_commits_source_loaded(),
         }
     }
 
@@ -91,8 +106,9 @@ impl App {
         *cursor = 0;
         let new_tab = *tab;
         self.last_launcher_tab = new_tab;
-        if new_tab == LauncherTab::Branches {
-            self.load_launcher_branches();
+        match new_tab {
+            LauncherTab::Branches => self.load_launcher_branches(),
+            LauncherTab::Commits => self.ensure_launcher_commits_source_loaded(),
         }
     }
 
@@ -121,8 +137,8 @@ impl App {
     }
 
     /// The active tab's row count: `launcher_branches`' length on Branches,
-    /// still `0` on Commits until its data lands — kept as its own method so
-    /// that work only needs to change this one arm, mirroring how
+    /// the active Commits source's length on Commits — kept as its own
+    /// method so that work only needs to change one arm, mirroring how
     /// [`super::git_panel::App::panel_row_count`] centralizes the git
     /// panel's per-tab length.
     fn review_launcher_row_count(&self) -> usize {
@@ -131,7 +147,7 @@ impl App {
         };
         match tab {
             LauncherTab::Branches => self.launcher_branches.len(),
-            LauncherTab::Commits => 0,
+            LauncherTab::Commits => self.launcher_commits_rows().len(),
         }
     }
 
@@ -152,16 +168,34 @@ impl App {
             .unwrap_or_default();
     }
 
-    /// The launcher's `Enter` gesture: dispatches on the active tab. The
-    /// Commits tab is still inert — its data lands in follow-up work.
+    /// The launcher's `Enter` gesture: dispatches on the active tab.
     pub(super) fn review_launcher_confirm(&mut self) {
         let Mode::ReviewLauncher { tab, cursor, .. } = self.mode else {
             return;
         };
         match tab {
             LauncherTab::Branches => self.confirm_launcher_branch_review(cursor),
-            LauncherTab::Commits => {}
+            LauncherTab::Commits => self.confirm_launcher_commit(cursor),
         }
+    }
+
+    /// Commits-tab `Enter`: opens the highlighted commit (from whichever
+    /// source is active — ahead-of-base or the full log) into the existing
+    /// read-only single-commit view ([`App::open_commit_view`]), unchanged
+    /// from how the History tab's own `Enter` opens a commit — same
+    /// suspend/restore semantics, same behavior whether or not a branch-
+    /// review session is active (the commit view reads through whatever
+    /// `stage_ops` is currently attached, review session or not). A no-op
+    /// on an out-of-range cursor (an empty or still-loading list).
+    fn confirm_launcher_commit(&mut self, cursor: usize) {
+        let Some(sha) = self
+            .launcher_commits_rows()
+            .get(cursor)
+            .map(|c| c.sha.clone())
+        else {
+            return;
+        };
+        self.open_commit_view(sha);
     }
 
     /// Branches-tab `Enter`: starts a worktree-backed review session on the
@@ -299,6 +333,151 @@ impl App {
             Mode::ReviewLauncher { origin, .. } => origin.restore(),
             other => other,
         };
+    }
+
+    // -- Commits tab: data loading (FR-11, FR-12) ----------------------------
+
+    /// The Commits tab's currently-active row source: the ahead-of-base
+    /// list (`launcher_commits`) by default, or the full recent-HEAD log
+    /// (`history`, the same source the History tab loads) once toggled via
+    /// [`App::review_launcher_toggle_all_commits`]. Both are newest-first,
+    /// so the cursor starting at `0` always lands on the newest commit
+    /// regardless of which source is active.
+    pub(super) fn launcher_commits_rows(&self) -> &[CommitLogEntry] {
+        if self.launcher_all_commits {
+            &self.history
+        } else {
+            &self.launcher_commits
+        }
+    }
+
+    /// Whether the active Commits source hasn't produced its first result
+    /// yet — drives the tab's loading placeholder, mirroring
+    /// [`App::history_loading`] for the all-commits source and the
+    /// equivalent single-shot check for the ahead-of-base source.
+    pub(super) fn launcher_commits_loading(&self) -> bool {
+        if self.launcher_all_commits {
+            self.history_loading()
+        } else {
+            !self.launcher_commits_loaded && self.launcher_commits_in_flight.is_some()
+        }
+    }
+
+    /// Ensures whichever Commits source is currently active has a load
+    /// requested: the all-commits source reuses [`App::ensure_history_loaded`]
+    /// verbatim; the ahead-of-base source gets its own single-flight
+    /// [`App::ensure_launcher_commits_loaded`]. Called on every path that
+    /// makes the Commits tab (or a new source within it) visible: opening
+    /// the launcher onto Commits, switching onto Commits, and the `a`
+    /// toggle itself.
+    pub(super) fn ensure_launcher_commits_source_loaded(&mut self) {
+        if self.launcher_all_commits {
+            self.ensure_history_loaded();
+        } else {
+            self.ensure_launcher_commits_loaded();
+        }
+    }
+
+    /// Toggles the Commits tab between the ahead-of-base list and the full
+    /// recent-HEAD log (`a`, remembered for the process lifetime like
+    /// `last_launcher_tab`): the newly-active source's load is kicked off
+    /// immediately (mirrors `review_launcher_switch_tab` eagerly loading
+    /// Branches data) so displaying it never shows a stale, pre-toggle
+    /// list, and the cursor resets to the top since the two sources are
+    /// different lengths.
+    pub(super) fn review_launcher_toggle_all_commits(&mut self) {
+        self.launcher_all_commits = !self.launcher_all_commits;
+        if let Mode::ReviewLauncher { cursor, .. } = &mut self.mode {
+            *cursor = 0;
+        }
+        self.ensure_launcher_commits_source_loaded();
+    }
+
+    /// Kicks off the ahead-of-base fetch if nothing has loaded yet and
+    /// nothing is already in flight — single-flight, mirroring
+    /// [`App::ensure_history_loaded`]. A no-op on every subsequent call.
+    pub(super) fn ensure_launcher_commits_loaded(&mut self) {
+        if !self.launcher_commits_loaded && self.launcher_commits_in_flight.is_none() {
+            self.request_launcher_commits();
+        }
+    }
+
+    /// Requests the ahead-of-base commit list: resolves the base
+    /// synchronously (a cheap `git symbolic-ref`/`rev-parse`, the same call
+    /// the Branches tab's confirm flow already makes on the foreground
+    /// thread) and hands the resolved range to the async fetcher, which
+    /// runs the actual (potentially larger) `git log` off the render
+    /// thread — [`App::poll_launcher_commits`] drains it once per tick.
+    /// Falls back to a synchronous fetch for backends that can't cross a
+    /// thread boundary (test fakes, git-less contexts), matching every
+    /// other lazy-load path's fallback shape. An unresolvable base (no
+    /// `origin/HEAD`, no local `main`/`master`) or a git-less context
+    /// degrades to "loaded, empty" rather than surfacing an error — the
+    /// same silent-degrade contract [`App::load_launcher_branches`]
+    /// documents for the Branches tab.
+    fn request_launcher_commits(&mut self) {
+        if self.launcher_commits_in_flight.is_some() {
+            return;
+        }
+        let Some(ops) = self.stage_ops.as_deref() else {
+            self.launcher_commits_loaded = true;
+            return;
+        };
+        let base = match resolve_review_base(ops, None) {
+            Ok(base) => base,
+            Err(_) => {
+                self.launcher_commits_loaded = true;
+                return;
+            }
+        };
+        let range = CommitLogRange {
+            base,
+            head: "HEAD".to_string(),
+        };
+        if let Some(fetcher) = ops.async_commit_log_range_fetcher() {
+            let generation = self.launcher_commits_generation;
+            let id = self
+                .launcher_commits_tasks
+                .spawn(move || fetcher(&range).ok());
+            self.launcher_commits_in_flight = Some(InFlightLauncherCommits { id, generation });
+        } else {
+            match ops.commit_log_range(&range) {
+                Ok(commits) => self.apply_launcher_commits(commits),
+                Err(_) => self.launcher_commits_loaded = true,
+            }
+        }
+    }
+
+    /// Drains a completed background ahead-of-base fetch (once per
+    /// event-loop tick, alongside [`App::poll_history`]). Drops a stale
+    /// result — spawned before `launcher_commits_generation` was last
+    /// bumped — or a foreign/task-panic/git-error result silently (marking
+    /// the load "loaded, empty" rather than leaving the placeholder stuck);
+    /// applies a successful list otherwise.
+    pub(super) fn poll_launcher_commits(&mut self) {
+        for (id, result) in self.launcher_commits_tasks.poll() {
+            let Some(in_flight) = self.launcher_commits_in_flight else {
+                continue;
+            };
+            if in_flight.id != id {
+                continue;
+            }
+            self.launcher_commits_in_flight = None;
+            if in_flight.generation != self.launcher_commits_generation {
+                continue;
+            }
+            match result {
+                Ok(Some(commits)) => self.apply_launcher_commits(commits),
+                _ => self.launcher_commits_loaded = true,
+            }
+        }
+    }
+
+    /// Folds a fetched ahead-of-base list into `launcher_commits`, marking
+    /// the load complete.
+    fn apply_launcher_commits(&mut self, commits: Vec<CommitLogEntry>) {
+        self.launcher_commits = commits;
+        self.launcher_commits_loaded = true;
     }
 }
 
@@ -700,5 +879,336 @@ index 111..222 100644
         // `BranchListOps::worktree_add`/`git_common_dir`/`default_base` all
         // panic — reaching this assertion without a panic proves none of
         // them ran.
+    }
+
+    // -- Commits tab: data loading (FR-11) -----------------------------------
+
+    /// A minimal `StageOps` fake serving a fixed ahead-of-base commit list
+    /// synchronously (no `async_commit_log_range_fetcher`, so
+    /// `request_launcher_commits` takes the synchronous fallback path) plus
+    /// a fixed `default_base` — mirrors `history_tests.rs`'s
+    /// `SyncHistoryFake`.
+    struct SyncCommitRangeOps {
+        base: &'static str,
+        commits: Vec<CommitLogEntry>,
+    }
+
+    impl super::super::stage_ops::StageOps for SyncCommitRangeOps {
+        fn diff(
+            &self,
+            _target: &crate::git::DiffTarget,
+        ) -> Result<Vec<crate::git::RawFilePatch>, crate::git::GitError> {
+            Ok(Vec::new())
+        }
+        fn status(&self) -> Result<Vec<crate::git::FileStatus>, crate::git::GitError> {
+            Ok(Vec::new())
+        }
+        fn stage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn unstage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn apply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn unapply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn read_worktree_file(&self, _path: &str) -> Option<Vec<u8>> {
+            None
+        }
+        fn show_file(&self, _spec: &str) -> Option<String> {
+            None
+        }
+        fn default_base(&self) -> Result<String, crate::git::GitError> {
+            Ok(self.base.to_string())
+        }
+        fn commit_log_range(
+            &self,
+            _range: &CommitLogRange,
+        ) -> Result<Vec<CommitLogEntry>, crate::git::GitError> {
+            Ok(self.commits.clone())
+        }
+    }
+
+    fn commit(sha: &str, subject: &str) -> CommitLogEntry {
+        CommitLogEntry {
+            sha: sha.to_string(),
+            short_sha: sha.to_string(),
+            subject: subject.to_string(),
+            author_name: "Dev".to_string(),
+            timestamp: 1_700_000_000,
+        }
+    }
+
+    fn app_with_commit_range(commits: Vec<CommitLogEntry>) -> App {
+        let mut app = app();
+        app.stage_ops = Some(Box::new(SyncCommitRangeOps {
+            base: "main",
+            commits,
+        }));
+        app
+    }
+
+    #[test]
+    fn launcher_commits_is_empty_and_not_loading_before_anything_is_requested() {
+        let app = app_with_commit_range(vec![commit("a", "one")]);
+        assert!(app.launcher_commits.is_empty());
+        assert!(!app.launcher_commits_loading());
+    }
+
+    #[test]
+    fn ensure_launcher_commits_loaded_applies_synchronously_when_no_async_fetcher() {
+        let mut app = app_with_commit_range(vec![commit("a", "one"), commit("b", "two")]);
+        app.ensure_launcher_commits_loaded();
+        assert_eq!(app.launcher_commits.len(), 2);
+        assert!(!app.launcher_commits_loading());
+        assert!(app.launcher_commits_in_flight.is_none());
+    }
+
+    #[test]
+    fn no_backend_degrades_to_loaded_and_empty_rather_than_a_stuck_placeholder() {
+        let mut app = app();
+        app.ensure_launcher_commits_loaded();
+        assert!(app.launcher_commits.is_empty());
+        assert!(!app.launcher_commits_loading());
+    }
+
+    #[test]
+    fn an_unresolvable_base_degrades_to_loaded_and_empty() {
+        struct NoBaseOps;
+        impl super::super::stage_ops::StageOps for NoBaseOps {
+            fn diff(
+                &self,
+                _target: &crate::git::DiffTarget,
+            ) -> Result<Vec<crate::git::RawFilePatch>, crate::git::GitError> {
+                Ok(Vec::new())
+            }
+            fn status(&self) -> Result<Vec<crate::git::FileStatus>, crate::git::GitError> {
+                Ok(Vec::new())
+            }
+            fn stage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+                Ok(())
+            }
+            fn unstage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+                Ok(())
+            }
+            fn apply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+                Ok(())
+            }
+            fn unapply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+                Ok(())
+            }
+            fn read_worktree_file(&self, _path: &str) -> Option<Vec<u8>> {
+                None
+            }
+            fn show_file(&self, _spec: &str) -> Option<String> {
+                None
+            }
+            // `default_base` keeps the trait's own default: an error.
+        }
+        let mut app = app();
+        app.stage_ops = Some(Box::new(NoBaseOps));
+        app.ensure_launcher_commits_loaded();
+        assert!(app.launcher_commits.is_empty());
+        assert!(!app.launcher_commits_loading());
+    }
+
+    #[test]
+    fn launcher_commits_loading_is_true_while_a_fetch_is_in_flight_and_false_after_it_lands() {
+        let mut app = app();
+        let id = app
+            .launcher_commits_tasks
+            .spawn(|| Some(vec![commit("a", "one")]));
+        app.launcher_commits_in_flight = Some(InFlightLauncherCommits {
+            id,
+            generation: app.launcher_commits_generation,
+        });
+        assert!(
+            app.launcher_commits_loading(),
+            "placeholder must show while the fetch is in flight"
+        );
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.launcher_commits_in_flight.is_some() && std::time::Instant::now() < deadline {
+            app.poll_launcher_commits();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            app.launcher_commits_in_flight.is_none(),
+            "fetch must have completed"
+        );
+        assert_eq!(app.launcher_commits.len(), 1);
+        assert!(!app.launcher_commits_loading());
+    }
+
+    #[test]
+    fn stale_generation_launcher_commits_result_is_dropped_not_applied() {
+        let mut app = app();
+        let stale = vec![commit("stale", "should never appear")];
+        let id = app.launcher_commits_tasks.spawn(move || Some(stale));
+        app.launcher_commits_in_flight = Some(InFlightLauncherCommits {
+            id,
+            generation: app.launcher_commits_generation,
+        });
+
+        // Something bumps the generation before this fetch lands.
+        app.launcher_commits_generation = app.launcher_commits_generation.wrapping_add(1);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            app.poll_launcher_commits();
+            if app.launcher_commits_in_flight.is_none() || std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        assert!(
+            app.launcher_commits_in_flight.is_none(),
+            "stale fetch was consumed"
+        );
+        assert!(
+            app.launcher_commits.is_empty(),
+            "a stale-generation result must never be applied"
+        );
+    }
+
+    #[test]
+    fn request_launcher_commits_is_single_flight() {
+        let mut app = app();
+        let id = app
+            .launcher_commits_tasks
+            .spawn(|| Some(vec![commit("a", "one")]));
+        app.launcher_commits_in_flight = Some(InFlightLauncherCommits {
+            id,
+            generation: app.launcher_commits_generation,
+        });
+        app.stage_ops = Some(Box::new(SyncCommitRangeOps {
+            base: "main",
+            commits: vec![commit("b", "two")],
+        }));
+
+        app.ensure_launcher_commits_loaded();
+
+        // Still the original in-flight task; the synchronous fake's list
+        // was never applied (a second fetch never started).
+        assert_eq!(app.launcher_commits_in_flight.map(|f| f.id), Some(id));
+        assert!(app.launcher_commits.is_empty());
+    }
+
+    // -- Commits tab: the `a` all-commits toggle (FR-12) ---------------------
+
+    #[test]
+    fn toggle_all_commits_switches_between_ahead_of_base_and_the_full_log() {
+        let mut app = app_with_commit_range(vec![commit("a", "ahead one")]);
+        app.history = vec![commit("h1", "history one"), commit("h2", "history two")];
+        app.history_exhausted = true; // pretend the History tab already loaded
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::Commits,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.ensure_launcher_commits_loaded();
+
+        assert!(!app.launcher_all_commits);
+        assert_eq!(
+            app.launcher_commits_rows()
+                .iter()
+                .map(|c| c.subject.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ahead one"]
+        );
+
+        app.review_launcher_toggle_all_commits();
+        assert!(app.launcher_all_commits);
+        assert_eq!(
+            app.launcher_commits_rows()
+                .iter()
+                .map(|c| c.subject.as_str())
+                .collect::<Vec<_>>(),
+            vec!["history one", "history two"]
+        );
+
+        app.review_launcher_toggle_all_commits();
+        assert!(!app.launcher_all_commits);
+        assert_eq!(
+            app.launcher_commits_rows()
+                .iter()
+                .map(|c| c.subject.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ahead one"]
+        );
+    }
+
+    #[test]
+    fn toggle_all_commits_resets_the_cursor() {
+        let mut app = app_with_commit_range(vec![commit("a", "one"), commit("b", "two")]);
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::Commits,
+            cursor: 1,
+            origin: ModeOrigin::Normal,
+        };
+        app.review_launcher_toggle_all_commits();
+        assert!(matches!(app.mode, Mode::ReviewLauncher { cursor: 0, .. }));
+    }
+
+    #[test]
+    fn toggle_state_survives_close_and_reopen() {
+        let mut app = app_with_commit_range(Vec::new());
+        app.open_review_launcher();
+        app.review_launcher_switch_tab(); // Branches -> Commits
+        app.review_launcher_toggle_all_commits();
+        assert!(app.launcher_all_commits);
+
+        app.close_review_launcher();
+        app.open_review_launcher();
+        assert_eq!(
+            app.mode,
+            Mode::ReviewLauncher {
+                tab: LauncherTab::Commits,
+                cursor: 0,
+                origin: ModeOrigin::Normal,
+            }
+        );
+        assert!(
+            app.launcher_all_commits,
+            "the toggle must survive close/reopen for the process lifetime"
+        );
+    }
+
+    // -- Commits tab: confirm opens the commit view (FR-14) ------------------
+
+    #[test]
+    fn confirm_on_commits_tab_opens_the_commit_view() {
+        let mut app = app_with_commit_range(Vec::new());
+        app.launcher_commits = vec![commit("deadbeef", "a commit")];
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::Commits,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+
+        app.review_launcher_confirm();
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(
+            matches!(&app.target, crate::git::DiffTarget::Commit(sha) if sha == "deadbeef"),
+            "got {:?}",
+            app.target
+        );
+    }
+
+    #[test]
+    fn confirm_on_commits_tab_with_an_empty_list_is_a_no_op() {
+        let mut app = app();
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::Commits,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.review_launcher_confirm();
+        assert!(matches!(app.mode, Mode::ReviewLauncher { .. }));
     }
 }

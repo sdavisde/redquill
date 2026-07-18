@@ -2,12 +2,16 @@
 //! centered overlay with two tabs — Branches (default) and Commits — styled
 //! like [`super::switcher_modal`] (centered `Clear`-ed bordered block, tab
 //! headers as the block title, active tab emphasized, cursor row reverse-
-//! highlighted). The Branches tab renders `app.launcher_branches` (real
-//! data, populated by [`super::review_launcher`]); the Commits tab is still
-//! a placeholder until its data lands in follow-up work. The footer hint
-//! line is built from the *effective* `REVIEW_LAUNCHER_KEYS` table
-//! (`app.modal_keys.review_launcher`) rather than a hardcoded string, so a
-//! `[keys.review-launcher]` remap shows up here with no extra wiring.
+//! highlighted). The Branches tab renders `app.launcher_branches`; the
+//! Commits tab renders whichever source [`super::review_launcher`]'s
+//! `App::launcher_commits_rows` selects (ahead-of-base or the full log),
+//! reusing [`super::git_panel::history_item`] so both surfaces render
+//! commits identically. The footer hint line is built from the *effective*
+//! `REVIEW_LAUNCHER_KEYS` table (`app.modal_keys.review_launcher`) rather
+//! than a hardcoded string, so a `[keys.review-launcher]` remap shows up
+//! here with no extra wiring — including the Commits tab's empty-state
+//! line, which names whatever key the table currently binds to
+//! `toggle-all-commits`.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
@@ -15,12 +19,14 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
-use crate::git::LocalBranch;
+use crate::git::{CommitLogEntry, LocalBranch};
 
 use super::app::App;
+use super::git_panel::history_item;
 use super::modal_keys::{LauncherAction, ModalBinding};
 use super::review_launcher::LauncherTab;
 use super::theme::Theme;
+use super::time_format::now_unix;
 
 /// Centers a `width_pct`% x `height_pct`% rect inside `area` — the same
 /// two-axis `Flex::Center` sizing [`super::switcher_modal::centered`] uses.
@@ -64,14 +70,63 @@ fn enter_outcome_hint(tab: LauncherTab) -> &'static str {
     }
 }
 
-/// The Commits tab's placeholder row: its real list lands in follow-up work,
-/// so this names that honestly rather than showing a misleadingly-empty
-/// list.
-fn commits_placeholder_rows(theme: &Theme) -> Vec<ListItem<'static>> {
-    vec![ListItem::new(Line::from(Span::styled(
-        "  commit list — coming soon",
-        Style::default().fg(theme.footer_text),
-    )))]
+/// The key label the Commits tab's empty state names, read from the
+/// *effective* launcher table rather than hardcoded `"a"` — a
+/// `[keys.review-launcher]` remap of `toggle-all-commits` is reflected here
+/// automatically, keeping the hint truthful (FR-13).
+fn toggle_all_commits_key_label(table: &[ModalBinding<LauncherAction>]) -> String {
+    table
+        .iter()
+        .find(|b| b.action == LauncherAction::ToggleAllCommits)
+        .and_then(|b| b.keys.first())
+        .map(|k| k.label())
+        .unwrap_or_else(|| "a".to_string())
+}
+
+/// The Commits tab's empty-state line: distinguishes "the ahead-of-base
+/// range has nothing in it" (names the toggle key, so there's always a next
+/// step) from "the full log itself is empty" (a brand-new repo — the same
+/// wording the History tab's own empty state uses, since toggling further
+/// wouldn't help).
+fn commits_empty_state_line(table: &[ModalBinding<LauncherAction>], all_commits: bool) -> String {
+    if all_commits {
+        "no commits".to_string()
+    } else {
+        format!(
+            "no commits ahead of base — press {} for all commits",
+            toggle_all_commits_key_label(table)
+        )
+    }
+}
+
+/// The Commits tab's rows: a loading placeholder while the active source's
+/// first fetch is still in flight, the empty-state line naming the toggle
+/// key once a load has landed with nothing in it, or real
+/// [`CommitLogEntry`] rows rendered via [`history_item`] (matching the
+/// History tab's row style exactly) — newest first, cursor starting on the
+/// newest.
+fn commits_rows(app: &App, theme: &Theme, content_width: usize) -> Vec<ListItem<'static>> {
+    if app.launcher_commits_loading() {
+        return vec![ListItem::new(Line::from(Span::styled(
+            "  loading\u{2026}",
+            Style::default().fg(theme.footer_text),
+        )))];
+    }
+    let commits: &[CommitLogEntry] = app.launcher_commits_rows();
+    if commits.is_empty() {
+        return vec![ListItem::new(Line::from(Span::styled(
+            format!(
+                "  {}",
+                commits_empty_state_line(&app.modal_keys.review_launcher, app.launcher_all_commits)
+            ),
+            Style::default().fg(theme.footer_text),
+        )))];
+    }
+    let now = now_unix();
+    commits
+        .iter()
+        .map(|c| history_item(c, false, now, theme, content_width))
+        .collect()
 }
 
 /// The Branches tab's rows: local branches excluding the current one,
@@ -156,7 +211,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             branch_rows(&app.launcher_branches, &app.theme),
             !app.launcher_branches.is_empty(),
         ),
-        LauncherTab::Commits => (commits_placeholder_rows(&app.theme), false),
+        LauncherTab::Commits => {
+            let selectable =
+                !app.launcher_commits_loading() && !app.launcher_commits_rows().is_empty();
+            (
+                commits_rows(app, &app.theme, list_area.width as usize),
+                selectable,
+            )
+        }
     };
     let list = List::new(items).highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     let mut list_state = ListState::default();
@@ -284,7 +346,7 @@ index 111..222 100644
     }
 
     #[test]
-    fn commits_tab_shows_its_placeholder_and_enter_outcome() {
+    fn commits_tab_shows_its_empty_state_and_enter_outcome_without_a_backend() {
         let mut app = App::new(vec![sample_file()]);
         app.mode = Mode::ReviewLauncher {
             tab: LauncherTab::Commits,
@@ -292,8 +354,82 @@ index 111..222 100644
             origin: ModeOrigin::Normal,
         };
         let content = render_launcher(&app);
-        assert!(content.contains("commit list"));
+        assert!(content.contains("no commits ahead of base"));
+        assert!(content.contains("all commits"), "must name the toggle key");
         assert!(content.contains("review commit (read-only)"));
+    }
+
+    #[test]
+    fn commits_tab_shows_a_loading_placeholder_while_a_fetch_is_in_flight() {
+        let mut app = App::new(vec![sample_file()]);
+        let id = app.launcher_commits_tasks.spawn(|| {
+            Some(vec![crate::git::CommitLogEntry {
+                sha: "a".to_string(),
+                short_sha: "a".to_string(),
+                subject: "one".to_string(),
+                author_name: "Dev".to_string(),
+                timestamp: 1_700_000_000,
+            }])
+        });
+        app.launcher_commits_in_flight =
+            Some(super::super::review_launcher::InFlightLauncherCommits {
+                id,
+                generation: app.launcher_commits_generation,
+            });
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::Commits,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        let content = render_launcher(&app);
+        assert!(content.contains("loading"));
+    }
+
+    #[test]
+    fn commits_tab_renders_real_commits_with_the_cursor_highlighted() {
+        let mut app = App::new(vec![sample_file()]);
+        app.launcher_commits = vec![
+            crate::git::CommitLogEntry {
+                sha: "aaa".to_string(),
+                short_sha: "aaa".to_string(),
+                subject: "add widget".to_string(),
+                author_name: "Dev".to_string(),
+                timestamp: 1_700_000_000,
+            },
+            crate::git::CommitLogEntry {
+                sha: "bbb".to_string(),
+                short_sha: "bbb".to_string(),
+                subject: "fix widget".to_string(),
+                author_name: "Dev".to_string(),
+                timestamp: 1_700_000_100,
+            },
+        ];
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::Commits,
+            cursor: 1,
+            origin: ModeOrigin::Normal,
+        };
+        let content = render_launcher(&app);
+        assert!(content.contains("add widget"));
+        assert!(content.contains("fix widget"));
+        assert!(!content.contains("no commits"));
+    }
+
+    #[test]
+    fn commits_tab_all_commits_empty_state_says_no_commits_without_a_toggle_hint() {
+        let mut app = App::new(vec![sample_file()]);
+        app.launcher_all_commits = true;
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::Commits,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        let content = render_launcher(&app);
+        assert!(content.contains("no commits"));
+        assert!(
+            !content.contains("ahead of base"),
+            "the full log's own empty state names no ahead-of-base range"
+        );
     }
 
     #[test]

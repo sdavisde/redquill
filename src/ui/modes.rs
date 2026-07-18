@@ -336,8 +336,10 @@ pub(super) fn handle_switcher_key(app: &mut App, key: KeyEvent) {
 /// (the Review launcher modal, `R`, `Scope::Global`): `Tab`/`Shift-Tab`/
 /// `h`/`l`/arrows switch between the Branches and Commits tabs, `j`/`k`/
 /// arrows move the cursor, `Enter` confirms the highlighted row — starts a
-/// branch review on the Branches tab (Commits is still inert until its data
-/// lands), `Esc` closes the modal back to the mode `R` was pressed from.
+/// branch review on the Branches tab, opens a read-only commit view on the
+/// Commits tab — `Esc` closes the modal back to the mode `R` was pressed
+/// from, and `a` toggles the Commits tab between its ahead-of-base list and
+/// the full recent-HEAD log.
 pub(super) fn handle_review_launcher_key(app: &mut App, key: KeyEvent) {
     let Some(action) = modal_keys::resolve(&app.modal_keys.review_launcher, key) else {
         return;
@@ -348,6 +350,7 @@ pub(super) fn handle_review_launcher_key(app: &mut App, key: KeyEvent) {
         LauncherAction::MoveUp => app.review_launcher_move_up(),
         LauncherAction::Confirm => app.review_launcher_confirm(),
         LauncherAction::Close => app.close_review_launcher(),
+        LauncherAction::ToggleAllCommits => app.review_launcher_toggle_all_commits(),
     }
 }
 

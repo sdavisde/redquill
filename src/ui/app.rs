@@ -35,7 +35,7 @@ use super::lsp_ops::LspClient;
 use super::peek::{PeekKind, PeekState};
 use super::project_search::ProjectSearchState;
 use super::refresh::InFlightRefresh;
-use super::review_launcher::LauncherTab;
+use super::review_launcher::{InFlightLauncherCommits, LauncherTab};
 use super::rows::Row;
 use super::search::SearchState;
 use super::stage_ops::{ReviewSnapshot, StageOps, StagedFile, StagedState};
@@ -432,6 +432,37 @@ pub struct App {
     /// struct field. Defaults to [`LauncherTab::default`] (Branches), so the
     /// first open of a session always lands there.
     pub(super) last_launcher_tab: LauncherTab,
+    /// The Review launcher Commits tab's ahead-of-base list (see
+    /// [`super::review_launcher`]): loaded once per open/toggle rather than
+    /// paginated, since a sane review range is small — never accumulated
+    /// page by page the way `history` is. Empty either because nothing was
+    /// requested yet, a fetch is still in flight, or the range genuinely
+    /// has nothing ahead of the base; [`App::launcher_commits_loaded`]
+    /// disambiguates the first two from the third.
+    pub(super) launcher_commits: Vec<CommitLogEntry>,
+    /// Whether a fetch for `launcher_commits` has completed at least once
+    /// (even to an empty result) — the loading-placeholder discriminator,
+    /// collapsed into one flag since this list is never paginated (unlike
+    /// `history_exhausted`, which only means "no *more* pages").
+    pub(super) launcher_commits_loaded: bool,
+    /// The single background ahead-of-base fetch in flight, if any
+    /// (single-flight, mirroring [`InFlightHistory`]).
+    pub(super) launcher_commits_in_flight: Option<InFlightLauncherCommits>,
+    /// Bumped to invalidate a straggling ahead-of-base fetch spawned before
+    /// the bump (mirrors `history_generation`: stays at `0` in production
+    /// today, exists for a future invalidation point and is exercised
+    /// directly by tests).
+    pub(super) launcher_commits_generation: u64,
+    /// The background-task poller ahead-of-base fetches run through,
+    /// separate from `history_tasks` so their results are drained
+    /// independently (see [`App::poll_launcher_commits`]).
+    pub(super) launcher_commits_tasks: BackgroundTasks<Option<Vec<CommitLogEntry>>>,
+    /// Whether the Commits tab shows the full recent-HEAD log (`history`,
+    /// the same source the History tab loads) instead of the ahead-of-base
+    /// list (`launcher_commits`) — the `a` "all commits" toggle. Remembered
+    /// for the process lifetime alongside `last_launcher_tab`, the same
+    /// "must survive mode exit" exception that field documents.
+    pub(super) launcher_all_commits: bool,
     /// The set of collapsed directory keys in the git panel's file tree (see
     /// [`super::file_tree`]). An `App` field rather than [`Mode::Panel`]
     /// state because a folded directory must stay folded across the panel
@@ -648,6 +679,12 @@ impl App {
             history_tasks: BackgroundTasks::new(),
             last_panel_tab: PanelTab::default(),
             last_launcher_tab: LauncherTab::default(),
+            launcher_commits: Vec::new(),
+            launcher_commits_loaded: false,
+            launcher_commits_in_flight: None,
+            launcher_commits_generation: 0,
+            launcher_commits_tasks: BackgroundTasks::new(),
+            launcher_all_commits: false,
             panel_collapsed_dirs: HashSet::new(),
             active_commit: None,
             suspended_view: None,

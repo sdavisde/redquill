@@ -13,8 +13,9 @@ use thiserror::Error;
 
 use crate::diff::{DiffParseError, FileChangeKind, FileDiff};
 use crate::git::{
-    BranchStatus, ChangeKind, CommitLogEntry, CommitSummary, DiffTarget, FileStatus, GitError,
-    GitRunner, LocalBranch, RawFilePatch, StashEntry, StatusCode, WorktreeEntry,
+    BranchStatus, ChangeKind, CommitLogEntry, CommitLogRange, CommitSummary, DiffTarget,
+    FileStatus, GitError, GitRunner, LocalBranch, RawFilePatch, StashEntry, StatusCode,
+    WorktreeEntry,
 };
 use crate::search::{FileCandidate, merge_candidates};
 
@@ -45,6 +46,14 @@ pub type AsyncReviewBuilder =
 /// `Send`, but a cloned [`GitRunner`] handle is.
 pub type AsyncCommitLogFetcher =
     Box<dyn Fn(u32, u32) -> Result<Vec<CommitLogEntry>, GitError> + Send>;
+
+/// A `Send` closure fetching a resolved `base..head` commit range off the
+/// render thread, for the Review launcher's Commits-tab ahead-of-base
+/// source. Same indirection as [`AsyncCommitLogFetcher`] and for the same
+/// reason — the closure itself is what crosses the thread boundary, since
+/// `App` is not `Send`.
+pub type AsyncCommitLogRangeFetcher =
+    Box<dyn Fn(&CommitLogRange) -> Result<Vec<CommitLogEntry>, GitError> + Send>;
 
 /// A `Send` closure fetching the fuzzy file finder's candidate list off the
 /// render thread, for the finder's single-flight background load. Same
@@ -174,6 +183,22 @@ pub trait StageOps {
     fn async_commit_log_fetcher(&self) -> Option<AsyncCommitLogFetcher> {
         None
     }
+    /// Reads the commits ahead of `range.base` (see
+    /// [`GitRunner::commit_log_range`]), synchronously — the fallback the
+    /// Review launcher's Commits tab takes when
+    /// [`StageOps::async_commit_log_range_fetcher`] returns `None`.
+    fn commit_log_range(&self, range: &CommitLogRange) -> Result<Vec<CommitLogEntry>, GitError> {
+        let _ = range;
+        Err(GitError::Parse("commit log range unavailable".into()))
+    }
+    /// A `Send` closure fetching a commit-log range off the render thread
+    /// (see [`AsyncCommitLogRangeFetcher`]). The default returns `None`,
+    /// keeping non-`Send` fakes (and git-less contexts) on the synchronous
+    /// [`StageOps::commit_log_range`] path; [`GitRunner`] overrides it the
+    /// same way it overrides [`StageOps::async_commit_log_fetcher`].
+    fn async_commit_log_range_fetcher(&self) -> Option<AsyncCommitLogRangeFetcher> {
+        None
+    }
     /// Reads the fuzzy file finder's candidate list: tracked (`git
     /// ls-files`) plus untracked-but-unignored files, merged via
     /// [`crate::search::merge_candidates`]; the finder treats this as
@@ -300,6 +325,18 @@ impl StageOps for GitRunner {
         // Same cloned-handle trick as `async_review_builder`.
         let runner = self.clone();
         Some(Box::new(move |count, skip| runner.commit_log(count, skip)))
+    }
+
+    fn commit_log_range(&self, range: &CommitLogRange) -> Result<Vec<CommitLogEntry>, GitError> {
+        GitRunner::commit_log_range(self, range)
+    }
+
+    fn async_commit_log_range_fetcher(&self) -> Option<AsyncCommitLogRangeFetcher> {
+        // Same cloned-handle trick as `async_review_builder`.
+        let runner = self.clone();
+        Some(Box::new(move |range: &CommitLogRange| {
+            runner.commit_log_range(range)
+        }))
     }
 
     fn list_files(&self) -> Result<Vec<FileCandidate>, GitError> {

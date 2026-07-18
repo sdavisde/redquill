@@ -807,10 +807,12 @@ pub(super) static CONFIRM_REMOTE_OP_KEYS: LazyLock<Vec<ModalBinding<ConfirmRemot
 /// opens [`super::app::Mode::ReviewLauncher`]): `Tab`/`Shift-Tab`/`h`/`l`
 /// switch between the Branches and Commits tabs, `j`/`k`/arrows move the
 /// active tab's cursor, `Enter` confirms the highlighted row — starts a
-/// branch review on the Branches tab (Commits is still inert until its data
-/// lands), `Esc` closes the modal and restores the mode `R` was pressed
-/// from. Same shape as [`SwitcherAction`] — tab toggle, cursor pair, confirm,
-/// close.
+/// branch review on the Branches tab, opens a read-only commit view on the
+/// Commits tab — `Esc` closes the modal and restores the mode `R` was
+/// pressed from, and `a` toggles the Commits tab's data source between
+/// ahead-of-base and the full recent-HEAD log. Same shape as
+/// [`SwitcherAction`] for the first five — tab toggle, cursor pair, confirm,
+/// close — plus the one launcher-specific row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LauncherAction {
     ToggleTab,
@@ -820,6 +822,10 @@ pub(super) enum LauncherAction {
     /// [`super::app::App::review_launcher_confirm`]).
     Confirm,
     Close,
+    /// The Commits tab's "all commits" toggle — switches its data source
+    /// between ahead-of-base and the full recent-HEAD log (see
+    /// [`super::app::App::review_launcher_toggle_all_commits`]).
+    ToggleAllCommits,
 }
 
 pub(super) fn launcher_action_name(action: LauncherAction) -> &'static str {
@@ -829,6 +835,7 @@ pub(super) fn launcher_action_name(action: LauncherAction) -> &'static str {
         LauncherAction::MoveUp => "move-up",
         LauncherAction::Confirm => "confirm",
         LauncherAction::Close => "close",
+        LauncherAction::ToggleAllCommits => "toggle-all-commits",
     }
 }
 
@@ -839,6 +846,7 @@ pub(super) fn launcher_action_from_name(name: &str) -> Option<LauncherAction> {
         "move-up" => LauncherAction::MoveUp,
         "confirm" => LauncherAction::Confirm,
         "close" => LauncherAction::Close,
+        "toggle-all-commits" => LauncherAction::ToggleAllCommits,
         _ => return None,
     })
 }
@@ -903,6 +911,15 @@ pub(super) static REVIEW_LAUNCHER_KEYS: LazyLock<Vec<ModalBinding<LauncherAction
                 footer: Some(FooterHint {
                     rank: 4,
                     label: "close",
+                }),
+            },
+            ModalBinding {
+                description: "Commits tab: toggle between ahead-of-base and all commits",
+                keys: vec![ModalKey::plain(KeyCode::Char('a'))],
+                action: LauncherAction::ToggleAllCommits,
+                footer: Some(FooterHint {
+                    rank: 5,
+                    label: "all commits",
                 }),
             },
         ]
@@ -2715,6 +2732,18 @@ index 111..222 100644
                             app.mode,
                             Mode::Normal,
                             "Launcher {label}: must close back to the origin mode"
+                        );
+                    }
+                    LauncherAction::ToggleAllCommits => {
+                        // Only observable on the Commits tab — switch there
+                        // first (`ToggleTab`'s own case above already
+                        // proves that key works).
+                        app.review_launcher_switch_tab();
+                        assert!(!app.launcher_all_commits);
+                        handle_review_launcher_key(&mut app, key.event());
+                        assert!(
+                            app.launcher_all_commits,
+                            "Launcher {label}: must toggle all-commits on"
                         );
                     }
                 }
