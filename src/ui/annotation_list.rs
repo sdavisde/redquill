@@ -118,6 +118,14 @@ impl App {
         let Some(id) = self.annotations.iter().nth(self.list_cursor).map(|a| a.id) else {
             return;
         };
+        self.delete_annotation_by_id(id);
+    }
+
+    /// Removes the annotation with `id` from the store, re-clamps the list
+    /// cursor, rebuilds the diff rows, and saves-on-change. Shared by the
+    /// list panel's delete and the diff view's in-place delete so both paths
+    /// behave identically (no confirmation). A no-op if `id` is unknown.
+    pub(super) fn delete_annotation_by_id(&mut self, id: usize) {
         let _ = self.annotations.remove(id);
         if self.annotations.is_empty() {
             self.list_cursor = 0;
