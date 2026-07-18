@@ -59,6 +59,7 @@ mod review_banner;
 mod review_branch;
 mod review_branch_modal;
 mod review_launcher;
+mod review_launcher_modal;
 mod review_ops;
 mod review_session;
 mod rows;
@@ -834,6 +835,9 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     }
     if matches!(app.mode, Mode::ReviewBranch) {
         review_branch_modal::render(frame, area, app);
+    }
+    if matches!(app.mode, Mode::ReviewLauncher { .. }) {
+        review_launcher_modal::render(frame, area, app);
     }
     if matches!(app.mode, Mode::CommitMessage) {
         commit_modal::render(frame, area, app);
