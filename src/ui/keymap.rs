@@ -1595,6 +1595,50 @@ mod tests {
         );
     }
 
+    // -- Scope::Global migration: behavior pin -------------------------------
+
+    /// Behavior pin: `?`/`@`/`!`/the quit family resolve to the same action
+    /// from both `Scope::Diff` and `Scope::Panel`, regardless of whether
+    /// that's backed by a duplicate row per scope or a single shared row —
+    /// this must hold unchanged before and after any row migration between
+    /// the two.
+    #[test]
+    fn cross_scope_duplicated_bindings_resolve_identically() {
+        let km = Keymap::default_map();
+        for scope in [Scope::Diff, Scope::Panel] {
+            assert_eq!(
+                km.lookup_in(scope, key(KeyCode::Char('?'), KeyModifiers::NONE)),
+                Some(Action::ToggleHelp),
+                "`?` must resolve to ToggleHelp in {scope:?}"
+            );
+            assert_eq!(
+                km.lookup_in(scope, key(KeyCode::Char('@'), KeyModifiers::NONE)),
+                Some(Action::ToggleCommandLog),
+                "`@` must resolve to ToggleCommandLog in {scope:?}"
+            );
+            assert_eq!(
+                km.lookup_in(scope, key(KeyCode::Char('!'), KeyModifiers::NONE)),
+                Some(Action::DismissConfigWarning),
+                "`!` must resolve to DismissConfigWarning in {scope:?}"
+            );
+            assert_eq!(
+                km.lookup_in(scope, key(KeyCode::Char('q'), KeyModifiers::NONE)),
+                Some(Action::Quit),
+                "`q` must resolve to Quit in {scope:?}"
+            );
+            assert_eq!(
+                km.lookup_in(scope, key(KeyCode::Char('Q'), KeyModifiers::NONE)),
+                Some(Action::QuitDiscard),
+                "`Q` must resolve to QuitDiscard in {scope:?}"
+            );
+            assert_eq!(
+                km.lookup_in(scope, key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+                Some(Action::QuitDiscard),
+                "Ctrl-C must resolve to QuitDiscard in {scope:?}"
+            );
+        }
+    }
+
     // -- Switcher modal -------------------------------------------------------
 
     /// `b` opens the switcher only in panel scope; in diff scope it stays
