@@ -11,7 +11,7 @@
 //! nothing; quit-and-emit prints annotations exactly once.
 
 use super::QuitOutcome;
-use super::app::{App, EndReviewOrigin, Mode};
+use super::app::{App, Mode, ModeOrigin};
 use super::modal_keys::EndReviewAction;
 
 impl App {
@@ -19,11 +19,7 @@ impl App {
     /// so [`App::cancel_end_review`] can restore it exactly. Called only
     /// when [`App::in_review_session`] is true (see [`super::quit_action`]).
     pub(super) fn open_end_review_modal(&mut self) {
-        let origin = match self.mode {
-            Mode::Visual { anchor } => EndReviewOrigin::Visual { anchor },
-            Mode::Panel { cursor, tab } => EndReviewOrigin::Panel { cursor, tab },
-            _ => EndReviewOrigin::Normal,
-        };
+        let origin = ModeOrigin::capture(self.mode);
         self.mode = Mode::EndReview { origin, cursor: 0 };
     }
 
@@ -34,11 +30,7 @@ impl App {
     /// `Mode::EndReview`.
     pub(super) fn cancel_end_review(&mut self) {
         self.mode = match self.mode {
-            Mode::EndReview { origin, .. } => match origin {
-                EndReviewOrigin::Normal => Mode::Normal,
-                EndReviewOrigin::Visual { anchor } => Mode::Visual { anchor },
-                EndReviewOrigin::Panel { cursor, tab } => Mode::Panel { cursor, tab },
-            },
+            Mode::EndReview { origin, .. } => origin.restore(),
             other => other,
         };
     }
@@ -181,7 +173,7 @@ index 111..222 100644
         assert_eq!(
             app.mode,
             Mode::EndReview {
-                origin: EndReviewOrigin::Normal,
+                origin: ModeOrigin::Normal,
                 cursor: 0,
             }
         );
@@ -197,7 +189,7 @@ index 111..222 100644
         assert_eq!(
             app.mode,
             Mode::EndReview {
-                origin: EndReviewOrigin::Visual { anchor: 3 },
+                origin: ModeOrigin::Visual { anchor: 3 },
                 cursor: 0,
             }
         );
@@ -216,7 +208,7 @@ index 111..222 100644
         assert_eq!(
             app.mode,
             Mode::EndReview {
-                origin: EndReviewOrigin::Panel {
+                origin: ModeOrigin::Panel {
                     cursor: 2,
                     tab: PanelTab::History,
                 },

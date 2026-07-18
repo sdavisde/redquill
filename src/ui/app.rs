@@ -120,17 +120,14 @@ pub enum Mode {
     /// The end-review modal (`q` in a review session) is open: pause /
     /// finish / cancel. `origin` is where `q` was pressed from — `Cancel`
     /// restores it exactly. This is the state-design exception documented
-    /// on [`EndReviewOrigin`]: it would ordinarily be a struct field ("must
+    /// on [`ModeOrigin`]: it would ordinarily be a struct field ("must
     /// survive mode exit"), but since it only matters for *this* mode's
     /// lifetime, carrying it as the variant's own payload keeps it from
     /// going stale as a field while every other mode is active. `cursor` is
     /// the `j`/`k`-highlighted option (0 = Pause, 1 = Finish, 2 = Cancel —
     /// the modal's display order), reset to `0` on open; the pre-existing
     /// `p`/`f`/`c` mnemonics dispatch immediately regardless of `cursor`.
-    EndReview {
-        origin: EndReviewOrigin,
-        cursor: usize,
-    },
+    EndReview { origin: ModeOrigin, cursor: usize },
     /// The pull/push confirm modal (`p`/`P` in a review session) is open:
     /// confirming this specific remote-writing op against the branch under
     /// review is the confirm-first guard `p`/`P` gain during a review (`f`
@@ -150,18 +147,45 @@ pub enum Mode {
     },
 }
 
-/// Where `q` was pressed from, carried by [`Mode::EndReview`] so its Cancel
-/// gesture can restore the exact prior mode. A dedicated small enum rather
-/// than `Box<Mode>` recursion: [`Mode`] derives `Copy` (every call site that
+/// Where a modal-launching gesture was pressed from, so closing that modal
+/// can restore the exact prior mode: [`Mode::EndReview`]'s Cancel (`q` was
+/// pressed from here) and [`Mode::ReviewLauncher`]'s `Esc` (`R` was pressed
+/// from here) both carry one of these rather than a parallel enum each,
+/// since the payloads are identical. A dedicated small enum rather than
+/// `Box<Mode>` recursion: [`Mode`] derives `Copy` (every call site that
 /// matches `app.mode` by value depends on that), and a `Box` field would
-/// remove it crate-wide. `q` is only ever intercepted from these three
-/// contexts (see [`super::quit_action`]/[`super::modes::handle_panel_key`]),
-/// so this closed enum covers every case.
+/// remove it crate-wide. Every capturing gesture is only ever intercepted
+/// from these contexts (see [`super::quit_action`]/
+/// [`super::modes::handle_panel_key`]/[`super::review_launcher`]), so this
+/// closed enum covers every case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EndReviewOrigin {
+pub enum ModeOrigin {
     Normal,
     Visual { anchor: usize },
     Panel { cursor: usize, tab: PanelTab },
+}
+
+impl ModeOrigin {
+    /// Captures `mode` as an origin to restore to later: `Visual`/`Panel`
+    /// keep their payload, every other mode collapses to `Normal` — the
+    /// same fallback [`super::end_review::App::open_end_review_modal`]'s
+    /// inline match used before this was factored out here.
+    pub(super) fn capture(mode: Mode) -> ModeOrigin {
+        match mode {
+            Mode::Visual { anchor } => ModeOrigin::Visual { anchor },
+            Mode::Panel { cursor, tab } => ModeOrigin::Panel { cursor, tab },
+            _ => ModeOrigin::Normal,
+        }
+    }
+
+    /// The mode this origin restores to.
+    pub(super) fn restore(self) -> Mode {
+        match self {
+            ModeOrigin::Normal => Mode::Normal,
+            ModeOrigin::Visual { anchor } => Mode::Visual { anchor },
+            ModeOrigin::Panel { cursor, tab } => Mode::Panel { cursor, tab },
+        }
+    }
 }
 
 /// The TUI's full state: the per-view diff state (files, selection, rows,
