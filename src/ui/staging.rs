@@ -38,6 +38,14 @@ pub(super) fn toggle_stage(app: &mut App) {
     if !matches!(app.mode, Mode::Normal | Mode::Visual { .. }) {
         return;
     }
+    toggle_stage_at_cursor(app);
+}
+
+/// The mode-independent core [`toggle_stage`] wraps: capability checks,
+/// gesture resolution against the cursor row, and the apply/refresh
+/// epilogue. Split from the mode guard so other entry points can route
+/// here legitimately instead of spoofing a mode.
+fn toggle_stage_at_cursor(app: &mut App) {
     if app.target.staging_mode() == StagingMode::ReadOnly {
         app.set_status_message("read-only diff target");
         return;
