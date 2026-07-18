@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.13.0](https://github.com/sdavisde/redquill/compare/v0.12.0...v0.13.0) (2026-07-18)
+
+
+### Features
+
+* add [keys.global] config section for Scope::Global remapping ([23555f9](https://github.com/sdavisde/redquill/commit/23555f9f8d580e46db31273a6a09ac83b2bd7af2))
+* add CommitLogRange git-layer query for ahead-of-base commits ([833e0c3](https://github.com/sdavisde/redquill/commit/833e0c36fde6bd8fafdc874352a25af2a30fb037))
+* global R opens the Review launcher, refresh moves to r ([c2dc66d](https://github.com/sdavisde/redquill/commit/c2dc66dee8005b3a7ca5149ba9bb529b399707f3))
+* render the Review launcher modal ([496678f](https://github.com/sdavisde/redquill/commit/496678f34ff53c944ba487a5115c1ce3e5a1b02c))
+* Review launcher Commits tab lists commits and opens read-only view ([9478b47](https://github.com/sdavisde/redquill/commit/9478b47dd680f2abe5ec4c6999127d22cd375908))
+* wire the Review launcher's Branches tab, retire Mode::ReviewBranch ([08eac70](https://github.com/sdavisde/redquill/commit/08eac70a8835fa28ce3396150957665739bd2188))
+
 ## [0.12.0](https://github.com/sdavisde/redquill/compare/v0.11.1...v0.12.0) (2026-07-17)
 
 
