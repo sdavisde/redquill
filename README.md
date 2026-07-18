@@ -24,5 +24,5 @@ brew install sdavisde/tap/redquill
 ```
 
 2. Run `redquill` in the git repo you want to review
-3. Press \` to open the git panel, and `?` to see the list of keybinds.
+3. Press \` to open the git panel, and `?` for help — it opens on a "This context" view scoped to wherever you pressed it from (plus a curated list of common workflows), with the full reference one `Tab` away. Pause after `g` or `z` to see a popup of what keys can follow.
 4. When viewing the diff, press `c` to leave a comment. When the session ends, your comments are copied to the clipboard so you can paste them straight into an agent.
