@@ -1,22 +1,22 @@
-//! Real-git integration tests for the review-branch modal's in-app entry
-//! path, driven through the actual key-dispatch pipeline for focus and
-//! confirm (`` ` `` -> `Enter`) against throwaway repositories built in
-//! tempdirs, per this repo's testing convention — never the host repo. The
-//! modal itself opens via a direct `App::open_review_branch_modal()` call
-//! rather than a keypress: its panel-scope `R` binding moved to the Review
-//! launcher's global `R`, so this file now exercises the confirm/reroot
-//! machinery the launcher's Branches tab will drive once migrated.
+//! Real-git integration tests for the Review launcher's Branches tab, driven
+//! through the actual key-dispatch pipeline (`R` from anywhere, `j`/`k` to
+//! move the cursor, `Enter` to confirm, `Esc` to close) against throwaway
+//! repositories built in tempdirs, per this repo's testing convention —
+//! never the host repo. Migrated from `review_branch_integration_tests.rs`
+//! (retired alongside `Mode::ReviewBranch`): identical coverage — branch-list
+//! contents, the confirm/reroot flow, the worktree-add-failure path — now
+//! entered through the launcher's global `R` instead of a panel-only
+//! binding, plus origin-restore coverage from both `Normal` and `Panel`.
 //!
 //! Lives beside `git_switch_integration_tests.rs`/`review_guard_integration_tests.rs`
-//! for the identical reason those files document: `dispatch_key`,
-//! `open_review_branch_modal`, and `confirm_review_branch` are
-//! crate-internal by design (the modal bypasses the public `Action`/
-//! `Keymap` surface entirely, same as the switcher), so a `tests/*.rs`
-//! binary — which only sees this crate's `pub` surface — has no way to
-//! drive `Enter` inside it. Living here keeps the coverage genuinely
-//! end-to-end (real `git worktree add` subprocesses, real key dispatch, a
-//! real full-frame render) without widening the public API for a test's
-//! sake.
+//! for the identical reason those files document: `dispatch_key` and the
+//! launcher's confirm machinery are crate-internal by design (the modal
+//! bypasses the public `Action`/`Keymap` surface entirely, same as the
+//! switcher), so a `tests/*.rs` binary — which only sees this crate's `pub`
+//! surface — has no way to drive `Enter` inside it. Living here keeps the
+//! coverage genuinely end-to-end (real `git worktree add` subprocesses, real
+//! key dispatch, a real full-frame render) without widening the public API
+//! for a test's sake.
 //!
 //! Every fixture is built with `tempfile`; every mutating git call is
 //! preceded by `assert_inside_tempdir` (a local copy of the shared isolation
@@ -24,11 +24,10 @@
 //! use — duplicated here rather than shared, matching how every one of
 //! those files already carries its own copy, per this repo's established
 //! one-copy-per-file convention: this in-crate module can't share code
-//! across the crate boundary with the `tests/*.rs` binaries).
-//! This file is exactly the incident's risk shape (worktree creation driven
-//! through a modal confirm gesture), so the guard runs before every
-//! mutating call as a matter of discipline, per the task's explicit
-//! requirement.
+//! across the crate boundary with the `tests/*.rs` binaries). This file is
+//! exactly the 2026-07-16 incident's risk shape (worktree creation driven
+//! through a modal confirm gesture), so the guard runs before every mutating
+//! call as a matter of discipline.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -38,6 +37,8 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use tempfile::TempDir;
 
+use super::app::{Mode, ModeOrigin, PanelTab};
+use super::review_launcher::LauncherTab;
 use super::stage_ops::build_review;
 use super::*;
 use crate::git::{DiffTarget, GitRunner};
@@ -107,7 +108,8 @@ fn assert_inside_tempdir(path: &Path, tmp: &TempDir) {
 
 /// A repo on `main` (checked out, clean) with one commit, plus a `feature`
 /// branch (not checked out anywhere) one commit ahead that changes `a.rs` —
-/// the fixture for a successful in-app review start.
+/// the fixture for a successful in-app review start with exactly one
+/// candidate branch (cursor stays at 0, no `j` needed).
 fn repo_with_feature_branch() -> TempDir {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path();
@@ -125,9 +127,32 @@ fn repo_with_feature_branch() -> TempDir {
     tmp
 }
 
+/// Same fixture, plus a second candidate branch `zulu` — `for-each-ref`
+/// lists local branches alphabetically, so after excluding the current
+/// `main` the Branches tab lists `alpha` then `zulu`; `j` moves the cursor
+/// onto `zulu`, proving the journey works from a real multi-branch list
+/// rather than a single-candidate list where `j` would be a no-op.
+fn repo_with_two_feature_branches() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    assert_inside_tempdir(dir, &tmp);
+    git(dir, &["init", "-q", "-b", "main"]);
+    configure_identity(dir);
+    write(dir, "a.rs", "fn a() {}\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "initial"]);
+    git(dir, &["branch", "alpha"]);
+    git(dir, &["branch", "zulu"]);
+    git(dir, &["checkout", "-q", "zulu"]);
+    write(dir, "a.rs", "fn a() { changed(); }\n");
+    git(dir, &["commit", "-aq", "-m", "zulu tip"]);
+    git(dir, &["checkout", "-q", "main"]);
+    tmp
+}
+
 /// Same as [`repo_with_feature_branch`], except `feature` is already checked
 /// out in a second, unmanaged worktree — the shape that makes `git worktree
-/// add` (and therefore the review-branch modal's confirm gesture) fail.
+/// add` (and therefore the launcher's confirm gesture) fail.
 fn repo_with_feature_checked_out_elsewhere() -> TempDir {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path();
@@ -165,8 +190,7 @@ fn app_for(dir: &Path) -> App {
 
 /// Dispatches one key through the real `dispatch_key` pipeline — the same
 /// handler the blocking event loop calls — so these tests exercise mode
-/// routing and the review-branch modal's own key handler exactly as the
-/// product does.
+/// routing and the launcher's own key handler exactly as the product does.
 fn press(app: &mut App, keymap: &Keymap, pending: &mut Option<KeyEvent>, code: KeyCode) {
     dispatch_key(
         app,
@@ -221,10 +245,10 @@ fn dump_frame(label: &str, app: &App, keymap: &Keymap) {
     }
 }
 
-// -- Scenarios ---------------------------------------------------------------
+// -- Scenarios: Branches tab data (FR-8 parity) ------------------------------
 
 #[test]
-fn review_branch_modal_lists_local_branches_excluding_the_current_one() {
+fn launcher_branches_tab_lists_local_branches_excluding_the_current_one() {
     let tmp = repo_with_feature_branch();
     let dir = tmp.path();
     let mut app = app_for(dir);
@@ -233,23 +257,38 @@ fn review_branch_modal_lists_local_branches_excluding_the_current_one() {
 
     press(&mut app, &keymap, &mut pending, KeyCode::Char('`')); // focus git panel
     assert!(matches!(app.mode, Mode::Panel { .. }));
-    app.open_review_branch_modal(); // panel-scope `R` moved to the Review launcher's global `R`
-    assert_eq!(app.mode, Mode::ReviewBranch);
-
-    let branches = &app.review_branch_modal.as_ref().unwrap().branches;
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('R')); // open the launcher (global scope)
     assert!(
-        branches.iter().all(|b| b.name != "main"),
-        "the currently checked-out branch must be excluded: {branches:?}"
+        matches!(
+            app.mode,
+            Mode::ReviewLauncher {
+                tab: LauncherTab::Branches,
+                ..
+            }
+        ),
+        "R must open the launcher on the Branches tab, got {:?}",
+        app.mode
+    );
+
+    assert!(
+        app.launcher_branches.iter().all(|b| b.name != "main"),
+        "the currently checked-out branch must be excluded: {:?}",
+        app.launcher_branches
     );
     assert!(
-        branches.iter().any(|b| b.name == "feature"),
-        "feature must be listed: {branches:?}"
+        app.launcher_branches.iter().any(|b| b.name == "feature"),
+        "feature must be listed: {:?}",
+        app.launcher_branches
     );
 
     let content = render_frame(&app, &keymap);
-    assert!(content.contains("Review branch"));
+    assert!(content.contains("Branches"));
     assert!(content.contains("feature"));
-    dump_frame("review-branch modal open over the git panel", &app, &keymap);
+    dump_frame(
+        "launcher open over the git panel, Branches tab",
+        &app,
+        &keymap,
+    );
 
     // Esc closes without starting anything.
     press(&mut app, &keymap, &mut pending, KeyCode::Esc);
@@ -259,14 +298,16 @@ fn review_branch_modal_lists_local_branches_excluding_the_current_one() {
     drop(tmp);
 }
 
+// -- Scenarios: reroot-into-review happy path (FR-8, FR-9) -------------------
+
 #[test]
-fn review_branch_modal_reroots_into_a_bannered_review_session_with_persisted_marks_restored() {
+fn launcher_reroots_into_a_bannered_review_session_with_persisted_marks_restored() {
     let tmp = repo_with_feature_branch();
     let dir = tmp.path();
     assert_inside_tempdir(dir, &tmp);
 
     // Pre-seed persisted review progress for `feature` (as if a prior
-    // paused CLI session had already accepted a.rs) — proves the in-app
+    // paused CLI session had already accepted a.rs) — proves the launcher's
     // path restores it exactly like the CLI path does.
     let runner = GitRunner::discover_in(dir).unwrap();
     let common_dir = runner.git_common_dir().unwrap();
@@ -297,14 +338,22 @@ fn review_branch_modal_reroots_into_a_bannered_review_session_with_persisted_mar
     let keymap = Keymap::default_map();
     let mut pending: Option<KeyEvent> = None;
 
+    // Journey B, git-panel origin: `` ` ``, `R`, `Enter` — one candidate
+    // branch (`feature`), so no `j` is needed.
     press(&mut app, &keymap, &mut pending, KeyCode::Char('`'));
-    app.open_review_branch_modal(); // panel-scope `R` moved to the Review launcher's global `R`
-    assert_eq!(app.mode, Mode::ReviewBranch);
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('R'));
+    assert!(matches!(
+        app.mode,
+        Mode::ReviewLauncher {
+            tab: LauncherTab::Branches,
+            ..
+        }
+    ));
     press(&mut app, &keymap, &mut pending, KeyCode::Enter); // confirm on `feature`
 
     assert!(
         matches!(app.mode, Mode::Panel { .. }),
-        "modal closes after a successful review start, got {:?}",
+        "modal closes into the panel after a successful review start, got {:?}",
         app.mode
     );
     assert!(
@@ -347,7 +396,7 @@ fn review_branch_modal_reroots_into_a_bannered_review_session_with_persisted_mar
         "banner must show the branch under review: {content}"
     );
     dump_frame(
-        "landed in the review session, first frame (a.rs pre-accepted)",
+        "landed in the review session via the launcher, first frame (a.rs pre-accepted)",
         &app,
         &keymap,
     );
@@ -356,7 +405,70 @@ fn review_branch_modal_reroots_into_a_bannered_review_session_with_persisted_mar
 }
 
 #[test]
-fn review_branch_modal_surfaces_a_worktree_add_failure_without_mutating_state() {
+fn launcher_from_the_diff_view_reroots_into_review_session_within_three_keystrokes() {
+    let tmp = repo_with_two_feature_branches();
+    let dir = tmp.path();
+    let mut app = app_for(dir);
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    assert_eq!(app.mode, Mode::Normal, "starts in the diff view");
+
+    // Journey B, diff-view origin, exactly three keystrokes: `R`, `j`, `Enter`.
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('R'));
+    assert!(matches!(
+        app.mode,
+        Mode::ReviewLauncher {
+            tab: LauncherTab::Branches,
+            origin: ModeOrigin::Normal,
+            ..
+        }
+    ));
+    assert_eq!(
+        app.launcher_branches
+            .iter()
+            .map(|b| b.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["alpha", "zulu"],
+        "for-each-ref lists local branches alphabetically"
+    );
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('j')); // move onto `zulu`
+    dump_frame(
+        "launcher open over the diff view, cursor on zulu",
+        &app,
+        &keymap,
+    );
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter); // confirm on `zulu`
+
+    assert_eq!(
+        app.mode,
+        Mode::Normal,
+        "a Normal-origin launcher restores to Normal after a successful start, got {:?}",
+        app.mode
+    );
+    assert!(
+        matches!(&app.target, DiffTarget::Review { branch, .. } if branch == "zulu"),
+        "target must be Review{{branch: zulu}} (the `j`-selected branch), got {:?}",
+        app.target
+    );
+    let content = render_frame(&app, &keymap);
+    assert!(
+        content.contains("REVIEWING zulu"),
+        "banner must show the branch under review: {content}"
+    );
+    dump_frame(
+        "landed in the review session from the diff view",
+        &app,
+        &keymap,
+    );
+
+    drop(tmp);
+}
+
+// -- Scenarios: failure path (FR-8) -------------------------------------------
+
+#[test]
+fn launcher_surfaces_a_worktree_add_failure_and_restores_the_origin_without_mutating_state() {
     let tmp = repo_with_feature_checked_out_elsewhere();
     let dir = tmp.path();
     let mut app = app_for(dir);
@@ -364,18 +476,24 @@ fn review_branch_modal_surfaces_a_worktree_add_failure_without_mutating_state() 
     let mut pending: Option<KeyEvent> = None;
 
     press(&mut app, &keymap, &mut pending, KeyCode::Char('`'));
-    app.open_review_branch_modal(); // panel-scope `R` moved to the Review launcher's global `R`
-    assert_eq!(app.mode, Mode::ReviewBranch);
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('R'));
+    assert!(matches!(
+        app.mode,
+        Mode::ReviewLauncher {
+            tab: LauncherTab::Branches,
+            ..
+        }
+    ));
 
     let before_root = app.repo_root.clone();
     let before_target = app.target.clone();
 
     press(&mut app, &keymap, &mut pending, KeyCode::Enter); // confirm on `feature`, which fails
 
-    assert_eq!(
-        app.mode,
-        Mode::ReviewBranch,
-        "the modal must stay open on a failed worktree add"
+    assert!(
+        matches!(app.mode, Mode::Panel { .. }),
+        "a failed start restores the launcher's Panel origin, got {:?}",
+        app.mode
     );
     assert!(
         app.status_message.is_some(),
@@ -403,6 +521,136 @@ fn review_branch_modal_surfaces_a_worktree_add_failure_without_mutating_state() 
         "main",
         "the user's own checkout must stay untouched"
     );
+
+    drop(tmp);
+}
+
+// -- Scenarios: single-in-flight guard (FR-8 parity) -------------------------
+
+#[test]
+fn confirm_is_rejected_while_a_remote_op_is_in_flight() {
+    let tmp = repo_with_feature_branch();
+    let dir = tmp.path();
+    let mut app = app_for(dir);
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('`'));
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('R'));
+    assert!(matches!(
+        app.mode,
+        Mode::ReviewLauncher {
+            tab: LauncherTab::Branches,
+            ..
+        }
+    ));
+
+    // Mark a fetch as running, the same way `App::request_remote_op` would,
+    // without actually spawning one — mirrors `app_tests.rs`'s
+    // `in_flight_fetch` precedent for the switcher's identical guard.
+    app.git_op = Some(super::app::InFlightGitOp {
+        id: super::background::TaskId(1),
+        kind: super::app::GitOpKind::Remote(crate::git::RemoteOp::Fetch),
+        command_line: crate::git::RemoteOp::Fetch.command_line(),
+    });
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter); // confirm on `feature`, blocked
+
+    assert!(
+        matches!(
+            app.mode,
+            Mode::ReviewLauncher {
+                tab: LauncherTab::Branches,
+                ..
+            }
+        ),
+        "the launcher stays open while a remote op is running, got {:?}",
+        app.mode
+    );
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_some_and(|m| m.contains("is running")),
+        "got {:?}",
+        app.status_message
+    );
+
+    // No managed worktree was created while blocked.
+    let runner = GitRunner::discover_in(dir).unwrap();
+    let common_dir = runner.git_common_dir().unwrap();
+    let managed = common_dir.join("redquill").join("worktrees");
+    assert!(
+        !managed.exists() || std::fs::read_dir(&managed).unwrap().next().is_none(),
+        "no worktree must have been created while a remote op is in flight"
+    );
+
+    drop(tmp);
+}
+
+// -- Scenarios: close-without-start origin restore (FR-5, FR-9) -------------
+
+#[test]
+fn esc_without_confirming_restores_the_normal_origin() {
+    let tmp = repo_with_feature_branch();
+    let dir = tmp.path();
+    let mut app = app_for(dir);
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('R'));
+    assert!(matches!(
+        app.mode,
+        Mode::ReviewLauncher {
+            origin: ModeOrigin::Normal,
+            ..
+        }
+    ));
+    press(&mut app, &keymap, &mut pending, KeyCode::Esc);
+    assert_eq!(app.mode, Mode::Normal);
+    assert!(matches!(app.target, DiffTarget::WorkingTree));
+
+    drop(tmp);
+}
+
+#[test]
+fn esc_without_confirming_restores_the_panel_origin_cursor_and_tab() {
+    let tmp = repo_with_feature_branch();
+    let dir = tmp.path();
+    let mut app = app_for(dir);
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('`')); // focus panel
+    press(&mut app, &keymap, &mut pending, KeyCode::Tab); // switch to History
+    assert_eq!(
+        app.mode,
+        Mode::Panel {
+            cursor: 0,
+            tab: PanelTab::History,
+        }
+    );
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('R'));
+    assert!(matches!(
+        app.mode,
+        Mode::ReviewLauncher {
+            origin: ModeOrigin::Panel {
+                cursor: 0,
+                tab: PanelTab::History,
+            },
+            ..
+        }
+    ));
+    press(&mut app, &keymap, &mut pending, KeyCode::Esc);
+    assert_eq!(
+        app.mode,
+        Mode::Panel {
+            cursor: 0,
+            tab: PanelTab::History,
+        },
+        "Esc without confirming restores the exact panel cursor/tab, got {:?}",
+        app.mode
+    );
+    assert!(matches!(app.target, DiffTarget::WorkingTree));
 
     drop(tmp);
 }

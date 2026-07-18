@@ -130,17 +130,11 @@ pub enum Action {
     CommitStaged,
     /// Open the branch/worktree switcher modal (panel scope).
     OpenSwitcher,
-    /// Open the review-branch modal. No longer bound to any key as of the
-    /// Review launcher's global `R` (see [`Action::OpenReviewLauncher`]):
-    /// `super::app::Mode::ReviewBranch` itself is retired in a follow-up
-    /// spec, so this variant is kept only so that mode's existing
-    /// dispatch/help wiring still compiles until then.
-    OpenReviewBranch,
     /// Open the Review launcher modal (`R`, works everywhere —
     /// [`Scope::Global`]): a tabbed overlay hosting branch review and
     /// single-commit review behind one entry point (see
-    /// [`super::review_launcher::LauncherTab`]), superseding
-    /// [`Action::OpenReviewBranch`]'s panel-only entry.
+    /// [`super::review_launcher::LauncherTab`]), the sole in-app entry point
+    /// for starting a branch review.
     OpenReviewLauncher,
     /// Open the fuzzy file finder overlay (`gp`, diff scope).
     OpenFileFinder,
@@ -240,7 +234,6 @@ pub(crate) fn action_name(action: Action) -> &'static str {
         RemotePush => "remote-push",
         CommitStaged => "commit-staged",
         OpenSwitcher => "open-switcher",
-        OpenReviewBranch => "open-review-branch",
         OpenReviewLauncher => "open-review-launcher",
         OpenFileFinder => "open-file-finder",
         OpenProjectSearch => "open-project-search",
@@ -310,7 +303,6 @@ pub(crate) fn action_from_name(name: &str) -> Option<Action> {
         "remote-push" => RemotePush,
         "commit-staged" => CommitStaged,
         "open-switcher" => OpenSwitcher,
-        "open-review-branch" => OpenReviewBranch,
         "open-review-launcher" => OpenReviewLauncher,
         "open-file-finder" => OpenFileFinder,
         "open-project-search" => OpenProjectSearch,

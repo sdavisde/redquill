@@ -1,18 +1,21 @@
 //! The Review launcher modal ([`super::app::Mode::ReviewLauncher`]): a
 //! centered overlay with two tabs — Branches (default) and Commits — styled
 //! like [`super::switcher_modal`] (centered `Clear`-ed bordered block, tab
-//! headers as the block title, active tab emphasized). The list area is a
-//! placeholder until the Branches/Commits tabs are wired up to real data in
-//! follow-up work; the footer hint line is built from the *effective*
-//! `REVIEW_LAUNCHER_KEYS` table (`app.modal_keys.review_launcher`) rather
-//! than a hardcoded string, so a `[keys.review-launcher]` remap shows up here
-//! with no extra wiring.
+//! headers as the block title, active tab emphasized, cursor row reverse-
+//! highlighted). The Branches tab renders `app.launcher_branches` (real
+//! data, populated by [`super::review_launcher`]); the Commits tab is still
+//! a placeholder until its data lands in follow-up work. The footer hint
+//! line is built from the *effective* `REVIEW_LAUNCHER_KEYS` table
+//! (`app.modal_keys.review_launcher`) rather than a hardcoded string, so a
+//! `[keys.review-launcher]` remap shows up here with no extra wiring.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+
+use crate::git::LocalBranch;
 
 use super::app::App;
 use super::modal_keys::{LauncherAction, ModalBinding};
@@ -61,18 +64,31 @@ fn enter_outcome_hint(tab: LauncherTab) -> &'static str {
     }
 }
 
-/// The active tab's placeholder row. Neither tab's real list is wired up yet
-/// (Branches/Commits data lands in follow-up work), so this names that
-/// honestly rather than showing a misleadingly-empty list.
-fn placeholder_rows(tab: LauncherTab, theme: &Theme) -> Vec<ListItem<'static>> {
-    let text = match tab {
-        LauncherTab::Branches => "  branch list — coming soon",
-        LauncherTab::Commits => "  commit list — coming soon",
-    };
+/// The Commits tab's placeholder row: its real list lands in follow-up work,
+/// so this names that honestly rather than showing a misleadingly-empty
+/// list.
+fn commits_placeholder_rows(theme: &Theme) -> Vec<ListItem<'static>> {
     vec![ListItem::new(Line::from(Span::styled(
-        text,
+        "  commit list — coming soon",
         Style::default().fg(theme.footer_text),
     )))]
+}
+
+/// The Branches tab's rows: local branches excluding the current one,
+/// mirroring the retired review-branch modal's `no other local branches`
+/// empty state exactly (nothing to review when every branch is checked out
+/// already, or the repo has only one).
+fn branch_rows(branches: &[LocalBranch], theme: &Theme) -> Vec<ListItem<'static>> {
+    if branches.is_empty() {
+        return vec![ListItem::new(Line::from(Span::styled(
+            "  no other local branches",
+            Style::default().fg(theme.footer_text),
+        )))];
+    }
+    branches
+        .iter()
+        .map(|b| ListItem::new(Line::from(Span::raw(format!("  {}", b.name)))))
+        .collect()
 }
 
 /// Builds the bottom-border hint line from the *effective* launcher table:
@@ -98,7 +114,7 @@ fn hint_line(table: &[ModalBinding<LauncherAction>]) -> String {
 /// `app.mode` isn't [`super::app::Mode::ReviewLauncher`] (the caller should
 /// only invoke this in that mode).
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let super::app::Mode::ReviewLauncher { tab, .. } = app.mode else {
+    let super::app::Mode::ReviewLauncher { tab, cursor, .. } = app.mode else {
         return;
     };
     let popup = centered(area, 80, 60);
@@ -114,8 +130,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
-    let [hint_area, list_area] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(inner);
+    let rows = if app.status_message.is_some() {
+        Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .split(inner)
+    } else {
+        Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(inner)
+    };
+    let hint_area = rows[0];
+    let list_area = rows[1];
 
     frame.render_widget(
         Line::from(Span::styled(
@@ -125,8 +151,29 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         hint_area,
     );
 
-    let list = List::new(placeholder_rows(tab, &app.theme));
-    frame.render_widget(list, list_area);
+    let (items, selectable) = match tab {
+        LauncherTab::Branches => (
+            branch_rows(&app.launcher_branches, &app.theme),
+            !app.launcher_branches.is_empty(),
+        ),
+        LauncherTab::Commits => (commits_placeholder_rows(&app.theme), false),
+    };
+    let list = List::new(items).highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+    let mut list_state = ListState::default();
+    if selectable {
+        list_state.select(Some(cursor));
+    }
+    frame.render_stateful_widget(list, list_area, &mut list_state);
+
+    if let Some(message) = &app.status_message {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                message.clone(),
+                Style::default().fg(app.theme.status_message),
+            ))),
+            rows[2],
+        );
+    }
 }
 
 #[cfg(test)]
@@ -183,7 +230,7 @@ index 111..222 100644
     }
 
     #[test]
-    fn branches_tab_shows_its_placeholder_and_enter_outcome() {
+    fn branches_tab_shows_its_empty_state_and_enter_outcome_without_a_backend() {
         let mut app = App::new(vec![sample_file()]);
         app.mode = Mode::ReviewLauncher {
             tab: LauncherTab::Branches,
@@ -193,8 +240,47 @@ index 111..222 100644
         let content = render_launcher(&app);
         assert!(content.contains("Branches"));
         assert!(content.contains("Commits"));
-        assert!(content.contains("branch list"));
+        assert!(content.contains("no other local branches"));
         assert!(content.contains("start branch review"));
+    }
+
+    #[test]
+    fn branches_tab_renders_real_branches_with_the_cursor_highlighted() {
+        let mut app = App::new(vec![sample_file()]);
+        app.launcher_branches = vec![
+            crate::git::LocalBranch {
+                name: "alpha".to_string(),
+                is_current: false,
+                worktree: None,
+            },
+            crate::git::LocalBranch {
+                name: "zulu".to_string(),
+                is_current: false,
+                worktree: None,
+            },
+        ];
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::Branches,
+            cursor: 1,
+            origin: ModeOrigin::Normal,
+        };
+        let content = render_launcher(&app);
+        assert!(content.contains("alpha"));
+        assert!(content.contains("zulu"));
+        assert!(!content.contains("no other local branches"));
+    }
+
+    #[test]
+    fn a_status_message_renders_inside_the_modal() {
+        let mut app = App::new(vec![sample_file()]);
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::Branches,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.set_status_message("already reviewing feature \u{2014} press q to finish or pause");
+        let content = render_launcher(&app);
+        assert!(content.contains("already reviewing feature"));
     }
 
     #[test]

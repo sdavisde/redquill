@@ -801,82 +801,16 @@ pub(super) static CONFIRM_REMOTE_OP_KEYS: LazyLock<Vec<ModalBinding<ConfirmRemot
         ]
     });
 
-// -- Review-branch modal -----------------------------------------------------
-
-/// What a key does in the review-branch modal (`R`, panel scope — opens
-/// [`super::app::Mode::ReviewBranch`]): `j`/`k`/arrows move the cursor,
-/// `Enter` starts a review session on the highlighted branch (see
-/// [`super::review_branch::App::confirm_review_branch`]), `Esc` closes the
-/// modal. Same shape as [`SwitcherAction`] minus `ToggleTab` — this modal
-/// has one flat branch list, no tabs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ReviewBranchAction {
-    MoveDown,
-    MoveUp,
-    /// Starts reviewing the highlighted branch (see
-    /// [`super::review_branch::App::confirm_review_branch`]).
-    Confirm,
-    Close,
-}
-
-/// The review-branch modal's key table, for the help overlay, footer strip,
-/// and [`super::modes::handle_review_branch_key`]'s dispatch. Not
-/// config-remappable yet — see module doc.
-pub(super) static REVIEW_BRANCH_KEYS: LazyLock<Vec<ModalBinding<ReviewBranchAction>>> =
-    LazyLock::new(|| {
-        vec![
-            ModalBinding {
-                description: "Move selection down",
-                keys: vec![
-                    ModalKey::plain(KeyCode::Char('j')),
-                    ModalKey::plain(KeyCode::Down),
-                ],
-                action: ReviewBranchAction::MoveDown,
-                footer: Some(FooterHint {
-                    rank: 1,
-                    label: "move",
-                }),
-            },
-            ModalBinding {
-                description: "Move selection up",
-                keys: vec![
-                    ModalKey::plain(KeyCode::Char('k')),
-                    ModalKey::plain(KeyCode::Up),
-                ],
-                action: ReviewBranchAction::MoveUp,
-                // Not tagged — same reasoning as SWITCHER_KEYS's MoveUp row.
-                footer: None,
-            },
-            ModalBinding {
-                description: "Start reviewing the selected branch",
-                keys: vec![ModalKey::plain(KeyCode::Enter)],
-                action: ReviewBranchAction::Confirm,
-                footer: Some(FooterHint {
-                    rank: 2,
-                    label: "review",
-                }),
-            },
-            ModalBinding {
-                description: "Close",
-                keys: vec![ModalKey::plain(KeyCode::Esc)],
-                action: ReviewBranchAction::Close,
-                footer: Some(FooterHint {
-                    rank: 3,
-                    label: "close",
-                }),
-            },
-        ]
-    });
-
 // -- Review launcher modal ---------------------------------------------------
 
 /// What a key does in the Review launcher modal (`R`, `Scope::Global` —
 /// opens [`super::app::Mode::ReviewLauncher`]): `Tab`/`Shift-Tab`/`h`/`l`
 /// switch between the Branches and Commits tabs, `j`/`k`/arrows move the
-/// active tab's cursor, `Enter` confirms the highlighted row (inert until
-/// the Branches/Commits tabs are wired up to real data), `Esc` closes the
-/// modal and restores the mode `R` was pressed from. Same shape as
-/// [`SwitcherAction`] — tab toggle, cursor pair, confirm, close.
+/// active tab's cursor, `Enter` confirms the highlighted row — starts a
+/// branch review on the Branches tab (Commits is still inert until its data
+/// lands), `Esc` closes the modal and restores the mode `R` was pressed
+/// from. Same shape as [`SwitcherAction`] — tab toggle, cursor pair, confirm,
+/// close.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LauncherAction {
     ToggleTab,
@@ -2125,9 +2059,6 @@ pub struct ModalKeymaps {
     /// The pull/push confirm modal. Not config-remappable yet — see
     /// [`CONFIRM_REMOTE_OP_KEYS`].
     pub(super) confirm_remote_op: Vec<ModalBinding<ConfirmRemoteOpAction>>,
-    /// The review-branch modal. Not config-remappable yet — see
-    /// [`REVIEW_BRANCH_KEYS`].
-    pub(super) review_branch: Vec<ModalBinding<ReviewBranchAction>>,
 }
 
 impl Default for ModalKeymaps {
@@ -2149,7 +2080,6 @@ impl Default for ModalKeymaps {
             end_review: END_REVIEW_KEYS.clone(),
             accepted_panel: ACCEPTED_PANEL_KEYS.clone(),
             confirm_remote_op: CONFIRM_REMOTE_OP_KEYS.clone(),
-            review_branch: REVIEW_BRANCH_KEYS.clone(),
         }
     }
 }
@@ -2727,10 +2657,11 @@ index 111..222 100644
     }
 
     /// An `App` in the Review launcher, Branches tab, opened from
-    /// `Mode::Normal` — so `ToggleTab`/`Close` have a visible effect.
-    /// `MoveDown`/`MoveUp`/`Confirm` are documented no-ops until the
-    /// Branches/Commits tabs are wired up to real data (mirrors
-    /// `SwitcherAction::Confirm`'s identical "Task 3 stub" precedent above).
+    /// `Mode::Normal` with no git backend attached — so `ToggleTab`/`Close`
+    /// have a visible effect, while `MoveDown`/`MoveUp`/`Confirm` are no-ops
+    /// against the empty branch list a backend-less open produces (real
+    /// branch-list/confirm coverage lives in `review_launcher.rs`'s own
+    /// tests and `review_launcher_integration_tests.rs`'s real-git flows).
     fn launcher_app() -> App {
         let mut app = app();
         app.open_review_launcher();
@@ -2775,7 +2706,7 @@ index 111..222 100644
                         handle_review_launcher_key(&mut app, key.event());
                         assert!(
                             matches!(app.mode, Mode::ReviewLauncher { .. }),
-                            "Launcher {label}: modal stays open (inert until later work)"
+                            "Launcher {label}: modal stays open (no backend, empty branch list)"
                         );
                     }
                     LauncherAction::Close => {
@@ -2924,82 +2855,6 @@ index 111..222 100644
                             app.running_op_label(),
                             None,
                             "Confirm remote op {label}: cancel must run nothing"
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    /// An `App` with the review-branch modal already open over two
-    /// candidate branches, so every review-branch action has an observable
-    /// effect. No git backend is attached — `Confirm` degrades to a footer
-    /// message (see [`super::super::review_branch::App::confirm_review_branch`]'s
-    /// no-backend guard) rather than actually starting a review, which is
-    /// exactly what proves `Enter` reaches that method at all; the real
-    /// end-to-end path is covered by
-    /// `review_branch_integration_tests.rs`'s real-git dispatch test.
-    fn review_branch_app() -> App {
-        let mut app = app();
-        let branches = vec![
-            crate::git::LocalBranch {
-                name: "feature-a".to_string(),
-                is_current: false,
-                worktree: None,
-            },
-            crate::git::LocalBranch {
-                name: "feature-b".to_string(),
-                is_current: false,
-                worktree: None,
-            },
-        ];
-        app.review_branch_modal = Some(crate::ui::review_branch::ReviewBranchState::new(
-            branches, 0,
-        ));
-        app.mode = Mode::ReviewBranch;
-        app
-    }
-
-    #[test]
-    fn every_review_branch_table_entry_drives_its_documented_action() {
-        use crate::ui::modes::handle_review_branch_key;
-
-        for binding in REVIEW_BRANCH_KEYS.iter() {
-            for key in &binding.keys {
-                let mut app = review_branch_app();
-                let label = binding.key_label();
-                match binding.action {
-                    ReviewBranchAction::MoveDown => {
-                        handle_review_branch_key(&mut app, key.event());
-                        assert_eq!(
-                            app.review_branch_modal.as_ref().unwrap().cursor,
-                            1,
-                            "Review branch {label}: cursor moves down"
-                        );
-                    }
-                    ReviewBranchAction::MoveUp => {
-                        app.review_branch_modal.as_mut().unwrap().cursor = 1;
-                        handle_review_branch_key(&mut app, key.event());
-                        assert_eq!(
-                            app.review_branch_modal.as_ref().unwrap().cursor,
-                            0,
-                            "Review branch {label}: cursor moves up"
-                        );
-                    }
-                    ReviewBranchAction::Confirm => {
-                        handle_review_branch_key(&mut app, key.event());
-                        assert_eq!(
-                            app.mode,
-                            Mode::ReviewBranch,
-                            "Review branch {label}: modal stays open without a git backend"
-                        );
-                        assert!(app.status_message.is_some());
-                    }
-                    ReviewBranchAction::Close => {
-                        handle_review_branch_key(&mut app, key.event());
-                        assert!(
-                            matches!(app.mode, Mode::Panel { .. }),
-                            "Review branch {label}: must close back to the panel"
                         );
                     }
                 }

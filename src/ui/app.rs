@@ -15,8 +15,8 @@ use crate::annotate::Side;
 use crate::config::{Config, ConfigWarning};
 use crate::diff::FileDiff;
 use crate::git::{
-    BranchStatus, CommitLogEntry, CommitSummary, DiffTarget, RawFilePatch, RemoteOp, StagingMode,
-    StashEntry, commit_command_line, remote_command,
+    BranchStatus, CommitLogEntry, CommitSummary, DiffTarget, LocalBranch, RawFilePatch, RemoteOp,
+    StagingMode, StashEntry, commit_command_line, remote_command,
 };
 use crate::highlight::Highlighter;
 use crate::lsp::RequestId;
@@ -35,7 +35,6 @@ use super::lsp_ops::LspClient;
 use super::peek::{PeekKind, PeekState};
 use super::project_search::ProjectSearchState;
 use super::refresh::InFlightRefresh;
-use super::review_branch::ReviewBranchState;
 use super::review_launcher::LauncherTab;
 use super::rows::Row;
 use super::search::SearchState;
@@ -92,15 +91,6 @@ pub enum Mode {
     Peek,
     /// The branch/worktree switcher modal (`b`, panel scope) is open.
     Switcher,
-    /// The review-branch modal (`R`, panel scope) is open: lists local
-    /// branches (excluding the one currently checked out) so the user can
-    /// start a review session in place, styled and behaved like
-    /// [`Mode::Switcher`]'s Branches tab (see
-    /// [`super::review_branch::ReviewBranchState`]). Its own mode rather
-    /// than a third switcher tab, since confirming here resolves a base ref
-    /// and ensures a managed worktree exists instead of switching onto an
-    /// already-checked-out ref.
-    ReviewBranch,
     /// The Review launcher modal (`R`, `Scope::Global`) is open: a tabbed
     /// overlay (see [`super::review_launcher::LauncherTab`]) hosting branch
     /// review and single-commit review behind one entry point, reachable
@@ -108,8 +98,10 @@ pub enum Mode {
     /// `cursor` are this open's navigation state; `origin` is where `R` was
     /// pressed from, restored exactly on `Esc` via [`ModeOrigin::restore`]
     /// (mirrors [`Mode::EndReview`]'s identical origin-restore contract).
-    /// Supersedes [`Mode::ReviewBranch`] as the sole in-app entry point for
-    /// starting a branch review.
+    /// The sole in-app entry point for starting a branch review — confirming
+    /// on the Branches tab resolves a base ref and ensures a managed
+    /// worktree exists instead of switching onto an already-checked-out ref,
+    /// which is why this isn't a third [`Mode::Switcher`] tab.
     ReviewLauncher {
         tab: LauncherTab,
         cursor: usize,
@@ -353,14 +345,14 @@ pub struct App {
     /// [`Mode::Switcher`] is active (see [`App::open_switcher`] /
     /// [`App::close_switcher`]).
     pub switcher: Option<SwitcherState>,
-    /// The review-branch modal's state, `Some` only while
-    /// [`Mode::ReviewBranch`] is active (see
-    /// [`super::review_branch::App::open_review_branch_modal`] /
-    /// [`super::review_branch::App::close_review_branch_modal`]). Named
+    /// The Review launcher's Branches tab: local branches read fresh on
+    /// every launcher open and every switch onto the tab (see
+    /// [`super::review_launcher`]), excluding the one currently checked out
+    /// — identical to the retired review-branch modal's filter. Named
     /// distinctly from [`App::review_branch`] (the *existing* method naming
     /// the branch under review) so the field and the predicate can never be
     /// confused at a call site.
-    pub review_branch_modal: Option<ReviewBranchState>,
+    pub(super) launcher_branches: Vec<LocalBranch>,
     /// The LSP client backing `gd`/`gr`/`K`, created lazily on first use
     /// against `repo_root`. `None` until then. `pub(super)` for the
     /// code-intelligence module.
@@ -639,7 +631,7 @@ impl App {
             repo_root: None,
             peek: None,
             switcher: None,
-            review_branch_modal: None,
+            launcher_branches: Vec::new(),
             lsp: None,
             pending_lsp: None,
             background: BackgroundTasks::new(),
@@ -1023,7 +1015,6 @@ impl App {
             Action::RemotePush => self.request_remote_op(self.remote_push_op()),
             Action::CommitStaged => self.open_commit_message(),
             Action::OpenSwitcher => self.open_switcher(),
-            Action::OpenReviewBranch => self.open_review_branch_modal(),
             Action::OpenReviewLauncher => self.open_review_launcher(),
             Action::OpenFileFinder => self.open_finder(),
             Action::OpenProjectSearch => self.open_project_search(),

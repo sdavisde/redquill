@@ -56,8 +56,6 @@ mod project_search_view;
 mod refresh;
 mod render_glue;
 mod review_banner;
-mod review_branch;
-mod review_branch_modal;
 mod review_launcher;
 mod review_launcher_modal;
 mod review_ops;
@@ -371,7 +369,6 @@ fn dispatch_key(
         Mode::Search => modes::handle_search_key(app, key),
         Mode::Peek => modes::handle_peek_key(app, key),
         Mode::Switcher => modes::handle_switcher_key(app, key),
-        Mode::ReviewBranch => modes::handle_review_branch_key(app, key),
         Mode::ReviewLauncher { .. } => modes::handle_review_launcher_key(app, key),
         Mode::CommitMessage => modes::handle_commit_message_key(app, key),
         Mode::Finder => modes::handle_finder_key(app, key),
@@ -833,9 +830,6 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     if matches!(app.mode, Mode::Switcher) {
         switcher_modal::render(frame, area, app);
     }
-    if matches!(app.mode, Mode::ReviewBranch) {
-        review_branch_modal::render(frame, area, app);
-    }
     if matches!(app.mode, Mode::ReviewLauncher { .. }) {
         review_launcher_modal::render(frame, area, app);
     }
@@ -1096,5 +1090,5 @@ mod review_guard_integration_tests;
 mod review_persistence_integration_tests;
 
 #[cfg(test)]
-#[path = "review_branch_integration_tests.rs"]
-mod review_branch_integration_tests;
+#[path = "review_launcher_integration_tests.rs"]
+mod review_launcher_integration_tests;

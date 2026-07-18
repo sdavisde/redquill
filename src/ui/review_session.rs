@@ -2,15 +2,15 @@
 //! and ensuring a managed worktree exists for a branch under review, plus
 //! loading and reconciling that branch's persisted progress. Both entry
 //! points — the CLI's `--review` flag (`main.rs::resolve_session`) and the
-//! in-app review-branch modal ([`super::review_branch`]) — call through
-//! these same functions, so there is exactly one "ensure a review session"
-//! code path, not two copies that could drift.
+//! Review launcher's Branches tab ([`super::review_launcher`]) — call
+//! through these same functions, so there is exactly one "ensure a review
+//! session" code path, not two copies that could drift.
 //!
 //! Operates over `&dyn StageOps`, exactly like
 //! [`super::stage_ops::build_review`]: the CLI's concrete `GitRunner`
 //! coerces to the trait object at the call site (`GitRunner: StageOps`), so
 //! `main.rs` can call these without any of `redquill`'s TUI types leaking
-//! into its own layering, and the in-app modal calls them through `App`'s
+//! into its own layering, and the launcher calls them through `App`'s
 //! existing `stage_ops` handle.
 
 use std::collections::HashMap;

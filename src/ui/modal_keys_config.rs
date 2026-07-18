@@ -152,7 +152,6 @@ pub(super) fn effective_modal_keys(
         end_review: modal_keys::END_REVIEW_KEYS.clone(),
         accepted_panel: modal_keys::ACCEPTED_PANEL_KEYS.clone(),
         confirm_remote_op: modal_keys::CONFIRM_REMOTE_OP_KEYS.clone(),
-        review_branch: modal_keys::REVIEW_BRANCH_KEYS.clone(),
     };
 
     // Every mode name the config actually provided a table for that isn't

@@ -18,8 +18,8 @@ use super::App;
 use super::modal_keys::{
     self, AcceptedPanelAction, CommitMessageAction, ComposeAction, ConfirmRemoteOpAction,
     EndReviewAction, FinderAction, LauncherAction, ListAction, PeekAction,
-    ProjectSearchInputAction, ProjectSearchResultsAction, ReviewBranchAction, SearchAction,
-    StagingAction, SwitcherAction,
+    ProjectSearchInputAction, ProjectSearchResultsAction, SearchAction, StagingAction,
+    SwitcherAction,
 };
 
 /// Handles one key event while [`super::Mode::Compose`] is active. Resolves
@@ -332,29 +332,12 @@ pub(super) fn handle_switcher_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-/// Handles one key event while [`super::Mode::ReviewBranch`] is active (the
-/// review-branch modal, `R` panel scope): `j`/`k`/arrows move the cursor,
-/// `Enter` starts a review session on the highlighted branch (see
-/// [`super::review_branch::App::confirm_review_branch`]), `Esc` closes the
-/// modal.
-pub(super) fn handle_review_branch_key(app: &mut App, key: KeyEvent) {
-    let Some(action) = modal_keys::resolve(&app.modal_keys.review_branch, key) else {
-        return;
-    };
-    match action {
-        ReviewBranchAction::MoveDown => app.review_branch_move_down(),
-        ReviewBranchAction::MoveUp => app.review_branch_move_up(),
-        ReviewBranchAction::Confirm => app.confirm_review_branch(),
-        ReviewBranchAction::Close => app.close_review_branch_modal(),
-    }
-}
-
 /// Handles one key event while [`super::Mode::ReviewLauncher`] is active
 /// (the Review launcher modal, `R`, `Scope::Global`): `Tab`/`Shift-Tab`/
 /// `h`/`l`/arrows switch between the Branches and Commits tabs, `j`/`k`/
-/// arrows move the cursor, `Enter` confirms the highlighted row (inert until
-/// the Branches/Commits tabs are wired up to real data), `Esc` closes the
-/// modal back to the mode `R` was pressed from.
+/// arrows move the cursor, `Enter` confirms the highlighted row — starts a
+/// branch review on the Branches tab (Commits is still inert until its data
+/// lands), `Esc` closes the modal back to the mode `R` was pressed from.
 pub(super) fn handle_review_launcher_key(app: &mut App, key: KeyEvent) {
     let Some(action) = modal_keys::resolve(&app.modal_keys.review_launcher, key) else {
         return;
