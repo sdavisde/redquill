@@ -206,6 +206,23 @@ fn fast_forward_pull_integrates_the_remote_commit() {
 }
 
 #[test]
+fn origin_url_returns_the_configured_origin_url() {
+    let (bare, repo) = setup_remote();
+    let runner = GitRunner::discover_in(repo.path()).unwrap();
+    assert_eq!(runner.origin_url().unwrap(), Some(file_url(bare.path())));
+}
+
+#[test]
+fn origin_url_is_none_without_an_origin_remote() {
+    let repo = TempDir::new().unwrap();
+    git(repo.path(), &["init", "-q"]);
+    configure_identity(repo.path());
+
+    let runner = GitRunner::discover_in(repo.path()).unwrap();
+    assert_eq!(runner.origin_url().unwrap(), None);
+}
+
+#[test]
 fn pull_with_divergent_edits_surfaces_conflicted_files_as_unmerged() {
     let (bare, repo) = setup_remote();
     // The remote edits line two one way...

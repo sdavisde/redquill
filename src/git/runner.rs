@@ -366,6 +366,21 @@ impl GitRunner {
         }
     }
 
+    /// Returns `origin`'s configured URL (`git remote get-url origin`), or
+    /// `None` when no `origin` remote is configured — expected in a repo
+    /// that has never been pushed anywhere, not an error (same treatment as
+    /// [`GitRunner::last_commit`]'s "no commits yet"). Read-only and safe to
+    /// call from a background task like every other one-shot read here;
+    /// this is the entry point for forge-provider hostname detection
+    /// (`crate::forge::remote_url::parse_origin_hostname`).
+    pub fn origin_url(&self) -> Result<Option<String>, GitError> {
+        match self.run_utf8(&["remote", "get-url", "origin"]) {
+            Ok(out) => Ok(Some(out.trim().to_string())),
+            Err(GitError::Command { .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Reads a file's content at a git revision spec (`git show <spec>`,
     /// e.g. `HEAD:src/main.rs`, `:0:src/main.rs`). Used to source whole-file
     /// content for syntax highlighting, since the diff itself only carries

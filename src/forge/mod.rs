@@ -16,6 +16,10 @@
 //!   and which verdicts/submit shapes a given provider actually supports.
 //! - [`ForgeError`] — the shared error type for every provider operation.
 
+mod remote_url;
+
+pub use remote_url::{Hostname, RemoteUrlError, parse_origin_hostname};
+
 use thiserror::Error;
 
 /// One PR/MR row as listed by a provider: enough to render a list and to
