@@ -65,7 +65,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 - [x] 1.4 TDD `src/forge/github.rs` listing: fixed argv for `gh pr list` with JSON fields (number, title, author, headRefName, isDraft, updatedAt), fixture-based parse tests into typed rows; prompts disabled (`GH_PROMPT_DISABLED=1`, `NO_COLOR=1`), kill-on-drop.
 - [x] 1.5 Refactor-only commit: replace `LauncherTab::toggle`'s two-tab assumption with ordered cycling over all variants (existing keys unchanged, last-used-tab memory intact); identical test counts before adding the third variant.
 - [x] 1.6 Add the **Pull Requests** tab: always-visible third variant; async list load through a new `stage_ops` fetcher seam + `BackgroundTasks` with single-flight and generation guard (mirror the Commits tab); shared `/` filter and motion layer; `Enter` stubbed to a status line until 2.0.
-- [ ] 1.7 Render the tab bodies: loading line, PR rows, zero-open-PRs empty state naming `org/repo`, and the four degraded-state prescriptions with real hostname interpolation; UI tests with a fake provider for every state.
+- [x] 1.7 Render the tab bodies: loading line, PR rows, zero-open-PRs empty state naming `org/repo`, and the four degraded-state prescriptions with real hostname interpolation; UI tests with a fake provider for every state.
 - [ ] 1.8 Write `docs/forge-setup.md` (providers, detection ladder, hosted-instance walkthrough, per-state troubleshooting), link from README, add the docs-drift existence/link test.
 - [ ] 1.9 Capture the scratch-repo journey transcripts; run all four gates; hand the live-listing dogfood step to the user (PRs tab showing PR #25).
 

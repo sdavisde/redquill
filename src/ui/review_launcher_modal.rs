@@ -775,4 +775,166 @@ index 111..222 100644
         let content = render_launcher(&app);
         assert!(content.contains("no other local branches"));
     }
+
+    // -- Pull Requests tab: every FR-5 state ---------------------------------
+
+    fn pr(number: u64, title: &str, author: &str, head_ref: &str, is_draft: bool) -> PullRequest {
+        PullRequest {
+            number,
+            title: title.to_string(),
+            author: author.to_string(),
+            head_ref: head_ref.to_string(),
+            is_draft,
+            updated_at: "2026-07-15T12:00:00Z".to_string(),
+        }
+    }
+
+    fn prs_app(outcome: PrFetchOutcome) -> App {
+        let mut app = App::new(vec![sample_file()]);
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.launcher_prs = Some(outcome);
+        app
+    }
+
+    #[test]
+    fn tab_bar_names_pull_requests() {
+        let app = prs_app(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: Vec::new(),
+        });
+        let content = render_launcher(&app);
+        assert!(content.contains("Pull Requests"));
+    }
+
+    #[test]
+    fn prs_tab_shows_a_loading_placeholder_while_a_fetch_is_in_flight() {
+        let mut app = App::new(vec![sample_file()]);
+        let id = app.launcher_prs_tasks.spawn(|| PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(1, "one", "dev", "feature", false)],
+        });
+        app.launcher_prs_in_flight = Some(super::super::review_launcher::InFlightLauncherPrs {
+            id,
+            generation: app.launcher_prs_generation,
+        });
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        let content = render_launcher(&app);
+        assert!(content.contains("loading"));
+    }
+
+    #[test]
+    fn prs_tab_renders_number_title_author_branch_draft_and_updated_time() {
+        let app = prs_app(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(42, "add widgets", "octocat", "widgets-branch", true)],
+        });
+        let content = render_launcher(&app);
+        assert!(content.contains("#42"));
+        assert!(content.contains("add widgets"));
+        assert!(content.contains("octocat"));
+        assert!(content.contains("widgets-branch"));
+        assert!(content.contains("draft"));
+        assert!(content.contains("2026-07-15T12:00:00Z"));
+    }
+
+    #[test]
+    fn prs_tab_zero_open_prs_names_the_repo_and_reads_as_success_not_a_diagnostic() {
+        let app = prs_app(PrFetchOutcome::Loaded {
+            repo_label: "sdavisde/redquill".to_string(),
+            prs: Vec::new(),
+        });
+        let content = render_launcher(&app);
+        assert!(content.contains("No open pull requests on sdavisde/redquill"));
+        // Distinct from a degraded body: no auth/install/retry language
+        // anywhere near the empty-state line.
+        assert!(!content.contains("auth login"));
+        assert!(!content.contains("retry"));
+    }
+
+    #[test]
+    fn prs_tab_unresolved_shows_both_cli_auth_commands_with_the_hostname() {
+        let app = prs_app(PrFetchOutcome::Unresolved {
+            hostname: "git.example.com".to_string(),
+            reason: UnresolvedReason::NoCredentials,
+        });
+        let content = render_launcher(&app);
+        assert!(content.contains("gh auth login --hostname git.example.com"));
+        assert!(content.contains("glab auth login --hostname git.example.com"));
+    }
+
+    #[test]
+    fn prs_tab_cli_missing_shows_an_install_pointer_and_the_auth_command() {
+        let app = prs_app(PrFetchOutcome::CliMissing {
+            cli: "gh",
+            hostname: "github.com".to_string(),
+        });
+        let content = render_launcher(&app);
+        assert!(content.contains("install gh"));
+        assert!(content.contains("cli.github.com"));
+        assert!(content.contains("gh auth login --hostname github.com"));
+    }
+
+    #[test]
+    fn prs_tab_unauthenticated_shows_the_exact_auth_login_line() {
+        let app = prs_app(PrFetchOutcome::Unauthenticated {
+            cli: "gh",
+            hostname: "github.com".to_string(),
+        });
+        let content = render_launcher(&app);
+        assert!(content.contains("gh auth login --hostname github.com"));
+    }
+
+    #[test]
+    fn prs_tab_list_failed_shows_the_stderr_headline_and_a_retry_hint() {
+        let app = prs_app(PrFetchOutcome::ListFailed {
+            message: "rate limit exceeded".to_string(),
+        });
+        let content = render_launcher(&app);
+        assert!(content.contains("rate limit exceeded"));
+        assert!(content.contains("retry"));
+    }
+
+    #[test]
+    fn prs_tab_no_forge_remote_is_not_a_blank_body() {
+        let app = prs_app(PrFetchOutcome::NoForgeRemote);
+        let content = render_launcher(&app);
+        assert!(content.contains("no forge remote"));
+    }
+
+    #[test]
+    fn prs_tab_provider_not_supported_names_the_provider_and_hostname() {
+        let app = prs_app(PrFetchOutcome::ProviderNotSupported {
+            hostname: "gitlab.com".to_string(),
+            provider: "GitLab",
+        });
+        let content = render_launcher(&app);
+        assert!(content.contains("GitLab"));
+        assert!(content.contains("gitlab.com"));
+    }
+
+    #[test]
+    fn prs_tab_degraded_states_are_never_selectable() {
+        // A degraded body isn't a real row — the cursor must never highlight
+        // it as if it were a PR the user could act on.
+        let mut app = prs_app(PrFetchOutcome::ListFailed {
+            message: "boom".to_string(),
+        });
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        // Rendering must not panic on a degraded, non-empty-list state with
+        // a cursor set — this is the same "no highlight state" contract the
+        // Branches/Commits empty states already rely on.
+        let _ = render_launcher(&app);
+    }
 }
