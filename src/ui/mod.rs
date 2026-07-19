@@ -50,6 +50,7 @@ mod lsp_ops;
 mod modal_keys;
 mod modal_keys_config;
 mod modes;
+mod motion;
 mod peek;
 mod peek_overlay;
 mod project_search;
