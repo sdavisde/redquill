@@ -1524,3 +1524,163 @@ fn annotation_roundtrip_journey_transcript() {
         eprintln!("{log}");
     }
 }
+
+// -- Shared motion layer: panel half/full-page + jump (FR-3) ----------------
+
+/// A flat app of `n` root-level files, for paging/jump tests that need more
+/// rows than `flat_app`'s three.
+fn many_files_app(n: usize) -> App {
+    let files: Vec<FileDiff> = (0..n).map(|i| sample_file(&format!("f{i}.rs"))).collect();
+    App::new(files)
+}
+
+fn panel_app(app: App, tab: PanelTab) -> App {
+    let mut app = app;
+    app.mode = Mode::Panel { cursor: 0, tab };
+    app
+}
+
+#[test]
+fn panel_half_and_full_page_step_and_clamp_on_changes_tab() {
+    let mut app = panel_app(many_files_app(50), PanelTab::Changes);
+    // Default viewport height (before any frame renders) is 20 rows, so
+    // half-page steps 10 and full-page steps 20 — mirrors the diff view's
+    // own DEFAULT_VIEWPORT_HEIGHT fallback.
+    app.panel_half_page_down();
+    assert_eq!(app.panel_cursor(), 10);
+    app.panel_full_page_down();
+    assert_eq!(app.panel_cursor(), 30);
+    app.panel_full_page_down();
+    assert_eq!(app.panel_cursor(), 49, "clamps at the last navigable row");
+    app.panel_half_page_up();
+    assert_eq!(app.panel_cursor(), 39);
+    app.panel_full_page_up();
+    app.panel_full_page_up();
+    assert_eq!(app.panel_cursor(), 0, "clamps at the first row");
+}
+
+#[test]
+fn panel_jump_to_top_and_bottom_hit_the_row_extremes() {
+    let mut app = panel_app(many_files_app(50), PanelTab::Changes);
+    app.panel_jump_to_bottom();
+    assert_eq!(app.panel_cursor(), 49);
+    app.panel_jump_to_top();
+    assert_eq!(app.panel_cursor(), 0);
+}
+
+#[test]
+fn panel_half_full_page_and_jump_are_noops_on_an_empty_panel() {
+    let mut app = panel_app(App::new(vec![]), PanelTab::Changes);
+    app.panel_half_page_down();
+    app.panel_full_page_down();
+    app.panel_jump_to_bottom();
+    assert_eq!(app.panel_cursor(), 0);
+    app.panel_jump_to_top();
+    assert_eq!(app.panel_cursor(), 0);
+}
+
+/// A minimal `StageOps` fake serving a fixed commit list synchronously,
+/// local to this test (mirrors `history_tests.rs`'s `SyncHistoryFake`, which
+/// is private to its own module).
+struct PanelHistoryFake {
+    entries: Vec<CommitLogEntry>,
+}
+
+impl crate::ui::stage_ops::StageOps for PanelHistoryFake {
+    fn diff(&self, _target: &DiffTarget) -> Result<Vec<RawFilePatch>, crate::git::GitError> {
+        Ok(Vec::new())
+    }
+    fn status(&self) -> Result<Vec<crate::git::FileStatus>, crate::git::GitError> {
+        Ok(Vec::new())
+    }
+    fn stage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+        Ok(())
+    }
+    fn unstage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+        Ok(())
+    }
+    fn apply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+        Ok(())
+    }
+    fn unapply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+        Ok(())
+    }
+    fn read_worktree_file(&self, _path: &str) -> Option<Vec<u8>> {
+        None
+    }
+    fn show_file(&self, _spec: &str) -> Option<String> {
+        None
+    }
+    fn commit_log(
+        &self,
+        count: u32,
+        skip: u32,
+    ) -> Result<Vec<CommitLogEntry>, crate::git::GitError> {
+        let start = (skip as usize).min(self.entries.len());
+        let end = (start + count as usize).min(self.entries.len());
+        Ok(self.entries[start..end].to_vec())
+    }
+}
+
+fn history_commit(sha: &str) -> CommitLogEntry {
+    CommitLogEntry {
+        sha: sha.to_string(),
+        short_sha: sha.to_string(),
+        subject: "subject".to_string(),
+        author_name: "Dev".to_string(),
+        timestamp: 1_700_000_000,
+    }
+}
+
+/// A layer-driven jump on the History tab must trigger the same lazy
+/// prefetch a plain `j` (`panel_move_down`) does — jumping to the bottom of
+/// a not-yet-exhausted 100-row page immediately lands within
+/// `HISTORY_PREFETCH_MARGIN` of the end, so it must request the next page.
+#[test]
+fn panel_jump_to_bottom_on_history_tab_triggers_prefetch_like_a_plain_move() {
+    let entries: Vec<CommitLogEntry> = (0..100).map(|i| history_commit(&format!("c{i}"))).collect();
+    let mut app = App::new(vec![]);
+    app.stage_ops = Some(Box::new(PanelHistoryFake { entries }));
+    app.ensure_history_loaded();
+    assert_eq!(app.history.len(), 100);
+    assert!(!app.history_exhausted);
+
+    app.mode = Mode::Panel {
+        cursor: 0,
+        tab: PanelTab::History,
+    };
+    app.panel_jump_to_bottom();
+    assert_eq!(app.panel_cursor(), 99);
+    // The prefetch's synchronous fallback path applies its page immediately
+    // (no background thread involved), so requesting past the fake's 100
+    // total entries exhausting history is the observable proof the jump
+    // actually fired `maybe_prefetch_history`.
+    assert_eq!(app.history.len(), 100);
+    assert!(
+        app.history_exhausted,
+        "requesting past the end of the fake's 100 entries exhausts history, \
+         which only happens if the jump actually requested a page"
+    );
+}
+
+/// Half/full-page paging on the History tab fires the same prefetch once
+/// the cursor lands within the margin of the end, exactly like `j`.
+#[test]
+fn panel_full_page_down_on_history_tab_triggers_prefetch_near_the_end() {
+    let entries: Vec<CommitLogEntry> = (0..100).map(|i| history_commit(&format!("c{i}"))).collect();
+    let mut app = App::new(vec![]);
+    app.stage_ops = Some(Box::new(PanelHistoryFake { entries }));
+    app.ensure_history_loaded();
+    app.mode = Mode::Panel {
+        cursor: 85,
+        tab: PanelTab::History,
+    };
+    // viewport defaults to 20 -> full page steps 20 -> cursor 99 (clamped),
+    // within HISTORY_PREFETCH_MARGIN (10) of history.len() (100).
+    app.panel_full_page_down();
+    assert_eq!(app.panel_cursor(), 99);
+    assert!(
+        app.history_exhausted,
+        "landing within the prefetch margin must have requested (and exhausted) the next page"
+    );
+}

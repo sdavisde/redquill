@@ -112,6 +112,21 @@ pub enum Action {
     PanelCursorDown,
     /// Move the git panel's cursor up one navigable row (panel scope).
     PanelCursorUp,
+    /// Move the git panel's cursor down half a viewport (panel scope; shared
+    /// motion set, see [`super::motion`]).
+    PanelHalfPageDown,
+    /// Move the git panel's cursor up half a viewport (panel scope).
+    PanelHalfPageUp,
+    /// Move the git panel's cursor down a full viewport (panel scope).
+    PanelFullPageDown,
+    /// Move the git panel's cursor up a full viewport (panel scope).
+    PanelFullPageUp,
+    /// Jump the git panel's cursor to the first navigable row (panel scope).
+    /// Bound to a single `g`/`Home`, not the diff view's two-key `gg` — see
+    /// [`super::motion`]'s module doc.
+    PanelJumpToTop,
+    /// Jump the git panel's cursor to the last navigable row (panel scope).
+    PanelJumpToBottom,
     /// Open the git panel cursor's file in the diff and return focus to it;
     /// a no-op on stash/header rows (panel scope). On the History tab,
     /// opens the highlighted commit into the main diff view instead.
@@ -237,6 +252,12 @@ pub(crate) fn action_name(action: Action) -> &'static str {
         FocusGitPanel => "focus-git-panel",
         PanelCursorDown => "panel-cursor-down",
         PanelCursorUp => "panel-cursor-up",
+        PanelHalfPageDown => "panel-half-page-down",
+        PanelHalfPageUp => "panel-half-page-up",
+        PanelFullPageDown => "panel-full-page-down",
+        PanelFullPageUp => "panel-full-page-up",
+        PanelJumpToTop => "panel-jump-to-top",
+        PanelJumpToBottom => "panel-jump-to-bottom",
         PanelSelect => "panel-select",
         TogglePanelTab => "toggle-panel-tab",
         RemoteFetch => "remote-fetch",
@@ -308,6 +329,12 @@ pub(crate) fn action_from_name(name: &str) -> Option<Action> {
         "focus-git-panel" => FocusGitPanel,
         "panel-cursor-down" => PanelCursorDown,
         "panel-cursor-up" => PanelCursorUp,
+        "panel-half-page-down" => PanelHalfPageDown,
+        "panel-half-page-up" => PanelHalfPageUp,
+        "panel-full-page-down" => PanelFullPageDown,
+        "panel-full-page-up" => PanelFullPageUp,
+        "panel-jump-to-top" => PanelJumpToTop,
+        "panel-jump-to-bottom" => PanelJumpToBottom,
         "panel-select" => PanelSelect,
         "toggle-panel-tab" => TogglePanelTab,
         "remote-fetch" => RemoteFetch,
@@ -817,6 +844,54 @@ impl Keymap {
                     "Move panel cursor up",
                 )
                 .footer(1, "move"),
+                // Shared motion set (see `super::motion`): half/full-page
+                // paging and buffer-extreme jumps, same physical keys as
+                // diff scope except jump-to-top, which is a single `g`/
+                // `Home` here rather than the diff view's two-key `gg` (no
+                // panel-scope two-key sequence existed before this, and
+                // adding one is unnecessary when a single key already
+                // works) — not footer-promoted, mirroring how diff scope
+                // itself keeps these out of the footer strip.
+                p(
+                    KeySeq::one(Char('d'), ctrl),
+                    PanelHalfPageDown,
+                    "Scroll panel half page down",
+                ),
+                p(
+                    KeySeq::one(Char('u'), ctrl),
+                    PanelHalfPageUp,
+                    "Scroll panel half page up",
+                ),
+                p(
+                    KeySeq::one(Char('f'), ctrl),
+                    PanelFullPageDown,
+                    "Scroll panel full page down",
+                ),
+                p(
+                    KeySeq::one(Char('b'), ctrl),
+                    PanelFullPageUp,
+                    "Scroll panel full page up",
+                ),
+                p(
+                    KeySeq::one(Char('g'), none),
+                    PanelJumpToTop,
+                    "Jump panel cursor to top",
+                ),
+                p(
+                    KeySeq::one(Home, none),
+                    PanelJumpToTop,
+                    "Jump panel cursor to top",
+                ),
+                p(
+                    KeySeq::one(Char('G'), none),
+                    PanelJumpToBottom,
+                    "Jump panel cursor to bottom",
+                ),
+                p(
+                    KeySeq::one(End, none),
+                    PanelJumpToBottom,
+                    "Jump panel cursor to bottom",
+                ),
                 p(
                     KeySeq::one(Enter, none),
                     PanelSelect,

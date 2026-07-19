@@ -1967,6 +1967,57 @@ fn panel_focus_key_dispatch_smoke() {
     assert_eq!(app.mode, Mode::Normal);
 }
 
+/// The shared motion layer's count prefix works in panel scope exactly like
+/// diff scope: `3j` steps three rows in one gesture, `Ctrl-d`/`Ctrl-u` page,
+/// `g`/`G` jump to the row extremes (single `g`, not the diff view's `gg` —
+/// see `motion`'s module doc), and Esc mid-count cancels it rather than also
+/// closing the panel.
+#[test]
+fn panel_motion_layer_supports_counts_and_jumps() {
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
+    let mut app = App::new((0..30).map(|i| named_file(&format!("f{i}.rs"))).collect());
+    let mut press = |app: &mut App, code: KeyCode| {
+        let _ = dispatch_key(
+            app,
+            &keymap,
+            &mut pending,
+            &mut pending_count,
+            KeyEvent::new(code, KeyModifiers::NONE),
+        );
+    };
+    press(&mut app, KeyCode::Char('`')); // focus the panel
+    assert!(matches!(app.mode, Mode::Panel { .. }));
+    assert_eq!(app.panel_cursor(), 0);
+
+    // `3j` steps three rows in one gesture.
+    press(&mut app, KeyCode::Char('3'));
+    assert_eq!(app.panel_cursor(), 0, "digits accumulate, no move yet");
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(app.panel_cursor(), 3);
+
+    // `G` jumps to the last row; `g` jumps back to the first.
+    press(&mut app, KeyCode::Char('G'));
+    assert_eq!(app.panel_cursor(), 29);
+    press(&mut app, KeyCode::Char('g'));
+    assert_eq!(app.panel_cursor(), 0);
+
+    // Esc mid-count cancels the count without closing the panel.
+    press(&mut app, KeyCode::Char('5'));
+    press(&mut app, KeyCode::Esc);
+    assert!(
+        matches!(app.mode, Mode::Panel { .. }),
+        "Esc must cancel the count, not close the panel"
+    );
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(app.panel_cursor(), 1, "the cancelled count must not apply");
+
+    // A bare Esc (nothing pending) still closes the panel.
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.mode, Mode::Normal);
+}
+
 /// The focused git panel is a first-class view, so the quit family ends
 /// the session from it just as from the diff view: `q` emits, `Q`/Ctrl-C
 /// discard. Driven through the real `dispatch_key` path.

@@ -73,8 +73,10 @@ fn group_of(action: Action) -> &'static str {
         ToggleList | ToggleHelp | FocusGitPanel | ToggleCommandLog | Refresh | OpenFileFinder
         | OpenProjectSearch | OpenEditor | DismissConfigWarning | OpenReviewLauncher => "Panels",
         GotoDefinition | GotoReferences | Hover => "Code intelligence",
-        PanelCursorDown | PanelCursorUp | PanelSelect | TogglePanelTab | RemoteFetch
-        | RemotePull | RemotePush | CommitStaged | OpenSwitcher => "Git panel",
+        PanelCursorDown | PanelCursorUp | PanelHalfPageDown | PanelHalfPageUp
+        | PanelFullPageDown | PanelFullPageUp | PanelJumpToTop | PanelJumpToBottom
+        | PanelSelect | TogglePanelTab | RemoteFetch | RemotePull | RemotePush | CommitStaged
+        | OpenSwitcher => "Git panel",
         Quit | QuitDiscard => "Quit",
     }
 }

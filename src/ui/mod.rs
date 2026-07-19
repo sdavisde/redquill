@@ -325,6 +325,12 @@ fn repeat_count(action: Action, count: Option<usize>) -> usize {
             | FullPageUp
             | SearchNext
             | SearchPrev
+            | PanelCursorDown
+            | PanelCursorUp
+            | PanelHalfPageDown
+            | PanelHalfPageUp
+            | PanelFullPageDown
+            | PanelFullPageUp
     );
     if repeatable {
         motion::clamp_count(count)

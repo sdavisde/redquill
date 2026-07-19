@@ -184,7 +184,32 @@ pub(super) fn handle_panel_key(
     keymap: &super::Keymap,
 ) -> super::Flow {
     use super::keymap::Scope;
+    use super::motion;
     use super::{Action, Flow, QuitOutcome};
+
+    // Esc always cancels an in-progress count first (mirrors Normal/Visual's
+    // count-cancel semantics), consuming the keystroke rather than also
+    // closing the panel that same press.
+    if key.code == KeyCode::Esc && app.motion_count.take().is_some() {
+        return Flow::Continue;
+    }
+    // Digit interception, ahead of the panel's own keymap resolution: the
+    // accumulation rule itself lives in the shared motion layer, exactly
+    // like Normal/Visual's (see `dispatch_key`) — this is the same logic,
+    // just with its own count field since Panel scope carries no two-key
+    // pending prefix to interact with.
+    if key.modifiers == KeyModifiers::NONE
+        && let KeyCode::Char(c) = key.code
+    {
+        match motion::accumulate_digit(app.motion_count, c) {
+            motion::DigitOutcome::Consumed(n) => {
+                app.motion_count = Some(n);
+                return Flow::Continue;
+            }
+            motion::DigitOutcome::LeadingZero | motion::DigitOutcome::NotADigit => {}
+        }
+    }
+    let count = app.motion_count.take();
     match keymap.lookup_in(Scope::Panel, key) {
         Some(Action::Quit) => super::quit_action(app),
         Some(Action::QuitDiscard) => Flow::Quit(QuitOutcome::Discard),
@@ -212,7 +237,13 @@ pub(super) fn handle_panel_key(
             Flow::Continue
         }
         Some(action) => {
-            app.apply(action);
+            // A count prefix repeats the panel motions exactly like
+            // Normal/Visual's (`repeat_count` — shared via
+            // `motion::clamp_count`); every other panel action applies
+            // exactly once regardless of a stray accumulated count.
+            for _ in 0..super::repeat_count(action, count) {
+                app.apply(action);
+            }
             Flow::Continue
         }
         None => Flow::Continue,

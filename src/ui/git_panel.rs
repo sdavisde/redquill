@@ -81,16 +81,12 @@ pub(super) fn navigable_rows(app: &App) -> Vec<PanelRow> {
 }
 
 /// Steps a panel cursor by one row within a `len`-row navigable list,
-/// clamping at both ends. An empty list pins the cursor at 0.
+/// clamping at both ends. An empty list pins the cursor at 0. Delegates to
+/// the shared motion layer's linear-cursor helper (see `super::motion`) so
+/// the git panel's step math is the same arithmetic every other
+/// motion-supporting list uses.
 pub(super) fn moved_cursor(cursor: usize, len: usize, down: bool) -> usize {
-    if len == 0 {
-        return 0;
-    }
-    if down {
-        (cursor + 1).min(len - 1)
-    } else {
-        cursor.saturating_sub(1)
-    }
+    super::motion::step(cursor, len, 1, down)
 }
 
 /// Splits `path` into a dimmed directory prefix and a normal-weight
@@ -683,6 +679,7 @@ impl App {
                     cursor: 0,
                     tab: self.last_panel_tab,
                 };
+                self.motion_count = None;
                 if self.last_panel_tab == PanelTab::History {
                     self.ensure_history_loaded();
                 }
@@ -736,6 +733,85 @@ impl App {
             *cursor = moved_cursor(*cursor, len, false);
         }
         self.panel_follow();
+    }
+
+    /// The panel's page-size proxy for half/full-page motions: the panel
+    /// doesn't track its own render height (its list widget scrolls itself
+    /// via `ListState`), so this approximates it with the diff pane's own
+    /// tracked viewport height — both panes are visible in the same
+    /// terminal, so the order of magnitude is right even though the exact
+    /// row count differs.
+    fn panel_viewport_proxy(&self) -> usize {
+        self.view.viewport_height()
+    }
+
+    /// Steps the panel cursor by `step` rows (clamped against the active
+    /// tab's row count) and re-runs the same History-tab prefetch and
+    /// diff-follow bookkeeping [`App::panel_move_down`]/[`App::panel_move_up`]
+    /// do, so every layer-driven move (half/full-page, jumps) behaves
+    /// identically to a plain `j`/`k` step. A no-op unless the panel is
+    /// focused.
+    fn panel_step(&mut self, step: usize, down: bool) {
+        let len = self.panel_row_count();
+        if let Mode::Panel { cursor, .. } = &mut self.mode {
+            *cursor = super::motion::step(*cursor, len, step, down);
+        }
+        if self.panel_tab() == PanelTab::History {
+            self.maybe_prefetch_history(self.panel_cursor());
+        }
+        self.panel_follow();
+    }
+
+    /// Jumps the panel cursor to `target` (clamped against the active tab's
+    /// row count), with the same prefetch/follow bookkeeping as
+    /// [`App::panel_step`]. A no-op unless the panel is focused.
+    fn panel_jump(&mut self, target: usize) {
+        let len = self.panel_row_count();
+        if let Mode::Panel { cursor, .. } = &mut self.mode {
+            *cursor = target.min(len.saturating_sub(1));
+        }
+        if self.panel_tab() == PanelTab::History {
+            self.maybe_prefetch_history(self.panel_cursor());
+        }
+        self.panel_follow();
+    }
+
+    /// Moves the panel cursor down half a viewport (`Ctrl-d`, panel scope;
+    /// shared motion set — see `super::motion`).
+    pub fn panel_half_page_down(&mut self) {
+        let step = super::motion::half_page(self.panel_viewport_proxy());
+        self.panel_step(step, true);
+    }
+
+    /// Moves the panel cursor up half a viewport (`Ctrl-u`, panel scope).
+    pub fn panel_half_page_up(&mut self) {
+        let step = super::motion::half_page(self.panel_viewport_proxy());
+        self.panel_step(step, false);
+    }
+
+    /// Moves the panel cursor down a full viewport (`Ctrl-f`, panel scope).
+    pub fn panel_full_page_down(&mut self) {
+        let step = super::motion::full_page(self.panel_viewport_proxy());
+        self.panel_step(step, true);
+    }
+
+    /// Moves the panel cursor up a full viewport (`Ctrl-b`, panel scope).
+    pub fn panel_full_page_up(&mut self) {
+        let step = super::motion::full_page(self.panel_viewport_proxy());
+        self.panel_step(step, false);
+    }
+
+    /// Jumps the panel cursor to the first navigable row (`g`/`Home`, panel
+    /// scope).
+    pub fn panel_jump_to_top(&mut self) {
+        self.panel_jump(super::motion::jump_top());
+    }
+
+    /// Jumps the panel cursor to the last navigable row (`G`/`End`, panel
+    /// scope).
+    pub fn panel_jump_to_bottom(&mut self) {
+        let len = self.panel_row_count();
+        self.panel_jump(super::motion::jump_bottom(len));
     }
 
     /// Toggles the collapse state of the directory keyed by `key` in the

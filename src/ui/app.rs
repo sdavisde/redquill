@@ -271,6 +271,16 @@ pub struct App {
     pub review_states: HashMap<String, ReviewStatus>,
     /// The focused row index into `staged` in the staging panel.
     pub staging_cursor: usize,
+    /// An in-progress numeric count prefix (`3`, `1` then `0`, ...) shared by
+    /// every non-diff motion-supporting context (the git panel, the
+    /// annotation list, the staging/accepted panels, the switcher, LSP
+    /// peek). Normal/Visual mode keeps its own count threaded through
+    /// `dispatch_key` instead (see that function's doc) since it also has
+    /// to interact with the diff-scope `g`/`z` pending-prefix machine; this
+    /// field is the equivalent for every mode that doesn't. Cleared
+    /// whenever the owning mode is freshly entered, so a count left
+    /// mid-accumulation can't leak into a different mode after a toggle.
+    pub(super) motion_count: Option<usize>,
     /// A transient one-line message for the status footer (errors, no-op
     /// explanations, success echoes). Cleared on the next keypress.
     pub status_message: Option<String>,
@@ -633,6 +643,7 @@ impl App {
             staged_states: HashMap::new(),
             review_states: HashMap::new(),
             staging_cursor: 0,
+            motion_count: None,
             status_message: None,
             config: Config::default(),
             config_warnings: Vec::new(),
@@ -1042,6 +1053,12 @@ impl App {
             Action::FocusGitPanel => self.toggle_git_panel(),
             Action::PanelCursorDown => self.panel_move_down(),
             Action::PanelCursorUp => self.panel_move_up(),
+            Action::PanelHalfPageDown => self.panel_half_page_down(),
+            Action::PanelHalfPageUp => self.panel_half_page_up(),
+            Action::PanelFullPageDown => self.panel_full_page_down(),
+            Action::PanelFullPageUp => self.panel_full_page_up(),
+            Action::PanelJumpToTop => self.panel_jump_to_top(),
+            Action::PanelJumpToBottom => self.panel_jump_to_bottom(),
             Action::PanelSelect => self.panel_select(),
             Action::TogglePanelTab => self.toggle_panel_tab(),
             Action::RemoteFetch => self.request_remote_op(RemoteOp::Fetch),
