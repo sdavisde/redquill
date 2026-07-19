@@ -21,6 +21,50 @@ use super::modal_keys::{
     ProjectSearchInputAction, ProjectSearchResultsAction, SearchAction, StagingAction,
     SwitcherAction,
 };
+use super::motion;
+
+/// What [`intercept_motion_count`] did with one key.
+enum MotionIntercept {
+    /// The key was fully consumed (a digit extended the count, or `Esc`
+    /// cancelled one in progress); the caller must not dispatch it further.
+    Handled,
+    /// Not a count-interception key: resolve it against the mode's own
+    /// table as usual, repeating a motion action this many times (`None` —
+    /// apply once).
+    Resolve(Option<usize>),
+}
+
+/// Shared digit/Esc count-prefix interception for every modal-list handler
+/// (List, Staging, Accepted panel, Switcher, Peek) — the modal-table
+/// counterpart of `handle_panel_key`'s identical bookkeeping, both built on
+/// `App::motion_count` and `motion::accumulate_digit` (see that field's doc
+/// for why this is a separate field from `dispatch_key`'s Normal/Visual
+/// count). `Esc` cancelling an in-progress count takes priority over the
+/// mode's own `Esc` binding (usually "close"), mirroring Normal/Visual's
+/// count-cancel-before-anything-else semantics.
+fn intercept_motion_count(app: &mut App, key: KeyEvent) -> MotionIntercept {
+    if key.code == KeyCode::Esc && app.motion_count.take().is_some() {
+        return MotionIntercept::Handled;
+    }
+    if key.modifiers == KeyModifiers::NONE
+        && let KeyCode::Char(c) = key.code
+        && let motion::DigitOutcome::Consumed(n) = motion::accumulate_digit(app.motion_count, c)
+    {
+        app.motion_count = Some(n);
+        return MotionIntercept::Handled;
+    }
+    MotionIntercept::Resolve(app.motion_count.take())
+}
+
+/// Applies `f` [`motion::clamp_count`]-many times for `count` — the shared
+/// repeat wrapper every modal-list handler's step/half-page/full-page arms
+/// use, so a count prefix (`3j`, `2Ctrl-d`) composes the same way it does
+/// in Normal/Visual and panel scope.
+fn apply_motion_n_times(count: Option<usize>, mut f: impl FnMut()) {
+    for _ in 0..motion::clamp_count(count) {
+        f();
+    }
+}
 
 /// Handles one key event while [`super::Mode::Compose`] is active. Resolves
 /// against `app.modal_keys.compose` first; an unresolved, unmodified `Char`
@@ -87,12 +131,22 @@ fn insert_if_plain_char(buffer: Option<&mut super::compose::TextBuffer>, key: Ke
 /// focus, `Enter` jumps to the annotation and closes the panel, `e` edits
 /// it, `d` deletes it, `a`/`Esc` close the panel.
 pub(super) fn handle_list_key(app: &mut App, key: KeyEvent) {
+    let count = match intercept_motion_count(app, key) {
+        MotionIntercept::Handled => return,
+        MotionIntercept::Resolve(count) => count,
+    };
     let Some(action) = modal_keys::resolve(&app.modal_keys.list, key) else {
         return;
     };
     match action {
-        ListAction::MoveDown => app.list_move_down(),
-        ListAction::MoveUp => app.list_move_up(),
+        ListAction::MoveDown => apply_motion_n_times(count, || app.list_move_down()),
+        ListAction::MoveUp => apply_motion_n_times(count, || app.list_move_up()),
+        ListAction::HalfPageDown => apply_motion_n_times(count, || app.list_half_page_down()),
+        ListAction::HalfPageUp => apply_motion_n_times(count, || app.list_half_page_up()),
+        ListAction::FullPageDown => apply_motion_n_times(count, || app.list_full_page_down()),
+        ListAction::FullPageUp => apply_motion_n_times(count, || app.list_full_page_up()),
+        ListAction::JumpToTop => app.list_jump_to_top(),
+        ListAction::JumpToBottom => app.list_jump_to_bottom(),
         ListAction::Jump => app.jump_to_focused_annotation(),
         ListAction::Edit => app.edit_focused_annotation(),
         ListAction::Delete => app.delete_focused_annotation(),
@@ -104,6 +158,10 @@ pub(super) fn handle_list_key(app: &mut App, key: KeyEvent) {
 /// move focus, `Space`/`Enter` unstage the focused file (the panel stays
 /// open), `s`/`Esc` close the panel.
 pub(super) fn handle_staging_key(app: &mut App, key: KeyEvent) {
+    let count = match intercept_motion_count(app, key) {
+        MotionIntercept::Handled => return,
+        MotionIntercept::Resolve(count) => count,
+    };
     // Review sessions repurpose `Mode::Staging` as the accepted-files panel:
     // resolve against its own table instead of the local staging panel's,
     // so the two never cross-dispatch (`unstage_focused_file`
@@ -114,8 +172,24 @@ pub(super) fn handle_staging_key(app: &mut App, key: KeyEvent) {
             return;
         };
         match action {
-            AcceptedPanelAction::MoveDown => app.staging_move_down(),
-            AcceptedPanelAction::MoveUp => app.staging_move_up(),
+            AcceptedPanelAction::MoveDown => {
+                apply_motion_n_times(count, || app.staging_move_down())
+            }
+            AcceptedPanelAction::MoveUp => apply_motion_n_times(count, || app.staging_move_up()),
+            AcceptedPanelAction::HalfPageDown => {
+                apply_motion_n_times(count, || app.staging_half_page_down())
+            }
+            AcceptedPanelAction::HalfPageUp => {
+                apply_motion_n_times(count, || app.staging_half_page_up())
+            }
+            AcceptedPanelAction::FullPageDown => {
+                apply_motion_n_times(count, || app.staging_full_page_down())
+            }
+            AcceptedPanelAction::FullPageUp => {
+                apply_motion_n_times(count, || app.staging_full_page_up())
+            }
+            AcceptedPanelAction::JumpToTop => app.staging_jump_to_top(),
+            AcceptedPanelAction::JumpToBottom => app.staging_jump_to_bottom(),
             AcceptedPanelAction::UnAccept => app.un_accept_focused_file(),
             AcceptedPanelAction::Close => app.close_staging(),
         }
@@ -125,8 +199,14 @@ pub(super) fn handle_staging_key(app: &mut App, key: KeyEvent) {
         return;
     };
     match action {
-        StagingAction::MoveDown => app.staging_move_down(),
-        StagingAction::MoveUp => app.staging_move_up(),
+        StagingAction::MoveDown => apply_motion_n_times(count, || app.staging_move_down()),
+        StagingAction::MoveUp => apply_motion_n_times(count, || app.staging_move_up()),
+        StagingAction::HalfPageDown => apply_motion_n_times(count, || app.staging_half_page_down()),
+        StagingAction::HalfPageUp => apply_motion_n_times(count, || app.staging_half_page_up()),
+        StagingAction::FullPageDown => apply_motion_n_times(count, || app.staging_full_page_down()),
+        StagingAction::FullPageUp => apply_motion_n_times(count, || app.staging_full_page_up()),
+        StagingAction::JumpToTop => app.staging_jump_to_top(),
+        StagingAction::JumpToBottom => app.staging_jump_to_bottom(),
         StagingAction::Unstage => app.unstage_focused_file(),
         StagingAction::Close => app.close_staging(),
     }
@@ -184,32 +264,16 @@ pub(super) fn handle_panel_key(
     keymap: &super::Keymap,
 ) -> super::Flow {
     use super::keymap::Scope;
-    use super::motion;
     use super::{Action, Flow, QuitOutcome};
 
-    // Esc always cancels an in-progress count first (mirrors Normal/Visual's
-    // count-cancel semantics), consuming the keystroke rather than also
-    // closing the panel that same press.
-    if key.code == KeyCode::Esc && app.motion_count.take().is_some() {
-        return Flow::Continue;
-    }
-    // Digit interception, ahead of the panel's own keymap resolution: the
-    // accumulation rule itself lives in the shared motion layer, exactly
-    // like Normal/Visual's (see `dispatch_key`) — this is the same logic,
-    // just with its own count field since Panel scope carries no two-key
-    // pending prefix to interact with.
-    if key.modifiers == KeyModifiers::NONE
-        && let KeyCode::Char(c) = key.code
-    {
-        match motion::accumulate_digit(app.motion_count, c) {
-            motion::DigitOutcome::Consumed(n) => {
-                app.motion_count = Some(n);
-                return Flow::Continue;
-            }
-            motion::DigitOutcome::LeadingZero | motion::DigitOutcome::NotADigit => {}
-        }
-    }
-    let count = app.motion_count.take();
+    // Same digit/Esc count-prefix bookkeeping every modal-list handler
+    // shares (see `intercept_motion_count`'s doc) — Panel scope has no
+    // two-key pending prefix to interact with, so it uses the same
+    // App::motion_count field rather than dispatch_key's Normal/Visual one.
+    let count = match intercept_motion_count(app, key) {
+        MotionIntercept::Handled => return Flow::Continue,
+        MotionIntercept::Resolve(count) => count,
+    };
     match keymap.lookup_in(Scope::Panel, key) {
         Some(Action::Quit) => super::quit_action(app),
         Some(Action::QuitDiscard) => Flow::Quit(QuitOutcome::Discard),
@@ -315,12 +379,30 @@ pub(super) fn handle_confirm_remote_op_key(app: &mut App, key: KeyEvent) {
 /// app).
 pub(super) fn handle_peek_key(app: &mut App, key: KeyEvent) {
     use super::code_intel;
+    let count = match intercept_motion_count(app, key) {
+        MotionIntercept::Handled => return,
+        MotionIntercept::Resolve(count) => count,
+    };
     let Some(action) = modal_keys::resolve(&app.modal_keys.peek, key) else {
         return;
     };
     match action {
-        PeekAction::MoveDown => code_intel::peek_move_down(app),
-        PeekAction::MoveUp => code_intel::peek_move_up(app),
+        PeekAction::MoveDown => apply_motion_n_times(count, || code_intel::peek_move_down(app)),
+        PeekAction::MoveUp => apply_motion_n_times(count, || code_intel::peek_move_up(app)),
+        PeekAction::HalfPageDown => {
+            apply_motion_n_times(count, || code_intel::peek_half_page_down(app))
+        }
+        PeekAction::HalfPageUp => {
+            apply_motion_n_times(count, || code_intel::peek_half_page_up(app))
+        }
+        PeekAction::FullPageDown => {
+            apply_motion_n_times(count, || code_intel::peek_full_page_down(app))
+        }
+        PeekAction::FullPageUp => {
+            apply_motion_n_times(count, || code_intel::peek_full_page_up(app))
+        }
+        PeekAction::JumpToTop => code_intel::peek_jump_to_top(app),
+        PeekAction::JumpToBottom => code_intel::peek_jump_to_bottom(app),
         PeekAction::Enter => code_intel::peek_enter(app),
         PeekAction::Close => code_intel::close_peek(app),
     }
@@ -416,13 +498,27 @@ pub(super) fn handle_project_search_key(app: &mut App, key: KeyEvent) {
 /// the git panel at its pre-open cursor row. `q` isn't in the table and is
 /// therefore inert here: an open overlay never quits the app.
 pub(super) fn handle_switcher_key(app: &mut App, key: KeyEvent) {
+    let count = match intercept_motion_count(app, key) {
+        MotionIntercept::Handled => return,
+        MotionIntercept::Resolve(count) => count,
+    };
     let Some(action) = modal_keys::resolve(&app.modal_keys.switcher, key) else {
         return;
     };
     match action {
         SwitcherAction::ToggleTab => app.switcher_toggle_tab(),
-        SwitcherAction::MoveDown => app.switcher_move_down(),
-        SwitcherAction::MoveUp => app.switcher_move_up(),
+        SwitcherAction::MoveDown => apply_motion_n_times(count, || app.switcher_move_down()),
+        SwitcherAction::MoveUp => apply_motion_n_times(count, || app.switcher_move_up()),
+        SwitcherAction::HalfPageDown => {
+            apply_motion_n_times(count, || app.switcher_half_page_down())
+        }
+        SwitcherAction::HalfPageUp => apply_motion_n_times(count, || app.switcher_half_page_up()),
+        SwitcherAction::FullPageDown => {
+            apply_motion_n_times(count, || app.switcher_full_page_down())
+        }
+        SwitcherAction::FullPageUp => apply_motion_n_times(count, || app.switcher_full_page_up()),
+        SwitcherAction::JumpToTop => app.switcher_jump_to_top(),
+        SwitcherAction::JumpToBottom => app.switcher_jump_to_bottom(),
         SwitcherAction::Confirm => app.switcher_confirm(),
         SwitcherAction::Close => app.close_switcher(),
     }

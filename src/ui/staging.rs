@@ -269,6 +269,7 @@ impl App {
                 }
                 self.staging_cursor = self.staging_cursor.min(self.staged.len().saturating_sub(1));
                 self.mode = Mode::Staging;
+                self.motion_count = None;
             }
         }
     }
@@ -288,6 +289,58 @@ impl App {
     /// Moves the staging panel's focus up one file, clamped at the first.
     pub fn staging_move_up(&mut self) {
         self.staging_cursor = self.staging_cursor.saturating_sub(1);
+    }
+
+    /// The staging/accepted panel's page-size proxy for half/full-page
+    /// motions (see `git_panel::App::panel_viewport_proxy`'s identical
+    /// rationale — neither panel tracks its own render height).
+    fn staging_viewport_proxy(&self) -> usize {
+        self.view.viewport_height()
+    }
+
+    /// Moves the staging/accepted panel's focus down half a viewport
+    /// (`Ctrl-d`; shared motion set, see `super::motion`). Shared by both
+    /// panels, like `staging_move_down`/`up`.
+    pub fn staging_half_page_down(&mut self) {
+        let step = super::motion::half_page(self.staging_viewport_proxy());
+        self.staging_cursor =
+            super::motion::step(self.staging_cursor, self.staged.len(), step, true);
+    }
+
+    /// Moves the staging/accepted panel's focus up half a viewport
+    /// (`Ctrl-u`).
+    pub fn staging_half_page_up(&mut self) {
+        let step = super::motion::half_page(self.staging_viewport_proxy());
+        self.staging_cursor =
+            super::motion::step(self.staging_cursor, self.staged.len(), step, false);
+    }
+
+    /// Moves the staging/accepted panel's focus down a full viewport
+    /// (`Ctrl-f`).
+    pub fn staging_full_page_down(&mut self) {
+        let step = super::motion::full_page(self.staging_viewport_proxy());
+        self.staging_cursor =
+            super::motion::step(self.staging_cursor, self.staged.len(), step, true);
+    }
+
+    /// Moves the staging/accepted panel's focus up a full viewport
+    /// (`Ctrl-b`).
+    pub fn staging_full_page_up(&mut self) {
+        let step = super::motion::full_page(self.staging_viewport_proxy());
+        self.staging_cursor =
+            super::motion::step(self.staging_cursor, self.staged.len(), step, false);
+    }
+
+    /// Jumps the staging/accepted panel's focus to the first entry
+    /// (`g`/`Home`).
+    pub fn staging_jump_to_top(&mut self) {
+        self.staging_cursor = super::motion::jump_top();
+    }
+
+    /// Jumps the staging/accepted panel's focus to the last entry
+    /// (`G`/`End`).
+    pub fn staging_jump_to_bottom(&mut self) {
+        self.staging_cursor = super::motion::jump_bottom(self.staged.len());
     }
 
     /// Unstages the staging panel's focused file, then refreshes. The panel

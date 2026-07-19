@@ -32,7 +32,7 @@ use super::help::{HelpOverlayState, HelpTab};
 use super::history::InFlightHistory;
 use super::keymap::Action;
 use super::lsp_ops::LspClient;
-use super::motion::Motionable;
+use super::motion;
 use super::peek::{PeekKind, PeekState};
 use super::project_search::ProjectSearchState;
 use super::refresh::InFlightRefresh;
@@ -999,25 +999,39 @@ impl App {
         }
         match action {
             // The eight shared motions (FR-1/FR-2) dispatch through
-            // `Motionable` rather than calling `self.view`'s inherent
-            // methods directly, so the diff view consumes the same layer
-            // every other motion-supporting context does; each trait method
-            // is a thin one-line forward to the identical inherent method
-            // (see `diff_view_state`'s impl), so behavior is unchanged.
-            Action::CursorDown => Motionable::step_down(&mut self.view),
-            Action::CursorUp => Motionable::step_up(&mut self.view),
-            Action::HalfPageDown => Motionable::half_page_down(&mut self.view),
-            Action::HalfPageUp => Motionable::half_page_up(&mut self.view),
-            Action::JumpToTop => Motionable::jump_to_top(&mut self.view),
-            Action::JumpToBottom => Motionable::jump_to_bottom(&mut self.view),
+            // `motion::dispatch` (a single, always-once application — `None`
+            // count — since the repeat loop for a `3j`-style count already
+            // lives one level up, in `dispatch_key`) rather than calling
+            // `self.view`'s inherent methods directly, so the diff view
+            // consumes the exact same entry point every other
+            // `Motionable`-based context would. Behavior is unchanged:
+            // `dispatch` with `None` applies each motion exactly once, and
+            // every `Motionable` method is a thin forward to the identical
+            // inherent method (see `diff_view_state`'s impl).
+            Action::CursorDown => motion::dispatch(&mut self.view, motion::Motion::StepDown, None),
+            Action::CursorUp => motion::dispatch(&mut self.view, motion::Motion::StepUp, None),
+            Action::HalfPageDown => {
+                motion::dispatch(&mut self.view, motion::Motion::HalfPageDown, None)
+            }
+            Action::HalfPageUp => {
+                motion::dispatch(&mut self.view, motion::Motion::HalfPageUp, None)
+            }
+            Action::JumpToTop => motion::dispatch(&mut self.view, motion::Motion::JumpToTop, None),
+            Action::JumpToBottom => {
+                motion::dispatch(&mut self.view, motion::Motion::JumpToBottom, None)
+            }
             Action::CursorLeft => self.view.move_column_left(),
             Action::CursorRight => self.view.move_column_right(),
             Action::CursorLineStart => self.view.move_column_to_line_start(),
             Action::CursorLineEnd => self.view.move_column_to_line_end(),
             Action::WordForward => self.view.move_word_forward(),
             Action::WordBackward => self.view.move_word_backward(),
-            Action::FullPageDown => Motionable::full_page_down(&mut self.view),
-            Action::FullPageUp => Motionable::full_page_up(&mut self.view),
+            Action::FullPageDown => {
+                motion::dispatch(&mut self.view, motion::Motion::FullPageDown, None)
+            }
+            Action::FullPageUp => {
+                motion::dispatch(&mut self.view, motion::Motion::FullPageUp, None)
+            }
             Action::NextHunk => self.view.next_hunk(),
             Action::PrevHunk => self.view.prev_hunk(),
             Action::NextFile => self.view.next_section(),

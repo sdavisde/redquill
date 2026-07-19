@@ -16,11 +16,6 @@
 //! from their own thin methods. Either way, the actual arithmetic is defined
 //! exactly once.
 //!
-//! (This module lands ahead of its callers, which arrive over the next few
-//! commits as each consuming context is migrated — `allow(dead_code)` is
-//! scoped to that staging window and comes off once everything here is
-//! consumed.)
-//!
 //! **Jump-to-top in non-diff contexts**: the diff view's `gg` is a two-key
 //! sequence, resolved by [`super::keymap::Keymap`]'s pending-prefix machine.
 //! The git panel and the modal-list tables ([`super::modal_keys`]) have no
@@ -31,10 +26,6 @@
 //! (see `modal_keys::HELP_KEYS`). `G`/`End` remains jump-to-bottom
 //! everywhere. This is a deliberate, documented divergence from the diff
 //! view's literal `gg`, not an oversight.
-
-#![allow(dead_code)]
-
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// The largest numeric prefix any context's digit interception will
 /// accumulate — a mistyped run of digits shouldn't be able to turn a single
@@ -60,7 +51,9 @@ pub enum Motion {
 impl Motion {
     /// Every motion, in a stable order — the coverage drift test's
     /// enumeration source, so a ninth motion added here is automatically
-    /// included in every context's coverage check.
+    /// included in every context's coverage check. Exercised only by that
+    /// test module today, hence the non-test-only `allow`.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub const ALL: [Motion; 8] = [
         Motion::StepDown,
         Motion::StepUp,
@@ -221,21 +214,15 @@ pub fn full_page(viewport_height: usize) -> usize {
     viewport_height.max(1)
 }
 
-// -- Non-diff jump-to-top: a single `g`/`Home` key, not the diff view's
-// -- two-key `gg` (see the module doc) --------------------------------------
-
-/// Whether `key` is the bare, unmodified `g` or `Home` every non-diff
-/// context binds to jump-to-top (see the module doc).
-pub fn is_top_jump_key(key: KeyEvent) -> bool {
-    key.modifiers == KeyModifiers::NONE && matches!(key.code, KeyCode::Char('g') | KeyCode::Home)
-}
-
 // -- Coverage checking -------------------------------------------------------
 
 /// Whether every motion in `required` is resolvable in some context, per
 /// `resolves`. Generic over both the motion list and the resolver so a test
 /// can prove the check has teeth (see the coverage-drift test module): a
-/// hardcoded check that never varies its input could never fail.
+/// hardcoded check that never varies its input could never fail. Exercised
+/// only by that test module today (the FR-5 coverage checker, not part of
+/// the interactive runtime path), hence the non-test-only `allow`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn covers_all<M: Copy>(required: &[M], resolves: impl Fn(M) -> bool) -> bool {
     required.iter().all(|&m| resolves(m))
 }
@@ -373,28 +360,6 @@ mod tests {
         assert_eq!(full_page(20), 20);
     }
 
-    // -- is_top_jump_key ---------------------------------------------------
-
-    #[test]
-    fn top_jump_key_accepts_bare_g_and_home_only() {
-        assert!(is_top_jump_key(KeyEvent::new(
-            KeyCode::Char('g'),
-            KeyModifiers::NONE
-        )));
-        assert!(is_top_jump_key(KeyEvent::new(
-            KeyCode::Home,
-            KeyModifiers::NONE
-        )));
-        assert!(!is_top_jump_key(KeyEvent::new(
-            KeyCode::Char('g'),
-            KeyModifiers::CONTROL
-        )));
-        assert!(!is_top_jump_key(KeyEvent::new(
-            KeyCode::Char('G'),
-            KeyModifiers::NONE
-        )));
-    }
-
     // -- Motionable / dispatch --------------------------------------------------
 
     /// A minimal `Motionable` over a plain linear list, for exercising
@@ -493,15 +458,15 @@ mod tests {
     fn covers_all_rejects_a_requirement_no_resolver_can_satisfy() {
         #[derive(Clone, Copy)]
         enum WithExtra {
-            Real(Motion),
+            Real,
             NeverSupported,
         }
         let required: Vec<WithExtra> = Motion::ALL
             .into_iter()
-            .map(WithExtra::Real)
+            .map(|_| WithExtra::Real)
             .chain(std::iter::once(WithExtra::NeverSupported))
             .collect();
-        let resolves = |m: WithExtra| matches!(m, WithExtra::Real(_));
+        let resolves = |m: WithExtra| matches!(m, WithExtra::Real);
         assert!(
             !covers_all(&required, resolves),
             "a required motion with no resolver must fail coverage"

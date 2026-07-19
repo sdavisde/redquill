@@ -114,6 +114,49 @@ impl SwitcherState {
         let cursor = self.active_cursor_mut();
         *cursor = cursor.saturating_sub(1);
     }
+
+    /// Steps the active tab's cursor by `delta` rows in `down`'s direction,
+    /// clamped at both ends (the shared core of half/full-page paging and
+    /// `move_down`/`move_up`'s single-row step).
+    fn step(&mut self, delta: usize, down: bool) {
+        let len = self.active_len();
+        let cursor = self.active_cursor_mut();
+        *cursor = super::motion::step(*cursor, len, delta, down);
+    }
+
+    /// Moves the active tab's cursor down half a viewport (`Ctrl-d`; shared
+    /// motion set, see `super::motion`). `viewport_height` is the caller's
+    /// page-size proxy (the switcher has no render height of its own to
+    /// track).
+    pub fn half_page_down(&mut self, viewport_height: usize) {
+        self.step(super::motion::half_page(viewport_height), true);
+    }
+
+    /// Moves the active tab's cursor up half a viewport (`Ctrl-u`).
+    pub fn half_page_up(&mut self, viewport_height: usize) {
+        self.step(super::motion::half_page(viewport_height), false);
+    }
+
+    /// Moves the active tab's cursor down a full viewport (`Ctrl-f`).
+    pub fn full_page_down(&mut self, viewport_height: usize) {
+        self.step(super::motion::full_page(viewport_height), true);
+    }
+
+    /// Moves the active tab's cursor up a full viewport (`Ctrl-b`).
+    pub fn full_page_up(&mut self, viewport_height: usize) {
+        self.step(super::motion::full_page(viewport_height), false);
+    }
+
+    /// Jumps the active tab's cursor to its first row (`g`/`Home`).
+    pub fn jump_to_top(&mut self) {
+        *self.active_cursor_mut() = super::motion::jump_top();
+    }
+
+    /// Jumps the active tab's cursor to its last row (`G`/`End`).
+    pub fn jump_to_bottom(&mut self) {
+        let len = self.active_len();
+        *self.active_cursor_mut() = super::motion::jump_bottom(len);
+    }
 }
 
 /// Whether `wt` is the worktree redquill is currently rooted at: its path
@@ -155,6 +198,7 @@ impl App {
                     panel_cursor,
                 ));
                 self.mode = Mode::Switcher;
+                self.motion_count = None;
             }
             (Err(e), _) | (_, Err(e)) => self.set_status_message(format!("switcher: {e}")),
         }
@@ -194,6 +238,64 @@ impl App {
     pub(super) fn switcher_move_up(&mut self) {
         if let Some(s) = self.switcher.as_mut() {
             s.move_up();
+        }
+    }
+
+    /// The switcher's page-size proxy for half/full-page motions (see
+    /// `git_panel::App::panel_viewport_proxy`'s identical rationale).
+    fn switcher_viewport_proxy(&self) -> usize {
+        self.view.viewport_height()
+    }
+
+    /// Moves the active tab's cursor down half a viewport (`Ctrl-d`, shared
+    /// motion set); a no-op if the modal isn't open.
+    pub(super) fn switcher_half_page_down(&mut self) {
+        let height = self.switcher_viewport_proxy();
+        if let Some(s) = self.switcher.as_mut() {
+            s.half_page_down(height);
+        }
+    }
+
+    /// Moves the active tab's cursor up half a viewport (`Ctrl-u`); a no-op
+    /// if the modal isn't open.
+    pub(super) fn switcher_half_page_up(&mut self) {
+        let height = self.switcher_viewport_proxy();
+        if let Some(s) = self.switcher.as_mut() {
+            s.half_page_up(height);
+        }
+    }
+
+    /// Moves the active tab's cursor down a full viewport (`Ctrl-f`); a
+    /// no-op if the modal isn't open.
+    pub(super) fn switcher_full_page_down(&mut self) {
+        let height = self.switcher_viewport_proxy();
+        if let Some(s) = self.switcher.as_mut() {
+            s.full_page_down(height);
+        }
+    }
+
+    /// Moves the active tab's cursor up a full viewport (`Ctrl-b`); a no-op
+    /// if the modal isn't open.
+    pub(super) fn switcher_full_page_up(&mut self) {
+        let height = self.switcher_viewport_proxy();
+        if let Some(s) = self.switcher.as_mut() {
+            s.full_page_up(height);
+        }
+    }
+
+    /// Jumps the active tab's cursor to its first row (`g`/`Home`); a no-op
+    /// if the modal isn't open.
+    pub(super) fn switcher_jump_to_top(&mut self) {
+        if let Some(s) = self.switcher.as_mut() {
+            s.jump_to_top();
+        }
+    }
+
+    /// Jumps the active tab's cursor to its last row (`G`/`End`); a no-op
+    /// if the modal isn't open.
+    pub(super) fn switcher_jump_to_bottom(&mut self) {
+        if let Some(s) = self.switcher.as_mut() {
+            s.jump_to_bottom();
         }
     }
 

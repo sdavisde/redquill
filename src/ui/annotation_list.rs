@@ -33,6 +33,7 @@ impl App {
                     self.list_cursor = self.list_cursor.min(self.annotations.len() - 1);
                 }
                 self.mode = Mode::List;
+                self.motion_count = None;
             }
         }
     }
@@ -54,6 +55,53 @@ impl App {
     /// first.
     pub fn list_move_up(&mut self) {
         self.list_cursor = self.list_cursor.saturating_sub(1);
+    }
+
+    /// The list panel's page-size proxy for half/full-page motions: the
+    /// panel doesn't track its own render height, so this approximates it
+    /// with the diff pane's own tracked viewport height (see
+    /// `git_panel::App::panel_viewport_proxy` for the identical rationale).
+    fn list_viewport_proxy(&self) -> usize {
+        self.view.viewport_height()
+    }
+
+    /// Moves the list panel's focus down half a viewport (`Ctrl-d`; shared
+    /// motion set, see `super::motion`).
+    pub fn list_half_page_down(&mut self) {
+        let step = super::motion::half_page(self.list_viewport_proxy());
+        self.list_cursor =
+            super::motion::step(self.list_cursor, self.annotations.len(), step, true);
+    }
+
+    /// Moves the list panel's focus up half a viewport (`Ctrl-u`).
+    pub fn list_half_page_up(&mut self) {
+        let step = super::motion::half_page(self.list_viewport_proxy());
+        self.list_cursor =
+            super::motion::step(self.list_cursor, self.annotations.len(), step, false);
+    }
+
+    /// Moves the list panel's focus down a full viewport (`Ctrl-f`).
+    pub fn list_full_page_down(&mut self) {
+        let step = super::motion::full_page(self.list_viewport_proxy());
+        self.list_cursor =
+            super::motion::step(self.list_cursor, self.annotations.len(), step, true);
+    }
+
+    /// Moves the list panel's focus up a full viewport (`Ctrl-b`).
+    pub fn list_full_page_up(&mut self) {
+        let step = super::motion::full_page(self.list_viewport_proxy());
+        self.list_cursor =
+            super::motion::step(self.list_cursor, self.annotations.len(), step, false);
+    }
+
+    /// Jumps the list panel's focus to the first annotation (`g`/`Home`).
+    pub fn list_jump_to_top(&mut self) {
+        self.list_cursor = super::motion::jump_top();
+    }
+
+    /// Jumps the list panel's focus to the last annotation (`G`/`End`).
+    pub fn list_jump_to_bottom(&mut self) {
+        self.list_cursor = super::motion::jump_bottom(self.annotations.len());
     }
 
     /// Switches to the focused annotation's file, places the cursor on its

@@ -218,6 +218,16 @@ pub(super) fn resolve<A: Copy + Clone>(table: &[ModalBinding<A>], key: KeyEvent)
 pub(super) enum ListAction {
     MoveDown,
     MoveUp,
+    /// Half/full-page paging and buffer-extreme jumps: the shared motion
+    /// set (see `super::motion`) beyond plain step. Jump-to-top is a single
+    /// `g`/`Home`, not the diff view's two-key `gg` — modal tables have no
+    /// two-key-sequence support (see `motion`'s module doc).
+    HalfPageDown,
+    HalfPageUp,
+    FullPageDown,
+    FullPageUp,
+    JumpToTop,
+    JumpToBottom,
     Jump,
     Edit,
     Delete,
@@ -228,6 +238,12 @@ pub(super) fn list_action_name(action: ListAction) -> &'static str {
     match action {
         ListAction::MoveDown => "move-down",
         ListAction::MoveUp => "move-up",
+        ListAction::HalfPageDown => "half-page-down",
+        ListAction::HalfPageUp => "half-page-up",
+        ListAction::FullPageDown => "full-page-down",
+        ListAction::FullPageUp => "full-page-up",
+        ListAction::JumpToTop => "jump-to-top",
+        ListAction::JumpToBottom => "jump-to-bottom",
         ListAction::Jump => "jump",
         ListAction::Edit => "edit",
         ListAction::Delete => "delete",
@@ -239,6 +255,12 @@ pub(super) fn list_action_from_name(name: &str) -> Option<ListAction> {
     Some(match name {
         "move-down" => ListAction::MoveDown,
         "move-up" => ListAction::MoveUp,
+        "half-page-down" => ListAction::HalfPageDown,
+        "half-page-up" => ListAction::HalfPageUp,
+        "full-page-down" => ListAction::FullPageDown,
+        "full-page-up" => ListAction::FullPageUp,
+        "jump-to-top" => ListAction::JumpToTop,
+        "jump-to-bottom" => ListAction::JumpToBottom,
         "jump" => ListAction::Jump,
         "edit" => ListAction::Edit,
         "delete" => ListAction::Delete,
@@ -266,6 +288,48 @@ pub(super) static LIST_KEYS: LazyLock<Vec<ModalBinding<ListAction>>> = LazyLock:
                 rank: 1,
                 label: "move",
             }),
+        },
+        ModalBinding {
+            description: "Scroll half page down",
+            keys: vec![ModalKey::ctrl(KeyCode::Char('d'))],
+            action: ListAction::HalfPageDown,
+            footer: None,
+        },
+        ModalBinding {
+            description: "Scroll half page up",
+            keys: vec![ModalKey::ctrl(KeyCode::Char('u'))],
+            action: ListAction::HalfPageUp,
+            footer: None,
+        },
+        ModalBinding {
+            description: "Scroll full page down",
+            keys: vec![ModalKey::ctrl(KeyCode::Char('f'))],
+            action: ListAction::FullPageDown,
+            footer: None,
+        },
+        ModalBinding {
+            description: "Scroll full page up",
+            keys: vec![ModalKey::ctrl(KeyCode::Char('b'))],
+            action: ListAction::FullPageUp,
+            footer: None,
+        },
+        ModalBinding {
+            description: "Jump to top",
+            keys: vec![
+                ModalKey::plain(KeyCode::Char('g')),
+                ModalKey::plain(KeyCode::Home),
+            ],
+            action: ListAction::JumpToTop,
+            footer: None,
+        },
+        ModalBinding {
+            description: "Jump to bottom",
+            keys: vec![
+                ModalKey::plain(KeyCode::Char('G')),
+                ModalKey::plain(KeyCode::End),
+            ],
+            action: ListAction::JumpToBottom,
+            footer: None,
         },
         ModalBinding {
             description: "Jump to annotation",
@@ -316,6 +380,14 @@ pub(super) static LIST_KEYS: LazyLock<Vec<ModalBinding<ListAction>>> = LazyLock:
 pub(super) enum StagingAction {
     MoveDown,
     MoveUp,
+    /// Shared motion set beyond plain step (see `ListAction`'s identical
+    /// doc note on jump-to-top's single-`g` divergence from the diff view).
+    HalfPageDown,
+    HalfPageUp,
+    FullPageDown,
+    FullPageUp,
+    JumpToTop,
+    JumpToBottom,
     Unstage,
     Close,
 }
@@ -324,6 +396,12 @@ pub(super) fn staging_action_name(action: StagingAction) -> &'static str {
     match action {
         StagingAction::MoveDown => "move-down",
         StagingAction::MoveUp => "move-up",
+        StagingAction::HalfPageDown => "half-page-down",
+        StagingAction::HalfPageUp => "half-page-up",
+        StagingAction::FullPageDown => "full-page-down",
+        StagingAction::FullPageUp => "full-page-up",
+        StagingAction::JumpToTop => "jump-to-top",
+        StagingAction::JumpToBottom => "jump-to-bottom",
         StagingAction::Unstage => "unstage",
         StagingAction::Close => "close",
     }
@@ -333,6 +411,12 @@ pub(super) fn staging_action_from_name(name: &str) -> Option<StagingAction> {
     Some(match name {
         "move-down" => StagingAction::MoveDown,
         "move-up" => StagingAction::MoveUp,
+        "half-page-down" => StagingAction::HalfPageDown,
+        "half-page-up" => StagingAction::HalfPageUp,
+        "full-page-down" => StagingAction::FullPageDown,
+        "full-page-up" => StagingAction::FullPageUp,
+        "jump-to-top" => StagingAction::JumpToTop,
+        "jump-to-bottom" => StagingAction::JumpToBottom,
         "unstage" => StagingAction::Unstage,
         "close" => StagingAction::Close,
         _ => return None,
@@ -358,6 +442,48 @@ pub(super) static STAGING_KEYS: LazyLock<Vec<ModalBinding<StagingAction>>> = Laz
                 rank: 1,
                 label: "move",
             }),
+        },
+        ModalBinding {
+            description: "Scroll half page down",
+            keys: vec![ModalKey::ctrl(KeyCode::Char('d'))],
+            action: StagingAction::HalfPageDown,
+            footer: None,
+        },
+        ModalBinding {
+            description: "Scroll half page up",
+            keys: vec![ModalKey::ctrl(KeyCode::Char('u'))],
+            action: StagingAction::HalfPageUp,
+            footer: None,
+        },
+        ModalBinding {
+            description: "Scroll full page down",
+            keys: vec![ModalKey::ctrl(KeyCode::Char('f'))],
+            action: StagingAction::FullPageDown,
+            footer: None,
+        },
+        ModalBinding {
+            description: "Scroll full page up",
+            keys: vec![ModalKey::ctrl(KeyCode::Char('b'))],
+            action: StagingAction::FullPageUp,
+            footer: None,
+        },
+        ModalBinding {
+            description: "Jump to top",
+            keys: vec![
+                ModalKey::plain(KeyCode::Char('g')),
+                ModalKey::plain(KeyCode::Home),
+            ],
+            action: StagingAction::JumpToTop,
+            footer: None,
+        },
+        ModalBinding {
+            description: "Jump to bottom",
+            keys: vec![
+                ModalKey::plain(KeyCode::Char('G')),
+                ModalKey::plain(KeyCode::End),
+            ],
+            action: StagingAction::JumpToBottom,
+            footer: None,
         },
         ModalBinding {
             description: "Unstage file",
@@ -401,6 +527,14 @@ pub(super) static STAGING_KEYS: LazyLock<Vec<ModalBinding<StagingAction>>> = Laz
 pub(super) enum AcceptedPanelAction {
     MoveDown,
     MoveUp,
+    /// Shared motion set beyond plain step (see `ListAction`'s doc note on
+    /// jump-to-top's single-`g` divergence from the diff view).
+    HalfPageDown,
+    HalfPageUp,
+    FullPageDown,
+    FullPageUp,
+    JumpToTop,
+    JumpToBottom,
     /// Un-accepts the focused entry (see [`super::app::App::un_accept_focused_file`]).
     UnAccept,
     Close,
@@ -429,6 +563,48 @@ pub(super) static ACCEPTED_PANEL_KEYS: LazyLock<Vec<ModalBinding<AcceptedPanelAc
                     rank: 1,
                     label: "move",
                 }),
+            },
+            ModalBinding {
+                description: "Scroll half page down",
+                keys: vec![ModalKey::ctrl(KeyCode::Char('d'))],
+                action: AcceptedPanelAction::HalfPageDown,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Scroll half page up",
+                keys: vec![ModalKey::ctrl(KeyCode::Char('u'))],
+                action: AcceptedPanelAction::HalfPageUp,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Scroll full page down",
+                keys: vec![ModalKey::ctrl(KeyCode::Char('f'))],
+                action: AcceptedPanelAction::FullPageDown,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Scroll full page up",
+                keys: vec![ModalKey::ctrl(KeyCode::Char('b'))],
+                action: AcceptedPanelAction::FullPageUp,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Jump to top",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('g')),
+                    ModalKey::plain(KeyCode::Home),
+                ],
+                action: AcceptedPanelAction::JumpToTop,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Jump to bottom",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('G')),
+                    ModalKey::plain(KeyCode::End),
+                ],
+                action: AcceptedPanelAction::JumpToBottom,
+                footer: None,
             },
             ModalBinding {
                 description: "Un-accept file (re-expands its section)",
@@ -464,6 +640,16 @@ pub(super) static ACCEPTED_PANEL_KEYS: LazyLock<Vec<ModalBinding<AcceptedPanelAc
 pub(super) enum PeekAction {
     MoveDown,
     MoveUp,
+    /// Shared motion set beyond plain step (see `ListAction`'s doc note on
+    /// jump-to-top's single-`g` divergence from the diff view). Reconciled
+    /// per `PeekKind` in `super::code_intel`'s handlers: paging/jumping the
+    /// selection for Definition/References, the hover scroll for Hover.
+    HalfPageDown,
+    HalfPageUp,
+    FullPageDown,
+    FullPageUp,
+    JumpToTop,
+    JumpToBottom,
     Enter,
     Close,
 }
@@ -472,6 +658,12 @@ pub(super) fn peek_action_name(action: PeekAction) -> &'static str {
     match action {
         PeekAction::MoveDown => "move-down",
         PeekAction::MoveUp => "move-up",
+        PeekAction::HalfPageDown => "half-page-down",
+        PeekAction::HalfPageUp => "half-page-up",
+        PeekAction::FullPageDown => "full-page-down",
+        PeekAction::FullPageUp => "full-page-up",
+        PeekAction::JumpToTop => "jump-to-top",
+        PeekAction::JumpToBottom => "jump-to-bottom",
         PeekAction::Enter => "enter",
         PeekAction::Close => "close",
     }
@@ -481,6 +673,12 @@ pub(super) fn peek_action_from_name(name: &str) -> Option<PeekAction> {
     Some(match name {
         "move-down" => PeekAction::MoveDown,
         "move-up" => PeekAction::MoveUp,
+        "half-page-down" => PeekAction::HalfPageDown,
+        "half-page-up" => PeekAction::HalfPageUp,
+        "full-page-down" => PeekAction::FullPageDown,
+        "full-page-up" => PeekAction::FullPageUp,
+        "jump-to-top" => PeekAction::JumpToTop,
+        "jump-to-bottom" => PeekAction::JumpToBottom,
         "enter" => PeekAction::Enter,
         "close" => PeekAction::Close,
         _ => return None,
@@ -506,6 +704,48 @@ pub(super) static PEEK_KEYS: LazyLock<Vec<ModalBinding<PeekAction>>> = LazyLock:
                 rank: 1,
                 label: "move",
             }),
+        },
+        ModalBinding {
+            description: "Scroll half page down",
+            keys: vec![ModalKey::ctrl(KeyCode::Char('d'))],
+            action: PeekAction::HalfPageDown,
+            footer: None,
+        },
+        ModalBinding {
+            description: "Scroll half page up",
+            keys: vec![ModalKey::ctrl(KeyCode::Char('u'))],
+            action: PeekAction::HalfPageUp,
+            footer: None,
+        },
+        ModalBinding {
+            description: "Scroll full page down",
+            keys: vec![ModalKey::ctrl(KeyCode::Char('f'))],
+            action: PeekAction::FullPageDown,
+            footer: None,
+        },
+        ModalBinding {
+            description: "Scroll full page up",
+            keys: vec![ModalKey::ctrl(KeyCode::Char('b'))],
+            action: PeekAction::FullPageUp,
+            footer: None,
+        },
+        ModalBinding {
+            description: "Jump to top",
+            keys: vec![
+                ModalKey::plain(KeyCode::Char('g')),
+                ModalKey::plain(KeyCode::Home),
+            ],
+            action: PeekAction::JumpToTop,
+            footer: None,
+        },
+        ModalBinding {
+            description: "Jump to bottom",
+            keys: vec![
+                ModalKey::plain(KeyCode::Char('G')),
+                ModalKey::plain(KeyCode::End),
+            ],
+            action: PeekAction::JumpToBottom,
+            footer: None,
         },
         ModalBinding {
             description: "Jump to location (definition/references)",
@@ -536,6 +776,14 @@ pub(super) enum SwitcherAction {
     ToggleTab,
     MoveDown,
     MoveUp,
+    /// Shared motion set beyond plain step (see `ListAction`'s doc note on
+    /// jump-to-top's single-`g` divergence from the diff view).
+    HalfPageDown,
+    HalfPageUp,
+    FullPageDown,
+    FullPageUp,
+    JumpToTop,
+    JumpToBottom,
     Confirm,
     Close,
 }
@@ -545,6 +793,12 @@ pub(super) fn switcher_action_name(action: SwitcherAction) -> &'static str {
         SwitcherAction::ToggleTab => "toggle-tab",
         SwitcherAction::MoveDown => "move-down",
         SwitcherAction::MoveUp => "move-up",
+        SwitcherAction::HalfPageDown => "half-page-down",
+        SwitcherAction::HalfPageUp => "half-page-up",
+        SwitcherAction::FullPageDown => "full-page-down",
+        SwitcherAction::FullPageUp => "full-page-up",
+        SwitcherAction::JumpToTop => "jump-to-top",
+        SwitcherAction::JumpToBottom => "jump-to-bottom",
         SwitcherAction::Confirm => "confirm",
         SwitcherAction::Close => "close",
     }
@@ -555,6 +809,12 @@ pub(super) fn switcher_action_from_name(name: &str) -> Option<SwitcherAction> {
         "toggle-tab" => SwitcherAction::ToggleTab,
         "move-down" => SwitcherAction::MoveDown,
         "move-up" => SwitcherAction::MoveUp,
+        "half-page-down" => SwitcherAction::HalfPageDown,
+        "half-page-up" => SwitcherAction::HalfPageUp,
+        "full-page-down" => SwitcherAction::FullPageDown,
+        "full-page-up" => SwitcherAction::FullPageUp,
+        "jump-to-top" => SwitcherAction::JumpToTop,
+        "jump-to-bottom" => SwitcherAction::JumpToBottom,
         "confirm" => SwitcherAction::Confirm,
         "close" => SwitcherAction::Close,
         _ => return None,
@@ -603,6 +863,48 @@ pub(super) static SWITCHER_KEYS: LazyLock<Vec<ModalBinding<SwitcherAction>>> =
                 // key display, so merging it with MoveDown's would double up
                 // the " / " separators in the footer merge. The MoveDown
                 // row's own label reads fine alone.
+                footer: None,
+            },
+            ModalBinding {
+                description: "Scroll half page down",
+                keys: vec![ModalKey::ctrl(KeyCode::Char('d'))],
+                action: SwitcherAction::HalfPageDown,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Scroll half page up",
+                keys: vec![ModalKey::ctrl(KeyCode::Char('u'))],
+                action: SwitcherAction::HalfPageUp,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Scroll full page down",
+                keys: vec![ModalKey::ctrl(KeyCode::Char('f'))],
+                action: SwitcherAction::FullPageDown,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Scroll full page up",
+                keys: vec![ModalKey::ctrl(KeyCode::Char('b'))],
+                action: SwitcherAction::FullPageUp,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Jump to top",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('g')),
+                    ModalKey::plain(KeyCode::Home),
+                ],
+                action: SwitcherAction::JumpToTop,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Jump to bottom",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('G')),
+                    ModalKey::plain(KeyCode::End),
+                ],
+                action: SwitcherAction::JumpToBottom,
                 footer: None,
             },
             ModalBinding {
@@ -2368,6 +2670,24 @@ index 111..222 100644
                         handle_list_key(&mut app, key.event());
                         assert_eq!(app.list_cursor, 0, "List {label}: focus must move up");
                     }
+                    ListAction::HalfPageDown | ListAction::FullPageDown => {
+                        handle_list_key(&mut app, key.event());
+                        assert_eq!(app.list_cursor, 1, "List {label}: page down must move");
+                    }
+                    ListAction::HalfPageUp | ListAction::FullPageUp => {
+                        app.list_cursor = 1;
+                        handle_list_key(&mut app, key.event());
+                        assert_eq!(app.list_cursor, 0, "List {label}: page up must move");
+                    }
+                    ListAction::JumpToTop => {
+                        app.list_cursor = 1;
+                        handle_list_key(&mut app, key.event());
+                        assert_eq!(app.list_cursor, 0, "List {label}: must jump to top");
+                    }
+                    ListAction::JumpToBottom => {
+                        handle_list_key(&mut app, key.event());
+                        assert_eq!(app.list_cursor, 1, "List {label}: must jump to bottom");
+                    }
                     ListAction::Jump => {
                         handle_list_key(&mut app, key.event());
                         assert_eq!(app.mode, Mode::Normal, "List {label}: jump must close");
@@ -2423,6 +2743,30 @@ index 111..222 100644
                         app.staging_cursor = 1;
                         handle_staging_key(&mut app, key.event());
                         assert_eq!(app.staging_cursor, 0, "Staging {label}: focus moves up");
+                    }
+                    StagingAction::HalfPageDown | StagingAction::FullPageDown => {
+                        handle_staging_key(&mut app, key.event());
+                        assert_eq!(
+                            app.staging_cursor, 1,
+                            "Staging {label}: page down must move"
+                        );
+                    }
+                    StagingAction::HalfPageUp | StagingAction::FullPageUp => {
+                        app.staging_cursor = 1;
+                        handle_staging_key(&mut app, key.event());
+                        assert_eq!(app.staging_cursor, 0, "Staging {label}: page up must move");
+                    }
+                    StagingAction::JumpToTop => {
+                        app.staging_cursor = 1;
+                        handle_staging_key(&mut app, key.event());
+                        assert_eq!(app.staging_cursor, 0, "Staging {label}: must jump to top");
+                    }
+                    StagingAction::JumpToBottom => {
+                        handle_staging_key(&mut app, key.event());
+                        assert_eq!(
+                            app.staging_cursor, 1,
+                            "Staging {label}: must jump to bottom"
+                        );
                     }
                     StagingAction::Unstage => {
                         handle_staging_key(&mut app, key.event());
@@ -2500,6 +2844,36 @@ index 111..222 100644
                         assert_eq!(
                             app.staging_cursor, 0,
                             "Accepted panel {label}: focus moves up"
+                        );
+                    }
+                    AcceptedPanelAction::HalfPageDown | AcceptedPanelAction::FullPageDown => {
+                        handle_staging_key(&mut app, key.event());
+                        assert_eq!(
+                            app.staging_cursor, 1,
+                            "Accepted panel {label}: page down must move"
+                        );
+                    }
+                    AcceptedPanelAction::HalfPageUp | AcceptedPanelAction::FullPageUp => {
+                        app.staging_cursor = 1;
+                        handle_staging_key(&mut app, key.event());
+                        assert_eq!(
+                            app.staging_cursor, 0,
+                            "Accepted panel {label}: page up must move"
+                        );
+                    }
+                    AcceptedPanelAction::JumpToTop => {
+                        app.staging_cursor = 1;
+                        handle_staging_key(&mut app, key.event());
+                        assert_eq!(
+                            app.staging_cursor, 0,
+                            "Accepted panel {label}: must jump to top"
+                        );
+                    }
+                    AcceptedPanelAction::JumpToBottom => {
+                        handle_staging_key(&mut app, key.event());
+                        assert_eq!(
+                            app.staging_cursor, 1,
+                            "Accepted panel {label}: must jump to bottom"
                         );
                     }
                     AcceptedPanelAction::UnAccept => {
@@ -2594,6 +2968,40 @@ index 111..222 100644
                             "Peek {label}: selection moves up"
                         );
                     }
+                    PeekAction::HalfPageDown | PeekAction::FullPageDown => {
+                        handle_peek_key(&mut app, key.event());
+                        assert_eq!(
+                            app.peek.as_ref().unwrap().selected,
+                            1,
+                            "Peek {label}: page down must move"
+                        );
+                    }
+                    PeekAction::HalfPageUp | PeekAction::FullPageUp => {
+                        app.peek.as_mut().unwrap().selected = 1;
+                        handle_peek_key(&mut app, key.event());
+                        assert_eq!(
+                            app.peek.as_ref().unwrap().selected,
+                            0,
+                            "Peek {label}: page up must move"
+                        );
+                    }
+                    PeekAction::JumpToTop => {
+                        app.peek.as_mut().unwrap().selected = 1;
+                        handle_peek_key(&mut app, key.event());
+                        assert_eq!(
+                            app.peek.as_ref().unwrap().selected,
+                            0,
+                            "Peek {label}: must jump to top"
+                        );
+                    }
+                    PeekAction::JumpToBottom => {
+                        handle_peek_key(&mut app, key.event());
+                        assert_eq!(
+                            app.peek.as_ref().unwrap().selected,
+                            1,
+                            "Peek {label}: must jump to bottom"
+                        );
+                    }
                     PeekAction::Enter => {
                         handle_peek_key(&mut app, key.event());
                         assert!(
@@ -2686,6 +3094,40 @@ index 111..222 100644
                             app.switcher.as_ref().unwrap().branch_cursor,
                             0,
                             "Switcher {label}: cursor moves up"
+                        );
+                    }
+                    SwitcherAction::HalfPageDown | SwitcherAction::FullPageDown => {
+                        handle_switcher_key(&mut app, key.event());
+                        assert_eq!(
+                            app.switcher.as_ref().unwrap().branch_cursor,
+                            1,
+                            "Switcher {label}: page down must move"
+                        );
+                    }
+                    SwitcherAction::HalfPageUp | SwitcherAction::FullPageUp => {
+                        app.switcher.as_mut().unwrap().branch_cursor = 1;
+                        handle_switcher_key(&mut app, key.event());
+                        assert_eq!(
+                            app.switcher.as_ref().unwrap().branch_cursor,
+                            0,
+                            "Switcher {label}: page up must move"
+                        );
+                    }
+                    SwitcherAction::JumpToTop => {
+                        app.switcher.as_mut().unwrap().branch_cursor = 1;
+                        handle_switcher_key(&mut app, key.event());
+                        assert_eq!(
+                            app.switcher.as_ref().unwrap().branch_cursor,
+                            0,
+                            "Switcher {label}: must jump to top"
+                        );
+                    }
+                    SwitcherAction::JumpToBottom => {
+                        handle_switcher_key(&mut app, key.event());
+                        assert_eq!(
+                            app.switcher.as_ref().unwrap().branch_cursor,
+                            1,
+                            "Switcher {label}: must jump to bottom"
                         );
                     }
                     SwitcherAction::Confirm => {

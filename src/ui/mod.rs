@@ -1114,3 +1114,7 @@ mod review_persistence_integration_tests;
 #[cfg(test)]
 #[path = "review_launcher_integration_tests.rs"]
 mod review_launcher_integration_tests;
+
+#[cfg(test)]
+#[path = "motion_coverage_tests.rs"]
+mod motion_coverage_tests;

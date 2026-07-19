@@ -143,6 +143,7 @@ fn handle_event(app: &mut App, event: LspEvent) {
         LspEvent::Hover { contents, .. } => {
             app.peek = Some(PeekState::hover(contents));
             app.mode = Mode::Peek;
+            app.motion_count = None;
         }
         LspEvent::Failed { .. } => app.set_status_message("lsp: failed"),
     }
@@ -155,6 +156,7 @@ fn open_peek_locations(app: &mut App, kind: PeekKind, locations: Vec<SourceLocat
     }
     app.peek = Some(PeekState::locations(kind, locations));
     app.mode = Mode::Peek;
+    app.motion_count = None;
     refresh_peek_preview(app);
 }
 
@@ -230,6 +232,98 @@ pub(super) fn peek_move_up(app: &mut App) {
             refresh_peek_preview(app);
         }
     }
+}
+
+/// The peek overlay's page-size proxy for half/full-page motions (see
+/// `git_panel::App::panel_viewport_proxy`'s identical rationale — the
+/// overlay doesn't track its own render height).
+fn peek_viewport_proxy(app: &App) -> usize {
+    app.view.viewport_height()
+}
+
+/// Shared core of the peek overlay's half/full-page paging: steps the
+/// selection (Definition/References) or the hover scroll (Hover) by `step`
+/// rows/lines, clamped at both ends. A no-op if no overlay is open.
+fn peek_step(app: &mut App, step: usize, down: bool) {
+    let Some(peek) = app.peek.as_mut() else {
+        return;
+    };
+    match peek.kind {
+        PeekKind::Hover => {
+            let len = peek.hover_line_count();
+            peek.hover_scroll = super::motion::step(peek.hover_scroll, len, step, down);
+        }
+        PeekKind::Definition | PeekKind::References => {
+            if !peek.locations.is_empty() {
+                peek.selected =
+                    super::motion::step(peek.selected, peek.locations.len(), step, down);
+            }
+            refresh_peek_preview(app);
+        }
+    }
+}
+
+/// Shared core of the peek overlay's jump-to-extreme: jumps the selection
+/// (Definition/References) or the hover scroll (Hover) to `target`, clamped
+/// into range. A no-op if no overlay is open.
+fn peek_jump(app: &mut App, target: usize) {
+    let Some(peek) = app.peek.as_mut() else {
+        return;
+    };
+    match peek.kind {
+        PeekKind::Hover => {
+            let len = peek.hover_line_count();
+            peek.hover_scroll = target.min(len.saturating_sub(1));
+        }
+        PeekKind::Definition | PeekKind::References => {
+            if !peek.locations.is_empty() {
+                peek.selected = target.min(peek.locations.len() - 1);
+            }
+            refresh_peek_preview(app);
+        }
+    }
+}
+
+/// Moves the peek selection/hover-scroll down half a viewport (`Ctrl-d`;
+/// shared motion set, see `super::motion`).
+pub(super) fn peek_half_page_down(app: &mut App) {
+    let step = super::motion::half_page(peek_viewport_proxy(app));
+    peek_step(app, step, true);
+}
+
+/// Moves the peek selection/hover-scroll up half a viewport (`Ctrl-u`).
+pub(super) fn peek_half_page_up(app: &mut App) {
+    let step = super::motion::half_page(peek_viewport_proxy(app));
+    peek_step(app, step, false);
+}
+
+/// Moves the peek selection/hover-scroll down a full viewport (`Ctrl-f`).
+pub(super) fn peek_full_page_down(app: &mut App) {
+    let step = super::motion::full_page(peek_viewport_proxy(app));
+    peek_step(app, step, true);
+}
+
+/// Moves the peek selection/hover-scroll up a full viewport (`Ctrl-b`).
+pub(super) fn peek_full_page_up(app: &mut App) {
+    let step = super::motion::full_page(peek_viewport_proxy(app));
+    peek_step(app, step, false);
+}
+
+/// Jumps the peek selection/hover-scroll to the top (`g`/`Home`).
+pub(super) fn peek_jump_to_top(app: &mut App) {
+    peek_jump(app, super::motion::jump_top());
+}
+
+/// Jumps the peek selection/hover-scroll to the bottom (`G`/`End`).
+pub(super) fn peek_jump_to_bottom(app: &mut App) {
+    let Some(peek) = app.peek.as_ref() else {
+        return;
+    };
+    let len = match peek.kind {
+        PeekKind::Hover => peek.hover_line_count(),
+        PeekKind::Definition | PeekKind::References => peek.locations.len(),
+    };
+    peek_jump(app, super::motion::jump_bottom(len));
 }
 
 /// Closes the peek overlay, returning to [`Mode::Normal`].
