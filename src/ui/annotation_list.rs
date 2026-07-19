@@ -468,4 +468,97 @@ index 111..222 100644
             "the filter is transient per-open (spec 12 Non-Goal 5)"
         );
     }
+
+    // -- Journey B: 30 annotations, find-and-edit by filter (spec 12) -------
+
+    /// Journey driver for spec 12's Success Metric 2: a session with 30
+    /// annotations, `/`, three characters narrow the list, `Enter` locks,
+    /// `e` edits the intended one — driven key by key through the real
+    /// dispatch path. Every logged step is asserted, so this is a
+    /// regression test as well as the transcript generator
+    /// (`RQ_JOURNEY_DUMP=1 cargo test --lib find_annotation_journey_transcript
+    /// -- --nocapture` captures the persisted `12-proofs/` transcript).
+    #[test]
+    fn find_annotation_journey_transcript() {
+        let mut log = String::new();
+        let mut step = |title: &str, body: &str| {
+            log.push_str(&format!("\n=== {title} ===\n{body}\n"));
+        };
+
+        let mut app = App::new(vec![sample_file()]);
+        // 29 routine annotations plus the one distinctive one below: 30
+        // total, matching spec 12's Success Metric 2 exactly.
+        for i in 0..29 {
+            app.annotations
+                .add(
+                    Target::file("src/main.rs"),
+                    Classification::Question,
+                    format!("routine note {i}"),
+                )
+                .unwrap();
+        }
+        // The distinctive annotation: a three-character fragment of it is
+        // the only thing that narrows the 30-annotation list down to a
+        // single row.
+        let zephyr_id = app
+            .annotations
+            .add(
+                Target::file("src/main.rs"),
+                Classification::Question,
+                "zephyr: check the retry backoff here",
+            )
+            .unwrap();
+        app.mode = Mode::List;
+        step(
+            "journey B: annotation list open over 30 annotations",
+            &format!("annotations: {}", app.annotations.len()),
+        );
+
+        handle_list_key(&mut app, key('/'));
+        assert!(app.list_filter.as_ref().unwrap().is_editing());
+        step(
+            "press /: filter mode entered, whole list still visible",
+            &format!("filtered rows: {}", app.list_filter.as_ref().unwrap().len()),
+        );
+
+        for c in "zep".chars() {
+            handle_list_key(&mut app, key(c));
+        }
+        assert_eq!(
+            app.list_filter.as_ref().unwrap().len(),
+            1,
+            "three characters must narrow to exactly the zephyr annotation"
+        );
+        step(
+            "type z, e, p: list narrows to the one matching annotation",
+            &format!(
+                "query: \"{}\"  filtered rows: {}",
+                app.list_filter.as_ref().unwrap().query(),
+                app.list_filter.as_ref().unwrap().len()
+            ),
+        );
+
+        handle_list_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!app.list_filter.as_ref().unwrap().is_editing());
+        step(
+            "press Enter: filter locks, list verbs resume",
+            "filter locked",
+        );
+
+        handle_list_key(&mut app, key('e'));
+        assert_eq!(app.mode, Mode::Compose);
+        assert_eq!(
+            app.compose.as_ref().unwrap().editing_id,
+            Some(zephyr_id),
+            "e must edit the filtered (zephyr) annotation"
+        );
+        step(
+            "press e: Compose opens on the filtered (zephyr) annotation",
+            &format!("editing annotation id: {zephyr_id}"),
+        );
+
+        if std::env::var("RQ_JOURNEY_DUMP").is_ok() {
+            eprintln!("{log}");
+        }
+    }
 }
