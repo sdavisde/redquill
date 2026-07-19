@@ -84,7 +84,7 @@ A user in the annotation list, staging panel, accepted panel, or switcher presse
 - [x] 2.7 Perf: add a 5k-row filter budget tripwire to `src/ui/perf_tests.rs` following the existing loop-amortized wall-clock pattern; confirm all existing tripwires stay green.
 - [x] 2.8 Proof: 30-annotation scratch session, capture journey transcript B into `12-proofs/`, record all-gates output in `12-proofs/12-task-02-proofs.md`.
 
-### [ ] 3.0 Filter and move through the Review launcher like every other list
+### [x] 3.0 Filter and move through the Review launcher like every other list
 
 A user presses `R`, lands on the launcher's Branches or Commits tab, pages/jumps/counts with the same motions as everywhere else, presses `/` and types a fragment to fuzzily narrow branches or commits, and a filtered `Enter` starts the right review — unless a review session is already active, in which case the same guard hint appears as today. Covers FR-12..FR-13.
 
@@ -96,7 +96,7 @@ A user presses `R`, lands on the launcher's Branches or Commits tab, pages/jumps
 
 #### 3.0 Tasks
 
-- [ ] 3.1 Feat: launcher Branches and Commits tabs consume the motion layer (including counts), clamped to `review_launcher_row_count()`; Commits-tab lazy prefetch (`poll_launcher_commits`) fires on layer-driven moves; both tabs added to the motion coverage drift test (FR-12, FR-13).
-- [ ] 3.2 Feat: both launcher tabs adopt the `/` filter component with indicator and empty-state hint; a filtered `Enter` routes through `confirm_launcher_branch_review`'s existing `in_review_session()` guard unchanged (FR-12).
-- [ ] 3.3 Launcher modal key table gains the filter-mode rows with footer hints, help coverage, config remapping, and drift-test coverage; no-shadow verification against `REVIEW_LAUNCHER_KEYS` (FR-13).
-- [ ] 3.4 Proof: many-branch scratch repo, capture journey transcript C into `12-proofs/`; integration test proving the guard holds under filtered `Enter`; record all-gates output in `12-proofs/12-task-03-proofs.md`.
+- [x] 3.1 Feat: launcher Branches and Commits tabs consume the motion layer (including counts), clamped to `review_launcher_row_count()`; Commits-tab lazy prefetch (`poll_launcher_commits`) fires on layer-driven moves; both tabs added to the motion coverage drift test (FR-12, FR-13).
+- [x] 3.2 Feat: both launcher tabs adopt the `/` filter component with indicator and empty-state hint; a filtered `Enter` routes through `confirm_launcher_branch_review`'s existing `in_review_session()` guard unchanged (FR-12).
+- [x] 3.3 Launcher modal key table gains the filter-mode rows with footer hints, help coverage, config remapping, and drift-test coverage; no-shadow verification against `REVIEW_LAUNCHER_KEYS` (FR-13). Folded into 3.2's commit per this task list's explicit allowance, since `LauncherAction::EnterFilter` and the filter-aware row-count/real-index translation are two halves of one indivisible change.
+- [x] 3.4 Proof: many-branch scratch repo, capture journey transcript C into `12-proofs/`; integration test proving the guard holds under filtered `Enter`; record all-gates output in `12-proofs/12-task-03-proofs.md`.
