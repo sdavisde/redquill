@@ -1055,6 +1055,9 @@ fn event_loop(
         // Drain any completed Review launcher Commits-tab ahead-of-base
         // fetch, same cadence as the other pollers.
         app.poll_launcher_commits();
+        // Drain any completed Review launcher Pull Requests-tab fetch, same
+        // cadence as the other pollers.
+        app.poll_launcher_prs();
         // Drain any completed fuzzy-finder candidate-list load, same
         // cadence as the other pollers.
         app.poll_finder();

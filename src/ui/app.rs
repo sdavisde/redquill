@@ -36,10 +36,10 @@ use super::motion;
 use super::peek::{PeekKind, PeekState};
 use super::project_search::ProjectSearchState;
 use super::refresh::InFlightRefresh;
-use super::review_launcher::{InFlightLauncherCommits, LauncherTab};
+use super::review_launcher::{InFlightLauncherCommits, InFlightLauncherPrs, LauncherTab};
 use super::rows::Row;
 use super::search::SearchState;
-use super::stage_ops::{ReviewSnapshot, StageOps, StagedFile, StagedState};
+use super::stage_ops::{PrFetchOutcome, ReviewSnapshot, StageOps, StagedFile, StagedState};
 use super::switcher::SwitcherState;
 use super::syntax::HighlightCache;
 use super::targeting;
@@ -475,7 +475,7 @@ pub struct App {
     /// "must survive mode exit" exception that field documents.
     pub(super) launcher_all_commits: bool,
     /// The active launcher tab's `/` filter session (`None`: no filter
-    /// active). One field shared by both tabs, cleared on every
+    /// active). One field shared by every tab, cleared on every
     /// [`App::review_launcher_switch_tab`] — spec 12 FR-12's decision,
     /// mirroring [`super::switcher::SwitcherState::filter`]'s identical
     /// shared-field-cleared-on-toggle choice: a query typed against branch
@@ -484,6 +484,25 @@ pub struct App {
     /// every launcher close ([`App::close_review_launcher`] /
     /// [`App::close_review_launcher_after_start`]).
     pub(super) launcher_filter: Option<super::list_filter::ListFilter>,
+    /// The Review launcher Pull Requests tab's latest resolved state:
+    /// `None` until the first fetch lands (the loading placeholder — see
+    /// [`App::launcher_prs_loading`]), `Some` afterward, carrying either a
+    /// listing or one of the degraded [`PrFetchOutcome`] prescriptions —
+    /// there's no separate "loaded" flag to fall out of sync with this,
+    /// unlike `launcher_commits`/`launcher_commits_loaded`'s two-field
+    /// shape, since a [`PrFetchOutcome`] already distinguishes every state
+    /// the tab can be in.
+    pub(super) launcher_prs: Option<PrFetchOutcome>,
+    /// The single background Pull Requests fetch in flight, if any
+    /// (single-flight, mirroring `launcher_commits_in_flight`).
+    pub(super) launcher_prs_in_flight: Option<InFlightLauncherPrs>,
+    /// Bumped to invalidate a straggling Pull Requests fetch spawned before
+    /// the bump (mirrors `launcher_commits_generation`).
+    pub(super) launcher_prs_generation: u64,
+    /// The background-task poller Pull Requests fetches run through,
+    /// separate from `launcher_commits_tasks` so their results are drained
+    /// independently (see [`App::poll_launcher_prs`]).
+    pub(super) launcher_prs_tasks: BackgroundTasks<PrFetchOutcome>,
     /// The set of collapsed directory keys in the git panel's file tree (see
     /// [`super::file_tree`]). An `App` field rather than [`Mode::Panel`]
     /// state because a folded directory must stay folded across the panel
@@ -707,6 +726,10 @@ impl App {
             launcher_commits_tasks: BackgroundTasks::new(),
             launcher_all_commits: false,
             launcher_filter: None,
+            launcher_prs: None,
+            launcher_prs_in_flight: None,
+            launcher_prs_generation: 0,
+            launcher_prs_tasks: BackgroundTasks::new(),
             panel_collapsed_dirs: HashSet::new(),
             active_commit: None,
             suspended_view: None,

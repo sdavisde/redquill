@@ -1,9 +1,10 @@
 //! State for the Review launcher modal ([`super::app::Mode::ReviewLauncher`]):
 //! a tabbed overlay reachable from anywhere (`R`, `Scope::Global`) that hosts
-//! branch review (Branches tab) and single-commit review (Commits tab)
-//! behind one entry point — the sole in-app entry point for starting a
-//! branch review. Modeled on [`super::switcher::SwitcherState`]'s tab/cursor
-//! shape and [`super::app::ModeOrigin`]'s origin-restore pattern.
+//! branch review (Branches tab), single-commit review (Commits tab), and
+//! forge PR review (Pull Requests tab) behind one entry point — the sole
+//! in-app entry point for starting a branch review. Modeled on
+//! [`super::switcher::SwitcherState`]'s tab/cursor shape and
+//! [`super::app::ModeOrigin`]'s origin-restore pattern.
 //!
 //! The Branches tab is wired to the real branch-review flow: `App`'s
 //! [`ensure_review_worktree`]/[`resolve_review_base`]/
@@ -12,16 +13,21 @@
 //! [`super::review_session`]'s module doc) — via
 //! [`App::confirm_launcher_branch_review`]. The Commits tab opens a
 //! read-only single-commit view on `Enter` via
-//! [`App::confirm_launcher_commit`]; both tabs share the shared motion
-//! layer (spec 12 FR-12) clamped against [`App::review_launcher_row_count`]
-//! and the shared `/` filter component (spec 12 FR-12,
-//! [`super::list_filter::ListFilter`]) via [`App::launcher_filter`] — see
-//! that field's doc for the shared-field-cleared-on-toggle decision. A
-//! filtered `Enter` still routes through [`App::confirm_launcher_branch_review`]'s
-//! in-session guard unchanged: [`App::review_launcher_confirm`] only
-//! translates the cursor to a real index before dispatch, never bypasses
-//! the guard that dispatch itself performs first.
+//! [`App::confirm_launcher_commit`]. The Pull Requests tab lists open PRs
+//! from whichever forge `origin` resolves to (async, through
+//! [`super::stage_ops::StageOps::async_pr_list_fetcher`]); `Enter` is
+//! stubbed to a status line via [`App::confirm_launcher_pr`] until PR
+//! checkout lands. All three tabs share the shared motion layer (spec 12
+//! FR-12) clamped against [`App::review_launcher_row_count`] and the shared
+//! `/` filter component (spec 12 FR-12, [`super::list_filter::ListFilter`])
+//! via [`App::launcher_filter`] — see that field's doc for the
+//! shared-field-cleared-on-toggle decision. A filtered `Enter` still routes
+//! through [`App::confirm_launcher_branch_review`]'s in-session guard
+//! unchanged: [`App::review_launcher_confirm`] only translates the cursor
+//! to a real index before dispatch, never bypasses the guard that dispatch
+//! itself performs first.
 
+use crate::forge::PullRequest;
 use crate::git::{CommitLogEntry, CommitLogRange, DiffTarget, GitRunner};
 
 use super::app::{App, Mode, ModeOrigin};
@@ -31,6 +37,7 @@ use super::review_session::{
     ensure_review_worktree, load_reconciled_review_state, resolve_review_base,
     resolve_review_state_path,
 };
+use super::stage_ops::PrFetchOutcome;
 
 /// A background ahead-of-base commit-log fetch awaiting completion. Mirrors
 /// [`super::history::InFlightHistory`]'s shape exactly — the Commits tab's
@@ -40,6 +47,18 @@ use super::review_session::{
 #[derive(Debug, Clone, Copy)]
 pub(super) struct InFlightLauncherCommits {
     /// The background task delivering the ahead-of-base commit list.
+    pub(super) id: TaskId,
+    /// The generation captured when this fetch was spawned.
+    pub(super) generation: u64,
+}
+
+/// A background Pull Requests tab fetch awaiting completion. Same shape as
+/// [`InFlightLauncherCommits`] and for the same reason: single-flight +
+/// generation-guard discipline against a single-shot (never paginated)
+/// fetch.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct InFlightLauncherPrs {
+    /// The background task delivering the [`PrFetchOutcome`].
     pub(super) id: TaskId,
     /// The generation captured when this fetch was spawned.
     pub(super) generation: u64,
@@ -55,13 +74,19 @@ pub enum LauncherTab {
     /// Commits ahead of the auto-resolved base (or the full log, once
     /// toggled), for opening a single read-only commit view.
     Commits,
+    /// The repo's open PRs/MRs from whichever forge `origin` resolves to.
+    PullRequests,
 }
 
 impl LauncherTab {
     /// Every tab, in display/cycle order — the one place a new tab gets
     /// added; [`LauncherTab::toggle`] and anything else that needs "all
     /// tabs" reads through this rather than re-listing variants.
-    const ORDER: &'static [LauncherTab] = &[LauncherTab::Branches, LauncherTab::Commits];
+    const ORDER: &'static [LauncherTab] = &[
+        LauncherTab::Branches,
+        LauncherTab::Commits,
+        LauncherTab::PullRequests,
+    ];
 
     /// The next tab in [`LauncherTab::ORDER`], wrapping past the end back
     /// to the start. `REVIEW_LAUNCHER_KEYS`' `ToggleTab` row binds both
@@ -101,6 +126,7 @@ impl App {
         match tab {
             LauncherTab::Branches => self.load_launcher_branches(),
             LauncherTab::Commits => self.ensure_launcher_commits_source_loaded(),
+            LauncherTab::PullRequests => self.ensure_launcher_prs_loaded(),
         }
     }
 
@@ -118,9 +144,10 @@ impl App {
         self.launcher_filter = None;
     }
 
-    /// Switches the launcher between its two tabs, resetting the cursor to
-    /// the top (each tab's list is independent) and remembering the new tab
-    /// in `last_launcher_tab` so the next open this process lands back here.
+    /// Cycles the launcher to its next tab (see [`LauncherTab::toggle`]),
+    /// resetting the cursor to the top (each tab's list is independent) and
+    /// remembering the new tab in `last_launcher_tab` so the next open this
+    /// process lands back here.
     /// Also drops any active filter (see [`App::launcher_filter`]'s doc on
     /// why toggling tabs doesn't try to carry a query over). A no-op unless
     /// the launcher is open.
@@ -136,6 +163,7 @@ impl App {
         match new_tab {
             LauncherTab::Branches => self.load_launcher_branches(),
             LauncherTab::Commits => self.ensure_launcher_commits_source_loaded(),
+            LauncherTab::PullRequests => self.ensure_launcher_prs_loaded(),
         }
     }
 
@@ -153,10 +181,11 @@ impl App {
     }
 
     /// The active tab's raw (unfiltered) row count: `launcher_branches`'
-    /// length on Branches, the active Commits source's length on Commits —
-    /// kept as its own method so that work only needs to change one arm,
-    /// mirroring how [`super::git_panel::App::panel_row_count`] centralizes
-    /// the git panel's per-tab length.
+    /// length on Branches, the active Commits source's length on Commits,
+    /// [`App::launcher_prs_rows`]'s length on Pull Requests — kept as its
+    /// own method so that work only needs to change one arm, mirroring how
+    /// [`super::git_panel::App::panel_row_count`] centralizes the git
+    /// panel's per-tab length.
     fn review_launcher_raw_row_count(&self) -> usize {
         let Mode::ReviewLauncher { tab, .. } = self.mode else {
             return 0;
@@ -164,6 +193,7 @@ impl App {
         match tab {
             LauncherTab::Branches => self.launcher_branches.len(),
             LauncherTab::Commits => self.launcher_commits_rows().len(),
+            LauncherTab::PullRequests => self.launcher_prs_rows().len(),
         }
     }
 
@@ -177,8 +207,9 @@ impl App {
     }
 
     /// Builds the active tab's `/`-filterable labels: branch names on the
-    /// Branches tab, "`<short-sha> <subject>`" on the Commits tab — whichever
-    /// source [`App::launcher_commits_rows`] currently selects.
+    /// Branches tab, "`<short-sha> <subject>`" on the Commits tab —
+    /// whichever source [`App::launcher_commits_rows`] currently selects —
+    /// or "`#<number> <title>`" on the Pull Requests tab.
     fn review_launcher_filter_labels(&self) -> Vec<String> {
         let Mode::ReviewLauncher { tab, .. } = self.mode else {
             return Vec::new();
@@ -193,6 +224,11 @@ impl App {
                 .launcher_commits_rows()
                 .iter()
                 .map(|c| format!("{} {}", c.short_sha, c.subject))
+                .collect(),
+            LauncherTab::PullRequests => self
+                .launcher_prs_rows()
+                .iter()
+                .map(|pr| format!("#{} {}", pr.number, pr.title))
                 .collect(),
         }
     }
@@ -428,6 +464,7 @@ impl App {
         match tab {
             LauncherTab::Branches => self.confirm_launcher_branch_review(index),
             LauncherTab::Commits => self.confirm_launcher_commit(index),
+            LauncherTab::PullRequests => self.confirm_launcher_pr(index),
         }
     }
 
@@ -448,6 +485,21 @@ impl App {
             return;
         };
         self.open_commit_view(sha);
+    }
+
+    /// Pull Requests tab `Enter`: names the highlighted PR in a status line
+    /// rather than starting a review — PR checkout is unimplemented until
+    /// PR-review wiring lands, and a stub keeps `Enter` from being silently
+    /// inert in the meantime. A no-op on an out-of-range cursor (empty,
+    /// still loading, or a degraded state with nothing selectable).
+    fn confirm_launcher_pr(&mut self, cursor: usize) {
+        let Some(pr) = self.launcher_prs_rows().get(cursor) else {
+            return;
+        };
+        self.set_status_message(format!(
+            "PR review not yet available (#{} {})",
+            pr.number, pr.title
+        ));
     }
 
     /// Branches-tab `Enter`: starts a worktree-backed review session on the
@@ -731,6 +783,97 @@ impl App {
         self.launcher_commits = commits;
         self.launcher_commits_loaded = true;
     }
+
+    // -- Pull Requests tab: data loading -------------------------------------
+
+    /// The Pull Requests tab's rows: the listing from the latest resolved
+    /// [`PrFetchOutcome`], or an empty slice while still loading, never
+    /// requested, or resolved to a degraded (non-listing) state — every
+    /// caller that needs "what's selectable" reads through this one method,
+    /// mirroring [`App::launcher_commits_rows`].
+    pub(super) fn launcher_prs_rows(&self) -> &[PullRequest] {
+        match &self.launcher_prs {
+            Some(PrFetchOutcome::Loaded { prs, .. }) => prs,
+            _ => &[],
+        }
+    }
+
+    /// Whether the tab's first fetch (or a retry after a degraded outcome —
+    /// see [`App::ensure_launcher_prs_loaded`]) is still in flight — drives
+    /// the tab's loading placeholder, mirroring
+    /// [`App::launcher_commits_loading`].
+    pub(super) fn launcher_prs_loading(&self) -> bool {
+        self.launcher_prs.is_none() && self.launcher_prs_in_flight.is_some()
+    }
+
+    /// Kicks off the Pull Requests fetch if nothing usable is showing and
+    /// nothing is already in flight. Unlike
+    /// [`App::ensure_launcher_commits_loaded`]'s strict load-once gate, only
+    /// a successful [`PrFetchOutcome::Loaded`] is sticky here: a degraded
+    /// outcome (no remote, unresolved provider, missing/unauthenticated
+    /// CLI, a failed list call) is *not* cached as final, so leaving the
+    /// tab and coming back — the "retry" every degraded body's hint line
+    /// promises — genuinely re-attempts the fetch rather than replaying a
+    /// stale failure forever.
+    pub(super) fn ensure_launcher_prs_loaded(&mut self) {
+        let needs_fetch = !matches!(self.launcher_prs, Some(PrFetchOutcome::Loaded { .. }));
+        if needs_fetch && self.launcher_prs_in_flight.is_none() {
+            self.request_launcher_prs();
+        }
+    }
+
+    /// Requests the Pull Requests listing: hands off to the async fetcher
+    /// (which runs the whole provider-resolve-then-list pipeline off the
+    /// render thread — [`App::poll_launcher_prs`] drains it once per tick)
+    /// when the backend supports one, falling back to a synchronous call
+    /// for backends that can't cross a thread boundary (test fakes,
+    /// git-less contexts), matching every other lazy-load path's fallback
+    /// shape.
+    fn request_launcher_prs(&mut self) {
+        if self.launcher_prs_in_flight.is_some() {
+            return;
+        }
+        let Some(ops) = self.stage_ops.as_deref() else {
+            self.launcher_prs = Some(PrFetchOutcome::NoForgeRemote);
+            return;
+        };
+        if let Some(fetcher) = ops.async_pr_list_fetcher() {
+            let generation = self.launcher_prs_generation;
+            let id = self.launcher_prs_tasks.spawn(fetcher);
+            self.launcher_prs_in_flight = Some(InFlightLauncherPrs { id, generation });
+        } else {
+            self.launcher_prs = Some(ops.list_open_prs());
+        }
+    }
+
+    /// Drains a completed background Pull Requests fetch (once per
+    /// event-loop tick, alongside [`App::poll_launcher_commits`]). Drops a
+    /// stale result — spawned before `launcher_prs_generation` was last
+    /// bumped — or a task-panic result silently, applying a successful
+    /// outcome (which may itself be a degraded [`PrFetchOutcome`] variant —
+    /// still a value, not dropped) otherwise.
+    pub(super) fn poll_launcher_prs(&mut self) {
+        for (id, result) in self.launcher_prs_tasks.poll() {
+            let Some(in_flight) = self.launcher_prs_in_flight else {
+                continue;
+            };
+            if in_flight.id != id {
+                continue;
+            }
+            self.launcher_prs_in_flight = None;
+            if in_flight.generation != self.launcher_prs_generation {
+                continue;
+            }
+            match result {
+                Ok(outcome) => self.launcher_prs = Some(outcome),
+                Err(_) => {
+                    self.launcher_prs = Some(PrFetchOutcome::ListFailed {
+                        message: "background PR fetch task panicked".to_string(),
+                    });
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -767,9 +910,10 @@ index 111..222 100644
     // -- LauncherTab::toggle -------------------------------------------------
 
     #[test]
-    fn toggle_switches_between_branches_and_commits() {
+    fn toggle_cycles_through_every_tab_and_wraps() {
         assert_eq!(LauncherTab::Branches.toggle(), LauncherTab::Commits);
-        assert_eq!(LauncherTab::Commits.toggle(), LauncherTab::Branches);
+        assert_eq!(LauncherTab::Commits.toggle(), LauncherTab::PullRequests);
+        assert_eq!(LauncherTab::PullRequests.toggle(), LauncherTab::Branches);
     }
 
     #[test]
@@ -1054,13 +1198,16 @@ index 111..222 100644
 
     #[test]
     fn switching_onto_the_branches_tab_reloads_the_list() {
+        // `PullRequests` is the tab immediately before `Branches` in cycle
+        // order, so `toggle()` from here lands on Branches (see
+        // `toggle_cycles_through_every_tab_and_wraps`).
         let mut app = app_with_branches(vec![branch("alpha")]);
         app.mode = Mode::ReviewLauncher {
-            tab: LauncherTab::Commits,
+            tab: LauncherTab::PullRequests,
             cursor: 0,
             origin: ModeOrigin::Normal,
         };
-        app.last_launcher_tab = LauncherTab::Commits;
+        app.last_launcher_tab = LauncherTab::PullRequests;
         assert!(app.launcher_branches.is_empty(), "not loaded yet");
         app.review_launcher_switch_tab();
         assert_eq!(
@@ -1704,6 +1851,321 @@ index 111..222 100644
         assert!(
             app.history.is_empty(),
             "history must stay untouched — nothing to prefetch on the ahead-of-base source"
+        );
+    }
+
+    // -- Pull Requests tab: data loading --------------------------------
+
+    /// A minimal `StageOps` fake serving a fixed [`PrFetchOutcome`]
+    /// synchronously (no `async_pr_list_fetcher`, so `request_launcher_prs`
+    /// takes the synchronous fallback path) — mirrors `SyncCommitRangeOps`.
+    struct SyncPrListOps {
+        outcome: PrFetchOutcome,
+    }
+
+    impl super::super::stage_ops::StageOps for SyncPrListOps {
+        fn diff(
+            &self,
+            _target: &crate::git::DiffTarget,
+        ) -> Result<Vec<crate::git::RawFilePatch>, crate::git::GitError> {
+            Ok(Vec::new())
+        }
+        fn status(&self) -> Result<Vec<crate::git::FileStatus>, crate::git::GitError> {
+            Ok(Vec::new())
+        }
+        fn stage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn unstage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn apply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn unapply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn read_worktree_file(&self, _path: &str) -> Option<Vec<u8>> {
+            None
+        }
+        fn show_file(&self, _spec: &str) -> Option<String> {
+            None
+        }
+        fn list_open_prs(&self) -> PrFetchOutcome {
+            self.outcome.clone()
+        }
+    }
+
+    fn pr(number: u64, title: &str) -> PullRequest {
+        PullRequest {
+            number,
+            title: title.to_string(),
+            author: "octocat".to_string(),
+            head_ref: "feature".to_string(),
+            is_draft: false,
+            updated_at: "2026-07-19T00:00:00Z".to_string(),
+        }
+    }
+
+    fn app_with_pr_outcome(outcome: PrFetchOutcome) -> App {
+        let mut app = app();
+        app.stage_ops = Some(Box::new(SyncPrListOps { outcome }));
+        app
+    }
+
+    #[test]
+    fn launcher_prs_rows_is_empty_before_anything_is_requested() {
+        let app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(1, "one")],
+        });
+        assert!(app.launcher_prs_rows().is_empty());
+        assert!(!app.launcher_prs_loading());
+    }
+
+    #[test]
+    fn ensure_launcher_prs_loaded_applies_synchronously_when_no_async_fetcher() {
+        let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(1, "one"), pr(2, "two")],
+        });
+        app.ensure_launcher_prs_loaded();
+        assert_eq!(app.launcher_prs_rows().len(), 2);
+        assert!(!app.launcher_prs_loading());
+        assert!(app.launcher_prs_in_flight.is_none());
+    }
+
+    #[test]
+    fn no_backend_degrades_to_no_forge_remote_rather_than_a_stuck_placeholder() {
+        let mut app = app();
+        app.ensure_launcher_prs_loaded();
+        assert_eq!(app.launcher_prs, Some(PrFetchOutcome::NoForgeRemote));
+        assert!(!app.launcher_prs_loading());
+    }
+
+    #[test]
+    fn a_degraded_outcome_is_not_sticky_leaving_and_returning_retries() {
+        let mut app = app_with_pr_outcome(PrFetchOutcome::ListFailed {
+            message: "boom".to_string(),
+        });
+        app.ensure_launcher_prs_loaded();
+        assert_eq!(
+            app.launcher_prs,
+            Some(PrFetchOutcome::ListFailed {
+                message: "boom".to_string(),
+            })
+        );
+
+        // Swap in a fake that would now succeed — mirrors "the transient
+        // failure that caused ListFailed is now resolved".
+        app.stage_ops = Some(Box::new(SyncPrListOps {
+            outcome: PrFetchOutcome::Loaded {
+                repo_label: "org/repo".to_string(),
+                prs: vec![pr(1, "one")],
+            },
+        }));
+        app.ensure_launcher_prs_loaded();
+        assert_eq!(app.launcher_prs_rows().len(), 1, "the retry must have run");
+    }
+
+    #[test]
+    fn a_loaded_outcome_is_sticky_a_second_ensure_call_never_refetches() {
+        let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(1, "one")],
+        });
+        app.ensure_launcher_prs_loaded();
+        assert_eq!(app.launcher_prs_rows().len(), 1);
+
+        // A fake that would now report something different — proving a
+        // second `ensure` call is a true no-op once loaded, not just
+        // coincidentally identical output.
+        app.stage_ops = Some(Box::new(SyncPrListOps {
+            outcome: PrFetchOutcome::Loaded {
+                repo_label: "org/repo".to_string(),
+                prs: vec![pr(1, "one"), pr(2, "two")],
+            },
+        }));
+        app.ensure_launcher_prs_loaded();
+        assert_eq!(
+            app.launcher_prs_rows().len(),
+            1,
+            "a successful load must be sticky"
+        );
+    }
+
+    #[test]
+    fn launcher_prs_loading_is_true_while_a_fetch_is_in_flight_and_false_after_it_lands() {
+        let mut app = app();
+        let id = app.launcher_prs_tasks.spawn(|| PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(1, "one")],
+        });
+        app.launcher_prs_in_flight = Some(InFlightLauncherPrs {
+            id,
+            generation: app.launcher_prs_generation,
+        });
+        assert!(
+            app.launcher_prs_loading(),
+            "placeholder must show while the fetch is in flight"
+        );
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.launcher_prs_in_flight.is_some() && std::time::Instant::now() < deadline {
+            app.poll_launcher_prs();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(app.launcher_prs_in_flight.is_none(), "fetch must complete");
+        assert_eq!(app.launcher_prs_rows().len(), 1);
+        assert!(!app.launcher_prs_loading());
+    }
+
+    #[test]
+    fn stale_generation_pr_result_is_dropped_not_applied() {
+        let mut app = app();
+        let id = app.launcher_prs_tasks.spawn(|| PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(1, "should never appear")],
+        });
+        app.launcher_prs_in_flight = Some(InFlightLauncherPrs {
+            id,
+            generation: app.launcher_prs_generation,
+        });
+
+        // Something bumps the generation before this fetch lands.
+        app.launcher_prs_generation = app.launcher_prs_generation.wrapping_add(1);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            app.poll_launcher_prs();
+            if app.launcher_prs_in_flight.is_none() || std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        assert!(app.launcher_prs_in_flight.is_none(), "stale fetch drained");
+        assert!(
+            app.launcher_prs.is_none(),
+            "a stale-generation result must never be applied"
+        );
+    }
+
+    #[test]
+    fn request_launcher_prs_is_single_flight() {
+        let mut app = app();
+        let id = app.launcher_prs_tasks.spawn(|| PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(1, "one")],
+        });
+        app.launcher_prs_in_flight = Some(InFlightLauncherPrs {
+            id,
+            generation: app.launcher_prs_generation,
+        });
+        app.stage_ops = Some(Box::new(SyncPrListOps {
+            outcome: PrFetchOutcome::Loaded {
+                repo_label: "org/repo".to_string(),
+                prs: vec![pr(2, "two")],
+            },
+        }));
+
+        app.ensure_launcher_prs_loaded();
+
+        // Still the original in-flight task; the synchronous fake's outcome
+        // was never applied (a second fetch never started).
+        assert_eq!(app.launcher_prs_in_flight.map(|f| f.id), Some(id));
+        assert!(app.launcher_prs.is_none());
+    }
+
+    // -- Pull Requests tab: confirm is a stub (Enter) --------------------
+
+    #[test]
+    fn confirm_on_prs_tab_sets_a_status_message_and_does_not_change_mode() {
+        let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(7, "add widgets")],
+        });
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.ensure_launcher_prs_loaded();
+
+        app.review_launcher_confirm();
+
+        assert!(matches!(
+            app.mode,
+            Mode::ReviewLauncher {
+                tab: LauncherTab::PullRequests,
+                ..
+            }
+        ));
+        assert!(
+            app.status_message
+                .as_deref()
+                .is_some_and(|m| m.contains('7') && m.contains("add widgets")),
+            "got {:?}",
+            app.status_message
+        );
+    }
+
+    #[test]
+    fn confirm_on_prs_tab_with_an_empty_list_is_a_no_op() {
+        let mut app = app();
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.review_launcher_confirm();
+        assert!(matches!(app.mode, Mode::ReviewLauncher { .. }));
+        assert!(app.status_message.is_none());
+    }
+
+    // -- Pull Requests tab: reachable via tab cycling ---------------------
+
+    #[test]
+    fn switching_onto_the_prs_tab_triggers_a_load() {
+        let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(1, "one")],
+        });
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::Commits,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.last_launcher_tab = LauncherTab::Commits;
+        assert!(app.launcher_prs.is_none(), "not loaded yet");
+
+        app.review_launcher_switch_tab(); // Commits -> PullRequests
+
+        assert!(matches!(
+            app.mode,
+            Mode::ReviewLauncher {
+                tab: LauncherTab::PullRequests,
+                ..
+            }
+        ));
+        assert_eq!(app.launcher_prs_rows().len(), 1);
+    }
+
+    #[test]
+    fn filter_labels_on_the_prs_tab_are_number_and_title() {
+        let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(42, "fix the thing")],
+        });
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.ensure_launcher_prs_loaded();
+        assert_eq!(
+            app.review_launcher_filter_labels(),
+            vec!["#42 fix the thing".to_string()]
         );
     }
 }

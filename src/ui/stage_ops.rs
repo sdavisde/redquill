@@ -12,6 +12,10 @@ use std::process::Command;
 use thiserror::Error;
 
 use crate::diff::{DiffParseError, FileChangeKind, FileDiff};
+use crate::forge::{
+    self, CredentialChecker, ForgeError, GhCredentialChecker, GlabCredentialChecker, ProviderKind,
+    ProviderResolution, PullRequest, ResolutionCache, UnresolvedReason,
+};
 use crate::git::{
     BranchStatus, ChangeKind, CommitLogEntry, CommitLogRange, CommitSummary, DiffTarget,
     FileStatus, GitError, GitRunner, LocalBranch, RawFilePatch, StashEntry, StatusCode,
@@ -60,6 +64,52 @@ pub type AsyncCommitLogRangeFetcher =
 /// indirection as [`AsyncReviewBuilder`]/[`AsyncCommitLogFetcher`] and for
 /// the same reason.
 pub type AsyncFileCandidatesFetcher = Box<dyn Fn() -> Result<Vec<FileCandidate>, GitError> + Send>;
+
+/// A `Send` closure running the Review launcher's Pull Requests tab's full
+/// provider-resolve-then-list pipeline off the render thread. Unlike the
+/// other `Async*Fetcher` aliases this doesn't return a `Result`: a
+/// [`PrFetchOutcome`] already represents every failure mode as a value the
+/// tab can render directly, so there's nothing left for an outer `Result`
+/// to add.
+pub type AsyncPrListFetcher = Box<dyn Fn() -> PrFetchOutcome + Send>;
+
+/// Everything the Review launcher's Pull Requests tab's load can resolve
+/// to: a listing, or one of the degraded states that gives the user a
+/// specific, actionable next step rather than a blank tab. `origin` having
+/// no forge remote at all, and a resolved-but-not-yet-implemented provider
+/// (GitLab, until Unit 6), degrade the same way as the four CLI-specific
+/// states below — never a bare error, since the tab always has *something*
+/// concrete to say.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrFetchOutcome {
+    /// No `origin` remote, or its URL doesn't parse to a hostname at all.
+    NoForgeRemote,
+    /// The origin's host resolved to a provider with no listing support
+    /// yet.
+    ProviderNotSupported {
+        hostname: String,
+        provider: &'static str,
+    },
+    /// Neither/both CLIs hold credentials for the host.
+    Unresolved {
+        hostname: String,
+        reason: UnresolvedReason,
+    },
+    /// The resolved CLI isn't on `PATH`.
+    CliMissing { cli: &'static str, hostname: String },
+    /// The CLI is present but not authenticated for this host.
+    Unauthenticated { cli: &'static str, hostname: String },
+    /// The CLI ran and exited non-zero (or its output didn't parse) for a
+    /// reason other than missing auth.
+    ListFailed { message: String },
+    /// A successful listing — `repo_label` is the "org/repo" slug parsed
+    /// from `origin`'s URL, falling back to the hostname when the slug
+    /// can't be extracted, for the tab's zero-results empty state.
+    Loaded {
+        repo_label: String,
+        prs: Vec<PullRequest>,
+    },
+}
 
 /// The git operations the TUI needs for staging and refresh, kept behind a
 /// trait so [`super::App`]'s staging logic is unit-testable without a real
@@ -222,6 +272,23 @@ pub trait StageOps {
         let _ = (branch, path);
         Err(GitError::Parse("blob sha unavailable".into()))
     }
+    /// Resolves `origin`'s forge provider and lists its open PRs,
+    /// synchronously — the fallback the Review launcher's Pull Requests tab
+    /// takes when [`StageOps::async_pr_list_fetcher`] returns `None`. The
+    /// default degrades to [`PrFetchOutcome::NoForgeRemote`] (a git-less or
+    /// navigation-only fake has no origin to resolve), matching every other
+    /// read-model default's "unavailable, not a panic" contract.
+    fn list_open_prs(&self) -> PrFetchOutcome {
+        PrFetchOutcome::NoForgeRemote
+    }
+    /// A `Send` closure running [`StageOps::list_open_prs`]'s pipeline off
+    /// the render thread (see [`AsyncPrListFetcher`]). The default returns
+    /// `None`, keeping non-`Send` fakes (and git-less contexts) on the
+    /// synchronous path; [`GitRunner`] overrides it the same way it
+    /// overrides [`StageOps::async_review_builder`].
+    fn async_pr_list_fetcher(&self) -> Option<AsyncPrListFetcher> {
+        None
+    }
 }
 
 impl StageOps for GitRunner {
@@ -353,6 +420,95 @@ impl StageOps for GitRunner {
             let untracked = runner.ls_files_untracked()?;
             Ok(merge_candidates(tracked, untracked))
         }))
+    }
+
+    fn list_open_prs(&self) -> PrFetchOutcome {
+        pr_fetch_outcome(self)
+    }
+
+    fn async_pr_list_fetcher(&self) -> Option<AsyncPrListFetcher> {
+        // Same cloned-handle trick as `async_review_builder`.
+        let runner = self.clone();
+        Some(Box::new(move || pr_fetch_outcome(&runner)))
+    }
+}
+
+/// Caches the Pull Requests tab's provider resolution for the process
+/// lifetime (a single process only ever reviews one repo, and hence one
+/// `origin` hostname) — the ladder's own credential-check subprocesses
+/// never re-run once a resolution lands.
+static PR_PROVIDER_RESOLUTION: ResolutionCache = ResolutionCache::new();
+
+/// Resolves `origin`'s forge provider and lists its open PRs, collapsing
+/// every failure mode into a [`PrFetchOutcome`] the tab can render
+/// directly. Only ever called off the render thread (via
+/// [`AsyncPrListFetcher`] in production; directly, synchronously, in a
+/// git-less-caller fallback) since the credential-check and listing steps
+/// both spawn subprocesses with multi-second timeouts.
+fn pr_fetch_outcome(runner: &GitRunner) -> PrFetchOutcome {
+    let Ok(Some(url)) = runner.origin_url() else {
+        return PrFetchOutcome::NoForgeRemote;
+    };
+    let Ok(hostname) = forge::parse_origin_hostname(&url) else {
+        return PrFetchOutcome::NoForgeRemote;
+    };
+    let resolution = PR_PROVIDER_RESOLUTION.get_or_resolve(
+        &hostname,
+        &GhCredentialChecker,
+        &GlabCredentialChecker,
+    );
+    match resolution {
+        ProviderResolution::Unresolved { hostname, reason } => {
+            PrFetchOutcome::Unresolved { hostname, reason }
+        }
+        ProviderResolution::Resolved(ProviderKind::GitLab) => {
+            PrFetchOutcome::ProviderNotSupported {
+                hostname: hostname.as_str().to_string(),
+                provider: "GitLab",
+            }
+        }
+        ProviderResolution::Resolved(ProviderKind::GitHub) => match forge::list_open_prs() {
+            Ok(prs) => {
+                let repo_label = forge::parse_origin_repo_slug(&url)
+                    .unwrap_or_else(|| hostname.as_str().to_string());
+                PrFetchOutcome::Loaded { repo_label, prs }
+            }
+            Err(ForgeError::CliNotFound { cli }) => PrFetchOutcome::CliMissing {
+                cli,
+                hostname: hostname.as_str().to_string(),
+            },
+            // The listing itself failed for some other reason; a fresh,
+            // cheap local credential check disambiguates "not logged in"
+            // (the common case, and the one with an exact fix) from every
+            // other failure — `gh` is already known to be on `PATH` at
+            // this point (it just ran), so `has_credentials` returning
+            // `false` here means "no credential", not "missing binary".
+            Err(e) => {
+                if GhCredentialChecker.has_credentials(&hostname) {
+                    PrFetchOutcome::ListFailed {
+                        message: forge_error_headline(&e),
+                    }
+                } else {
+                    PrFetchOutcome::Unauthenticated {
+                        cli: "gh",
+                        hostname: hostname.as_str().to_string(),
+                    }
+                }
+            }
+        },
+    }
+}
+
+/// The one-line summary a [`ForgeError`] contributes to a
+/// [`PrFetchOutcome::ListFailed`] body: a `Command` error's first stderr
+/// line (stderr is often multi-line; the tab shows one actionable line, not
+/// a dump), or the error's own `Display` for every other variant.
+fn forge_error_headline(e: &ForgeError) -> String {
+    match e {
+        ForgeError::Command { stderr, .. } if !stderr.is_empty() => {
+            stderr.lines().next().unwrap_or(stderr).to_string()
+        }
+        other => other.to_string(),
     }
 }
 
@@ -899,5 +1055,35 @@ mod tests {
         // synthesis path.
         let count = review.files.iter().filter(|f| f.path == "y.rs").count();
         assert_eq!(count, 1);
+    }
+
+    // -- forge_error_headline -------------------------------------------
+
+    #[test]
+    fn command_error_headline_is_the_first_stderr_line() {
+        let e = crate::forge::ForgeError::Command {
+            cli: "gh",
+            command: "pr list".to_string(),
+            code: "1".to_string(),
+            stderr: "not logged in\nrun `gh auth login`".to_string(),
+        };
+        assert_eq!(forge_error_headline(&e), "not logged in");
+    }
+
+    #[test]
+    fn command_error_with_empty_stderr_falls_back_to_display() {
+        let e = crate::forge::ForgeError::Command {
+            cli: "gh",
+            command: "pr list".to_string(),
+            code: "1".to_string(),
+            stderr: String::new(),
+        };
+        assert_eq!(forge_error_headline(&e), e.to_string());
+    }
+
+    #[test]
+    fn non_command_error_headline_is_the_display_string() {
+        let e = crate::forge::ForgeError::CliNotFound { cli: "gh" };
+        assert_eq!(forge_error_headline(&e), e.to_string());
     }
 }

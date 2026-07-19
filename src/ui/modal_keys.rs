@@ -1222,12 +1222,14 @@ pub(super) static CONFIRM_REMOTE_OP_KEYS: LazyLock<Vec<ModalBinding<ConfirmRemot
 
 /// What a key does in the Review launcher modal (`R`, `Scope::Global` —
 /// opens [`super::app::Mode::ReviewLauncher`]): `Tab`/`Shift-Tab`/`h`/`l`
-/// switch between the Branches and Commits tabs, `j`/`k`/arrows move the
-/// active tab's cursor, `Enter` confirms the highlighted row — starts a
-/// branch review on the Branches tab, opens a read-only commit view on the
-/// Commits tab — `Esc` closes the modal and restores the mode `R` was
-/// pressed from, and `a` toggles the Commits tab's data source between
-/// ahead-of-base and the full recent-HEAD log. Same shape as
+/// cycle through the Branches, Commits, and Pull Requests tabs, `j`/`k`/
+/// arrows move the active tab's cursor, `Enter` confirms the highlighted
+/// row — starts a branch review on the Branches tab, opens a read-only
+/// commit view on the Commits tab, names the highlighted PR in a status
+/// line on the Pull Requests tab (a stub until PR checkout lands) — `Esc`
+/// closes the modal and restores the mode `R` was pressed from, and `a`
+/// toggles the Commits tab's data source between ahead-of-base and the full
+/// recent-HEAD log. Same shape as
 /// [`SwitcherAction`] for the first five — tab toggle, cursor pair, confirm,
 /// close — plus the shared motion set beyond plain step (spec 12 FR-12,
 /// half/full-page paging, jump-to-extremes — see [`SwitcherAction`]'s

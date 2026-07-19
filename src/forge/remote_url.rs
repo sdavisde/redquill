@@ -111,6 +111,48 @@ fn extract_scp_like_host(s: &str) -> Option<String> {
     }
 }
 
+/// Extracts the path portion of `origin`'s remote URL as a display-only
+/// "org/repo" (or "group/subgroup/repo") slug, using the same three shapes
+/// [`parse_origin_hostname`] recognizes. Cosmetic — the result is UI copy,
+/// never argv — so this returns a bare `Option<String>` rather than a typed
+/// error: callers already have the hostname (from [`parse_origin_hostname`])
+/// to fall back on when a slug can't be extracted.
+pub fn parse_origin_repo_slug(url: &str) -> Option<String> {
+    let trimmed = url.trim();
+    let path = if let Some(rest) = trimmed.strip_prefix("https://") {
+        extract_authority_path(rest)
+    } else if let Some(rest) = trimmed.strip_prefix("ssh://") {
+        extract_authority_path(rest)
+    } else if trimmed.contains("://") {
+        None
+    } else {
+        extract_scp_like_path(trimmed)
+    }?;
+    let slug = path.trim_matches('/').trim_end_matches(".git");
+    (!slug.is_empty()).then(|| slug.to_string())
+}
+
+/// Pulls the path out of what follows `scheme://`: everything from the
+/// first `/` onward (the authority itself — host, optional `user@`,
+/// optional port — is [`extract_authority_host`]'s concern, not this one's).
+fn extract_authority_path(rest: &str) -> Option<&str> {
+    let idx = rest.find('/')?;
+    Some(&rest[idx..])
+}
+
+/// Pulls the path out of a scheme-less scp-like remote (everything after
+/// the `user@host:` prefix), mirroring [`extract_scp_like_host`]'s shape
+/// requirements (`@` then `:`) so the two agree on what counts as scp-like.
+fn extract_scp_like_path(s: &str) -> Option<&str> {
+    if s.starts_with('/') {
+        return None;
+    }
+    let at_idx = s.find('@')?;
+    let rest = &s[at_idx + 1..];
+    let colon_idx = rest.find(':')?;
+    Some(&rest[colon_idx + 1..])
+}
+
 /// The strict hostname charset allowlist: alphanumerics, `-`, `.` — nothing
 /// else is ever accepted, so a hostname can never smuggle a shell
 /// metacharacter or extra argv element into a CLI invocation built from it.

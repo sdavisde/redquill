@@ -26,7 +26,7 @@ pub use detect::{
     ProviderResolution, ResolutionCache, UnresolvedReason, resolve_provider,
 };
 pub use github::{PR_LIST_JSON_FIELDS, list_open_prs, parse_pr_list_json, pr_list_command};
-pub use remote_url::{Hostname, RemoteUrlError, parse_origin_hostname};
+pub use remote_url::{Hostname, RemoteUrlError, parse_origin_hostname, parse_origin_repo_slug};
 
 use thiserror::Error;
 

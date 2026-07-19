@@ -1,17 +1,20 @@
 //! The Review launcher modal ([`super::app::Mode::ReviewLauncher`]): a
-//! centered overlay with two tabs — Branches (default) and Commits — styled
-//! like [`super::switcher_modal`] (centered `Clear`-ed bordered block, tab
-//! headers as the block title, active tab emphasized, cursor row reverse-
-//! highlighted). The Branches tab renders `app.launcher_branches`; the
-//! Commits tab renders whichever source [`super::review_launcher`]'s
-//! `App::launcher_commits_rows` selects (ahead-of-base or the full log),
-//! reusing [`super::git_panel::history_item`] so both surfaces render
-//! commits identically. The footer hint line is built from the *effective*
-//! `REVIEW_LAUNCHER_KEYS` table (`app.modal_keys.review_launcher`) rather
-//! than a hardcoded string, so a `[keys.review-launcher]` remap shows up
-//! here with no extra wiring — including the Commits tab's empty-state
-//! line, which names whatever key the table currently binds to
-//! `toggle-all-commits`.
+//! centered overlay with three tabs — Branches (default), Commits, and Pull
+//! Requests — styled like [`super::switcher_modal`] (centered `Clear`-ed
+//! bordered block, tab headers as the block title, active tab emphasized,
+//! cursor row reverse-highlighted). The Branches tab renders
+//! `app.launcher_branches`; the Commits tab renders whichever source
+//! [`super::review_launcher`]'s `App::launcher_commits_rows` selects
+//! (ahead-of-base or the full log), reusing [`super::git_panel::history_item`]
+//! so both surfaces render commits identically. The Pull Requests tab
+//! renders `app.launcher_prs` — either a listing, a loading placeholder, the
+//! zero-open-PRs empty state, or one of the degraded-state prescriptions
+//! (see [`prs_degraded_body_lines`]) — never a blank body. The footer hint
+//! line is built from the *effective* `REVIEW_LAUNCHER_KEYS` table
+//! (`app.modal_keys.review_launcher`) rather than a hardcoded string, so a
+//! `[keys.review-launcher]` remap shows up here with no extra wiring —
+//! including the Commits tab's empty-state line, which names whatever key
+//! the table currently binds to `toggle-all-commits`.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
@@ -19,12 +22,14 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
+use crate::forge::{PullRequest, UnresolvedReason};
 use crate::git::{CommitLogEntry, LocalBranch};
 
 use super::app::App;
 use super::git_panel::history_item;
 use super::modal_keys::{LauncherAction, ModalBinding};
 use super::review_launcher::LauncherTab;
+use super::stage_ops::PrFetchOutcome;
 use super::theme::Theme;
 use super::time_format::now_unix;
 
@@ -40,33 +45,42 @@ fn centered(area: Rect, width_pct: u16, height_pct: u16) -> Rect {
     area
 }
 
-/// The ` Branches │ Commits ` tab bar, active tab emphasized, rendered as the
-/// modal's block title — mirrors [`super::switcher_modal::tab_bar`] exactly.
+/// The ` Branches │ Commits │ Pull Requests ` tab bar, active tab
+/// emphasized, rendered as the modal's block title — mirrors
+/// [`super::switcher_modal::tab_bar`] exactly.
 fn tab_bar(active: LauncherTab, theme: &Theme) -> Line<'static> {
     let active_style = Style::default()
         .fg(theme.help_key)
         .add_modifier(Modifier::BOLD);
     let inactive_style = Style::default().fg(theme.footer_text);
-    let (branches_style, commits_style) = match active {
-        LauncherTab::Branches => (active_style, inactive_style),
-        LauncherTab::Commits => (inactive_style, active_style),
+    let (branches_style, commits_style, prs_style) = match active {
+        LauncherTab::Branches => (active_style, inactive_style, inactive_style),
+        LauncherTab::Commits => (inactive_style, active_style, inactive_style),
+        LauncherTab::PullRequests => (inactive_style, inactive_style, active_style),
     };
     Line::from(vec![
         Span::raw(" "),
         Span::styled("Branches", branches_style),
         Span::styled(" \u{2502} ", Style::default().fg(theme.footer_text)),
         Span::styled("Commits", commits_style),
+        Span::styled(" \u{2502} ", Style::default().fg(theme.footer_text)),
+        Span::styled("Pull Requests", prs_style),
         Span::raw(" "),
     ])
 }
 
-/// What `Enter` does on `tab` — shown as its own line so the two tabs'
-/// differing weight (a lightweight read-only peek vs. starting a full
-/// worktree session) is unambiguous before the user presses it.
+/// What `Enter` does on `tab` — shown as its own line so the tabs' differing
+/// weight (a lightweight read-only peek vs. starting a full worktree
+/// session) is unambiguous before the user presses it. The Pull Requests
+/// tab names its current, honest behavior — `Enter` is a stub until PR
+/// checkout lands (see [`super::app::App::confirm_launcher_pr`]) — rather
+/// than the eventual "start PR review" wording, so the hint never promises
+/// more than pressing the key actually does.
 fn enter_outcome_hint(tab: LauncherTab) -> &'static str {
     match tab {
         LauncherTab::Branches => "Enter: start branch review",
         LauncherTab::Commits => "Enter: review commit (read-only)",
+        LauncherTab::PullRequests => "Enter: PR review not yet available",
     }
 }
 
@@ -162,6 +176,149 @@ fn branch_rows(branches: &[LocalBranch], order: &[usize], theme: &Theme) -> Vec<
         .collect()
 }
 
+/// Where to point a reviewer to install a forge CLI they don't have yet —
+/// fixed per CLI name (never derived from anything user-controlled, since
+/// this is display copy only).
+fn cli_install_pointer(cli: &str) -> &'static str {
+    match cli {
+        "glab" => "install glab: https://gitlab.com/gitlab-org/cli",
+        _ => "install gh: https://cli.github.com",
+    }
+}
+
+/// One PR row: `#<number> <title>` as the primary line (matching
+/// [`branch_rows`]' plain-name weight), a right-aligned "draft" marker when
+/// applicable, and a secondary meta line (author, source branch, updated
+/// time) — draft and updated-time both visually secondary to number+title,
+/// mirroring [`history_item`]'s two-tier weight.
+fn pr_row(pr: &PullRequest, theme: &Theme, content_width: usize) -> ListItem<'static> {
+    let mut primary = Line::from(vec![
+        Span::styled(
+            format!("#{} ", pr.number),
+            Style::default().fg(theme.dir_prefix),
+        ),
+        Span::raw(pr.title.clone()),
+    ]);
+    if pr.is_draft {
+        let label = "draft";
+        let used = primary.width();
+        let pad = content_width
+            .saturating_sub(used + label.chars().count() + 1)
+            .max(1);
+        primary.spans.push(Span::raw(" ".repeat(pad)));
+        primary
+            .spans
+            .push(Span::styled(label, Style::default().fg(theme.dir_prefix)));
+    }
+    let meta = format!(
+        "\u{2502} {} \u{b7} {} \u{b7} {}",
+        pr.author, pr.head_ref, pr.updated_at
+    );
+    ListItem::new(vec![
+        primary,
+        Line::from(Span::styled(meta, Style::default().fg(theme.dir_prefix))),
+    ])
+}
+
+/// The zero-open-PRs empty state: success, not a diagnostic — rendered in
+/// `kind_added` (the same "positive change" color the diff view uses for
+/// additions) rather than `status_message`'s diagnostic tone, so it reads
+/// visually distinct from every degraded body below.
+fn prs_empty_state_line(repo_label: &str, theme: &Theme) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("No open pull requests on {repo_label}"),
+        Style::default().fg(theme.kind_added),
+    ))
+}
+
+/// The body for every non-[`PrFetchOutcome::Loaded`] outcome: imperative,
+/// copy-pasteable command lines first, prose explanation last (Design
+/// Considerations' ordering for degraded-state bodies), with the real
+/// hostname interpolated wherever the outcome carries one. Command lines
+/// use `help_key`'s accent color (matching how the help overlay marks a
+/// literal keystroke); prose uses `status_message`'s diagnostic tone.
+fn prs_degraded_body_lines(outcome: &PrFetchOutcome, theme: &Theme) -> Vec<Line<'static>> {
+    let cmd = |s: String| Line::from(Span::styled(s, Style::default().fg(theme.help_key)));
+    let prose = |s: String| Line::from(Span::styled(s, Style::default().fg(theme.status_message)));
+    match outcome {
+        PrFetchOutcome::Loaded { .. } => Vec::new(),
+        PrFetchOutcome::NoForgeRemote => vec![prose(
+            "no forge remote — add a GitHub/GitLab `origin` remote to use this tab".to_string(),
+        )],
+        PrFetchOutcome::ProviderNotSupported { hostname, provider } => vec![prose(format!(
+            "{provider} isn't supported yet ({hostname})"
+        ))],
+        PrFetchOutcome::Unresolved { hostname, reason } => {
+            let why = match reason {
+                UnresolvedReason::NoCredentials => {
+                    format!("neither CLI holds credentials for {hostname} — run one of the above")
+                }
+                UnresolvedReason::Ambiguous => format!(
+                    "both CLIs hold credentials for {hostname} — redquill can't tell which forge this is"
+                ),
+            };
+            vec![
+                cmd(format!("gh auth login --hostname {hostname}")),
+                cmd(format!("glab auth login --hostname {hostname}")),
+                prose(why),
+            ]
+        }
+        PrFetchOutcome::CliMissing { cli, hostname } => vec![
+            cmd(cli_install_pointer(cli).to_string()),
+            cmd(format!("{cli} auth login --hostname {hostname}")),
+            prose(format!("{cli} isn't on PATH")),
+        ],
+        PrFetchOutcome::Unauthenticated { cli, hostname } => vec![
+            cmd(format!("{cli} auth login --hostname {hostname}")),
+            prose(format!(
+                "{cli} is installed but not logged in for {hostname}"
+            )),
+        ],
+        PrFetchOutcome::ListFailed { message } => vec![
+            prose(message.clone()),
+            prose("switch tabs and back to retry".to_string()),
+        ],
+    }
+}
+
+/// The Pull Requests tab's rows: a loading placeholder while the first
+/// fetch is in flight, real [`PullRequest`] rows via [`pr_row`] on a
+/// successful non-empty listing, the zero-results empty state naming the
+/// repo, or a degraded-state prescription — never a blank body. `order`
+/// restricts which PRs render and in what sequence (see [`commits_rows`]'s
+/// identical convention, spec 12 FR-12); loading/empty/degraded states take
+/// priority over `order`, same precedence as every other tab.
+fn prs_rows(
+    app: &App,
+    order: &[usize],
+    theme: &Theme,
+    content_width: usize,
+) -> Vec<ListItem<'static>> {
+    if app.launcher_prs_loading() {
+        return vec![ListItem::new(Line::from(Span::styled(
+            "  loading\u{2026}",
+            Style::default().fg(theme.footer_text),
+        )))];
+    }
+    let Some(outcome) = app.launcher_prs.as_ref() else {
+        return vec![ListItem::new(Line::from(Span::styled(
+            "  loading\u{2026}",
+            Style::default().fg(theme.footer_text),
+        )))];
+    };
+    match outcome {
+        PrFetchOutcome::Loaded { repo_label, prs } if prs.is_empty() => {
+            vec![ListItem::new(prs_empty_state_line(repo_label, theme))]
+        }
+        PrFetchOutcome::Loaded { prs, .. } => order
+            .iter()
+            .filter_map(|&i| prs.get(i))
+            .map(|pr| pr_row(pr, theme, content_width))
+            .collect(),
+        degraded => vec![ListItem::new(prs_degraded_body_lines(degraded, theme))],
+    }
+}
+
 /// Builds the bottom-border hint line from the *effective* launcher table:
 /// one `key label` per footer-tagged row (its first bound key — a remap's
 /// alternate keys still resolve, this is just the label shown), joined in
@@ -251,8 +408,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let raw_len = match tab {
         LauncherTab::Branches => app.launcher_branches.len(),
         LauncherTab::Commits => app.launcher_commits_rows().len(),
+        LauncherTab::PullRequests => app.launcher_prs_rows().len(),
     };
-    let loading = tab == LauncherTab::Commits && app.launcher_commits_loading();
+    let loading = (tab == LauncherTab::Commits && app.launcher_commits_loading())
+        || (tab == LauncherTab::PullRequests && app.launcher_prs_loading());
     if raw_len > 0
         && !loading
         && let Some(filter) = app.launcher_filter.as_ref().filter(|f| f.is_empty())
@@ -286,6 +445,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 !loading && !app.launcher_commits_rows().is_empty() && !order.is_empty();
             (
                 commits_rows(app, &order, &app.theme, list_area.width as usize),
+                selectable,
+            )
+        }
+        LauncherTab::PullRequests => {
+            let selectable = !loading && !app.launcher_prs_rows().is_empty() && !order.is_empty();
+            (
+                prs_rows(app, &order, &app.theme, list_area.width as usize),
                 selectable,
             )
         }

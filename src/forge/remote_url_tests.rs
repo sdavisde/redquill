@@ -95,3 +95,50 @@ fn valid_hostname_charset_accepts_alphanumerics_dashes_and_dots() {
     let host = parse_origin_hostname("https://git-hub.example-01.co/org/repo.git").unwrap();
     assert_eq!(host.as_str(), "git-hub.example-01.co");
 }
+
+// -- parse_origin_repo_slug ---------------------------------------------
+
+#[test]
+fn https_url_slug_drops_the_git_suffix() {
+    let slug = parse_origin_repo_slug("https://github.com/org/repo.git").unwrap();
+    assert_eq!(slug, "org/repo");
+}
+
+#[test]
+fn https_url_slug_without_git_suffix() {
+    let slug = parse_origin_repo_slug("https://github.com/org/repo").unwrap();
+    assert_eq!(slug, "org/repo");
+}
+
+#[test]
+fn ssh_url_slug_with_user_and_port() {
+    let slug = parse_origin_repo_slug("ssh://git@example.com:22/group/sub/repo.git").unwrap();
+    assert_eq!(slug, "group/sub/repo");
+}
+
+#[test]
+fn scp_like_slug() {
+    let slug = parse_origin_repo_slug("git@github.com:org/repo.git").unwrap();
+    assert_eq!(slug, "org/repo");
+}
+
+#[test]
+fn scp_like_slug_with_nested_group() {
+    let slug = parse_origin_repo_slug("git@gitlab.example.com:group/sub/repo.git").unwrap();
+    assert_eq!(slug, "group/sub/repo");
+}
+
+#[test]
+fn https_url_with_no_path_yields_no_slug() {
+    assert_eq!(parse_origin_repo_slug("https://github.com"), None);
+}
+
+#[test]
+fn malformed_url_yields_no_slug() {
+    assert_eq!(parse_origin_repo_slug("not a url"), None);
+    assert_eq!(parse_origin_repo_slug(""), None);
+    assert_eq!(
+        parse_origin_repo_slug("ftp://host.example.com/org/repo"),
+        None
+    );
+}
