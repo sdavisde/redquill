@@ -106,6 +106,31 @@ fn assert_inside_tempdir(path: &Path, tmp: &TempDir) {
     );
 }
 
+/// Journey C's "many-branch scratch repo" (spec 12 Success Metric 3): 20
+/// noise branches (`chore-00`..`chore-19`) plus one uniquely-named target,
+/// `zephyr-hotfix`, one commit ahead of `main` — real enough scale that
+/// stepping through the unfiltered list one row at a time would be
+/// tedious, and `zephyr` is a fragment nothing else in the list matches.
+fn repo_with_many_branches_and_a_findable_target() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    assert_inside_tempdir(dir, &tmp);
+    git(dir, &["init", "-q", "-b", "main"]);
+    configure_identity(dir);
+    write(dir, "a.rs", "fn a() {}\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "initial"]);
+    for i in 0..20 {
+        git(dir, &["branch", &format!("chore-{i:02}")]);
+    }
+    git(dir, &["branch", "zephyr-hotfix"]);
+    git(dir, &["checkout", "-q", "zephyr-hotfix"]);
+    write(dir, "a.rs", "fn a() { zephyr(); }\n");
+    git(dir, &["commit", "-aq", "-m", "zephyr hotfix"]);
+    git(dir, &["checkout", "-q", "main"]);
+    tmp
+}
+
 /// A repo on `main` (checked out, clean) with a "many candidate branches"
 /// shape: `feature-apple` and `feature-apricot` share a `feature` prefix a
 /// `/feature` query narrows to (excluding `gamma` and the checked-out
@@ -1134,6 +1159,120 @@ fn filter_narrows_the_commits_tab_and_confirm_opens_the_filtered_commit() {
         &app,
         &keymap,
     );
+
+    drop(tmp);
+}
+
+// -- Journey C: many-branch scratch repo, R / fragment Enter -----------------
+
+/// Journey driver for spec 12's Success Metric 3: a real scratch-tempdir
+/// repo with 21 local branches (20 noise + one findable target), driven key
+/// by key through the real dispatch path (`R` opens the launcher, `/`
+/// enters filter mode, typing `zephyr` narrows 21 branches down to the one
+/// that matches, `Enter` starts a review of exactly that branch). Every
+/// logged step is asserted, so this is a regression test as well as the
+/// transcript generator (`RQ_JOURNEY_DUMP=1 cargo test --lib
+/// branch_pick_journey_transcript -- --nocapture` captures the persisted
+/// `12-proofs/` transcript) — mirrors `git_panel_tests.rs`'s
+/// `big_changeset_motion_journey_transcript` (Journey A) and
+/// `annotation_list.rs`'s `find_annotation_journey_transcript` (Journey B).
+#[test]
+fn branch_pick_journey_transcript() {
+    let mut log = String::new();
+    let mut step = |title: &str, body: &str| {
+        log.push_str(&format!("\n=== {title} ===\n{body}\n"));
+    };
+
+    let tmp = repo_with_many_branches_and_a_findable_target();
+    let dir = tmp.path();
+    let mut app = app_for(dir);
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    step(
+        "journey C: launch on a scratch repo with 21 local branches",
+        "repo: 20 noise branches (chore-00..chore-19) plus the findable target zephyr-hotfix",
+    );
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('R'));
+    assert!(matches!(
+        app.mode,
+        Mode::ReviewLauncher {
+            tab: LauncherTab::Branches,
+            origin: ModeOrigin::Normal,
+            ..
+        }
+    ));
+    assert_eq!(app.launcher_branches.len(), 21, "20 noise + 1 target");
+    step(
+        "press R: launcher opens on the Branches tab",
+        &format!("branches listed: {}", app.launcher_branches.len()),
+    );
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('/'));
+    let opened_len = app.launcher_filter.as_ref().map(|f| f.len());
+    assert!(app.launcher_filter.as_ref().is_some_and(|f| f.is_editing()));
+    assert_eq!(opened_len, Some(21), "an empty query shows the whole list");
+    step(
+        "press /: filter mode entered, all 21 branches still visible",
+        &format!("filtered rows: {}", opened_len.unwrap()),
+    );
+
+    for c in "zephyr".chars() {
+        press(&mut app, &keymap, &mut pending, KeyCode::Char(c));
+    }
+    let filtered_len = app.launcher_filter.as_ref().map(|f| f.len());
+    assert_eq!(
+        filtered_len,
+        Some(1),
+        "\"zephyr\" must narrow the 21 branches down to exactly the target"
+    );
+    step(
+        "type z, e, p, h, y, r: 21 branches narrow to the one matching zephyr-hotfix",
+        &format!(
+            "query: \"zephyr\"  filtered rows: {}",
+            filtered_len.unwrap()
+        ),
+    );
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter); // locks the filter
+    assert!(!app.launcher_filter.as_ref().unwrap().is_editing());
+    step(
+        "press Enter: filter locks, launcher verbs resume",
+        "filter locked",
+    );
+    dump_frame(
+        "Journey C: filter locked on the single zephyr-hotfix match",
+        &app,
+        &keymap,
+    );
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter); // confirms the filtered selection
+
+    assert_eq!(
+        app.mode,
+        Mode::Normal,
+        "a Normal-origin launcher restores to Normal after a successful start, got {:?}",
+        app.mode
+    );
+    assert!(
+        matches!(&app.target, DiffTarget::Review { branch, .. } if branch == "zephyr-hotfix"),
+        "Enter must start review of zephyr-hotfix (the filtered branch), got {:?}",
+        app.target
+    );
+    step(
+        "press Enter: review of zephyr-hotfix starts (not any of the 20 noise branches)",
+        &format!("target: {:?}", app.target),
+    );
+    dump_frame(
+        "Journey C: landed in the review session for the filter-picked branch",
+        &app,
+        &keymap,
+    );
+
+    if std::env::var("RQ_JOURNEY_DUMP").is_ok() {
+        eprintln!("{log}");
+    }
 
     drop(tmp);
 }
