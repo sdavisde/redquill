@@ -39,8 +39,11 @@ use tempfile::TempDir;
 
 use super::app::{Mode, ModeOrigin, PanelTab};
 use super::review_launcher::LauncherTab;
-use super::stage_ops::build_review;
+use super::stage_ops::{PrFetchOutcome, StageOps, build_review};
 use super::*;
+use crate::forge::{
+    CredentialChecker, Hostname, UnresolvedReason, parse_origin_hostname, resolve_provider,
+};
 use crate::git::{DiffTarget, GitRunner};
 use crate::review::{ReviewStatus, store};
 
@@ -263,6 +266,18 @@ fn drain_launcher_commits(app: &mut App) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while app.launcher_commits_in_flight.is_some() && std::time::Instant::now() < deadline {
         app.poll_launcher_commits();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// Polls `app.poll_launcher_prs()` until the Pull Requests tab's fetch
+/// lands (or a 5s deadline, generous for a background thread that — in
+/// every scratch-repo fixture this file uses — never reaches an actual
+/// subprocess spawn).
+fn drain_launcher_prs(app: &mut App) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.launcher_prs_in_flight.is_some() && std::time::Instant::now() < deadline {
+        app.poll_launcher_prs();
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
@@ -1266,6 +1281,278 @@ fn branch_pick_journey_transcript() {
     );
     dump_frame(
         "Journey C: landed in the review session for the filter-picked branch",
+        &app,
+        &keymap,
+    );
+
+    if std::env::var("RQ_JOURNEY_DUMP").is_ok() {
+        eprintln!("{log}");
+    }
+
+    drop(tmp);
+}
+
+// -- Spec 13 Unit 1: Pull Requests tab degraded-state journeys ---------------
+//
+// Two journey-generators for spec 13 task 1.0's proof artifacts (FR-3,
+// FR-5): a scratch repo with no forge remote at all, and one whose `origin`
+// resolves to a hostname neither `gh` nor `glab` holds credentials for. Both
+// drive `R` / tab-switch through the real dispatch pipeline, matching
+// `branch_pick_journey_transcript`'s pattern (`RQ_JOURNEY_DUMP=1 cargo test
+// --lib <name> -- --nocapture` captures the transcript). Per this repo's
+// agent ceiling, neither ever spawns a real `gh`/`glab`: the no-remote case
+// is hermetic because `pr_fetch_outcome` bails out (no `origin` to resolve)
+// before any credential check would run; the unresolvable-host case swaps
+// in a fake `CredentialChecker`/`StageOps` rather than letting the real
+// GitHub/GitLab CLI lookups fire.
+
+/// A repo with a real git history but no `origin` remote at all — the
+/// simplest FR-5 degraded state, and the only one exercisable against a
+/// completely real `GitRunner`-backed `App` without ever touching a
+/// subprocess beyond `git` itself.
+fn repo_with_no_origin() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    assert_inside_tempdir(dir, &tmp);
+    git(dir, &["init", "-q", "-b", "main"]);
+    configure_identity(dir);
+    write(dir, "a.rs", "fn a() {}\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "initial"]);
+    tmp
+}
+
+/// Journey generator for spec 13 task 1.0: a real scratch repo with no
+/// `origin` remote, driven `R` -> tab-switch to Pull Requests through the
+/// real dispatch pipeline and the real `GitRunner`-backed async fetch
+/// (`request_launcher_prs` -> `StageOps::async_pr_list_fetcher` ->
+/// `pr_fetch_outcome`, which bails at `runner.origin_url()` returning
+/// `Ok(None)` before any credential check or CLI spawn could happen) —
+/// captured with `RQ_JOURNEY_DUMP=1 cargo test --lib
+/// forge_no_remote_journey_transcript -- --nocapture`.
+#[test]
+fn forge_no_remote_journey_transcript() {
+    let mut log = String::new();
+    let mut step = |title: &str, body: &str| {
+        log.push_str(&format!("\n=== {title} ===\n{body}\n"));
+    };
+
+    let tmp = repo_with_no_origin();
+    let dir = tmp.path();
+    let mut app = app_for(dir);
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    step(
+        "journey: scratch repo with no origin remote at all",
+        "no `git remote add origin ...` was ever run in this fixture",
+    );
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('R'));
+    assert!(matches!(
+        app.mode,
+        Mode::ReviewLauncher {
+            tab: LauncherTab::Branches,
+            origin: ModeOrigin::Normal,
+            ..
+        }
+    ));
+    step("press R: launcher opens on the Branches tab", "");
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Tab);
+    assert!(matches!(
+        app.mode,
+        Mode::ReviewLauncher {
+            tab: LauncherTab::Commits,
+            ..
+        }
+    ));
+    press(&mut app, &keymap, &mut pending, KeyCode::Tab);
+    assert!(matches!(
+        app.mode,
+        Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            ..
+        }
+    ));
+    step(
+        "press Tab, Tab: Branches -> Commits -> Pull Requests",
+        "the Pull Requests fetch is now in flight on a background thread",
+    );
+
+    drain_launcher_prs(&mut app);
+    assert_eq!(
+        app.launcher_prs,
+        Some(PrFetchOutcome::NoForgeRemote),
+        "no origin remote must degrade to NoForgeRemote, not a blank tab"
+    );
+    step(
+        "fetch lands: no origin remote resolved",
+        &format!("outcome: {:?}", app.launcher_prs),
+    );
+    dump_frame(
+        "Pull Requests tab: no forge remote prescription",
+        &app,
+        &keymap,
+    );
+
+    if std::env::var("RQ_JOURNEY_DUMP").is_ok() {
+        eprintln!("{log}");
+    }
+
+    drop(tmp);
+}
+
+/// A fake `CredentialChecker` reporting no credentials for any hostname —
+/// stands in for both `gh` and `glab` so the resolution ladder's
+/// `Unresolved`/`NoCredentials` branch is reachable without ever spawning
+/// either CLI.
+struct NoCredentials;
+
+impl CredentialChecker for NoCredentials {
+    fn has_credentials(&self, _hostname: &Hostname) -> bool {
+        false
+    }
+}
+
+/// A minimal `StageOps` fake that serves one fixed `PrFetchOutcome`
+/// synchronously (no `async_pr_list_fetcher` override, so
+/// `request_launcher_prs` takes the synchronous fallback path — no
+/// background thread, no polling needed) — the same shape
+/// `review_launcher.rs`'s own `SyncPrListOps` test fake uses, duplicated
+/// here per this file's established one-copy-per-file convention (see this
+/// file's header doc).
+struct FixedPrOutcome {
+    outcome: PrFetchOutcome,
+}
+
+impl StageOps for FixedPrOutcome {
+    fn diff(
+        &self,
+        _target: &DiffTarget,
+    ) -> Result<Vec<crate::git::RawFilePatch>, crate::git::GitError> {
+        Ok(Vec::new())
+    }
+    fn status(&self) -> Result<Vec<crate::git::FileStatus>, crate::git::GitError> {
+        Ok(Vec::new())
+    }
+    fn stage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+        Ok(())
+    }
+    fn unstage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+        Ok(())
+    }
+    fn apply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+        Ok(())
+    }
+    fn unapply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+        Ok(())
+    }
+    fn read_worktree_file(&self, _path: &str) -> Option<Vec<u8>> {
+        None
+    }
+    fn show_file(&self, _spec: &str) -> Option<String> {
+        None
+    }
+    fn list_open_prs(&self) -> PrFetchOutcome {
+        self.outcome.clone()
+    }
+}
+
+/// Journey generator for spec 13 task 1.0: a real scratch repo whose
+/// `origin` points at a hostname (`git.internal.example`) neither known
+/// forge nor either CLI's credential store resolves. The hostname itself is
+/// read and parsed for real (`GitRunner::origin_url` +
+/// `forge::parse_origin_hostname`, both pure/local — no subprocess beyond
+/// `git`); the ladder that would normally consult `gh`/`glab`'s credential
+/// stores runs for real too (`forge::resolve_provider`), but against a fake
+/// `CredentialChecker` so no CLI is ever spawned, per the agent ceiling.
+/// The resulting `PrFetchOutcome::Unresolved` is served through a
+/// `StageOps` fake so opening the tab can't accidentally trigger the real,
+/// CLI-spawning production fetcher — captured with `RQ_JOURNEY_DUMP=1
+/// cargo test --lib forge_unresolvable_host_journey_transcript --
+/// --nocapture`.
+#[test]
+fn forge_unresolvable_host_journey_transcript() {
+    let mut log = String::new();
+    let mut step = |title: &str, body: &str| {
+        log.push_str(&format!("\n=== {title} ===\n{body}\n"));
+    };
+
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    assert_inside_tempdir(dir, &tmp);
+    git(dir, &["init", "-q", "-b", "main"]);
+    configure_identity(dir);
+    write(dir, "a.rs", "fn a() {}\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "initial"]);
+    git(
+        dir,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://git.internal.example/org/repo.git",
+        ],
+    );
+    step(
+        "journey: scratch repo with an origin on an unresolvable host",
+        "git remote add origin https://git.internal.example/org/repo.git",
+    );
+
+    let runner = GitRunner::discover_in(dir).expect("discover repo");
+    let url = runner
+        .origin_url()
+        .expect("read origin url")
+        .expect("origin must be set");
+    let hostname = parse_origin_hostname(&url).expect("hostname must parse");
+    step(
+        "real read: GitRunner::origin_url + forge::parse_origin_hostname",
+        &format!("hostname: {}", hostname.as_str()),
+    );
+
+    let resolution = resolve_provider(&hostname, &NoCredentials, &NoCredentials);
+    let outcome = match resolution {
+        crate::forge::ProviderResolution::Unresolved { hostname, reason } => {
+            PrFetchOutcome::Unresolved { hostname, reason }
+        }
+        other => panic!("fixture must resolve Unresolved, got {other:?}"),
+    };
+    step(
+        "real ladder: forge::resolve_provider against a fake, credential-less CredentialChecker",
+        &format!("outcome: {outcome:?}"),
+    );
+
+    let mut app = App::new(vec![]);
+    app.stage_ops = Some(Box::new(FixedPrOutcome { outcome }));
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('R'));
+    press(&mut app, &keymap, &mut pending, KeyCode::Tab);
+    press(&mut app, &keymap, &mut pending, KeyCode::Tab);
+    assert!(matches!(
+        app.mode,
+        Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            ..
+        }
+    ));
+    assert_eq!(
+        app.launcher_prs,
+        Some(PrFetchOutcome::Unresolved {
+            hostname: "git.internal.example".to_string(),
+            reason: UnresolvedReason::NoCredentials,
+        }),
+        "an unresolvable host must degrade to Unresolved, not a blank tab"
+    );
+    step(
+        "press R, Tab, Tab: launcher lands on Pull Requests showing the prescription",
+        &format!("outcome: {:?}", app.launcher_prs),
+    );
+    dump_frame(
+        "Pull Requests tab: unresolvable-host prescription (both CLI auth commands)",
         &app,
         &keymap,
     );
