@@ -58,13 +58,20 @@ pub enum LauncherTab {
 }
 
 impl LauncherTab {
-    /// The other tab — there are only two, so switching always toggles
-    /// rather than needing a direction.
+    /// Every tab, in display/cycle order — the one place a new tab gets
+    /// added; [`LauncherTab::toggle`] and anything else that needs "all
+    /// tabs" reads through this rather than re-listing variants.
+    const ORDER: &'static [LauncherTab] = &[LauncherTab::Branches, LauncherTab::Commits];
+
+    /// The next tab in [`LauncherTab::ORDER`], wrapping past the end back
+    /// to the start. `REVIEW_LAUNCHER_KEYS`' `ToggleTab` row binds both
+    /// directions (`h`/`l`, `Tab`/`BackTab`) to this one action, so
+    /// switching always advances forward through every tab rather than
+    /// picking a direction. Falls back to the first tab if `self` somehow
+    /// isn't in the table — defensive rather than reachable.
     fn toggle(self) -> LauncherTab {
-        match self {
-            LauncherTab::Branches => LauncherTab::Commits,
-            LauncherTab::Commits => LauncherTab::Branches,
-        }
+        let idx = Self::ORDER.iter().position(|&t| t == self).unwrap_or(0);
+        Self::ORDER[(idx + 1) % Self::ORDER.len()]
     }
 }
 
