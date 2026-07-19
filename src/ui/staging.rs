@@ -12,6 +12,7 @@ use crate::git::{StagingMode, build_hunk_patch, build_line_patch};
 use super::App;
 use super::Mode;
 use super::diff_view_state::DiffViewState;
+use super::list_filter::ListFilter;
 use super::rows::Row;
 use super::stage_ops::{staged_from_status, staged_states_from_status};
 
@@ -245,10 +246,14 @@ impl App {
     /// if nothing changed this session — from `git status` in a plain
     /// session, or from `review_states` (the accepted-files panel) during a
     /// review session, via [`App::refresh_accepted_list`].
-    /// A no-op while Compose or the annotation list is open.
+    /// A no-op while Compose or the annotation list is open. The filter is
+    /// transient per-open (spec 12 Non-Goal 5): closing always drops it.
     pub(super) fn toggle_staging_panel(&mut self) {
         match self.mode {
-            Mode::Staging => self.mode = Mode::Normal,
+            Mode::Staging => {
+                self.mode = Mode::Normal;
+                self.staging_filter = None;
+            }
             Mode::Compose
             | Mode::List
             | Mode::Panel { .. }
@@ -274,19 +279,118 @@ impl App {
         }
     }
 
-    /// Closes the staging panel, returning to [`Mode::Normal`].
+    /// Closes the staging panel, returning to [`Mode::Normal`] and dropping
+    /// any active filter (transient per-open).
     pub fn close_staging(&mut self) {
         self.mode = Mode::Normal;
+        self.staging_filter = None;
     }
 
-    /// Moves the staging panel's focus down one file, clamped at the last.
-    pub fn staging_move_down(&mut self) {
-        if !self.staged.is_empty() {
-            self.staging_cursor = (self.staging_cursor + 1).min(self.staged.len() - 1);
+    /// Builds the staging/accepted panel's `/`-filterable labels (each
+    /// entry's path), in the same order `staged`/`staging_cursor` already
+    /// index over.
+    fn staging_filter_labels(&self) -> Vec<String> {
+        self.staged.iter().map(|e| e.path.clone()).collect()
+    }
+
+    /// The staging/accepted panel's effective row count: the active
+    /// filter's filtered view when one is set, the full `staged` count
+    /// otherwise — every motion clamps against this (spec 12's
+    /// filtered-view design constraint).
+    fn staging_effective_len(&self) -> usize {
+        self.staging_filter
+            .as_ref()
+            .map_or(self.staged.len(), ListFilter::len)
+    }
+
+    /// Translates `staging_cursor` (a filtered position while a filter is
+    /// active, a raw index otherwise) into a real `staged` index — the one
+    /// point every verb (unstage/un-accept) routes through.
+    pub(super) fn staging_real_index(&self) -> Option<usize> {
+        match &self.staging_filter {
+            Some(f) => f.real_index(self.staging_cursor),
+            None => (self.staging_cursor < self.staged.len()).then_some(self.staging_cursor),
         }
     }
 
-    /// Moves the staging panel's focus up one file, clamped at the first.
+    /// Enters filter mode (`/`): a no-op if already active.
+    pub(super) fn staging_enter_filter(&mut self) {
+        if self.staging_filter.is_none() {
+            let labels = self.staging_filter_labels();
+            self.staging_filter = Some(ListFilter::open(&labels));
+        }
+    }
+
+    /// Resumes editing a locked filter (`/` while locked).
+    pub(super) fn staging_resume_filter_editing(&mut self) {
+        if let Some(f) = self.staging_filter.as_mut() {
+            f.resume_editing();
+        }
+    }
+
+    /// Locks the active filter (`Enter` while editing).
+    pub(super) fn staging_lock_filter(&mut self) {
+        if let Some(f) = self.staging_filter.as_mut() {
+            f.lock();
+        }
+    }
+
+    /// Clears the active filter entirely (`Esc`).
+    pub(super) fn staging_clear_filter(&mut self) {
+        self.staging_filter = None;
+        self.staging_cursor = self.staging_cursor.min(self.staged.len().saturating_sub(1));
+    }
+
+    /// Appends `c` to the active filter's query and re-clamps the cursor.
+    pub(super) fn staging_filter_push_char(&mut self, c: char) {
+        let labels = self.staging_filter_labels();
+        if let Some(f) = self.staging_filter.as_mut() {
+            f.push_char(c, &labels);
+        }
+        self.staging_clamp_cursor_to_filter();
+    }
+
+    /// Deletes the last character of the active filter's query.
+    pub(super) fn staging_filter_backspace(&mut self) {
+        let labels = self.staging_filter_labels();
+        if let Some(f) = self.staging_filter.as_mut() {
+            f.backspace(&labels);
+        }
+        self.staging_clamp_cursor_to_filter();
+    }
+
+    fn staging_clamp_cursor_to_filter(&mut self) {
+        if let Some(f) = self.staging_filter.as_ref() {
+            self.staging_cursor = self.staging_cursor.min(f.len().saturating_sub(1));
+        }
+    }
+
+    /// Re-ranks an active filter against the current `staged` list (a no-op
+    /// without one) and re-clamps the cursor — called after unstage/accept
+    /// shrinks the list, so a filtered session survives the mutation
+    /// instead of going stale.
+    pub(super) fn staging_refresh_filter(&mut self) {
+        if let Some(f) = self.staging_filter.as_mut() {
+            let labels: Vec<String> = self.staged.iter().map(|e| e.path.clone()).collect();
+            f.refresh(&labels);
+        }
+        let len = self.staging_effective_len();
+        self.staging_cursor = if len == 0 {
+            0
+        } else {
+            self.staging_cursor.min(len - 1)
+        };
+    }
+
+    /// Moves the staging panel's focus down one row, clamped at the last.
+    pub fn staging_move_down(&mut self) {
+        let len = self.staging_effective_len();
+        if len > 0 {
+            self.staging_cursor = (self.staging_cursor + 1).min(len - 1);
+        }
+    }
+
+    /// Moves the staging panel's focus up one row, clamped at the first.
     pub fn staging_move_up(&mut self) {
         self.staging_cursor = self.staging_cursor.saturating_sub(1);
     }
@@ -303,32 +407,48 @@ impl App {
     /// panels, like `staging_move_down`/`up`.
     pub fn staging_half_page_down(&mut self) {
         let step = super::motion::half_page(self.staging_viewport_proxy());
-        self.staging_cursor =
-            super::motion::step(self.staging_cursor, self.staged.len(), step, true);
+        self.staging_cursor = super::motion::step(
+            self.staging_cursor,
+            self.staging_effective_len(),
+            step,
+            true,
+        );
     }
 
     /// Moves the staging/accepted panel's focus up half a viewport
     /// (`Ctrl-u`).
     pub fn staging_half_page_up(&mut self) {
         let step = super::motion::half_page(self.staging_viewport_proxy());
-        self.staging_cursor =
-            super::motion::step(self.staging_cursor, self.staged.len(), step, false);
+        self.staging_cursor = super::motion::step(
+            self.staging_cursor,
+            self.staging_effective_len(),
+            step,
+            false,
+        );
     }
 
     /// Moves the staging/accepted panel's focus down a full viewport
     /// (`Ctrl-f`).
     pub fn staging_full_page_down(&mut self) {
         let step = super::motion::full_page(self.staging_viewport_proxy());
-        self.staging_cursor =
-            super::motion::step(self.staging_cursor, self.staged.len(), step, true);
+        self.staging_cursor = super::motion::step(
+            self.staging_cursor,
+            self.staging_effective_len(),
+            step,
+            true,
+        );
     }
 
     /// Moves the staging/accepted panel's focus up a full viewport
     /// (`Ctrl-b`).
     pub fn staging_full_page_up(&mut self) {
         let step = super::motion::full_page(self.staging_viewport_proxy());
-        self.staging_cursor =
-            super::motion::step(self.staging_cursor, self.staged.len(), step, false);
+        self.staging_cursor = super::motion::step(
+            self.staging_cursor,
+            self.staging_effective_len(),
+            step,
+            false,
+        );
     }
 
     /// Jumps the staging/accepted panel's focus to the first entry
@@ -340,14 +460,18 @@ impl App {
     /// Jumps the staging/accepted panel's focus to the last entry
     /// (`G`/`End`).
     pub fn staging_jump_to_bottom(&mut self) {
-        self.staging_cursor = super::motion::jump_bottom(self.staged.len());
+        self.staging_cursor = super::motion::jump_bottom(self.staging_effective_len());
     }
 
-    /// Unstages the staging panel's focused file, then refreshes. The panel
-    /// stays open and its cursor is clamped to the shrunken list. A no-op
-    /// on an empty list; failures set a footer message and change nothing.
+    /// Unstages the staging panel's focused file (the filtered selection,
+    /// while a filter is active), then refreshes. The panel stays open and
+    /// its cursor is clamped to the shrunken list. A no-op on an empty
+    /// list; failures set a footer message and change nothing.
     pub fn unstage_focused_file(&mut self) {
-        let Some(entry) = self.staged.get(self.staging_cursor) else {
+        let Some(index) = self.staging_real_index() else {
+            return;
+        };
+        let Some(entry) = self.staged.get(index) else {
             return;
         };
         let path = entry.path.clone();
@@ -362,6 +486,7 @@ impl App {
             Ok(()) => {
                 self.set_status_message(format!("unstaged {path}"));
                 self.refresh();
+                self.staging_refresh_filter();
             }
             Err(e) => self.set_status_message(e.to_string()),
         }
@@ -394,6 +519,7 @@ mod tests {
     use crate::diff::FileDiff;
     use crate::git::RawFilePatch;
     use crate::ui::rows::{ReviewMarker, StagedMarker, SyntaxSpans, build_multibuffer};
+    use crate::ui::stage_ops::StageOps;
 
     fn file_from_raw(path: &str, raw: &str) -> FileDiff {
         FileDiff::from_patch(&RawFilePatch {
@@ -530,5 +656,109 @@ index 1..2 100644
         view.cursor = 2; // ctx1
         let err = visual_stage_selection(&view, 2).unwrap_err();
         assert_eq!(err, "no changed lines in selection");
+    }
+
+    // -- Filter + motion + verb composition (spec 12 FR-8) -------------------
+
+    /// A no-op `StageOps` fake recording every `unstage_file` call (via a
+    /// shared `Rc<RefCell<_>>` so the test can inspect it after the fake is
+    /// boxed into `App::stage_ops`) — enough to prove *which* path a
+    /// filtered `Space` targeted, without needing a real git backend.
+    struct RecordingOps {
+        unstaged: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+    }
+
+    impl StageOps for RecordingOps {
+        fn diff(
+            &self,
+            _target: &crate::git::DiffTarget,
+        ) -> Result<Vec<RawFilePatch>, crate::git::GitError> {
+            Ok(Vec::new())
+        }
+        fn status(&self) -> Result<Vec<crate::git::FileStatus>, crate::git::GitError> {
+            Ok(Vec::new())
+        }
+        fn stage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn unstage_file(&self, path: &str) -> Result<(), crate::git::GitError> {
+            self.unstaged.borrow_mut().push(path.to_string());
+            Ok(())
+        }
+        fn apply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn unapply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn read_worktree_file(&self, _path: &str) -> Option<Vec<u8>> {
+            None
+        }
+        fn show_file(&self, _spec: &str) -> Option<String> {
+            None
+        }
+    }
+
+    /// Three staged files, two of which ("apple.rs"/"apricot.rs") share an
+    /// `ap` prefix a `/ap` query narrows to, leaving the third ("banana.rs")
+    /// out — so the filtered view is genuinely narrower than the raw list,
+    /// and stepping within it has two real rows to move between.
+    fn app_with_three_staged_files(log: std::rc::Rc<std::cell::RefCell<Vec<String>>>) -> App {
+        let mut app = App::new(vec![file_from_raw(
+            "z.rs",
+            "diff --git a/z.rs b/z.rs\nindex 1..2 100644\n--- a/z.rs\n+++ b/z.rs\n@@ -1,1 +1,1 @@\n-old\n+new\n",
+        )]);
+        app.staged = vec![
+            crate::ui::StagedFile {
+                path: "src/apple.rs".to_string(),
+                letter: 'M',
+            },
+            crate::ui::StagedFile {
+                path: "src/apricot.rs".to_string(),
+                letter: 'M',
+            },
+            crate::ui::StagedFile {
+                path: "src/banana.rs".to_string(),
+                letter: 'M',
+            },
+        ];
+        app.stage_ops = Some(Box::new(RecordingOps { unstaged: log }));
+        app.mode = Mode::Staging;
+        app
+    }
+
+    #[test]
+    fn filter_narrows_j_then_space_unstages_the_correct_filtered_entry() {
+        use crate::ui::modes::handle_staging_key;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut app = app_with_three_staged_files(log.clone());
+        let key = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+
+        handle_staging_key(&mut app, key('/'));
+        for c in "ap".chars() {
+            handle_staging_key(&mut app, key(c));
+        }
+        assert_eq!(
+            app.staging_filter.as_ref().unwrap().len(),
+            2,
+            "banana.rs must be excluded"
+        );
+        handle_staging_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!app.staging_filter.as_ref().unwrap().is_editing());
+
+        let first = app.staging_real_index().unwrap();
+        handle_staging_key(&mut app, key('j'));
+        let second = app.staging_real_index().unwrap();
+        assert_ne!(first, second, "`j` must move within the filtered view");
+        let target_path = app.staged[second].path.clone();
+
+        handle_staging_key(&mut app, key(' '));
+        assert_eq!(
+            *log.borrow(),
+            vec![target_path],
+            "Space must unstage the filtered (not raw-list) selection"
+        );
     }
 }

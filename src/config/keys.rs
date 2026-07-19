@@ -180,6 +180,7 @@ const MODAL_MODE_NAMES: &[&str] = &[
     "finder",
     "project-search-input",
     "project-search-results",
+    "filter-edit",
 ];
 
 /// `[keys.diff]`/`[keys.panel]`/`[keys.global]`/`[keys.<mode>]`: raw

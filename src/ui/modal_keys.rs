@@ -231,6 +231,8 @@ pub(super) enum ListAction {
     Jump,
     Edit,
     Delete,
+    /// Enters the `/` filter (see `super::list_filter`), spec 12 FR-7/FR-8.
+    EnterFilter,
     Close,
 }
 
@@ -247,6 +249,7 @@ pub(super) fn list_action_name(action: ListAction) -> &'static str {
         ListAction::Jump => "jump",
         ListAction::Edit => "edit",
         ListAction::Delete => "delete",
+        ListAction::EnterFilter => "enter-filter",
         ListAction::Close => "close",
     }
 }
@@ -264,6 +267,7 @@ pub(super) fn list_action_from_name(name: &str) -> Option<ListAction> {
         "jump" => ListAction::Jump,
         "edit" => ListAction::Edit,
         "delete" => ListAction::Delete,
+        "enter-filter" => ListAction::EnterFilter,
         "close" => ListAction::Close,
         _ => return None,
     })
@@ -359,6 +363,15 @@ pub(super) static LIST_KEYS: LazyLock<Vec<ModalBinding<ListAction>>> = LazyLock:
             }),
         },
         ModalBinding {
+            description: "Filter (fuzzy, narrows to matching annotations)",
+            keys: vec![ModalKey::plain(KeyCode::Char('/'))],
+            action: ListAction::EnterFilter,
+            footer: Some(FooterHint {
+                rank: 5,
+                label: "filter",
+            }),
+        },
+        ModalBinding {
             description: "Close panel",
             keys: vec![
                 ModalKey::plain(KeyCode::Char('a')),
@@ -366,7 +379,7 @@ pub(super) static LIST_KEYS: LazyLock<Vec<ModalBinding<ListAction>>> = LazyLock:
             ],
             action: ListAction::Close,
             footer: Some(FooterHint {
-                rank: 5,
+                rank: 6,
                 label: "close",
             }),
         },
@@ -389,6 +402,8 @@ pub(super) enum StagingAction {
     JumpToTop,
     JumpToBottom,
     Unstage,
+    /// Enters the `/` filter (see `super::list_filter`), spec 12 FR-7/FR-8.
+    EnterFilter,
     Close,
 }
 
@@ -403,6 +418,7 @@ pub(super) fn staging_action_name(action: StagingAction) -> &'static str {
         StagingAction::JumpToTop => "jump-to-top",
         StagingAction::JumpToBottom => "jump-to-bottom",
         StagingAction::Unstage => "unstage",
+        StagingAction::EnterFilter => "enter-filter",
         StagingAction::Close => "close",
     }
 }
@@ -418,6 +434,7 @@ pub(super) fn staging_action_from_name(name: &str) -> Option<StagingAction> {
         "jump-to-top" => StagingAction::JumpToTop,
         "jump-to-bottom" => StagingAction::JumpToBottom,
         "unstage" => StagingAction::Unstage,
+        "enter-filter" => StagingAction::EnterFilter,
         "close" => StagingAction::Close,
         _ => return None,
     })
@@ -498,6 +515,15 @@ pub(super) static STAGING_KEYS: LazyLock<Vec<ModalBinding<StagingAction>>> = Laz
             }),
         },
         ModalBinding {
+            description: "Filter (fuzzy, narrows to matching files)",
+            keys: vec![ModalKey::plain(KeyCode::Char('/'))],
+            action: StagingAction::EnterFilter,
+            footer: Some(FooterHint {
+                rank: 3,
+                label: "filter",
+            }),
+        },
+        ModalBinding {
             description: "Close panel",
             keys: vec![
                 ModalKey::plain(KeyCode::Char('s')),
@@ -505,7 +531,7 @@ pub(super) static STAGING_KEYS: LazyLock<Vec<ModalBinding<StagingAction>>> = Laz
             ],
             action: StagingAction::Close,
             footer: Some(FooterHint {
-                rank: 3,
+                rank: 4,
                 label: "close",
             }),
         },
@@ -537,6 +563,8 @@ pub(super) enum AcceptedPanelAction {
     JumpToBottom,
     /// Un-accepts the focused entry (see [`super::app::App::un_accept_focused_file`]).
     UnAccept,
+    /// Enters the `/` filter (see `super::list_filter`), spec 12 FR-7/FR-8.
+    EnterFilter,
     Close,
 }
 
@@ -619,6 +647,15 @@ pub(super) static ACCEPTED_PANEL_KEYS: LazyLock<Vec<ModalBinding<AcceptedPanelAc
                 }),
             },
             ModalBinding {
+                description: "Filter (fuzzy, narrows to matching files)",
+                keys: vec![ModalKey::plain(KeyCode::Char('/'))],
+                action: AcceptedPanelAction::EnterFilter,
+                footer: Some(FooterHint {
+                    rank: 3,
+                    label: "filter",
+                }),
+            },
+            ModalBinding {
                 description: "Close panel",
                 keys: vec![
                     ModalKey::plain(KeyCode::Char('s')),
@@ -626,7 +663,7 @@ pub(super) static ACCEPTED_PANEL_KEYS: LazyLock<Vec<ModalBinding<AcceptedPanelAc
                 ],
                 action: AcceptedPanelAction::Close,
                 footer: Some(FooterHint {
-                    rank: 3,
+                    rank: 4,
                     label: "close",
                 }),
             },
@@ -785,6 +822,8 @@ pub(super) enum SwitcherAction {
     JumpToTop,
     JumpToBottom,
     Confirm,
+    /// Enters the `/` filter (see `super::list_filter`), spec 12 FR-7/FR-8.
+    EnterFilter,
     Close,
 }
 
@@ -800,6 +839,7 @@ pub(super) fn switcher_action_name(action: SwitcherAction) -> &'static str {
         SwitcherAction::JumpToTop => "jump-to-top",
         SwitcherAction::JumpToBottom => "jump-to-bottom",
         SwitcherAction::Confirm => "confirm",
+        SwitcherAction::EnterFilter => "enter-filter",
         SwitcherAction::Close => "close",
     }
 }
@@ -816,6 +856,7 @@ pub(super) fn switcher_action_from_name(name: &str) -> Option<SwitcherAction> {
         "jump-to-top" => SwitcherAction::JumpToTop,
         "jump-to-bottom" => SwitcherAction::JumpToBottom,
         "confirm" => SwitcherAction::Confirm,
+        "enter-filter" => SwitcherAction::EnterFilter,
         "close" => SwitcherAction::Close,
         _ => return None,
     })
@@ -917,13 +958,87 @@ pub(super) static SWITCHER_KEYS: LazyLock<Vec<ModalBinding<SwitcherAction>>> =
                 }),
             },
             ModalBinding {
+                description: "Filter (fuzzy, narrows the active tab)",
+                keys: vec![ModalKey::plain(KeyCode::Char('/'))],
+                action: SwitcherAction::EnterFilter,
+                footer: Some(FooterHint {
+                    rank: 4,
+                    label: "filter",
+                }),
+            },
+            ModalBinding {
                 description: "Close",
                 keys: vec![ModalKey::plain(KeyCode::Esc)],
                 action: SwitcherAction::Close,
                 footer: Some(FooterHint {
-                    rank: 4,
+                    rank: 5,
                     label: "close",
                 }),
+            },
+        ]
+    });
+
+// -- Shared list-filter editing (spec 12 FR-7..FR-10) ------------------------
+
+/// What a key does while *editing* a `/` list filter (see
+/// `super::list_filter::ListFilter`) — free-text input (printable chars
+/// extend the query, never remappable) plus these three control keys. One
+/// shared table for every filter-gaining context (the annotation list, the
+/// staging/accepted panels, the switcher): the editing sub-state's control
+/// keys are identical everywhere a list filter appears — there's no
+/// per-context divergence to justify one table per context — mirroring how
+/// [`HelpSearchAction`]/[`HELP_SEARCH_HINTS`] plays the same role for the
+/// help overlay's own (structurally separate) `/` filter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FilterEditAction {
+    /// Locks the filter in (list verbs resume) — see
+    /// [`super::list_filter::ListFilter::lock`].
+    Lock,
+    /// Clears the filter and exits filter mode entirely.
+    Clear,
+    DeleteChar,
+}
+
+pub(super) fn filter_edit_action_name(action: FilterEditAction) -> &'static str {
+    match action {
+        FilterEditAction::Lock => "lock",
+        FilterEditAction::Clear => "clear",
+        FilterEditAction::DeleteChar => "delete-char",
+    }
+}
+
+pub(super) fn filter_edit_action_from_name(name: &str) -> Option<FilterEditAction> {
+    Some(match name {
+        "lock" => FilterEditAction::Lock,
+        "clear" => FilterEditAction::Clear,
+        "delete-char" => FilterEditAction::DeleteChar,
+        _ => return None,
+    })
+}
+
+/// List-filter editing control keys, for the help overlay, footer strip,
+/// and every filter-gaining modal handler's editing-substate dispatch (see
+/// the enum doc on why this is one shared table).
+pub(super) static FILTER_EDIT_KEYS: LazyLock<Vec<ModalBinding<FilterEditAction>>> =
+    LazyLock::new(|| {
+        vec![
+            ModalBinding {
+                description: "Lock in the filter (list verbs resume)",
+                keys: vec![ModalKey::plain(KeyCode::Enter)],
+                action: FilterEditAction::Lock,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Clear the filter",
+                keys: vec![ModalKey::plain(KeyCode::Esc)],
+                action: FilterEditAction::Clear,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Delete character",
+                keys: vec![ModalKey::plain(KeyCode::Backspace)],
+                action: FilterEditAction::DeleteChar,
+                footer: None,
             },
         ]
     });
@@ -2380,6 +2495,7 @@ pub(super) const MODAL_MODE_NAMES: &[&str] = &[
     "finder",
     "project-search-input",
     "project-search-results",
+    "filter-edit",
 ];
 
 /// Every modal mode's *effective* table — [`LazyLock`] defaults above, each
@@ -2415,6 +2531,10 @@ pub struct ModalKeymaps {
     /// The pull/push confirm modal. Not config-remappable yet — see
     /// [`CONFIRM_REMOTE_OP_KEYS`].
     pub(super) confirm_remote_op: Vec<ModalBinding<ConfirmRemoteOpAction>>,
+    /// The shared `/` list-filter editing sub-state (see
+    /// [`FILTER_EDIT_KEYS`]) — one table reused by every filter-gaining
+    /// context (list, staging, accepted panel, switcher).
+    pub(super) filter_edit: Vec<ModalBinding<FilterEditAction>>,
 }
 
 impl Default for ModalKeymaps {
@@ -2436,6 +2556,7 @@ impl Default for ModalKeymaps {
             end_review: END_REVIEW_KEYS.clone(),
             accepted_panel: ACCEPTED_PANEL_KEYS.clone(),
             confirm_remote_op: CONFIRM_REMOTE_OP_KEYS.clone(),
+            filter_edit: FILTER_EDIT_KEYS.clone(),
         }
     }
 }
@@ -2701,6 +2822,13 @@ index 111..222 100644
                         handle_list_key(&mut app, key.event());
                         assert_eq!(app.annotations.len(), 1, "List {label}: delete removes one");
                     }
+                    ListAction::EnterFilter => {
+                        handle_list_key(&mut app, key.event());
+                        assert!(
+                            app.list_filter.is_some(),
+                            "List {label}: must enter filter mode"
+                        );
+                    }
                     ListAction::Close => {
                         handle_list_key(&mut app, key.event());
                         assert_eq!(app.mode, Mode::Normal, "List {label}: must close the panel");
@@ -2773,6 +2901,13 @@ index 111..222 100644
                         assert!(
                             app.status_message.is_some(),
                             "Staging {label}: unstage must act (footer message)"
+                        );
+                    }
+                    StagingAction::EnterFilter => {
+                        handle_staging_key(&mut app, key.event());
+                        assert!(
+                            app.staging_filter.is_some(),
+                            "Staging {label}: must enter filter mode"
                         );
                     }
                     StagingAction::Close => {
@@ -2886,6 +3021,13 @@ index 111..222 100644
                         assert!(
                             !app.view.is_collapsed("a.rs"),
                             "Accepted panel {label}: un-accept must re-expand"
+                        );
+                    }
+                    AcceptedPanelAction::EnterFilter => {
+                        handle_staging_key(&mut app, key.event());
+                        assert!(
+                            app.staging_filter.is_some(),
+                            "Accepted panel {label}: must enter filter mode"
                         );
                     }
                     AcceptedPanelAction::Close => {
@@ -3138,6 +3280,13 @@ index 111..222 100644
                             app.mode,
                             Mode::Switcher,
                             "Switcher {label}: modal stays open"
+                        );
+                    }
+                    SwitcherAction::EnterFilter => {
+                        handle_switcher_key(&mut app, key.event());
+                        assert!(
+                            app.switcher.as_ref().unwrap().filter.is_some(),
+                            "Switcher {label}: must enter filter mode"
                         );
                     }
                     SwitcherAction::Close => {
@@ -3867,6 +4016,33 @@ index 111..222 100644
         assert!(resolve(&FINDER_HINTS, ev).is_none());
         assert!(resolve(&PROJECT_SEARCH_INPUT_HINTS, ev).is_none());
         assert!(resolve(&PROJECT_SEARCH_RESULTS_HINTS, ev).is_none());
+    }
+
+    /// FR-10's no-shadow requirement: every context gaining the `/` filter
+    /// (List, Staging, the accepted panel, Switcher) must resolve `/` to
+    /// `EnterFilter` specifically — not some pre-existing row that happened
+    /// to already claim the key. `resolve` returns the *first* matching
+    /// row, so if any other action had already bound `/` ahead of
+    /// `EnterFilter`'s row, this would observe that action instead and fail,
+    /// proving the check has teeth (not just "no row raised a config-merge
+    /// collision warning," which a same-table check like this doesn't even
+    /// need config to demonstrate).
+    #[test]
+    fn filter_key_does_not_shadow_any_existing_binding_in_gaining_tables() {
+        let slash = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
+        assert_eq!(resolve(&LIST_KEYS, slash), Some(ListAction::EnterFilter));
+        assert_eq!(
+            resolve(&STAGING_KEYS, slash),
+            Some(StagingAction::EnterFilter)
+        );
+        assert_eq!(
+            resolve(&ACCEPTED_PANEL_KEYS, slash),
+            Some(AcceptedPanelAction::EnterFilter)
+        );
+        assert_eq!(
+            resolve(&SWITCHER_KEYS, slash),
+            Some(SwitcherAction::EnterFilter)
+        );
     }
 
     // -- Project Search mode -------------------------------------------------

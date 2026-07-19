@@ -225,8 +225,14 @@ pub struct App {
     /// (see [`super::commit_message`]).
     pub commit_message: Option<CommitMessageState>,
     /// The focused row index into `annotations` (insertion order) in the
-    /// annotation list panel.
+    /// annotation list panel — or, while [`Self::list_filter`] is active, a
+    /// position within its filtered view (translated to a real annotation
+    /// via [`super::list_filter::ListFilter::real_index`]).
     pub list_cursor: usize,
+    /// The annotation list panel's `/` filter session (`None`: no filter
+    /// active). Transient per-open — cleared whenever the panel closes, per
+    /// spec 12's Non-Goal 5 (nothing persists across reopens).
+    pub(super) list_filter: Option<super::list_filter::ListFilter>,
     /// The raw patch each entry of `files` was parsed from, index-aligned.
     /// `None` for synthetic untracked entries (no real patch exists, so
     /// hunk/line staging falls back to whole-file).
@@ -269,8 +275,14 @@ pub struct App {
     /// self-guards), so a plain working-tree/staged/range session leaves
     /// this permanently empty.
     pub review_states: HashMap<String, ReviewStatus>,
-    /// The focused row index into `staged` in the staging panel.
+    /// The focused row index into `staged` in the staging panel — or, while
+    /// [`Self::staging_filter`] is active, a position within its filtered
+    /// view. Shared by the accepted-files panel (see `staged`'s own doc on
+    /// why the two panels dual-purpose one field).
     pub staging_cursor: usize,
+    /// The staging/accepted panel's `/` filter session (`None`: no filter
+    /// active). Transient per-open, like [`Self::list_filter`].
+    pub(super) staging_filter: Option<super::list_filter::ListFilter>,
     /// An in-progress numeric count prefix (`3`, `1` then `0`, ...) shared by
     /// every non-diff motion-supporting context (the git panel, the
     /// annotation list, the staging/accepted panels, the switcher, LSP
@@ -633,6 +645,7 @@ impl App {
             compose: None,
             commit_message: None,
             list_cursor: 0,
+            list_filter: None,
             patches,
             target: DiffTarget::WorkingTree,
             staged: Vec::new(),
@@ -643,6 +656,7 @@ impl App {
             staged_states: HashMap::new(),
             review_states: HashMap::new(),
             staging_cursor: 0,
+            staging_filter: None,
             motion_count: None,
             status_message: None,
             config: Config::default(),

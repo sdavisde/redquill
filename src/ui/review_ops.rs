@@ -250,15 +250,19 @@ impl App {
             .collect();
     }
 
-    /// Un-accepts the accepted-files panel's focused entry (`Space`/`Enter`):
-    /// sets its status back to `Unreviewed`, re-expands its
-    /// diff section, rebuilds rows, then refreshes the panel list (which
-    /// shrinks by one) and re-clamps the cursor — the review analogue of
+    /// Un-accepts the accepted-files panel's focused entry (`Space`/`Enter`;
+    /// the filtered selection, while a filter is active): sets its status
+    /// back to `Unreviewed`, re-expands its diff section, rebuilds rows,
+    /// then refreshes the panel list (which shrinks by one) and re-clamps
+    /// the cursor (and any active filter) — the review analogue of
     /// `App::unstage_focused_file`. A no-op on an empty list. The banner's
     /// `(accepted, total)` count (`App::review_progress`) reflects this
     /// immediately, since it always recomputes live from `review_states`.
     pub(super) fn un_accept_focused_file(&mut self) {
-        let Some(entry) = self.staged.get(self.staging_cursor) else {
+        let Some(index) = self.staging_real_index() else {
+            return;
+        };
+        let Some(entry) = self.staged.get(index) else {
             return;
         };
         let path = entry.path.clone();
@@ -266,7 +270,7 @@ impl App {
         self.view.set_collapsed(&path, false);
         self.rebuild_rows();
         self.refresh_accepted_list();
-        self.staging_cursor = self.staging_cursor.min(self.staged.len().saturating_sub(1));
+        self.staging_refresh_filter();
         self.set_status_message(format!("un-accepted {path}"));
         self.persist_review_state();
     }

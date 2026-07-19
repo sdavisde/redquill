@@ -3,7 +3,9 @@
 //! Worktrees — each listing the rows [`super::switcher::SwitcherState`]'s
 //! per-tab cursor moves over. Modeled on [`super::compose_modal`] (a
 //! centered, `Clear`-ed, bordered block) and [`super::git_panel`]'s row
-//! styling (selected row reversed).
+//! styling (selected row reversed). Supports the shared `/` fuzzy filter
+//! (spec 12 FR-7..FR-9), narrowing the active tab; toggling tabs clears the
+//! filter (see [`super::switcher::SwitcherState::filter`]'s doc).
 
 use std::path::Path;
 
@@ -11,7 +13,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
 use crate::git::WorktreeEntry;
 
@@ -101,19 +103,16 @@ fn worktree_extra_badges(wt: &WorktreeEntry) -> Vec<String> {
     badges
 }
 
-/// The Branches tab's rows: a `*` marker on the current branch, and a
-/// dimmed `(worktree: <basename>)` suffix on any branch checked out in
-/// another worktree. `no local branches` if the list is empty.
-fn branch_rows(state: &SwitcherState, theme: &Theme) -> Vec<ListItem<'static>> {
-    if state.branches.is_empty() {
-        return vec![ListItem::new(Line::from(Span::styled(
-            "  no local branches",
-            Style::default().fg(theme.footer_text),
-        )))];
-    }
-    state
-        .branches
+/// The Branches tab's rows, restricted to `order` (indices into
+/// `state.branches`, in render order — the full `0..len` identity order with
+/// no active filter, or [`super::list_filter::ListFilter::indices`]'s
+/// filtered/ranked order otherwise): a `*` marker on the current branch, and
+/// a dimmed `(worktree: <basename>)` suffix on any branch checked out in
+/// another worktree.
+fn branch_rows(state: &SwitcherState, order: &[usize], theme: &Theme) -> Vec<ListItem<'static>> {
+    order
         .iter()
+        .filter_map(|&i| state.branches.get(i))
         .map(|b| {
             let marker = if b.is_current { "* " } else { "  " };
             let mut spans = vec![Span::raw(marker.to_string()), Span::raw(b.name.clone())];
@@ -132,24 +131,19 @@ fn branch_rows(state: &SwitcherState, theme: &Theme) -> Vec<ListItem<'static>> {
         .collect()
 }
 
-/// The Worktrees tab's rows: basename, the `[branch | detached @ <short> |
+/// The Worktrees tab's rows, restricted to `order` (see [`branch_rows`]'s
+/// identical convention): basename, the `[branch | detached @ <short> |
 /// bare]` badge, dimmed locked/prunable badges, and a `*` marker on the
-/// current worktree (by canonicalized path). `no worktrees` if the list is
-/// empty.
+/// current worktree (by canonicalized path).
 fn worktree_rows(
     state: &SwitcherState,
+    order: &[usize],
     repo_root: Option<&Path>,
     theme: &Theme,
 ) -> Vec<ListItem<'static>> {
-    if state.worktrees.is_empty() {
-        return vec![ListItem::new(Line::from(Span::styled(
-            "  no worktrees",
-            Style::default().fg(theme.footer_text),
-        )))];
-    }
-    state
-        .worktrees
+    order
         .iter()
+        .filter_map(|&i| state.worktrees.get(i))
         .map(|wt| {
             let marker = if is_current_worktree(repo_root, wt) {
                 "* "
@@ -177,6 +171,12 @@ fn worktree_rows(
 /// Renders the branch/worktree switcher modal, centered over `area`. A
 /// no-op if `app.switcher` is `None` (the caller should only invoke this in
 /// [`super::app::Mode::Switcher`]).
+///
+/// A `/` filter (spec 12 FR-7..FR-9) adds a one-row chrome line below the
+/// tab bar showing the live/locked query, narrows the active tab's rows to
+/// the filtered view, and shows a "no matches" hint in place of a blank
+/// list; an underlying empty tab (no branches/worktrees at all) keeps its
+/// pre-existing "no local branches"/"no worktrees" hint regardless.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let Some(state) = &app.switcher else {
         return;
@@ -184,31 +184,69 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let popup = centered(area, 80, 60);
     frame.render_widget(Clear, popup);
 
-    let (items, cursor, empty) = match state.tab {
-        SwitcherTab::Branches => (
-            branch_rows(state, &app.theme),
-            state.branch_cursor,
-            state.branches.is_empty(),
-        ),
-        SwitcherTab::Worktrees => (
-            worktree_rows(state, app.repo_root.as_deref(), &app.theme),
-            state.worktree_cursor,
-            state.worktrees.is_empty(),
-        ),
+    let (tab_len, cursor) = match state.tab {
+        SwitcherTab::Branches => (state.branches.len(), state.branch_cursor),
+        SwitcherTab::Worktrees => (state.worktrees.len(), state.worktree_cursor),
+    };
+    let order: Vec<usize> = match &state.filter {
+        Some(f) => f.indices().to_vec(),
+        None => (0..tab_len).collect(),
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .title(tab_bar(state.tab, &app.theme))
-        .title_bottom(Line::from(" Enter switch  Tab tabs  j/k move  Esc close "));
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        .title_bottom(Line::from(" Enter switch  Tab tabs  / filter  Esc close "));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let (chrome_area, list_area) = match &state.filter {
+        Some(_) => {
+            let [chrome, list] =
+                Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(inner);
+            (Some(chrome), list)
+        }
+        None => (None, inner),
+    };
+
+    if let (Some(chrome_area), Some(filter)) = (chrome_area, state.filter.as_ref()) {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                super::list_filter::chrome_text(filter),
+                Style::default().fg(app.theme.search_prompt),
+            ))),
+            chrome_area,
+        );
+    }
+
+    if tab_len > 0
+        && let Some(filter) = state.filter.as_ref().filter(|f| f.is_empty())
+    {
+        let hint = Paragraph::new(super::list_filter::empty_hint(filter));
+        frame.render_widget(hint, list_area);
+        return;
+    }
+
+    let items = match state.tab {
+        SwitcherTab::Branches if tab_len == 0 => vec![ListItem::new(Line::from(Span::styled(
+            "  no local branches",
+            Style::default().fg(app.theme.footer_text),
+        )))],
+        SwitcherTab::Worktrees if tab_len == 0 => vec![ListItem::new(Line::from(Span::styled(
+            "  no worktrees",
+            Style::default().fg(app.theme.footer_text),
+        )))],
+        SwitcherTab::Branches => branch_rows(state, &order, &app.theme),
+        SwitcherTab::Worktrees => {
+            worktree_rows(state, &order, app.repo_root.as_deref(), &app.theme)
+        }
+    };
+    let list = List::new(items).highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     let mut list_state = ListState::default();
-    if !empty {
+    if tab_len > 0 {
         list_state.select(Some(cursor));
     }
-    frame.render_stateful_widget(list, popup, &mut list_state);
+    frame.render_stateful_widget(list, list_area, &mut list_state);
 }
 
 #[cfg(test)]

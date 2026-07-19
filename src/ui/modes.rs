@@ -17,7 +17,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use super::App;
 use super::modal_keys::{
     self, AcceptedPanelAction, CommitMessageAction, ComposeAction, ConfirmRemoteOpAction,
-    EndReviewAction, FinderAction, LauncherAction, ListAction, PeekAction,
+    EndReviewAction, FilterEditAction, FinderAction, LauncherAction, ListAction, PeekAction,
     ProjectSearchInputAction, ProjectSearchResultsAction, SearchAction, StagingAction,
     SwitcherAction,
 };
@@ -65,6 +65,106 @@ fn apply_motion_n_times(count: Option<usize>, mut f: impl FnMut()) {
         f();
     }
 }
+
+/// One filter-adopting context's hooks into its own `App` methods — the
+/// generic surface [`intercept_filter`] drives so the interception logic
+/// (spec 12 FR-7) is written exactly once instead of once per context
+/// (List, Staging/Accepted panel, Switcher). Non-capturing closures, so
+/// these coerce to plain `fn` pointers and a hook table is a `const`.
+struct FilterHooks {
+    is_active: fn(&App) -> bool,
+    is_editing: fn(&App) -> bool,
+    push_char: fn(&mut App, char),
+    backspace: fn(&mut App),
+    lock: fn(&mut App),
+    resume_editing: fn(&mut App),
+    clear: fn(&mut App),
+}
+
+/// Shared `/` filter-mode key interception (spec 12 FR-7/FR-10): while a
+/// filter is active and still being edited, bare printable chars extend the
+/// query and Enter/Esc/Backspace resolve against `app.modal_keys.filter_edit`
+/// (never the caller's own table — every key belongs to the query while
+/// typing); while locked, `/` resumes editing and `Esc` clears the filter
+/// outright, ahead of the caller's own `Esc` binding (usually "close"),
+/// mirroring `intercept_motion_count`'s identical count-cancel-first
+/// priority. Returns `true` if the key was fully handled here — the caller
+/// must not dispatch it further.
+fn intercept_filter(app: &mut App, key: KeyEvent, hooks: &FilterHooks) -> bool {
+    if !(hooks.is_active)(app) {
+        return false;
+    }
+    if (hooks.is_editing)(app) {
+        if let Some(action) = modal_keys::resolve(&app.modal_keys.filter_edit, key) {
+            match action {
+                FilterEditAction::Lock => (hooks.lock)(app),
+                FilterEditAction::Clear => (hooks.clear)(app),
+                FilterEditAction::DeleteChar => (hooks.backspace)(app),
+            }
+            return true;
+        }
+        // Bare, unmodified `Char` extends the query — never remappable, per
+        // the free-text-mode contract (mirrors `insert_if_plain_char`).
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        if let (KeyCode::Char(c), false, false) = (key.code, ctrl, alt) {
+            (hooks.push_char)(app, c);
+        }
+        return true;
+    }
+    match key.code {
+        KeyCode::Char('/') => {
+            (hooks.resume_editing)(app);
+            true
+        }
+        KeyCode::Esc => {
+            (hooks.clear)(app);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// [`FilterHooks`] for the annotation list panel's filter (`App::list_filter`).
+const LIST_FILTER_HOOKS: FilterHooks = FilterHooks {
+    is_active: |app| app.list_filter.is_some(),
+    is_editing: |app| app.list_filter.as_ref().is_some_and(|f| f.is_editing()),
+    push_char: |app, c| app.list_filter_push_char(c),
+    backspace: |app| app.list_filter_backspace(),
+    lock: |app| app.list_lock_filter(),
+    resume_editing: |app| app.list_resume_filter_editing(),
+    clear: |app| app.list_clear_filter(),
+};
+
+/// [`FilterHooks`] for the staging/accepted panel's filter
+/// (`App::staging_filter`) — shared by both panels, like every other
+/// staging method (see `App::staged`'s doc).
+const STAGING_FILTER_HOOKS: FilterHooks = FilterHooks {
+    is_active: |app| app.staging_filter.is_some(),
+    is_editing: |app| app.staging_filter.as_ref().is_some_and(|f| f.is_editing()),
+    push_char: |app, c| app.staging_filter_push_char(c),
+    backspace: |app| app.staging_filter_backspace(),
+    lock: |app| app.staging_lock_filter(),
+    resume_editing: |app| app.staging_resume_filter_editing(),
+    clear: |app| app.staging_clear_filter(),
+};
+
+/// [`FilterHooks`] for the switcher's active-tab filter
+/// (`SwitcherState::filter`).
+const SWITCHER_FILTER_HOOKS: FilterHooks = FilterHooks {
+    is_active: |app| app.switcher.as_ref().is_some_and(|s| s.filter.is_some()),
+    is_editing: |app| {
+        app.switcher
+            .as_ref()
+            .and_then(|s| s.filter.as_ref())
+            .is_some_and(|f| f.is_editing())
+    },
+    push_char: |app, c| app.switcher_filter_push_char(c),
+    backspace: |app| app.switcher_filter_backspace(),
+    lock: |app| app.switcher_lock_filter(),
+    resume_editing: |app| app.switcher_resume_filter_editing(),
+    clear: |app| app.switcher_clear_filter(),
+};
 
 /// Handles one key event while [`super::Mode::Compose`] is active. Resolves
 /// against `app.modal_keys.compose` first; an unresolved, unmodified `Char`
@@ -131,6 +231,9 @@ fn insert_if_plain_char(buffer: Option<&mut super::compose::TextBuffer>, key: Ke
 /// focus, `Enter` jumps to the annotation and closes the panel, `e` edits
 /// it, `d` deletes it, `a`/`Esc` close the panel.
 pub(super) fn handle_list_key(app: &mut App, key: KeyEvent) {
+    if intercept_filter(app, key, &LIST_FILTER_HOOKS) {
+        return;
+    }
     let count = match intercept_motion_count(app, key) {
         MotionIntercept::Handled => return,
         MotionIntercept::Resolve(count) => count,
@@ -150,6 +253,7 @@ pub(super) fn handle_list_key(app: &mut App, key: KeyEvent) {
         ListAction::Jump => app.jump_to_focused_annotation(),
         ListAction::Edit => app.edit_focused_annotation(),
         ListAction::Delete => app.delete_focused_annotation(),
+        ListAction::EnterFilter => app.list_enter_filter(),
         ListAction::Close => app.close_list(),
     }
 }
@@ -158,6 +262,9 @@ pub(super) fn handle_list_key(app: &mut App, key: KeyEvent) {
 /// move focus, `Space`/`Enter` unstage the focused file (the panel stays
 /// open), `s`/`Esc` close the panel.
 pub(super) fn handle_staging_key(app: &mut App, key: KeyEvent) {
+    if intercept_filter(app, key, &STAGING_FILTER_HOOKS) {
+        return;
+    }
     let count = match intercept_motion_count(app, key) {
         MotionIntercept::Handled => return,
         MotionIntercept::Resolve(count) => count,
@@ -191,6 +298,7 @@ pub(super) fn handle_staging_key(app: &mut App, key: KeyEvent) {
             AcceptedPanelAction::JumpToTop => app.staging_jump_to_top(),
             AcceptedPanelAction::JumpToBottom => app.staging_jump_to_bottom(),
             AcceptedPanelAction::UnAccept => app.un_accept_focused_file(),
+            AcceptedPanelAction::EnterFilter => app.staging_enter_filter(),
             AcceptedPanelAction::Close => app.close_staging(),
         }
         return;
@@ -208,6 +316,7 @@ pub(super) fn handle_staging_key(app: &mut App, key: KeyEvent) {
         StagingAction::JumpToTop => app.staging_jump_to_top(),
         StagingAction::JumpToBottom => app.staging_jump_to_bottom(),
         StagingAction::Unstage => app.unstage_focused_file(),
+        StagingAction::EnterFilter => app.staging_enter_filter(),
         StagingAction::Close => app.close_staging(),
     }
 }
@@ -498,6 +607,9 @@ pub(super) fn handle_project_search_key(app: &mut App, key: KeyEvent) {
 /// the git panel at its pre-open cursor row. `q` isn't in the table and is
 /// therefore inert here: an open overlay never quits the app.
 pub(super) fn handle_switcher_key(app: &mut App, key: KeyEvent) {
+    if intercept_filter(app, key, &SWITCHER_FILTER_HOOKS) {
+        return;
+    }
     let count = match intercept_motion_count(app, key) {
         MotionIntercept::Handled => return,
         MotionIntercept::Resolve(count) => count,
@@ -520,6 +632,7 @@ pub(super) fn handle_switcher_key(app: &mut App, key: KeyEvent) {
         SwitcherAction::JumpToTop => app.switcher_jump_to_top(),
         SwitcherAction::JumpToBottom => app.switcher_jump_to_bottom(),
         SwitcherAction::Confirm => app.switcher_confirm(),
+        SwitcherAction::EnterFilter => app.switcher_enter_filter(),
         SwitcherAction::Close => app.close_switcher(),
     }
 }

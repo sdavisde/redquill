@@ -322,7 +322,7 @@ fn list_mode_hints_have_no_help_entry() {
     let entries = modal_hints(&LIST_KEYS);
     assert_eq!(
         labels(&entries),
-        vec!["move", "open", "edit", "delete", "close"]
+        vec!["move", "open", "edit", "delete", "filter", "close"]
     );
     assert!(!labels(&entries).contains(&"help"));
 }
@@ -330,7 +330,7 @@ fn list_mode_hints_have_no_help_entry() {
 #[test]
 fn staging_mode_hints() {
     let entries = modal_hints(&STAGING_KEYS);
-    assert_eq!(labels(&entries), vec!["move", "unstage", "close"]);
+    assert_eq!(labels(&entries), vec!["move", "unstage", "filter", "close"]);
 }
 
 #[test]
@@ -344,7 +344,7 @@ fn switcher_mode_hints() {
     let entries = modal_hints(&SWITCHER_KEYS);
     assert_eq!(
         labels(&entries),
-        vec!["switch tab", "move", "switch", "close"]
+        vec!["switch tab", "move", "switch", "filter", "close"]
     );
     // "move" must stay MoveDown's own compound label ("j / Down") alone —
     // merging it with MoveUp's ("k / Up") would double up the " / "
@@ -357,6 +357,7 @@ fn switcher_mode_hints() {
             "Tab / Shift-Tab / h / l / Left / Right",
             "j / Down",
             "Enter",
+            "/",
             "Esc"
         ]
     );

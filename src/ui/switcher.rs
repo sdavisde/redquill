@@ -12,6 +12,7 @@ use crate::git::{DiffTarget, GitError, GitRunner, LocalBranch, WorktreeEntry};
 
 use super::app::{App, Mode};
 use super::command_log::CommandLogEntry;
+use super::list_filter::ListFilter;
 use super::stage_ops::build_review;
 
 /// Which tab of the switcher modal is active.
@@ -43,6 +44,17 @@ pub struct SwitcherState {
     /// by [`App::close_switcher`] so `Esc` lands the user back on the same
     /// panel row.
     pub panel_cursor: usize,
+    /// The active tab's `/` filter session (`None`: no filter active).
+    /// Cleared on every [`SwitcherState::toggle_tab`] — spec 12 §2.4's
+    /// decision on the simplest sane tab/filter interaction: a query typed
+    /// against branch names doesn't carry any meaning over to worktree
+    /// names (or vice versa), so switching tabs starts the other tab fresh
+    /// rather than silently reapplying a stale query. Transient per-open
+    /// either way (spec 12 Non-Goal 5). `pub(super)` (not `pub`, unlike this
+    /// struct's other fields) since [`ListFilter`] itself is
+    /// `pub(in crate::ui)` — nothing outside this module tree could name
+    /// the field's type anyway.
+    pub(super) filter: Option<ListFilter>,
 }
 
 impl SwitcherState {
@@ -69,31 +81,81 @@ impl SwitcherState {
             branch_cursor,
             worktree_cursor,
             panel_cursor,
+            filter: None,
         }
     }
 
     /// Switches between the Branches and Worktrees tabs (there are only
-    /// two, so this always toggles rather than needing a direction).
+    /// two, so this always toggles rather than needing a direction),
+    /// clearing any active filter (see [`Self::filter`]'s doc on why).
     pub fn toggle_tab(&mut self) {
         self.tab = match self.tab {
             SwitcherTab::Branches => SwitcherTab::Worktrees,
             SwitcherTab::Worktrees => SwitcherTab::Branches,
         };
+        self.filter = None;
     }
 
-    /// The active tab's row count.
+    /// The active tab's raw (unfiltered) label list, for the `/` filter's
+    /// fuzzy matcher: branch names, or a worktree's path plus branch (the
+    /// same fields [`super::switcher_modal`]'s rows show).
+    fn active_labels(&self) -> Vec<String> {
+        match self.tab {
+            SwitcherTab::Branches => self.branches.iter().map(|b| b.name.clone()).collect(),
+            SwitcherTab::Worktrees => self
+                .worktrees
+                .iter()
+                .map(|wt| {
+                    format!(
+                        "{} {}",
+                        wt.path.display(),
+                        wt.branch.as_deref().unwrap_or("")
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    /// The active tab's effective row count: the active filter's filtered
+    /// view when one is set, the full tab's row count otherwise — every
+    /// motion clamps against this (spec 12's filtered-view design
+    /// constraint).
     fn active_len(&self) -> usize {
+        if let Some(f) = &self.filter {
+            return f.len();
+        }
         match self.tab {
             SwitcherTab::Branches => self.branches.len(),
             SwitcherTab::Worktrees => self.worktrees.len(),
         }
     }
 
-    /// The active tab's cursor field.
+    /// The active tab's cursor field — a filtered position while
+    /// [`Self::filter`] is active, a raw index otherwise.
     fn active_cursor_mut(&mut self) -> &mut usize {
         match self.tab {
             SwitcherTab::Branches => &mut self.branch_cursor,
             SwitcherTab::Worktrees => &mut self.worktree_cursor,
+        }
+    }
+
+    /// Translates the active tab's cursor into a real index into
+    /// `branches`/`worktrees` — the one point every confirm gesture routes
+    /// through.
+    fn active_real_index(&self) -> Option<usize> {
+        let cursor = match self.tab {
+            SwitcherTab::Branches => self.branch_cursor,
+            SwitcherTab::Worktrees => self.worktree_cursor,
+        };
+        match &self.filter {
+            Some(f) => f.real_index(cursor),
+            None => {
+                let len = match self.tab {
+                    SwitcherTab::Branches => self.branches.len(),
+                    SwitcherTab::Worktrees => self.worktrees.len(),
+                };
+                (cursor < len).then_some(cursor)
+            }
         }
     }
 
@@ -156,6 +218,18 @@ impl SwitcherState {
     pub fn jump_to_bottom(&mut self) {
         let len = self.active_len();
         *self.active_cursor_mut() = super::motion::jump_bottom(len);
+    }
+}
+
+/// Re-clamps `s`'s active-tab cursor into its filter's freshly reranked
+/// view — the switcher-state counterpart of the App-level filter methods'
+/// clamp, needed here since [`SwitcherState::filter`] and its cursor fields
+/// both live on the state struct rather than directly on `App`.
+fn switcher_clamp_cursor_to_filter(s: &mut SwitcherState) {
+    if let Some(f) = s.filter.as_ref() {
+        let len = f.len();
+        let cursor = s.active_cursor_mut();
+        *cursor = (*cursor).min(len.saturating_sub(1));
     }
 }
 
@@ -299,6 +373,72 @@ impl App {
         }
     }
 
+    /// Enters filter mode against the active tab (`/`); a no-op if the
+    /// modal isn't open or a filter is already active.
+    pub(super) fn switcher_enter_filter(&mut self) {
+        let Some(s) = self.switcher.as_mut() else {
+            return;
+        };
+        if s.filter.is_none() {
+            let labels = s.active_labels();
+            s.filter = Some(ListFilter::open(&labels));
+        }
+    }
+
+    /// Resumes editing a locked filter (`/` while locked); a no-op if the
+    /// modal isn't open or no filter is active.
+    pub(super) fn switcher_resume_filter_editing(&mut self) {
+        if let Some(f) = self.switcher.as_mut().and_then(|s| s.filter.as_mut()) {
+            f.resume_editing();
+        }
+    }
+
+    /// Locks the active filter (`Enter` while editing); a no-op if the
+    /// modal isn't open or no filter is active.
+    pub(super) fn switcher_lock_filter(&mut self) {
+        if let Some(f) = self.switcher.as_mut().and_then(|s| s.filter.as_mut()) {
+            f.lock();
+        }
+    }
+
+    /// Clears the active tab's filter entirely (`Esc`); a no-op if the
+    /// modal isn't open.
+    pub(super) fn switcher_clear_filter(&mut self) {
+        let Some(s) = self.switcher.as_mut() else {
+            return;
+        };
+        s.filter = None;
+        let len = s.active_len();
+        let cursor = s.active_cursor_mut();
+        *cursor = (*cursor).min(len.saturating_sub(1));
+    }
+
+    /// Appends `c` to the active filter's query and re-clamps the cursor; a
+    /// no-op if the modal isn't open or no filter is active.
+    pub(super) fn switcher_filter_push_char(&mut self, c: char) {
+        let Some(s) = self.switcher.as_mut() else {
+            return;
+        };
+        let labels = s.active_labels();
+        if let Some(f) = s.filter.as_mut() {
+            f.push_char(c, &labels);
+        }
+        switcher_clamp_cursor_to_filter(s);
+    }
+
+    /// Deletes the last character of the active filter's query; a no-op if
+    /// the modal isn't open or no filter is active.
+    pub(super) fn switcher_filter_backspace(&mut self) {
+        let Some(s) = self.switcher.as_mut() else {
+            return;
+        };
+        let labels = s.active_labels();
+        if let Some(f) = s.filter.as_mut() {
+            f.backspace(&labels);
+        }
+        switcher_clamp_cursor_to_filter(s);
+    }
+
     /// The `Enter` gesture inside the switcher modal: dispatches on the
     /// active tab to [`App::confirm_branch_switch`] or
     /// [`App::confirm_worktree_switch`]. Guarded up front by the same
@@ -342,7 +482,10 @@ impl App {
         let Some(s) = self.switcher.as_ref() else {
             return;
         };
-        let Some(branch) = s.branches.get(s.branch_cursor) else {
+        let Some(index) = s.active_real_index() else {
+            return;
+        };
+        let Some(branch) = s.branches.get(index) else {
             return;
         };
         let name = branch.name.clone();
@@ -382,7 +525,10 @@ impl App {
         let Some(s) = self.switcher.as_ref() else {
             return;
         };
-        let Some(wt) = s.worktrees.get(s.worktree_cursor) else {
+        let Some(index) = s.active_real_index() else {
+            return;
+        };
+        let Some(wt) = s.worktrees.get(index) else {
             return;
         };
         if wt.bare {
@@ -688,6 +834,142 @@ index 111..222 100644
                 cursor: 0,
                 tab: crate::ui::app::PanelTab::Changes
             }
+        );
+    }
+
+    // -- Filter + motion + verb composition (spec 12 FR-8) -------------------
+
+    /// A no-op `StageOps` fake recording every `switch_branch` call (via a
+    /// shared `Rc<RefCell<_>>`, mirroring `staging.rs`'s identical
+    /// `RecordingOps` pattern), so a test can prove *which* branch a
+    /// filtered `Enter` actually switched to.
+    struct RecordingSwitchOps {
+        switched: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+    }
+
+    impl crate::ui::stage_ops::StageOps for RecordingSwitchOps {
+        fn diff(&self, _target: &DiffTarget) -> Result<Vec<RawFilePatch>, GitError> {
+            Ok(Vec::new())
+        }
+        fn status(&self) -> Result<Vec<crate::git::FileStatus>, GitError> {
+            Ok(Vec::new())
+        }
+        fn stage_file(&self, _path: &str) -> Result<(), GitError> {
+            Ok(())
+        }
+        fn unstage_file(&self, _path: &str) -> Result<(), GitError> {
+            Ok(())
+        }
+        fn apply_cached(&self, _patch: &str) -> Result<(), GitError> {
+            Ok(())
+        }
+        fn unapply_cached(&self, _patch: &str) -> Result<(), GitError> {
+            Ok(())
+        }
+        fn read_worktree_file(&self, _path: &str) -> Option<Vec<u8>> {
+            None
+        }
+        fn show_file(&self, _spec: &str) -> Option<String> {
+            None
+        }
+        fn switch_branch(&self, name: &str) -> Result<(), GitError> {
+            self.switched.borrow_mut().push(name.to_string());
+            Ok(())
+        }
+    }
+
+    /// Three branches, two of which ("feature-apple"/"feature-apricot")
+    /// share a `feature` prefix a `/feature` query narrows to, leaving
+    /// "main" (also the current branch) out — so the filtered view is
+    /// genuinely narrower, with two real rows to move between.
+    fn switcher_app_with_three_branches(log: std::rc::Rc<std::cell::RefCell<Vec<String>>>) -> App {
+        let mut app = App::new(vec![sample_file()]);
+        // None marked current, so `SwitcherState::new` falls back to
+        // starting the cursor at row 0 (rather than following whichever
+        // branch happens to be checked out, which could start the cursor
+        // outside the filtered view below).
+        let branches = vec![
+            branch("feature-apple", false, None),
+            branch("feature-apricot", false, None),
+            branch("main", false, None),
+        ];
+        app.switcher = Some(SwitcherState::new(branches, vec![], None, 0));
+        app.mode = Mode::Switcher;
+        app.stage_ops = Some(Box::new(RecordingSwitchOps { switched: log }));
+        app
+    }
+
+    #[test]
+    fn filter_narrows_branches_motion_moves_within_it_and_confirm_switches_to_it() {
+        use crate::ui::modes::handle_switcher_key;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut app = switcher_app_with_three_branches(log.clone());
+        let key = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        let enter = || KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+
+        handle_switcher_key(&mut app, key('/'));
+        for c in "feature".chars() {
+            handle_switcher_key(&mut app, key(c));
+        }
+        assert_eq!(
+            app.switcher
+                .as_ref()
+                .unwrap()
+                .filter
+                .as_ref()
+                .unwrap()
+                .len(),
+            2,
+            "main must be excluded"
+        );
+        handle_switcher_key(&mut app, enter()); // locks the filter
+        assert!(
+            !app.switcher
+                .as_ref()
+                .unwrap()
+                .filter
+                .as_ref()
+                .unwrap()
+                .is_editing()
+        );
+
+        let first = app.switcher.as_ref().unwrap().active_real_index().unwrap();
+        handle_switcher_key(&mut app, key('j'));
+        let second = app.switcher.as_ref().unwrap().active_real_index().unwrap();
+        assert_ne!(first, second, "`j` must move within the filtered view");
+        let target_name = app.switcher.as_ref().unwrap().branches[second].name.clone();
+
+        handle_switcher_key(&mut app, enter()); // confirms the filtered selection
+        assert_eq!(
+            *log.borrow(),
+            vec![target_name],
+            "Enter must switch to the filtered (not raw-list) selection"
+        );
+    }
+
+    #[test]
+    fn toggling_tabs_clears_the_active_filter() {
+        use crate::ui::modes::handle_switcher_key;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut app = switcher_app_with_three_branches(log);
+        let key = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+
+        handle_switcher_key(&mut app, key('/'));
+        for c in "feature".chars() {
+            handle_switcher_key(&mut app, key(c));
+        }
+        handle_switcher_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)); // locks
+        assert!(app.switcher.as_ref().unwrap().filter.is_some());
+
+        handle_switcher_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.switcher.as_ref().unwrap().tab, SwitcherTab::Worktrees);
+        assert!(
+            app.switcher.as_ref().unwrap().filter.is_none(),
+            "switching tabs must drop the other tab's stale filter"
         );
     }
 }

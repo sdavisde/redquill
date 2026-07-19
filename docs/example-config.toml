@@ -299,10 +299,11 @@ literal = false
 # Every modal mode — a mode that handles its own keys directly instead of
 # going through the main keymap (the annotation list, the staging panel,
 # the LSP peek overlay, the branch/worktree switcher, the Review launcher,
-# the help overlay's scroll keys and its own `/` filter, Compose, the
-# commit-message modal, the diff-view `/` search input, the fuzzy file
-# finder, and the two Project Search focuses) — has its own
-# `[keys.<mode>]` table, with the
+# the help overlay's scroll keys and its own `/` filter, the shared `/`
+# list-filter editing sub-state (annotation list / staging / accepted panel
+# / switcher, spec 12), Compose, the commit-message modal, the diff-view `/`
+# search input, the fuzzy file finder, and the two Project Search focuses) —
+# has its own `[keys.<mode>]` table, with the
 # identical grammar and merge semantics as `[keys.diff]`/`[keys.panel]`
 # above: `action-name = "<key>"` or `= ["<key>", ...]`, an override
 # replaces that action's default keys entirely, an unlisted action keeps
@@ -315,7 +316,7 @@ literal = false
 # only the *control* keys listed below (Enter/Esc/arrows/Backspace/...)
 # are actions.
 #
-# The thirteen mode names and their complete action lists, each showing its
+# The fourteen mode names and their complete action lists, each showing its
 # default key(s):
 #
 # [keys.list]                          # Annotation list panel (`a`)
@@ -330,6 +331,7 @@ literal = false
 # jump = "enter"                       # Jump to annotation
 # edit = "e"                           # Edit
 # delete = "d"                         # Delete
+# enter-filter = "/"                   # Filter (fuzzy, narrows to matching annotations)
 # close = ["a", "esc"]                 # Close panel
 #
 # [keys.staging]                       # Staging panel (`s`)
@@ -342,6 +344,7 @@ literal = false
 # jump-to-top = ["g", "home"]          # Jump to top
 # jump-to-bottom = ["G", "end"]        # Jump to bottom
 # unstage = ["space", "enter"]         # Unstage file
+# enter-filter = "/"                   # Filter (fuzzy, narrows to matching files)
 # close = ["s", "esc"]                 # Close panel
 #
 # [keys.peek]                          # LSP peek overlay (`gd`/`gr`/`K`)
@@ -367,6 +370,7 @@ literal = false
 # jump-to-top = ["g", "home"]          # Jump to top
 # jump-to-bottom = ["G", "end"]        # Jump to bottom
 # confirm = "enter"                    # Switch to the selected branch/worktree
+# enter-filter = "/"                   # Filter (fuzzy, narrows the active tab)
 # close = "esc"                        # Close
 #
 # [keys.review-launcher]               # Review launcher (`R`, works everywhere, spec 09)
@@ -390,6 +394,11 @@ literal = false
 #
 # [keys.help-search]                   # Help overlay's own `/` filter, while editing it
 # lock = "enter"                       # Lock in the filter (scroll keys resume)
+# clear = "esc"                        # Clear the filter
+# delete-char = "backspace"            # Delete character
+#
+# [keys.filter-edit]                   # Shared `/` list-filter editing (list/staging/accepted/switcher, spec 12)
+# lock = "enter"                       # Lock in the filter (list verbs resume)
 # clear = "esc"                        # Clear the filter
 # delete-char = "backspace"            # Delete character
 #

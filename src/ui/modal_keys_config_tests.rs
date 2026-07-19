@@ -87,6 +87,7 @@ fn no_overrides_yields_every_default_table_unchanged() {
         &effective.project_search_results,
         &modal_keys::PROJECT_SEARCH_RESULTS_HINTS,
     );
+    same(&effective.filter_edit, &modal_keys::FILTER_EDIT_KEYS);
 }
 
 // -- Replace: an action named in config gets exactly the listed keys --------
@@ -577,6 +578,7 @@ fn example_config_documents_every_modal_action_exactly_once() {
             ListAction::Jump,
             ListAction::Edit,
             ListAction::Delete,
+            ListAction::EnterFilter,
             ListAction::Close,
         ],
         list_action_name,
@@ -595,6 +597,7 @@ fn example_config_documents_every_modal_action_exactly_once() {
             StagingAction::JumpToTop,
             StagingAction::JumpToBottom,
             StagingAction::Unstage,
+            StagingAction::EnterFilter,
             StagingAction::Close,
         ],
         staging_action_name,
@@ -632,6 +635,7 @@ fn example_config_documents_every_modal_action_exactly_once() {
             SwitcherAction::JumpToTop,
             SwitcherAction::JumpToBottom,
             SwitcherAction::Confirm,
+            SwitcherAction::EnterFilter,
             SwitcherAction::Close,
         ],
         switcher_action_name,
@@ -678,6 +682,17 @@ fn example_config_documents_every_modal_action_exactly_once() {
         ],
         help_search_action_name,
         help_search_action_from_name,
+    );
+    assert_doc_block_matches(
+        &blocks,
+        "filter-edit",
+        &[
+            FilterEditAction::Lock,
+            FilterEditAction::Clear,
+            FilterEditAction::DeleteChar,
+        ],
+        filter_edit_action_name,
+        filter_edit_action_from_name,
     );
     assert_doc_block_matches(
         &blocks,

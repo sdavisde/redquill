@@ -41,10 +41,6 @@ pub(super) struct ListFilter {
     indices: Vec<usize>,
 }
 
-// Not wired into any consuming context yet (that lands per-context in later
-// commits) — `cfg_attr` so the not-yet-called API doesn't trip `dead_code`
-// outside test builds, mirroring `motion.rs`'s identical bridging pattern.
-#[cfg_attr(not(test), allow(dead_code))]
 impl ListFilter {
     /// Enters filter mode against `labels`: an empty query, editing, and
     /// the whole list visible in its original order (see the module doc on
@@ -116,6 +112,14 @@ impl ListFilter {
         self.editing = true;
     }
 
+    /// Re-ranks against `labels` without changing the query — used after the
+    /// underlying list mutates (e.g. a delete/unstage/accept while
+    /// filtered), so the filtered view reflects the new list instead of
+    /// going stale.
+    pub(super) fn refresh(&mut self, labels: &[String]) {
+        self.rerank(labels);
+    }
+
     /// Locks the filter (`Enter` while editing), handing key handling back
     /// to the list's own verbs.
     pub(super) fn lock(&mut self) {
@@ -127,12 +131,37 @@ impl ListFilter {
     }
 }
 
+/// The active-filter indicator text every adopting context's chrome renders
+/// (in `theme.search_prompt`'s color, per the spec's design note reusing the
+/// help overlay's own filter-line styling): a live `/query` while editing,
+/// or a locked reminder once `Enter` has confirmed it — the same two-shape
+/// convention `help::render`'s subtitle uses for its own `/` filter.
+pub(super) fn chrome_text(filter: &ListFilter) -> String {
+    if filter.is_editing() {
+        format!("/{}", filter.query())
+    } else {
+        format!(
+            "filter: /{}  (/ to edit \u{00b7} esc to clear)",
+            filter.query()
+        )
+    }
+}
+
+/// The empty-result hint line (FR-9): the query plus a reminder that `Esc`
+/// clears it, shown in place of a blank list when a locked, non-empty
+/// filter matches nothing.
+pub(super) fn empty_hint(filter: &ListFilter) -> String {
+    format!(
+        "no matches for \"{}\" \u{2014} esc to clear",
+        filter.query()
+    )
+}
+
 /// Ranks `labels` against `query`, returning indices into `labels` in
 /// filtered/ranked order. An empty query is the whole list, in original
 /// index order (see the module doc's divergence note); a non-empty query
 /// delegates to [`crate::search::rank`] via synthetic [`FileCandidate`]s
 /// built from `labels`.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn filtered_indices(labels: &[String], query: &str) -> Vec<usize> {
     if query.is_empty() {
         return (0..labels.len()).collect();
@@ -286,5 +315,35 @@ mod tests {
         let l = labels(&["a", "b", "c"]);
         let f = ListFilter::open(&l);
         assert_eq!(f.real_index(2), Some(2));
+    }
+
+    // -- chrome_text / empty_hint ------------------------------------------------
+
+    #[test]
+    fn chrome_text_shows_a_live_query_while_editing() {
+        let l = labels(&["a"]);
+        let mut f = ListFilter::open(&l);
+        f.push_char('x', &l);
+        assert_eq!(chrome_text(&f), "/x");
+    }
+
+    #[test]
+    fn chrome_text_shows_the_locked_reminder_once_locked() {
+        let l = labels(&["a"]);
+        let mut f = ListFilter::open(&l);
+        f.push_char('x', &l);
+        f.lock();
+        assert_eq!(
+            chrome_text(&f),
+            "filter: /x  (/ to edit \u{00b7} esc to clear)"
+        );
+    }
+
+    #[test]
+    fn empty_hint_names_the_query() {
+        let l = labels(&["a"]);
+        let mut f = ListFilter::open(&l);
+        f.push_char('z', &l);
+        assert_eq!(empty_hint(&f), "no matches for \"z\" \u{2014} esc to clear");
     }
 }

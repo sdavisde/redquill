@@ -146,6 +146,14 @@ pub(super) fn effective_modal_keys(
             modal_keys::project_search_results_action_from_name,
             &mut warnings,
         ),
+        filter_edit: apply_modal_overrides(
+            modal_keys::FILTER_EDIT_KEYS.clone(),
+            overrides_for("filter-edit"),
+            "keys.filter-edit",
+            modal_keys::filter_edit_action_name,
+            modal_keys::filter_edit_action_from_name,
+            &mut warnings,
+        ),
         // Not `[keys.<mode>]` remappable yet — always the compiled-in
         // defaults verbatim, with no override lookup. See each table's own
         // doc in `modal_keys`.
