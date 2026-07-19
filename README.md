@@ -26,3 +26,8 @@ brew install sdavisde/tap/redquill
 2. Run `redquill` in the git repo you want to review
 3. Press \` to open the git panel, and `?` for help — it opens on a "This context" view scoped to wherever you pressed it from (plus a curated list of common workflows), with the full reference one `Tab` away. Pause after `g` or `z` and the footer shows what keys can follow.
 4. When viewing the diff, press `c` to leave a comment. When the session ends, your comments are copied to the clipboard so you can paste them straight into an agent.
+5. Reviewing a teammate's pull request? Press `R` to open the Review launcher's Pull Requests tab — see [`docs/forge-setup.md`](docs/forge-setup.md) for supported providers and setup.
+
+## Documentation
+
+- [`docs/forge-setup.md`](docs/forge-setup.md) — Pull Requests tab: supported providers, zero-config detection, hosted-instance setup, troubleshooting.
