@@ -1684,3 +1684,153 @@ fn panel_full_page_down_on_history_tab_triggers_prefetch_near_the_end() {
         "landing within the prefetch margin must have requested (and exhausted) the next page"
     );
 }
+
+// -- Journey A: a 200-file changeset, shared-motion-layer paging -----------
+
+/// Journey driver for the motion-layer proof: a real scratch tempdir repo
+/// with 200 modified files, driven key by key through the real dispatch
+/// path (`Ctrl-d` pages, `G` jumps to bottom, `g` jumps to top, `3j` steps
+/// three) in the git panel, then the identical gestures in the annotation
+/// list. Every logged step is asserted, so this is a regression test as
+/// well as the transcript generator
+/// (`RQ_JOURNEY_DUMP=1 cargo test --lib big_changeset_motion_journey_transcript
+/// -- --nocapture` captures the persisted `12-proofs/` transcript).
+#[test]
+fn big_changeset_motion_journey_transcript() {
+    use crate::annotate::{Classification, Target};
+
+    let mut log = String::new();
+    let mut step = |title: &str, body: &str| {
+        log.push_str(&format!("\n=== {title} ===\n{body}\n"));
+    };
+
+    // -- Scratch repo: 200 modified root-level files ------------------------
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path();
+    scratch_git(dir, &["init", "-q", "-b", "main"]);
+    scratch_git(dir, &["config", "user.name", "redquill test"]);
+    scratch_git(dir, &["config", "user.email", "test@redquill.invalid"]);
+    for i in 0..200 {
+        scratch_write(dir, &format!("f{i:03}.rs"), &format!("fn f{i}() {{}}\n"));
+    }
+    scratch_git(dir, &["add", "."]);
+    scratch_git(dir, &["commit", "-q", "-m", "base"]);
+    for i in 0..200 {
+        scratch_write(
+            dir,
+            &format!("f{i:03}.rs"),
+            &format!("fn f{i}() {{ changed(); }}\n"),
+        );
+    }
+
+    let runner = crate::git::GitRunner::discover_in(dir).expect("discover scratch repo");
+    let mut app = App::new(Vec::new());
+    app.stage_ops = Some(Box::new(runner));
+    app.refresh();
+    assert_eq!(app.view.files.len(), 200);
+
+    // A stateful key-press closure (unlike this file's shared `press`
+    // helper, which resets its pending-prefix/count on every call): the
+    // count-prefix gesture below (`3j`) needs that state to survive across
+    // presses, exactly like the real event loop.
+    let keymap = Keymap::default_map();
+    let mut pending = None;
+    let mut pending_count = None;
+    let mut press = |app: &mut App, code: KeyCode, mods: KeyModifiers| {
+        let _ = super::super::dispatch_key(
+            app,
+            &keymap,
+            &mut pending,
+            &mut pending_count,
+            KeyEvent::new(code, mods),
+        );
+    };
+    let none = KeyModifiers::NONE;
+    let ctrl = KeyModifiers::CONTROL;
+
+    step(
+        "journey A: launch on a 200-file scratch changeset",
+        &format!("repo: {} files modified", app.view.files.len()),
+    );
+
+    press(&mut app, KeyCode::Char('`'), none);
+    assert!(matches!(app.mode, Mode::Panel { .. }));
+    assert_eq!(app.panel_cursor(), 0);
+    step("press ` : panel focused, cursor at row 0", "cursor: 0");
+
+    press(&mut app, KeyCode::Char('d'), ctrl);
+    assert_eq!(app.panel_cursor(), 10);
+    step(
+        "press Ctrl-d: half page down (default viewport 20 -> step 10)",
+        "cursor: 10",
+    );
+
+    press(&mut app, KeyCode::Char('G'), none);
+    assert_eq!(app.panel_cursor(), 199);
+    step("press G: jump to the last of 200 rows", "cursor: 199");
+
+    press(&mut app, KeyCode::Char('g'), none);
+    assert_eq!(app.panel_cursor(), 0);
+    step("press g: jump back to the first row", "cursor: 0");
+
+    press(&mut app, KeyCode::Char('3'), none);
+    press(&mut app, KeyCode::Char('j'), none);
+    assert_eq!(app.panel_cursor(), 3);
+    step(
+        "press 3 then j: count-prefixed step moves three rows in one gesture",
+        "cursor: 3",
+    );
+
+    // -- Same gestures in the annotation list -------------------------------
+    for i in 0..40 {
+        app.annotations
+            .add(
+                Target::file(format!("f{i:03}.rs")),
+                Classification::Question,
+                format!("note {i}"),
+            )
+            .unwrap();
+    }
+    press(&mut app, KeyCode::Esc, none); // close the panel
+    assert_eq!(app.mode, Mode::Normal);
+    press(&mut app, KeyCode::Char('a'), none); // open the annotation list
+    assert_eq!(app.mode, Mode::List);
+    assert_eq!(app.list_cursor, 0);
+    step(
+        "press Esc then a: annotation list open over 40 annotations",
+        "list_cursor: 0",
+    );
+
+    press(&mut app, KeyCode::Char('d'), ctrl);
+    assert_eq!(app.list_cursor, 10);
+    step(
+        "press Ctrl-d in the annotation list: half page down (step 10)",
+        "list_cursor: 10",
+    );
+
+    press(&mut app, KeyCode::Char('G'), none);
+    assert_eq!(app.list_cursor, 39);
+    step(
+        "press G in the annotation list: jump to the last of 40 annotations",
+        "list_cursor: 39",
+    );
+
+    press(&mut app, KeyCode::Char('g'), none);
+    assert_eq!(app.list_cursor, 0);
+    step(
+        "press g in the annotation list: jump back to the first annotation",
+        "list_cursor: 0",
+    );
+
+    press(&mut app, KeyCode::Char('3'), none);
+    press(&mut app, KeyCode::Char('j'), none);
+    assert_eq!(app.list_cursor, 3);
+    step(
+        "press 3 then j in the annotation list: steps three annotations",
+        "list_cursor: 3",
+    );
+
+    if std::env::var("RQ_JOURNEY_DUMP").is_ok() {
+        eprintln!("{log}");
+    }
+}
