@@ -1229,12 +1229,21 @@ pub(super) static CONFIRM_REMOTE_OP_KEYS: LazyLock<Vec<ModalBinding<ConfirmRemot
 /// pressed from, and `a` toggles the Commits tab's data source between
 /// ahead-of-base and the full recent-HEAD log. Same shape as
 /// [`SwitcherAction`] for the first five — tab toggle, cursor pair, confirm,
-/// close — plus the one launcher-specific row.
+/// close — plus the shared motion set beyond plain step (spec 12 FR-12,
+/// half/full-page paging, jump-to-extremes — see [`SwitcherAction`]'s
+/// identical doc note on jump-to-top's single-`g` divergence) and the one
+/// launcher-specific row (`ToggleAllCommits`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LauncherAction {
     ToggleTab,
     MoveDown,
     MoveUp,
+    HalfPageDown,
+    HalfPageUp,
+    FullPageDown,
+    FullPageUp,
+    JumpToTop,
+    JumpToBottom,
     /// Acts on the highlighted row of the active tab (see
     /// [`super::app::App::review_launcher_confirm`]).
     Confirm,
@@ -1250,6 +1259,12 @@ pub(super) fn launcher_action_name(action: LauncherAction) -> &'static str {
         LauncherAction::ToggleTab => "toggle-tab",
         LauncherAction::MoveDown => "move-down",
         LauncherAction::MoveUp => "move-up",
+        LauncherAction::HalfPageDown => "half-page-down",
+        LauncherAction::HalfPageUp => "half-page-up",
+        LauncherAction::FullPageDown => "full-page-down",
+        LauncherAction::FullPageUp => "full-page-up",
+        LauncherAction::JumpToTop => "jump-to-top",
+        LauncherAction::JumpToBottom => "jump-to-bottom",
         LauncherAction::Confirm => "confirm",
         LauncherAction::Close => "close",
         LauncherAction::ToggleAllCommits => "toggle-all-commits",
@@ -1261,6 +1276,12 @@ pub(super) fn launcher_action_from_name(name: &str) -> Option<LauncherAction> {
         "toggle-tab" => LauncherAction::ToggleTab,
         "move-down" => LauncherAction::MoveDown,
         "move-up" => LauncherAction::MoveUp,
+        "half-page-down" => LauncherAction::HalfPageDown,
+        "half-page-up" => LauncherAction::HalfPageUp,
+        "full-page-down" => LauncherAction::FullPageDown,
+        "full-page-up" => LauncherAction::FullPageUp,
+        "jump-to-top" => LauncherAction::JumpToTop,
+        "jump-to-bottom" => LauncherAction::JumpToBottom,
         "confirm" => LauncherAction::Confirm,
         "close" => LauncherAction::Close,
         "toggle-all-commits" => LauncherAction::ToggleAllCommits,
@@ -1310,6 +1331,48 @@ pub(super) static REVIEW_LAUNCHER_KEYS: LazyLock<Vec<ModalBinding<LauncherAction
                 ],
                 action: LauncherAction::MoveUp,
                 // Not tagged — same reasoning as SWITCHER_KEYS's MoveUp row.
+                footer: None,
+            },
+            ModalBinding {
+                description: "Scroll half page down",
+                keys: vec![ModalKey::ctrl(KeyCode::Char('d'))],
+                action: LauncherAction::HalfPageDown,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Scroll half page up",
+                keys: vec![ModalKey::ctrl(KeyCode::Char('u'))],
+                action: LauncherAction::HalfPageUp,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Scroll full page down",
+                keys: vec![ModalKey::ctrl(KeyCode::Char('f'))],
+                action: LauncherAction::FullPageDown,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Scroll full page up",
+                keys: vec![ModalKey::ctrl(KeyCode::Char('b'))],
+                action: LauncherAction::FullPageUp,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Jump to top",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('g')),
+                    ModalKey::plain(KeyCode::Home),
+                ],
+                action: LauncherAction::JumpToTop,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Jump to bottom",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('G')),
+                    ModalKey::plain(KeyCode::End),
+                ],
+                action: LauncherAction::JumpToBottom,
                 footer: None,
             },
             ModalBinding {
@@ -3311,14 +3374,33 @@ index 111..222 100644
     }
 
     /// An `App` in the Review launcher, Branches tab, opened from
-    /// `Mode::Normal` with no git backend attached — so `ToggleTab`/`Close`
-    /// have a visible effect, while `MoveDown`/`MoveUp`/`Confirm` are no-ops
-    /// against the empty branch list a backend-less open produces (real
-    /// branch-list/confirm coverage lives in `review_launcher.rs`'s own
-    /// tests and `review_launcher_integration_tests.rs`'s real-git flows).
+    /// `Mode::Normal` with no git backend attached, over two branches set
+    /// directly on `launcher_branches` (bypassing the backend-driven loader
+    /// `open_review_launcher` would otherwise reset it through) — so every
+    /// motion has a visible effect, mirroring `switcher_app`'s identical
+    /// two-item-list setup. `Confirm` still degrades to a footer message
+    /// (no backend attached); real branch-list/confirm coverage lives in
+    /// `review_launcher.rs`'s own tests and
+    /// `review_launcher_integration_tests.rs`'s real-git flows.
     fn launcher_app() -> App {
         let mut app = app();
-        app.open_review_launcher();
+        app.mode = Mode::ReviewLauncher {
+            tab: crate::ui::review_launcher::LauncherTab::Branches,
+            cursor: 0,
+            origin: crate::ui::app::ModeOrigin::Normal,
+        };
+        app.launcher_branches = vec![
+            crate::git::LocalBranch {
+                name: "main".to_string(),
+                is_current: true,
+                worktree: None,
+            },
+            crate::git::LocalBranch {
+                name: "feature".to_string(),
+                is_current: false,
+                worktree: None,
+            },
+        ];
         app
     }
 
@@ -3344,7 +3426,24 @@ index 111..222 100644
                             "Launcher {label}: must switch tab"
                         );
                     }
-                    LauncherAction::MoveDown | LauncherAction::MoveUp => {
+                    LauncherAction::MoveDown => {
+                        handle_review_launcher_key(&mut app, key.event());
+                        assert_eq!(
+                            app.mode,
+                            Mode::ReviewLauncher {
+                                tab: LauncherTab::Branches,
+                                cursor: 1,
+                                origin: crate::ui::app::ModeOrigin::Normal,
+                            },
+                            "Launcher {label}: cursor moves down"
+                        );
+                    }
+                    LauncherAction::MoveUp => {
+                        app.mode = Mode::ReviewLauncher {
+                            tab: LauncherTab::Branches,
+                            cursor: 1,
+                            origin: crate::ui::app::ModeOrigin::Normal,
+                        };
                         handle_review_launcher_key(&mut app, key.event());
                         assert_eq!(
                             app.mode,
@@ -3353,14 +3452,72 @@ index 111..222 100644
                                 cursor: 0,
                                 origin: crate::ui::app::ModeOrigin::Normal,
                             },
-                            "Launcher {label}: no list data yet, cursor stays at 0"
+                            "Launcher {label}: cursor moves up"
+                        );
+                    }
+                    LauncherAction::HalfPageDown | LauncherAction::FullPageDown => {
+                        handle_review_launcher_key(&mut app, key.event());
+                        assert_eq!(
+                            app.mode,
+                            Mode::ReviewLauncher {
+                                tab: LauncherTab::Branches,
+                                cursor: 1,
+                                origin: crate::ui::app::ModeOrigin::Normal,
+                            },
+                            "Launcher {label}: page down must move"
+                        );
+                    }
+                    LauncherAction::HalfPageUp | LauncherAction::FullPageUp => {
+                        app.mode = Mode::ReviewLauncher {
+                            tab: LauncherTab::Branches,
+                            cursor: 1,
+                            origin: crate::ui::app::ModeOrigin::Normal,
+                        };
+                        handle_review_launcher_key(&mut app, key.event());
+                        assert_eq!(
+                            app.mode,
+                            Mode::ReviewLauncher {
+                                tab: LauncherTab::Branches,
+                                cursor: 0,
+                                origin: crate::ui::app::ModeOrigin::Normal,
+                            },
+                            "Launcher {label}: page up must move"
+                        );
+                    }
+                    LauncherAction::JumpToTop => {
+                        app.mode = Mode::ReviewLauncher {
+                            tab: LauncherTab::Branches,
+                            cursor: 1,
+                            origin: crate::ui::app::ModeOrigin::Normal,
+                        };
+                        handle_review_launcher_key(&mut app, key.event());
+                        assert_eq!(
+                            app.mode,
+                            Mode::ReviewLauncher {
+                                tab: LauncherTab::Branches,
+                                cursor: 0,
+                                origin: crate::ui::app::ModeOrigin::Normal,
+                            },
+                            "Launcher {label}: must jump to top"
+                        );
+                    }
+                    LauncherAction::JumpToBottom => {
+                        handle_review_launcher_key(&mut app, key.event());
+                        assert_eq!(
+                            app.mode,
+                            Mode::ReviewLauncher {
+                                tab: LauncherTab::Branches,
+                                cursor: 1,
+                                origin: crate::ui::app::ModeOrigin::Normal,
+                            },
+                            "Launcher {label}: must jump to bottom"
                         );
                     }
                     LauncherAction::Confirm => {
                         handle_review_launcher_key(&mut app, key.event());
                         assert!(
                             matches!(app.mode, Mode::ReviewLauncher { .. }),
-                            "Launcher {label}: modal stays open (no backend, empty branch list)"
+                            "Launcher {label}: modal stays open (no backend attached)"
                         );
                     }
                     LauncherAction::Close => {

@@ -10,7 +10,8 @@
 
 use super::keymap::{Action, Keymap, Scope};
 use super::modal_keys::{
-    self, AcceptedPanelAction, ListAction, PeekAction, StagingAction, SwitcherAction,
+    self, AcceptedPanelAction, LauncherAction, ListAction, PeekAction, StagingAction,
+    SwitcherAction,
 };
 use super::motion::{self, Motion};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -220,6 +221,47 @@ fn peek_resolves(m: Motion) -> bool {
     }
 }
 
+/// The Review launcher's resolver (spec 12 FR-13): one shared
+/// `REVIEW_LAUNCHER_KEYS` table drives both the Branches and Commits
+/// tabs (the actions aren't tab-specific — see `LauncherAction`'s doc), so
+/// checking it once covers both, mirroring how `switcher_resolves` above
+/// covers the switcher's own two tabs (Branches/Worktrees) through one
+/// `SWITCHER_KEYS` table rather than a resolver per tab.
+fn launcher_resolves(m: Motion) -> bool {
+    use modal_keys::REVIEW_LAUNCHER_KEYS;
+    match m {
+        Motion::StepDown => {
+            modal_keys::resolve(&REVIEW_LAUNCHER_KEYS, key('j')) == Some(LauncherAction::MoveDown)
+        }
+        Motion::StepUp => {
+            modal_keys::resolve(&REVIEW_LAUNCHER_KEYS, key('k')) == Some(LauncherAction::MoveUp)
+        }
+        Motion::HalfPageDown => {
+            modal_keys::resolve(&REVIEW_LAUNCHER_KEYS, ctrl_key('d'))
+                == Some(LauncherAction::HalfPageDown)
+        }
+        Motion::HalfPageUp => {
+            modal_keys::resolve(&REVIEW_LAUNCHER_KEYS, ctrl_key('u'))
+                == Some(LauncherAction::HalfPageUp)
+        }
+        Motion::FullPageDown => {
+            modal_keys::resolve(&REVIEW_LAUNCHER_KEYS, ctrl_key('f'))
+                == Some(LauncherAction::FullPageDown)
+        }
+        Motion::FullPageUp => {
+            modal_keys::resolve(&REVIEW_LAUNCHER_KEYS, ctrl_key('b'))
+                == Some(LauncherAction::FullPageUp)
+        }
+        Motion::JumpToTop => {
+            modal_keys::resolve(&REVIEW_LAUNCHER_KEYS, key('g')) == Some(LauncherAction::JumpToTop)
+        }
+        Motion::JumpToBottom => {
+            modal_keys::resolve(&REVIEW_LAUNCHER_KEYS, key('G'))
+                == Some(LauncherAction::JumpToBottom)
+        }
+    }
+}
+
 /// FR-5: every consuming context dispatches the complete motion set.
 #[test]
 fn every_consuming_context_covers_the_full_motion_set() {
@@ -251,6 +293,10 @@ fn every_consuming_context_covers_the_full_motion_set() {
     assert!(
         motion::covers_all(&Motion::ALL, peek_resolves),
         "LSP peek is missing a motion"
+    );
+    assert!(
+        motion::covers_all(&Motion::ALL, launcher_resolves),
+        "Review launcher (Branches/Commits tabs) is missing a motion"
     );
 }
 

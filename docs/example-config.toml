@@ -377,6 +377,12 @@ literal = false
 # toggle-tab = ["tab", "shift-tab", "h", "l", "left", "right"]  # Switch tab
 # move-down = ["j", "down"]             # Move selection down
 # move-up = ["k", "up"]                 # Move selection up
+# half-page-down = "ctrl-d"            # Scroll half page down
+# half-page-up = "ctrl-u"              # Scroll half page up
+# full-page-down = "ctrl-f"            # Scroll full page down
+# full-page-up = "ctrl-b"              # Scroll full page up
+# jump-to-top = ["g", "home"]          # Jump to top
+# jump-to-bottom = ["G", "end"]        # Jump to bottom
 # confirm = "enter"                    # Confirm the highlighted row
 # close = "esc"                        # Close
 #

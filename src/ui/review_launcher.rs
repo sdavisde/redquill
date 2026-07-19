@@ -10,9 +10,10 @@
 //! [`load_reconciled_review_state`] machinery — the same "ensure a review
 //! session" path the CLI's `--review` flag runs through (see
 //! [`super::review_session`]'s module doc) — via
-//! [`App::confirm_launcher_branch_review`]. The Commits tab's real list and
-//! `Enter` behavior land in follow-up work; until then its cursor never
-//! moves off zero (see [`App::review_launcher_row_count`]).
+//! [`App::confirm_launcher_branch_review`]. The Commits tab opens a
+//! read-only single-commit view on `Enter` via
+//! [`App::confirm_launcher_commit`]; both tabs share the shared motion
+//! layer (spec 12 FR-12) clamped against [`App::review_launcher_row_count`].
 
 use crate::git::{CommitLogEntry, CommitLogRange, DiffTarget, GitRunner};
 
@@ -77,6 +78,11 @@ impl App {
             cursor: 0,
             origin,
         };
+        // A count left mid-accumulation in whatever mode `R` was pressed
+        // from (e.g. the panel's own `motion_count`) must not leak into the
+        // launcher's first keystroke — mirrors every other motion-consuming
+        // mode's entry point (`open_switcher`, `toggle_list`, ...).
+        self.motion_count = None;
         match tab {
             LauncherTab::Branches => self.load_launcher_branches(),
             LauncherTab::Commits => self.ensure_launcher_commits_source_loaded(),
@@ -116,24 +122,13 @@ impl App {
     /// whichever list backs the active tab (or pinned at 0 on an empty
     /// list). A no-op unless the launcher is open.
     pub(super) fn review_launcher_move_down(&mut self) {
-        let len = self.review_launcher_row_count();
-        let Mode::ReviewLauncher { cursor, .. } = &mut self.mode else {
-            return;
-        };
-        *cursor = if len == 0 {
-            0
-        } else {
-            (*cursor + 1).min(len - 1)
-        };
+        self.review_launcher_step(1, true);
     }
 
     /// Moves the launcher's cursor up one row, clamped at the first. A no-op
     /// unless the launcher is open.
     pub(super) fn review_launcher_move_up(&mut self) {
-        let Mode::ReviewLauncher { cursor, .. } = &mut self.mode else {
-            return;
-        };
-        *cursor = cursor.saturating_sub(1);
+        self.review_launcher_step(1, false);
     }
 
     /// The active tab's row count: `launcher_branches`' length on Branches,
@@ -148,6 +143,100 @@ impl App {
         match tab {
             LauncherTab::Branches => self.launcher_branches.len(),
             LauncherTab::Commits => self.launcher_commits_rows().len(),
+        }
+    }
+
+    /// The launcher's page-size proxy for half/full-page motions: like the
+    /// git panel and switcher, it has no render height of its own to track
+    /// (see [`super::git_panel::App::panel_viewport_proxy`]'s identical
+    /// rationale).
+    fn review_launcher_viewport_proxy(&self) -> usize {
+        self.view.viewport_height()
+    }
+
+    /// Steps the launcher's cursor by `step` rows in `down`'s direction,
+    /// clamped against the active tab's row count, then re-runs the
+    /// Commits tab's lazy-prefetch check so every layer-driven move
+    /// (half/full-page, jumps, and the plain `j`/`k` step
+    /// [`App::review_launcher_move_down`]/[`App::review_launcher_move_up`]
+    /// delegate to) behaves identically (mirrors
+    /// [`super::git_panel::App::panel_step`]). A no-op unless the launcher
+    /// is open.
+    fn review_launcher_step(&mut self, step: usize, down: bool) {
+        let len = self.review_launcher_row_count();
+        if let Mode::ReviewLauncher { cursor, .. } = &mut self.mode {
+            *cursor = super::motion::step(*cursor, len, step, down);
+        }
+        self.review_launcher_maybe_prefetch_commits();
+    }
+
+    /// Jumps the launcher's cursor to `target`, clamped against the active
+    /// tab's row count, with the same prefetch bookkeeping as
+    /// [`App::review_launcher_step`]. A no-op unless the launcher is open.
+    fn review_launcher_jump(&mut self, target: usize) {
+        let len = self.review_launcher_row_count();
+        if let Mode::ReviewLauncher { cursor, .. } = &mut self.mode {
+            *cursor = target.min(len.saturating_sub(1));
+        }
+        self.review_launcher_maybe_prefetch_commits();
+    }
+
+    /// Moves the launcher's cursor down half a viewport (`Ctrl-d`, shared
+    /// motion set — see `super::motion`).
+    pub(super) fn review_launcher_half_page_down(&mut self) {
+        let step = super::motion::half_page(self.review_launcher_viewport_proxy());
+        self.review_launcher_step(step, true);
+    }
+
+    /// Moves the launcher's cursor up half a viewport (`Ctrl-u`).
+    pub(super) fn review_launcher_half_page_up(&mut self) {
+        let step = super::motion::half_page(self.review_launcher_viewport_proxy());
+        self.review_launcher_step(step, false);
+    }
+
+    /// Moves the launcher's cursor down a full viewport (`Ctrl-f`).
+    pub(super) fn review_launcher_full_page_down(&mut self) {
+        let step = super::motion::full_page(self.review_launcher_viewport_proxy());
+        self.review_launcher_step(step, true);
+    }
+
+    /// Moves the launcher's cursor up a full viewport (`Ctrl-b`).
+    pub(super) fn review_launcher_full_page_up(&mut self) {
+        let step = super::motion::full_page(self.review_launcher_viewport_proxy());
+        self.review_launcher_step(step, false);
+    }
+
+    /// Jumps the launcher's cursor to the first row (`g`/`Home`).
+    pub(super) fn review_launcher_jump_to_top(&mut self) {
+        self.review_launcher_jump(super::motion::jump_top());
+    }
+
+    /// Jumps the launcher's cursor to the last row (`G`/`End`).
+    pub(super) fn review_launcher_jump_to_bottom(&mut self) {
+        let len = self.review_launcher_row_count();
+        self.review_launcher_jump(super::motion::jump_bottom(len));
+    }
+
+    /// Re-runs the Commits tab's lazy-prefetch check
+    /// ([`App::maybe_prefetch_history`]) after a cursor move — only
+    /// meaningful once the tab's "all commits" source is active (the
+    /// ahead-of-base source, `launcher_commits`, is a single-shot fetch with
+    /// nothing to paginate); a no-op on the Branches tab or while the
+    /// ahead-of-base source is active. Mirrors the git panel History tab's
+    /// own scroll-triggered prefetch, so scrolling the launcher's Commits
+    /// tab (in "all commits" mode) never has to wait on a visible "load
+    /// more" action either.
+    fn review_launcher_maybe_prefetch_commits(&mut self) {
+        let Mode::ReviewLauncher {
+            tab: LauncherTab::Commits,
+            cursor,
+            ..
+        } = self.mode
+        else {
+            return;
+        };
+        if self.launcher_all_commits {
+            self.maybe_prefetch_history(cursor);
         }
     }
 
@@ -1210,5 +1299,196 @@ index 111..222 100644
         };
         app.review_launcher_confirm();
         assert!(matches!(app.mode, Mode::ReviewLauncher { .. }));
+    }
+
+    // -- Motion layer adoption (spec 12 FR-12) -------------------------------
+
+    #[test]
+    fn half_and_full_page_motions_step_and_clamp_on_the_branches_tab() {
+        let mut app = app_with_branches(vec![branch("alpha"), branch("beta"), branch("gamma")]);
+        app.open_review_launcher();
+        assert_eq!(
+            app.launcher_branches.len(),
+            3,
+            "sanity: real branches loaded"
+        );
+
+        app.review_launcher_half_page_down();
+        app.review_launcher_full_page_down();
+        assert_eq!(
+            app.mode,
+            Mode::ReviewLauncher {
+                tab: LauncherTab::Branches,
+                cursor: 2,
+                origin: ModeOrigin::Normal,
+            },
+            "half then full page down must clamp at the last of 3 branches"
+        );
+
+        app.review_launcher_half_page_up();
+        assert_eq!(
+            app.mode,
+            Mode::ReviewLauncher {
+                tab: LauncherTab::Branches,
+                cursor: 0,
+                origin: ModeOrigin::Normal,
+            },
+            "half page up must clamp at the first row"
+        );
+
+        app.review_launcher_jump_to_bottom();
+        assert_eq!(
+            app.mode,
+            Mode::ReviewLauncher {
+                tab: LauncherTab::Branches,
+                cursor: 2,
+                origin: ModeOrigin::Normal,
+            }
+        );
+        app.review_launcher_jump_to_top();
+        assert_eq!(
+            app.mode,
+            Mode::ReviewLauncher {
+                tab: LauncherTab::Branches,
+                cursor: 0,
+                origin: ModeOrigin::Normal,
+            }
+        );
+    }
+
+    #[test]
+    fn count_prefix_composes_with_a_motion_through_the_real_dispatch() {
+        use crate::ui::modes::handle_review_launcher_key;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut app = app_with_branches(vec![branch("a"), branch("b"), branch("c"), branch("d")]);
+        app.open_review_launcher();
+        let key = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        handle_review_launcher_key(&mut app, key('3'));
+        handle_review_launcher_key(&mut app, key('j'));
+        assert_eq!(
+            app.mode,
+            Mode::ReviewLauncher {
+                tab: LauncherTab::Branches,
+                cursor: 3,
+                origin: ModeOrigin::Normal,
+            },
+            "3j must step three rows in one gesture"
+        );
+    }
+
+    /// A minimal `StageOps` fake serving a fixed commit list synchronously
+    /// for the History-tab source the Commits tab's "all commits" toggle
+    /// reuses (mirrors `git_panel_tests.rs`'s `PanelHistoryFake`, private to
+    /// its own module).
+    struct LauncherHistoryFake {
+        entries: Vec<CommitLogEntry>,
+    }
+
+    impl super::super::stage_ops::StageOps for LauncherHistoryFake {
+        fn diff(
+            &self,
+            _target: &crate::git::DiffTarget,
+        ) -> Result<Vec<crate::git::RawFilePatch>, crate::git::GitError> {
+            Ok(Vec::new())
+        }
+        fn status(&self) -> Result<Vec<crate::git::FileStatus>, crate::git::GitError> {
+            Ok(Vec::new())
+        }
+        fn stage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn unstage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn apply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn unapply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn read_worktree_file(&self, _path: &str) -> Option<Vec<u8>> {
+            None
+        }
+        fn show_file(&self, _spec: &str) -> Option<String> {
+            None
+        }
+        fn commit_log(
+            &self,
+            count: u32,
+            skip: u32,
+        ) -> Result<Vec<CommitLogEntry>, crate::git::GitError> {
+            let start = (skip as usize).min(self.entries.len());
+            let end = (start + count as usize).min(self.entries.len());
+            Ok(self.entries[start..end].to_vec())
+        }
+    }
+
+    /// A layer-driven full-page-down on the Commits tab's "all commits"
+    /// source must trigger the same lazy prefetch the git panel's History
+    /// tab gets from a plain `j` — mirrors
+    /// `git_panel_tests.rs::panel_full_page_down_on_history_tab_triggers_prefetch_near_the_end`.
+    #[test]
+    fn full_page_down_on_the_all_commits_source_triggers_prefetch_near_the_end() {
+        let entries: Vec<CommitLogEntry> = (0..100)
+            .map(|i| commit(&format!("c{i}"), "subject"))
+            .collect();
+        let mut app = app();
+        app.stage_ops = Some(Box::new(LauncherHistoryFake { entries }));
+        app.ensure_history_loaded();
+        assert_eq!(app.history.len(), 100);
+        assert!(!app.history_exhausted);
+
+        app.launcher_all_commits = true;
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::Commits,
+            cursor: 85,
+            origin: ModeOrigin::Normal,
+        };
+        // viewport defaults to 20 -> full page steps 20 -> cursor 99
+        // (clamped), within HISTORY_PREFETCH_MARGIN (10) of history.len()
+        // (100).
+        app.review_launcher_full_page_down();
+        assert_eq!(
+            app.mode,
+            Mode::ReviewLauncher {
+                tab: LauncherTab::Commits,
+                cursor: 99,
+                origin: ModeOrigin::Normal,
+            }
+        );
+        assert!(
+            app.history_exhausted,
+            "landing within the prefetch margin must have requested (and exhausted) the next page"
+        );
+    }
+
+    #[test]
+    fn prefetch_does_not_fire_against_the_single_shot_ahead_of_base_source() {
+        // The ahead-of-base source (`launcher_commits`) is a single-shot
+        // fetch, not paginated — moving to its end must never touch
+        // `history` (there is nothing to page there).
+        let mut app =
+            app_with_commit_range((0..5).map(|i| commit(&format!("c{i}"), "s")).collect());
+        app.ensure_launcher_commits_loaded();
+        assert_eq!(app.launcher_commits.len(), 5);
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::Commits,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.review_launcher_jump_to_bottom();
+        assert_eq!(
+            app.mode,
+            Mode::ReviewLauncher {
+                tab: LauncherTab::Commits,
+                cursor: 4,
+                origin: ModeOrigin::Normal,
+            }
+        );
+        assert!(
+            app.history.is_empty(),
+            "history must stay untouched — nothing to prefetch on the ahead-of-base source"
+        );
     }
 }

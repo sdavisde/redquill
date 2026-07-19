@@ -639,20 +639,39 @@ pub(super) fn handle_switcher_key(app: &mut App, key: KeyEvent) {
 
 /// Handles one key event while [`super::Mode::ReviewLauncher`] is active
 /// (the Review launcher modal, `R`, `Scope::Global`): `Tab`/`Shift-Tab`/
-/// `h`/`l`/arrows switch between the Branches and Commits tabs, `j`/`k`/
-/// arrows move the cursor, `Enter` confirms the highlighted row — starts a
-/// branch review on the Branches tab, opens a read-only commit view on the
-/// Commits tab — `Esc` closes the modal back to the mode `R` was pressed
-/// from, and `a` toggles the Commits tab between its ahead-of-base list and
-/// the full recent-HEAD log.
+/// `h`/`l`/arrows switch between the Branches and Commits tabs, the shared
+/// motion set (`j`/`k`, half/full-page paging, jump-to-extremes, count
+/// prefixes — spec 12 FR-12) moves the cursor, `Enter` confirms the
+/// highlighted row — starts a branch review on the Branches tab, opens a
+/// read-only commit view on the Commits tab — `Esc` closes the modal back to
+/// the mode `R` was pressed from, and `a` toggles the Commits tab between
+/// its ahead-of-base list and the full recent-HEAD log.
 pub(super) fn handle_review_launcher_key(app: &mut App, key: KeyEvent) {
+    let count = match intercept_motion_count(app, key) {
+        MotionIntercept::Handled => return,
+        MotionIntercept::Resolve(count) => count,
+    };
     let Some(action) = modal_keys::resolve(&app.modal_keys.review_launcher, key) else {
         return;
     };
     match action {
         LauncherAction::ToggleTab => app.review_launcher_switch_tab(),
-        LauncherAction::MoveDown => app.review_launcher_move_down(),
-        LauncherAction::MoveUp => app.review_launcher_move_up(),
+        LauncherAction::MoveDown => apply_motion_n_times(count, || app.review_launcher_move_down()),
+        LauncherAction::MoveUp => apply_motion_n_times(count, || app.review_launcher_move_up()),
+        LauncherAction::HalfPageDown => {
+            apply_motion_n_times(count, || app.review_launcher_half_page_down())
+        }
+        LauncherAction::HalfPageUp => {
+            apply_motion_n_times(count, || app.review_launcher_half_page_up())
+        }
+        LauncherAction::FullPageDown => {
+            apply_motion_n_times(count, || app.review_launcher_full_page_down())
+        }
+        LauncherAction::FullPageUp => {
+            apply_motion_n_times(count, || app.review_launcher_full_page_up())
+        }
+        LauncherAction::JumpToTop => app.review_launcher_jump_to_top(),
+        LauncherAction::JumpToBottom => app.review_launcher_jump_to_bottom(),
         LauncherAction::Confirm => app.review_launcher_confirm(),
         LauncherAction::Close => app.close_review_launcher(),
         LauncherAction::ToggleAllCommits => app.review_launcher_toggle_all_commits(),
