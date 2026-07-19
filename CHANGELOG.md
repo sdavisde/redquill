@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.16.0](https://github.com/sdavisde/redquill/compare/v0.15.0...v0.16.0) (2026-07-19)
+
+
+### Features
+
+* annotation list, staging/accepted panel, and switcher adopt the shared `/` filter ([cf5aa33](https://github.com/sdavisde/redquill/commit/cf5aa331182d966d347a58c4db221d94a96c0909))
+* git panel (both tabs) consumes the shared motion layer ([4ae4add](https://github.com/sdavisde/redquill/commit/4ae4adda517fd9c052c63c13b776aa6063f182ec))
+* modal list contexts consume the shared motion layer ([dd626c8](https://github.com/sdavisde/redquill/commit/dd626c88460c4c037cfc02239b9251ce982225ed))
+* Review launcher (both tabs) adopts the shared `/` filter ([3115286](https://github.com/sdavisde/redquill/commit/31152865e6d46bcea9695948c5a78ca41478d266))
+* Review launcher (both tabs) consumes the shared motion layer ([4414546](https://github.com/sdavisde/redquill/commit/4414546658c9ff28c54dfed3847742f08471234a))
+* shared `/` list-filter component ([684d29d](https://github.com/sdavisde/redquill/commit/684d29d458c604e3c0b104bfcdf239a9bb4c26f6))
+* shared motion-set layer (src/ui/motion.rs) ([78a6c2c](https://github.com/sdavisde/redquill/commit/78a6c2c463ae902893bfb4aa53928700027d353e))
+
+
+### Performance Improvements
+
+* add a 5k-row list-filter re-rank budget tripwire ([7ce3eb3](https://github.com/sdavisde/redquill/commit/7ce3eb373fe1754e93098ccb71dc5d308144af1f))
+
 ## [0.15.0](https://github.com/sdavisde/redquill/compare/v0.14.0...v0.15.0) (2026-07-18)
 
 
