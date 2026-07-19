@@ -32,6 +32,7 @@ use super::help::{HelpOverlayState, HelpTab};
 use super::history::InFlightHistory;
 use super::keymap::Action;
 use super::lsp_ops::LspClient;
+use super::motion::Motionable;
 use super::peek::{PeekKind, PeekState};
 use super::project_search::ProjectSearchState;
 use super::refresh::InFlightRefresh;
@@ -986,20 +987,26 @@ impl App {
             return;
         }
         match action {
-            Action::CursorDown => self.view.cursor_down(),
-            Action::CursorUp => self.view.cursor_up(),
-            Action::HalfPageDown => self.view.half_page_down(),
-            Action::HalfPageUp => self.view.half_page_up(),
-            Action::JumpToTop => self.view.jump_to_top(),
-            Action::JumpToBottom => self.view.jump_to_bottom(),
+            // The eight shared motions (FR-1/FR-2) dispatch through
+            // `Motionable` rather than calling `self.view`'s inherent
+            // methods directly, so the diff view consumes the same layer
+            // every other motion-supporting context does; each trait method
+            // is a thin one-line forward to the identical inherent method
+            // (see `diff_view_state`'s impl), so behavior is unchanged.
+            Action::CursorDown => Motionable::step_down(&mut self.view),
+            Action::CursorUp => Motionable::step_up(&mut self.view),
+            Action::HalfPageDown => Motionable::half_page_down(&mut self.view),
+            Action::HalfPageUp => Motionable::half_page_up(&mut self.view),
+            Action::JumpToTop => Motionable::jump_to_top(&mut self.view),
+            Action::JumpToBottom => Motionable::jump_to_bottom(&mut self.view),
             Action::CursorLeft => self.view.move_column_left(),
             Action::CursorRight => self.view.move_column_right(),
             Action::CursorLineStart => self.view.move_column_to_line_start(),
             Action::CursorLineEnd => self.view.move_column_to_line_end(),
             Action::WordForward => self.view.move_word_forward(),
             Action::WordBackward => self.view.move_word_backward(),
-            Action::FullPageDown => self.view.full_page_down(),
-            Action::FullPageUp => self.view.full_page_up(),
+            Action::FullPageDown => Motionable::full_page_down(&mut self.view),
+            Action::FullPageUp => Motionable::full_page_up(&mut self.view),
             Action::NextHunk => self.view.next_hunk(),
             Action::PrevHunk => self.view.prev_hunk(),
             Action::NextFile => self.view.next_section(),

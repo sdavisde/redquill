@@ -17,6 +17,7 @@ use crate::annotate::Target;
 use crate::diff::FileDiff;
 
 use super::diff_wrap::WrapLayout;
+use super::motion::Motionable;
 use super::rows::{MIN_GUTTER_WIDTH, Row, anchor_row_index};
 
 /// A reasonable default viewport height, used until the first frame reports
@@ -750,6 +751,38 @@ impl DiffViewState {
 /// or underscore.
 fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
+}
+
+/// Consumes the shared motion layer (FR-1/FR-2): every method here delegates
+/// straight to the inherent method of the same behavior, so dispatching
+/// through this trait is behavior-identical to calling the inherent method
+/// directly — the point is giving `App`'s dispatch one shared entry point
+/// (`motion::dispatch`) rather than a diff-view-specific one.
+impl Motionable for DiffViewState {
+    fn step_down(&mut self) {
+        DiffViewState::cursor_down(self);
+    }
+    fn step_up(&mut self) {
+        DiffViewState::cursor_up(self);
+    }
+    fn half_page_down(&mut self) {
+        DiffViewState::half_page_down(self);
+    }
+    fn half_page_up(&mut self) {
+        DiffViewState::half_page_up(self);
+    }
+    fn full_page_down(&mut self) {
+        DiffViewState::full_page_down(self);
+    }
+    fn full_page_up(&mut self) {
+        DiffViewState::full_page_up(self);
+    }
+    fn jump_to_top(&mut self) {
+        DiffViewState::jump_to_top(self);
+    }
+    fn jump_to_bottom(&mut self) {
+        DiffViewState::jump_to_bottom(self);
+    }
 }
 
 #[cfg(test)]
