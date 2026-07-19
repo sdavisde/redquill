@@ -44,6 +44,7 @@ mod history;
 mod icons;
 mod keymap;
 mod keymap_config;
+mod list_filter;
 mod list_panel;
 mod lsp_config;
 mod lsp_ops;
