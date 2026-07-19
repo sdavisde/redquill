@@ -26,6 +26,19 @@
 //! [`all_keys_sections`], the full reference described above. `Tab`/`l` and
 //! `Shift-Tab`/`h` switch tabs (see [`super::modal_keys::HELP_KEYS`]),
 //! resetting the filter and scroll each time.
+//!
+//! **Not reconciled onto the shared motion layer** ([`super::motion`]):
+//! this overlay's own scroll keys already cover the same conceptual ground
+//! (`j`/`k` step, `PageUp`/`PageDown` a full viewport, `g`/`G`/`Home`/`End`
+//! jump to the ends — no distinct half-page binding existed before this
+//! layer), but its scroll model is a bare `Cell<u16>` offset advanced
+//! freely by the key handler and clamped to content height only at render
+//! time (including a `u16::MAX` sentinel for "jump to end" — see
+//! [`HelpOverlayState::scroll`]'s doc), structurally unlike every other
+//! context's clamped-cursor-against-a-known-length model. Forcing it onto
+//! `motion`'s shared helpers would mean restructuring that render-side
+//! clamp, which is out of scope here; the divergence is deliberate, not an
+//! oversight, and no user-visible behavior changes either way.
 
 use std::cell::Cell;
 
