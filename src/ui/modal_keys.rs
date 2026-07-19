@@ -2635,6 +2635,15 @@ mod tests {
     }
 
     #[test]
+    fn filter_edit_action_names_are_total_and_bijective() {
+        assert_action_names_are_total_and_bijective(
+            &FILTER_EDIT_KEYS,
+            filter_edit_action_name,
+            filter_edit_action_from_name,
+        );
+    }
+
+    #[test]
     fn peek_action_names_are_total_and_bijective() {
         assert_action_names_are_total_and_bijective(
             &PEEK_KEYS,
@@ -4043,6 +4052,40 @@ index 111..222 100644
             resolve(&SWITCHER_KEYS, slash),
             Some(SwitcherAction::EnterFilter)
         );
+    }
+
+    /// Every `FILTER_EDIT_KEYS` row, fed through the real `handle_list_key`
+    /// while a filter is actively being edited, must be consumed (produce an
+    /// observable change) — the shared table's coverage proof, mirroring
+    /// `every_help_search_hint_key_is_consumed_by_the_handler`'s identical
+    /// pattern for the help overlay's own filter table. Exercising it
+    /// through `handle_list_key` alone is representative: `intercept_filter`
+    /// (`modes.rs`) is the one shared dispatcher every filter-gaining
+    /// context calls this same table through, so a row's wiring can't drift
+    /// per-context without a code change duplicating the dispatch (which
+    /// this repo's own convention forbids — see `modes.rs`'s module doc).
+    #[test]
+    fn every_filter_edit_hint_key_is_consumed_by_the_list_handler() {
+        for binding in FILTER_EDIT_KEYS.iter() {
+            for key in &binding.keys {
+                let mut app = list_app();
+                app.list_filter = Some(crate::ui::list_filter::ListFilter::open(&[
+                    "one".to_string(),
+                    "two".to_string(),
+                ]));
+                if let Some(f) = app.list_filter.as_mut() {
+                    f.push_char('o', &["one".to_string(), "two".to_string()]);
+                }
+                let before = app.list_filter.clone();
+                handle_list_key(&mut app, key.event());
+                assert_ne!(
+                    before,
+                    app.list_filter,
+                    "Filter-edit {}: documented key must be consumed while editing",
+                    binding.key_label()
+                );
+            }
+        }
     }
 
     // -- Project Search mode -------------------------------------------------
