@@ -7,6 +7,9 @@
 //! 3. Highlight-cache population for the whole diff (tree-sitter over every
 //!    expanded file).
 //! 4. Cursor / hunk navigation over the built buffer (per-keypress cost).
+//! 5. The shared `/` list-filter's fuzzy re-rank over a 5k-row candidate
+//!    list (spec 12's perf requirement — every filter-adopting context's
+//!    per-keystroke cost).
 //!
 //! The budgets are deliberately loose — chosen with ~12-16x headroom over
 //! measured debug-build times on a developer machine — so the assertions only fire on a
@@ -390,6 +393,56 @@ fn wrap_layout_build_is_bounded() {
         elapsed < BUDGET,
         "wrap_layout_build x{ITERS} took {elapsed:?}, over budget {BUDGET:?} \
          (possible O(n^2) in the wrap layout build)"
+    );
+}
+
+/// Hot path 5: the shared `/` list-filter's fuzzy re-rank
+/// ([`crate::ui::list_filter::filtered_indices`]), spec 12's perf requirement —
+/// "filtering a 5k-row candidate list stays within budget (render loop never
+/// stalls)." This runs once per keystroke in every filter-adopting context
+/// (annotation list, staging/accepted panel, switcher), so a realistic
+/// worst case is a full query typed one character at a time over the
+/// largest list a reviewer could plausibly face. Looped to amortize noise.
+#[test]
+fn list_filter_rerank_over_5k_rows_is_bounded() {
+    const ROWS: usize = 5_000;
+    const QUERY: &str = "module_04213";
+    // Measured ~0.88s debug on a dev machine for the full incremental-query
+    // sweep below (144 rerank calls, each O(rows)); ~15x headroom.
+    const BUDGET: Duration = Duration::from_millis(13_000);
+    let labels: Vec<String> = (0..ROWS).map(|i| format!("src/module_{i:05}.rs")).collect();
+
+    let start = Instant::now();
+    // Types the query one character at a time (like a real filter session),
+    // re-ranking the whole 5k-row list on every keystroke — the actual
+    // per-keystroke cost the render loop must never stall on.
+    let mut query = String::new();
+    for c in QUERY.chars() {
+        query.push(c);
+        let _ = crate::ui::list_filter::filtered_indices(&labels, &query);
+    }
+    // A handful of full backspace-to-empty-and-retype cycles, the other
+    // per-keystroke path (`ListFilter::backspace`) exercises.
+    for _ in 0..5 {
+        while !query.is_empty() {
+            query.pop();
+            let _ = crate::ui::list_filter::filtered_indices(&labels, &query);
+        }
+        for c in QUERY.chars() {
+            query.push(c);
+            let _ = crate::ui::list_filter::filtered_indices(&labels, &query);
+        }
+    }
+    let elapsed = start.elapsed();
+    report(
+        &format!("list_filter rerank ({ROWS} rows, keystroke sweep)"),
+        elapsed,
+        BUDGET,
+    );
+    assert!(
+        elapsed < BUDGET,
+        "list-filter rerank over {ROWS} rows took {elapsed:?}, over budget {BUDGET:?} \
+         (possible per-keystroke complexity regression in the shared filter)"
     );
 }
 
