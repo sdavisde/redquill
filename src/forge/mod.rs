@@ -17,6 +17,7 @@
 //! - [`ForgeError`] — the shared error type for every provider operation.
 
 mod detect;
+mod github;
 mod process;
 mod remote_url;
 
@@ -24,6 +25,7 @@ pub use detect::{
     CredentialChecker, GhCredentialChecker, GlabCredentialChecker, ProviderKind,
     ProviderResolution, ResolutionCache, UnresolvedReason, resolve_provider,
 };
+pub use github::{PR_LIST_JSON_FIELDS, list_open_prs, parse_pr_list_json, pr_list_command};
 pub use remote_url::{Hostname, RemoteUrlError, parse_origin_hostname};
 
 use thiserror::Error;
