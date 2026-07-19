@@ -997,7 +997,7 @@ fn repeat_count_caps_and_ignores_non_repeatable_actions() {
     assert_eq!(repeat_count(Action::CursorDown, None), 1);
     assert_eq!(
         repeat_count(Action::CursorDown, Some(50_000)),
-        MAX_COUNT,
+        motion::MAX_COUNT,
         "a count is clamped by the digit-accumulation cap before it ever reaches repeat_count, \
          but repeat_count itself must not blow past MAX_COUNT either"
     );

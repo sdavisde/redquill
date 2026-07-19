@@ -292,18 +292,19 @@ fn quit_action(app: &mut App) -> Flow {
     }
 }
 
-/// The largest numeric prefix [`dispatch_key`]'s digit interception will
-/// accumulate — a mistyped run of digits shouldn't be able to turn a single
-/// keypress into a render-loop hitch on a large diff.
-const MAX_COUNT: usize = 1000;
-
 /// How many times to apply `action` for an accumulated count prefix (`None`
 /// if the user typed no digits before this key). Only pure motions honor a
 /// count; everything else (toggles, staging, LSP requests, mode changes,
 /// `JumpToTop`/`JumpToBottom`) always applies exactly once regardless of a
 /// stray accumulated count — repeating e.g. `ToggleStage` N times would just
 /// flip state back and forth, and `gg`/`G` have no natural "repeat" meaning
-/// (v1 does not reinterpret `3gg` as "goto line 3").
+/// (v1 does not reinterpret `3gg` as "goto line 3"). The repeatable actions
+/// that also exist in [`motion::Motion`] (`CursorDown`/`Up`, `HalfPageDown`/
+/// `Up`, `FullPageDown`/`Up`) share their repeat clamp with every other
+/// consuming context via [`motion::clamp_count`]; the rest (`CursorLeft`/
+/// `Right`, `WordForward`/`Backward`, `NextHunk`/`PrevHunk`, `NextFile`/
+/// `PrevFile`, `SearchNext`/`Prev`) are diff-view-only gestures outside the
+/// shared motion set and keep the same repeat rule they always had.
 fn repeat_count(action: Action, count: Option<usize>) -> usize {
     use Action::*;
     let repeatable = matches!(
@@ -326,7 +327,7 @@ fn repeat_count(action: Action, count: Option<usize>) -> usize {
             | SearchPrev
     );
     if repeatable {
-        count.unwrap_or(1).clamp(1, MAX_COUNT)
+        motion::clamp_count(count)
     } else {
         1
     }
@@ -394,32 +395,29 @@ fn dispatch_key(
 
             // Digit interception, ahead of the keymap: only while no two-key
             // prefix is already pending (a count always precedes it, e.g.
-            // `3gg`, never interleaves with it). `1'..='9'` always
-            // accumulate; a bare `0` is the `CursorLineStart` motion (falls
-            // through unconsumed to `keymap.resolve` below) but a `0` typed
-            // *after* another digit continues the count, exactly like vim.
-            if pending.is_none() && key.modifiers == KeyModifiers::NONE {
-                if let KeyCode::Char(c @ '1'..='9') = key.code {
-                    let digit = c.to_digit(10).unwrap_or(0) as usize;
-                    *pending_count = Some(
-                        pending_count
-                            .unwrap_or(0)
-                            .saturating_mul(10)
-                            .saturating_add(digit)
-                            .min(MAX_COUNT),
-                    );
-                    return Flow::Continue;
-                }
-                if key.code == KeyCode::Char('0') && pending_count.is_some() {
-                    *pending_count =
-                        Some(pending_count.unwrap_or(0).saturating_mul(10).min(MAX_COUNT));
-                    return Flow::Continue;
+            // `3gg`, never interleaves with it). The accumulation rule
+            // itself — `1`-`9` always extend the count, a bare `0` is its
+            // own motion (`CursorLineStart`, falls through unconsumed) but a
+            // `0` after another digit continues the count — lives in the
+            // shared motion layer (`motion::accumulate_digit`) so every
+            // other consuming context intercepts digits the same way.
+            if pending.is_none()
+                && key.modifiers == KeyModifiers::NONE
+                && let KeyCode::Char(c) = key.code
+            {
+                match motion::accumulate_digit(*pending_count, c) {
+                    motion::DigitOutcome::Consumed(n) => {
+                        *pending_count = Some(n);
+                        return Flow::Continue;
+                    }
+                    motion::DigitOutcome::LeadingZero | motion::DigitOutcome::NotADigit => {}
                 }
             }
 
             let had_pending = pending.is_some();
             let action = keymap.resolve(pending, key);
-            let just_started_sequence = !had_pending && pending.is_some();
+            let just_started_sequence =
+                motion::count_survives_sequence_start(had_pending, pending.is_some());
 
             // Esc only ever closes an already-open help overlay, cancels an
             // in-progress Visual selection, or returns from a commit view
