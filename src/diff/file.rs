@@ -79,6 +79,19 @@ impl FileDiff {
         })
     }
 
+    /// Counts changed lines across all hunks, as `(added, removed)`. Context
+    /// lines aren't counted on either side.
+    pub fn line_counts(&self) -> (usize, usize) {
+        self.hunks
+            .iter()
+            .flat_map(|hunk| &hunk.lines)
+            .fold((0, 0), |(added, removed), line| match line.origin {
+                LineOrigin::Added => (added + 1, removed),
+                LineOrigin::Removed => (added, removed + 1),
+                LineOrigin::Context => (added, removed),
+            })
+    }
+
     /// Builds a synthetic [`FileDiff`] for an untracked file: `git diff` never
     /// surfaces untracked content, but a reviewer needs to see it as a
     /// single all-added hunk (old side `0,0`; new side `1,n`).
@@ -423,5 +436,44 @@ index 1..2 100644
 ";
         let p = patch(raw, "f.rs", None, false);
         assert!(FileDiff::from_patch(&p).is_err());
+    }
+
+    #[test]
+    fn line_counts_tallies_added_and_removed_across_hunks() {
+        let raw = "\
+diff --git a/f.rs b/f.rs
+index 111..222 100644
+--- a/f.rs
++++ b/f.rs
+@@ -1,3 +1,3 @@
+ ctx
+-old
++new
+@@ -10,2 +10,3 @@
+ ctx2
++extra1
++extra2
+";
+        let p = patch(raw, "f.rs", None, false);
+        let diff = FileDiff::from_patch(&p).unwrap();
+        assert_eq!(diff.line_counts(), (3, 1));
+    }
+
+    #[test]
+    fn line_counts_ignores_context_only_hunks() {
+        let diff = FileDiff::synthetic_context("f.rs".to_string(), "a\nb\n");
+        assert_eq!(diff.line_counts(), (0, 0));
+    }
+
+    #[test]
+    fn line_counts_on_file_with_no_hunks_is_zero() {
+        let raw = "\
+diff --git a/f.bin b/f.bin
+index 111..222 100644
+Binary files a/f.bin and b/f.bin differ
+";
+        let p = patch(raw, "f.bin", None, true);
+        let diff = FileDiff::from_patch(&p).unwrap();
+        assert_eq!(diff.line_counts(), (0, 0));
     }
 }

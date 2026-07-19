@@ -194,9 +194,15 @@ fn run(config: &RunConfig) -> anyhow::Result<()> {
     for patch in &patches {
         let binary = if patch.is_binary { " (binary)" } else { "" };
         let diff = FileDiff::from_patch(patch)?;
+        let (added, removed) = diff.line_counts();
+        let counts = if patch.is_binary {
+            String::new()
+        } else {
+            format!(" +{added} -{removed}")
+        };
         match &patch.old_path {
-            Some(old) => println!("R  {old} -> {}{binary}", patch.path),
-            None => println!("{}  {}{binary}", diff.kind.letter(), patch.path),
+            Some(old) => println!("R  {old} -> {}{binary}{counts}", patch.path),
+            None => println!("{}  {}{binary}{counts}", diff.kind.letter(), patch.path),
         }
         printed += 1;
     }
