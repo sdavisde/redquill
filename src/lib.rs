@@ -6,6 +6,7 @@
 pub mod annotate;
 pub mod config;
 pub mod diff;
+pub mod forge;
 pub mod git;
 pub mod highlight;
 pub mod lsp;

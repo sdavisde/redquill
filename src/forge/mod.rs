@@ -1,0 +1,146 @@
+//! Forge (GitHub/GitLab) integration: all "talk to the code-hosting
+//! service" logic lives behind [`ForgeProvider`], mirroring `crate::git`'s
+//! "own all interaction with an external CLI, no TUI types leak in here"
+//! shape. A layering-guard test (`mod_tests.rs`) walks this directory's
+//! source files and fails if any of them mention a TUI crate.
+//!
+//! - [`ForgeProvider`] — the trait every provider (GitHub, GitLab)
+//!   implements: list PRs, read PR detail, fetch comment threads, submit a
+//!   review, and report capability flags. UI code talks only to this trait,
+//!   never to `gh`/`glab` directly, so it's testable with fakes.
+//! - [`PullRequest`] — one row of a PR/MR listing.
+//! - [`PrDetail`], [`Thread`], [`ReviewSubmission`] — minimal stand-ins for
+//!   richer shapes that later work fleshes out; present now only so the
+//!   trait surface compiles.
+//! - [`Verdict`]/[`Capabilities`] — the review verdict a submission carries,
+//!   and which verdicts/submit shapes a given provider actually supports.
+//! - [`ForgeError`] — the shared error type for every provider operation.
+
+use thiserror::Error;
+
+/// One PR/MR row as listed by a provider: enough to render a list and to
+/// target a checkout, nothing more.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullRequest {
+    /// The PR/MR number (GitHub) or internal ID (GitLab).
+    pub number: u64,
+    pub title: String,
+    /// The author's login/username.
+    pub author: String,
+    /// The source branch name (`headRefName` on GitHub).
+    pub head_ref: String,
+    pub is_draft: bool,
+    /// Provider-formatted timestamp string, verbatim — no local parsing or
+    /// timezone conversion happens at this layer.
+    pub updated_at: String,
+}
+
+/// One PR's full detail (base/head SHAs, diff refs, etc.). A minimal
+/// stand-in until PR checkout needs the richer shape — only `number` is
+/// populated today, but the method exists so the trait surface is real.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PrDetail {
+    pub number: u64,
+}
+
+/// One imported comment thread. A minimal stand-in until thread import
+/// lands — carries only enough to identify the thread.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Thread {
+    pub id: String,
+}
+
+/// A batch of comments/replies/verdict ready to publish as one review. A
+/// minimal stand-in until the submit flow lands.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReviewSubmission {
+    pub verdict: Option<Verdict>,
+    pub summary: String,
+}
+
+/// The outcome a reviewer chooses when submitting a review. Not every
+/// provider supports every variant — see [`Capabilities`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    Comment,
+    Approve,
+    RequestChanges,
+}
+
+/// Which verdicts and submit-shape behaviors a provider instance actually
+/// supports, so UI code can render only the choices that will really work
+/// (e.g. GitHub supports all three verdicts; GitLab v1 has no
+/// request-changes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Capabilities {
+    pub can_approve: bool,
+    pub can_request_changes: bool,
+    /// Whether this provider can stage a batch privately before publishing
+    /// it atomically (GitLab draft notes) as opposed to posting each item
+    /// visibly as it goes.
+    pub near_atomic_submit: bool,
+}
+
+/// Errors produced while running or parsing a forge CLI (`gh`/`glab`).
+/// Mirrors `crate::git::GitError`'s shape; `cli` names which CLI was
+/// involved since a single process may talk to either.
+#[derive(Debug, Error)]
+pub enum ForgeError {
+    /// The named CLI executable could not be found on `PATH`.
+    #[error("{cli} executable not found on PATH")]
+    CliNotFound {
+        /// The CLI binary name (e.g. `"gh"`, `"glab"`).
+        cli: &'static str,
+    },
+
+    /// Spawning the CLI failed for a reason other than it being missing.
+    #[error("failed to run {cli}: {source}")]
+    Spawn {
+        cli: &'static str,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// A CLI invocation exited with a non-zero status.
+    #[error("{cli} {command} exited with status {code}: {stderr}")]
+    Command {
+        cli: &'static str,
+        /// The subcommand and arguments that were run.
+        command: String,
+        /// The exit code (or `"signal"` if terminated by a signal).
+        code: String,
+        /// Captured stderr, trimmed of trailing whitespace.
+        stderr: String,
+    },
+
+    /// A CLI invocation's output did not match the expected machine format.
+    #[error("failed to parse {cli} output: {message}")]
+    Parse { cli: &'static str, message: String },
+}
+
+/// Everything forge-specific behind one seam: the UI layer talks only to
+/// this trait, never to `gh`/`glab` directly, so it's testable with fakes
+/// and a second provider (GitLab) is a second impl, not a UI branch. All
+/// CLI invocations behind implementations of this trait build argv from
+/// closed/typed values (PR numbers as integers, hostnames validated
+/// against a strict charset) — never a string-assembled command line.
+pub trait ForgeProvider {
+    /// Lists the repo's open PRs/MRs.
+    fn list_open_prs(&self) -> Result<Vec<PullRequest>, ForgeError>;
+
+    /// Reads one PR's full detail.
+    fn pr_detail(&self, number: u64) -> Result<PrDetail, ForgeError>;
+
+    /// Fetches a PR's existing comment threads, live — never cached to disk.
+    fn fetch_threads(&self, number: u64) -> Result<Vec<Thread>, ForgeError>;
+
+    /// Publishes one review (comments, replies, verdict) against a PR.
+    fn submit_review(&self, number: u64, submission: ReviewSubmission) -> Result<(), ForgeError>;
+
+    /// This provider's supported verdicts and submit-shape capabilities.
+    fn capabilities(&self) -> Capabilities;
+}
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

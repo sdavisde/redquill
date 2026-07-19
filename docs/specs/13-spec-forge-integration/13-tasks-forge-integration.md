@@ -41,7 +41,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 
 ## Tasks
 
-### [ ] 1.0 Press `R` and see the repo's open pull requests — or exact setup instructions when the forge isn't reachable (GitHub)
+### [~] 1.0 Press `R` and see the repo's open pull requests — or exact setup instructions when the forge isn't reachable (GitHub)
 
 **User verification:** In a GitHub-backed repo with `gh` logged in, press `R`, switch to the new **Pull Requests** tab, and see the repo's open PRs (number, title, author, branch, updated time), filterable with `/`. When the repo simply has no open PRs, the tab says so plainly ("No open pull requests on org/repo") — clearly success, not an error. In a repo with no forge or no login, the same tab shows plain instructions naming the exact command to run — never a blank screen. A new `docs/forge-setup.md` page explains setup, including hosted GitLab.
 
@@ -59,7 +59,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 
 #### 1.0 Tasks
 
-- [ ] 1.1 Create `src/forge/mod.rs`: `ForgeError` (thiserror), `PullRequest`, `Verdict`, `Capabilities`, and the `ForgeProvider` trait (list PRs, PR detail, fetch threads, submit review, capabilities). Add the layering-guard test (no TUI crate imports under `src/forge/`).
+- [x] 1.1 Create `src/forge/mod.rs`: `ForgeError` (thiserror), `PullRequest`, `Verdict`, `Capabilities`, and the `ForgeProvider` trait (list PRs, PR detail, fetch threads, submit review, capabilities). Add the layering-guard test (no TUI crate imports under `src/forge/`).
 - [ ] 1.2 TDD `src/forge/remote_url.rs`: hostname extraction for `https://`, `ssh://`, and `git@host:path` origin URLs; strict hostname charset validation; malformed input → typed error. Add `git remote get-url origin` read to the git layer (machine output, background-capable).
 - [ ] 1.3 TDD `src/forge/detect.rs`: resolution ladder behind an injectable `CredentialChecker` trait — known hosts first, then per-CLI credential lookup (gh: `gh auth token --hostname <h>` exit-status only, stdout discarded unread; glab: placeholder seam, finalized in 6.2), ambiguous/none → `Unresolved` with the reason. Process-lifetime cache; all lookups off the render loop with a timeout.
 - [ ] 1.4 TDD `src/forge/github.rs` listing: fixed argv for `gh pr list` with JSON fields (number, title, author, headRefName, isDraft, updatedAt), fixture-based parse tests into typed rows; prompts disabled (`GH_PROMPT_DISABLED=1`, `NO_COLOR=1`), kill-on-drop.
