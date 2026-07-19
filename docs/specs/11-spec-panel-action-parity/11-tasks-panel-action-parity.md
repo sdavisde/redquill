@@ -34,7 +34,7 @@ Precondition (workspace hygiene, not a task): the uncommitted which-key withdraw
 
 ## Tasks
 
-### [~] 1.0 Panel file actions — stage, unstage, accept, defer from the git panel (FR-1..FR-5)
+### [x] 1.0 Panel file actions — stage, unstage, accept, defer from the git panel (FR-1..FR-5)
 
 Route `Space`/`S` (and in review sessions `d`) from the panel's highlighted file row to the existing stage/accept/defer operations — zero new git-layer code.
 
@@ -57,9 +57,9 @@ Route `Space`/`S` (and in review sessions `d`) from the panel's highlighted file
 - [x] 1.8 Add the new rows to the `?` help overlay's panel section via the shared tables, extend config-remap coverage, and keep bidirectional drift tests passing in `src/ui/keymap_config_tests.rs` (FR-5).
 - [x] 1.9 Produce the CLI journey transcript on a scratch tempdir repo (working-tree staging flow + review-session accept flow) and persist it to `docs/specs/11-spec-panel-action-parity/proofs/` (FR-1, FR-2).
 - [x] 1.10 Run all four cargo gates plus perf tripwires; commit the behavior change as `feat:` separate from 1.2's refactor.
-- [~] 1.11 **USER UI CHECKPOINT:** write `proofs/demo-1-panel-actions.md` — a script that builds a scratch repo (setup commands included) and lists the exact key sequence: `cargo run`, `` ` ``, `j` to a file, `Space` (stages, marker updates), `Space` (unstages), `S`; then `--review` on a scratch branch: accept two files, `d`-defer one, watch `●`/`~` update; also verify a directory row shows the hint and the History tab is inert. Pause here — the user runs it and their verdict is recorded in the file before 1.0 is checked off.
+- [x] 1.11 **USER UI CHECKPOINT:** write `proofs/demo-1-panel-actions.md` — a script that builds a scratch repo (setup commands included) and lists the exact key sequence: `cargo run`, `` ` ``, `j` to a file, `Space` (stages, marker updates), `Space` (unstages), `S`; then `--review` on a scratch branch: accept two files, `d`-defer one, watch `●`/`~` update; also verify a directory row shows the hint and the History tab is inert. Pause here — the user runs it and their verdict is recorded in the file before 1.0 is checked off.
 
-### [~] 2.0 Panel coherence — `Esc` leaves, `s` and `/` reach through (FR-6..FR-8)
+### [x] 2.0 Panel coherence — `Esc` leaves, `s` and `/` reach through (FR-6..FR-8)
 
 Make the git panel answer to the app's universal verbs: `Esc` backs out, `s` and `/` behave as if the panel were closed first.
 
@@ -77,9 +77,9 @@ Make the git panel answer to the app's universal verbs: `Esc` backs out, `s` and
 - [x] 2.3 Help/footer coverage for the three rows via the shared tables; config-remap and bidirectional drift tests pass in `src/ui/keymap_config_tests.rs` (FR-8).
 - [x] 2.4 Produce the CLI journey transcript (`` ` `` → `Esc`; `` ` `` → `/` → query → match) and persist to `proofs/` (FR-6, FR-7).
 - [x] 2.5 Run all four cargo gates plus perf tripwires; commit as `feat:`.
-- [~] 2.6 **USER UI CHECKPOINT:** write `proofs/demo-2-panel-coherence.md` — scratch-repo script: open panel, `Esc` backs out; open panel with help overlay up, `Esc` closes help not panel; from panel press `s` (staging panel opens) and `/` (search works, exit returns to Normal). Pause for the user's UI verdict before 2.0 is checked off.
+- [x] 2.6 **USER UI CHECKPOINT:** write `proofs/demo-2-panel-coherence.md` — scratch-repo script: open panel, `Esc` backs out; open panel with help overlay up, `Esc` closes help not panel; from panel press `s` (staging panel opens) and `/` (search works, exit returns to Normal). Pause for the user's UI verdict before 2.0 is checked off.
 
-### [~] 3.0 Edit and delete annotations from the diff view (FR-9..FR-12)
+### [x] 3.0 Edit and delete annotations from the diff view (FR-9..FR-12)
 
 Close the reverse gap: `e` edits and `x` deletes the annotation under the cursor, right where it's rendered.
 
@@ -99,4 +99,4 @@ Close the reverse gap: `e` edits and `x` deletes the annotation under the cursor
 - [x] 3.5 Help/footer coverage for `e`/`x`; config-remap and bidirectional drift tests pass (FR-12).
 - [x] 3.6 Produce the CLI journey transcript (annotate → `e` edit → submit → `x` delete → inline row gone) and persist to `proofs/` (FR-9, FR-10).
 - [x] 3.7 Run all four cargo gates plus perf tripwires; commit (`feat:` for bindings/wiring; the `annotation_list.rs` delete-core extraction commits separately as `refactor:` if done as a distinct move).
-- [~] 3.8 **USER UI CHECKPOINT:** write `proofs/demo-3-annotation-roundtrip.md` — scratch-repo script: annotate a line with `c`, scroll away and back, `e` on the annotated line (compose opens pre-filled), edit and submit, see the new text inline; `x` deletes it; `e` on a bare line shows the no-op hint. Pause for the user's UI verdict before 3.0 is checked off.
+- [x] 3.8 **USER UI CHECKPOINT:** write `proofs/demo-3-annotation-roundtrip.md` — scratch-repo script: annotate a line with `c`, scroll away and back, `e` on the annotated line (compose opens pre-filled), edit and submit, see the new text inline; `x` deletes it; `e` on a bare line shows the no-op hint. Pause for the user's UI verdict before 3.0 is checked off.
