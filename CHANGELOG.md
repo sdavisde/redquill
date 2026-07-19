@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.15.0](https://github.com/sdavisde/redquill/compare/v0.14.0...v0.15.0) (2026-07-18)
+
+
+### Features
+
+* close the git panel with Esc and reach staging and search from it ([b92f5b0](https://github.com/sdavisde/redquill/commit/b92f5b0189d7512a3969642734b73665f78d1b78))
+* edit and delete annotations from the diff view ([ed879d0](https://github.com/sdavisde/redquill/commit/ed879d0a79ac5bdc456a2cb689c37057cf9fa56b))
+* stage, accept, and defer files from the git panel ([8b60128](https://github.com/sdavisde/redquill/commit/8b601283b669c53c87fc569a682e7a5df715fedb))
+
 ## [0.14.0](https://github.com/sdavisde/redquill/compare/v0.13.0...v0.14.0) (2026-07-18)
 
 
