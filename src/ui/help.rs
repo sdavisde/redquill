@@ -39,6 +39,29 @@
 //! `motion`'s shared helpers would mean restructuring that render-side
 //! clamp, which is out of scope here; the divergence is deliberate, not an
 //! oversight, and no user-visible behavior changes either way.
+//!
+//! **Not reconciled onto the shared list-filter component**
+//! ([`super::list_filter`], spec 12 FR-11) either, for the same
+//! not-behavior-identical reason: this overlay's own `/` filter
+//! (`row_matches`, above) is a **substring** smartcase match against a
+//! static, in-memory list of `(key label, description)` pairs that never
+//! reorders — every matching row stays in its original position, sections
+//! just drop to empty and disappear. `super::list_filter::ListFilter` is a
+//! **fuzzy** match (delegating to the same `nucleo-matcher` ranking the file
+//! finder uses) that re-*ranks* its filtered view — a locked query can
+//! reorder rows, best match first, which the help overlay's row-in-place
+//! model was never designed to do (its rows are grouped under section
+//! headers rendered independently per section; a cross-section rank-sorted
+//! merge would need restructuring the section model, not a one-line swap).
+//! Since FR-11 says "adopt only if behavior-identical, otherwise document
+//! the divergence," and substring-vs-fuzzy is a real behavior difference
+//! (not just an implementation-detail one), the help overlay's filter is
+//! left exactly as it was — same `row_matches`, same `HelpOverlayState`
+//! shape, same tests (`help_filter_enter_locks_and_two_escapes_close`,
+//! `help_filter_narrows_rendered_bindings_to_matching_rows`,
+//! `closing_help_resets_the_filter`, all still passing unchanged) — rather
+//! than forced onto the shared component for its own sake. No user-visible
+//! change either way.
 
 use std::cell::Cell;
 
