@@ -474,6 +474,16 @@ pub struct App {
     /// for the process lifetime alongside `last_launcher_tab`, the same
     /// "must survive mode exit" exception that field documents.
     pub(super) launcher_all_commits: bool,
+    /// The active launcher tab's `/` filter session (`None`: no filter
+    /// active). One field shared by both tabs, cleared on every
+    /// [`App::review_launcher_switch_tab`] — spec 12 FR-12's decision,
+    /// mirroring [`super::switcher::SwitcherState::filter`]'s identical
+    /// shared-field-cleared-on-toggle choice: a query typed against branch
+    /// names carries no meaning over to commit subjects, or vice versa.
+    /// Transient per-open either way (spec 12 Non-Goal 5) — also cleared on
+    /// every launcher close ([`App::close_review_launcher`] /
+    /// [`App::close_review_launcher_after_start`]).
+    pub(super) launcher_filter: Option<super::list_filter::ListFilter>,
     /// The set of collapsed directory keys in the git panel's file tree (see
     /// [`super::file_tree`]). An `App` field rather than [`Mode::Panel`]
     /// state because a folded directory must stay folded across the panel
@@ -696,6 +706,7 @@ impl App {
             launcher_commits_generation: 0,
             launcher_commits_tasks: BackgroundTasks::new(),
             launcher_all_commits: false,
+            launcher_filter: None,
             panel_collapsed_dirs: HashSet::new(),
             active_commit: None,
             suspended_view: None,

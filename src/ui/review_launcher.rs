@@ -13,12 +13,20 @@
 //! [`App::confirm_launcher_branch_review`]. The Commits tab opens a
 //! read-only single-commit view on `Enter` via
 //! [`App::confirm_launcher_commit`]; both tabs share the shared motion
-//! layer (spec 12 FR-12) clamped against [`App::review_launcher_row_count`].
+//! layer (spec 12 FR-12) clamped against [`App::review_launcher_row_count`]
+//! and the shared `/` filter component (spec 12 FR-12,
+//! [`super::list_filter::ListFilter`]) via [`App::launcher_filter`] — see
+//! that field's doc for the shared-field-cleared-on-toggle decision. A
+//! filtered `Enter` still routes through [`App::confirm_launcher_branch_review`]'s
+//! in-session guard unchanged: [`App::review_launcher_confirm`] only
+//! translates the cursor to a real index before dispatch, never bypasses
+//! the guard that dispatch itself performs first.
 
 use crate::git::{CommitLogEntry, CommitLogRange, DiffTarget, GitRunner};
 
 use super::app::{App, Mode, ModeOrigin};
 use super::background::TaskId;
+use super::list_filter::ListFilter;
 use super::review_session::{
     ensure_review_worktree, load_reconciled_review_state, resolve_review_base,
     resolve_review_state_path,
@@ -90,20 +98,25 @@ impl App {
     }
 
     /// Closes the Review launcher without acting, restoring the mode it was
-    /// opened from exactly (panel cursor/tab included, via `ModeOrigin`). A
-    /// no-op (falls back to `Mode::Normal`, never panicking) if called while
-    /// the modal isn't open — defensive rather than relied upon.
+    /// opened from exactly (panel cursor/tab included, via `ModeOrigin`) and
+    /// dropping any active filter (transient per-open, see
+    /// [`App::launcher_filter`]'s doc). A no-op (falls back to
+    /// `Mode::Normal`, never panicking) if called while the modal isn't
+    /// open — defensive rather than relied upon.
     pub(super) fn close_review_launcher(&mut self) {
         self.mode = match self.mode {
             Mode::ReviewLauncher { origin, .. } => origin.restore(),
             other => other,
         };
+        self.launcher_filter = None;
     }
 
     /// Switches the launcher between its two tabs, resetting the cursor to
     /// the top (each tab's list is independent) and remembering the new tab
     /// in `last_launcher_tab` so the next open this process lands back here.
-    /// A no-op unless the launcher is open.
+    /// Also drops any active filter (see [`App::launcher_filter`]'s doc on
+    /// why toggling tabs doesn't try to carry a query over). A no-op unless
+    /// the launcher is open.
     pub(super) fn review_launcher_switch_tab(&mut self) {
         let Mode::ReviewLauncher { tab, cursor, .. } = &mut self.mode else {
             return;
@@ -111,6 +124,7 @@ impl App {
         *tab = tab.toggle();
         *cursor = 0;
         let new_tab = *tab;
+        self.launcher_filter = None;
         self.last_launcher_tab = new_tab;
         match new_tab {
             LauncherTab::Branches => self.load_launcher_branches(),
@@ -131,18 +145,133 @@ impl App {
         self.review_launcher_step(1, false);
     }
 
-    /// The active tab's row count: `launcher_branches`' length on Branches,
-    /// the active Commits source's length on Commits — kept as its own
-    /// method so that work only needs to change one arm, mirroring how
-    /// [`super::git_panel::App::panel_row_count`] centralizes the git
-    /// panel's per-tab length.
-    fn review_launcher_row_count(&self) -> usize {
+    /// The active tab's raw (unfiltered) row count: `launcher_branches`'
+    /// length on Branches, the active Commits source's length on Commits —
+    /// kept as its own method so that work only needs to change one arm,
+    /// mirroring how [`super::git_panel::App::panel_row_count`] centralizes
+    /// the git panel's per-tab length.
+    fn review_launcher_raw_row_count(&self) -> usize {
         let Mode::ReviewLauncher { tab, .. } = self.mode else {
             return 0;
         };
         match tab {
             LauncherTab::Branches => self.launcher_branches.len(),
             LauncherTab::Commits => self.launcher_commits_rows().len(),
+        }
+    }
+
+    /// The active tab's effective row count: the active filter's filtered
+    /// view when one is set, the full tab's row count otherwise (spec 12's
+    /// filtered-view design constraint) — every motion clamps against this.
+    fn review_launcher_row_count(&self) -> usize {
+        self.launcher_filter
+            .as_ref()
+            .map_or_else(|| self.review_launcher_raw_row_count(), ListFilter::len)
+    }
+
+    /// Builds the active tab's `/`-filterable labels: branch names on the
+    /// Branches tab, "`<short-sha> <subject>`" on the Commits tab — whichever
+    /// source [`App::launcher_commits_rows`] currently selects.
+    fn review_launcher_filter_labels(&self) -> Vec<String> {
+        let Mode::ReviewLauncher { tab, .. } = self.mode else {
+            return Vec::new();
+        };
+        match tab {
+            LauncherTab::Branches => self
+                .launcher_branches
+                .iter()
+                .map(|b| b.name.clone())
+                .collect(),
+            LauncherTab::Commits => self
+                .launcher_commits_rows()
+                .iter()
+                .map(|c| format!("{} {}", c.short_sha, c.subject))
+                .collect(),
+        }
+    }
+
+    /// Translates the launcher's cursor (a filtered position while a filter
+    /// is active, a raw index otherwise) into a real index into whichever
+    /// list backs the active tab — the one point `Enter`
+    /// ([`App::review_launcher_confirm`]) and the Commits-tab prefetch check
+    /// route through.
+    fn review_launcher_real_index(&self, cursor: usize) -> Option<usize> {
+        match &self.launcher_filter {
+            Some(f) => f.real_index(cursor),
+            None => (cursor < self.review_launcher_raw_row_count()).then_some(cursor),
+        }
+    }
+
+    /// The launcher's cursor translated to a real index (see
+    /// [`App::review_launcher_real_index`]), exposed read-only for
+    /// integration tests that need to know which real row `Enter` is about
+    /// to act on before pressing it. A no-op (`None`) unless the launcher is
+    /// open.
+    #[cfg(test)]
+    pub(super) fn review_launcher_selected_index(&self) -> Option<usize> {
+        let Mode::ReviewLauncher { cursor, .. } = self.mode else {
+            return None;
+        };
+        self.review_launcher_real_index(cursor)
+    }
+
+    /// Enters filter mode (`/`): a no-op if it's already active (`/` while
+    /// locked resumes editing instead — see
+    /// [`App::review_launcher_resume_filter_editing`]).
+    pub(super) fn review_launcher_enter_filter(&mut self) {
+        if self.launcher_filter.is_none() {
+            let labels = self.review_launcher_filter_labels();
+            self.launcher_filter = Some(ListFilter::open(&labels));
+        }
+    }
+
+    /// Resumes editing a locked filter (`/` while locked).
+    pub(super) fn review_launcher_resume_filter_editing(&mut self) {
+        if let Some(f) = self.launcher_filter.as_mut() {
+            f.resume_editing();
+        }
+    }
+
+    /// Locks the active filter (`Enter` while editing), handing key
+    /// handling back to the launcher's own verbs.
+    pub(super) fn review_launcher_lock_filter(&mut self) {
+        if let Some(f) = self.launcher_filter.as_mut() {
+            f.lock();
+        }
+    }
+
+    /// Clears the active filter entirely (`Esc`).
+    pub(super) fn review_launcher_clear_filter(&mut self) {
+        self.launcher_filter = None;
+        self.review_launcher_clamp_cursor_to_len();
+    }
+
+    /// Appends `c` to the active filter's query and re-clamps the cursor
+    /// into the freshly reranked view. A no-op if no filter is active.
+    pub(super) fn review_launcher_filter_push_char(&mut self, c: char) {
+        let labels = self.review_launcher_filter_labels();
+        if let Some(f) = self.launcher_filter.as_mut() {
+            f.push_char(c, &labels);
+        }
+        self.review_launcher_clamp_cursor_to_len();
+    }
+
+    /// Deletes the last character of the active filter's query. A no-op if
+    /// no filter is active.
+    pub(super) fn review_launcher_filter_backspace(&mut self) {
+        let labels = self.review_launcher_filter_labels();
+        if let Some(f) = self.launcher_filter.as_mut() {
+            f.backspace(&labels);
+        }
+        self.review_launcher_clamp_cursor_to_len();
+    }
+
+    /// Re-clamps the launcher's cursor into `review_launcher_row_count()` —
+    /// the effective (filtered or full) length — after the filter mutates.
+    fn review_launcher_clamp_cursor_to_len(&mut self) {
+        let len = self.review_launcher_row_count();
+        if let Mode::ReviewLauncher { cursor, .. } = &mut self.mode {
+            *cursor = (*cursor).min(len.saturating_sub(1));
         }
     }
 
@@ -222,10 +351,13 @@ impl App {
     /// meaningful once the tab's "all commits" source is active (the
     /// ahead-of-base source, `launcher_commits`, is a single-shot fetch with
     /// nothing to paginate); a no-op on the Branches tab or while the
-    /// ahead-of-base source is active. Mirrors the git panel History tab's
-    /// own scroll-triggered prefetch, so scrolling the launcher's Commits
-    /// tab (in "all commits" mode) never has to wait on a visible "load
-    /// more" action either.
+    /// ahead-of-base source is active. Translates the cursor through
+    /// [`App::review_launcher_real_index`] first, so a filtered position
+    /// checks proximity to the end of the *real* (unfiltered) source rather
+    /// than the filtered view's own (typically much smaller) length.
+    /// Mirrors the git panel History tab's own scroll-triggered prefetch, so
+    /// scrolling the launcher's Commits tab (in "all commits" mode) never
+    /// has to wait on a visible "load more" action either.
     fn review_launcher_maybe_prefetch_commits(&mut self) {
         let Mode::ReviewLauncher {
             tab: LauncherTab::Commits,
@@ -235,8 +367,10 @@ impl App {
         else {
             return;
         };
-        if self.launcher_all_commits {
-            self.maybe_prefetch_history(cursor);
+        if self.launcher_all_commits
+            && let Some(real) = self.review_launcher_real_index(cursor)
+        {
+            self.maybe_prefetch_history(real);
         }
     }
 
@@ -257,14 +391,36 @@ impl App {
             .unwrap_or_default();
     }
 
-    /// The launcher's `Enter` gesture: dispatches on the active tab.
+    /// The launcher's `Enter` gesture: translates the cursor to a real index
+    /// while a filter is active (a no-op if the filter matches nothing, same
+    /// contract as [`super::switcher::SwitcherState`]'s own
+    /// `active_real_index`) and dispatches on the active tab. Without a
+    /// filter the raw cursor passes straight through unchanged — including
+    /// when it's out of range (an empty list) — exactly as before spec 12:
+    /// the callee's own guard
+    /// ([`App::confirm_launcher_branch_review`]'s in-session check) must
+    /// still run *before* any row-emptiness check, so this never resolves
+    /// the index down to "nothing to do" ahead of that guard the way
+    /// [`App::review_launcher_real_index`] would (that method is for the
+    /// prefetch check, where skipping silently on an unresolved index is
+    /// correct). A filtered `Enter` on the Branches tab still runs into the
+    /// same in-session guard exactly as an unfiltered one does — this only
+    /// changes *which* row's index gets passed in, never what the callee
+    /// does with it.
     pub(super) fn review_launcher_confirm(&mut self) {
         let Mode::ReviewLauncher { tab, cursor, .. } = self.mode else {
             return;
         };
+        let index = match &self.launcher_filter {
+            Some(f) => match f.real_index(cursor) {
+                Some(i) => i,
+                None => return,
+            },
+            None => cursor,
+        };
         match tab {
-            LauncherTab::Branches => self.confirm_launcher_branch_review(cursor),
-            LauncherTab::Commits => self.confirm_launcher_commit(cursor),
+            LauncherTab::Branches => self.confirm_launcher_branch_review(index),
+            LauncherTab::Commits => self.confirm_launcher_commit(index),
         }
     }
 
@@ -968,6 +1124,58 @@ index 111..222 100644
         // `BranchListOps::worktree_add`/`git_common_dir`/`default_base` all
         // panic — reaching this assertion without a panic proves none of
         // them ran.
+    }
+
+    /// The same guard, proven to hold when `Enter` is filtered (spec 12
+    /// FR-12): a locked filter narrows two real branches down to one
+    /// (`"zulu-target"`, real index 1 — deliberately not the first row, so
+    /// this can't pass by coincidence the way an unfiltered index-0 case
+    /// could), yet the in-session guard still fires before any branch
+    /// lookup or worktree call, exactly as the unfiltered case above.
+    #[test]
+    fn confirm_during_an_active_review_session_emits_the_hint_and_mutates_nothing_under_a_filter() {
+        let mut app = app_with_branches(vec![branch("alpha"), branch("zulu-target")]);
+        app.open_review_launcher();
+        app.target = crate::git::DiffTarget::Review {
+            base: "main".to_string(),
+            branch: "feature".to_string(),
+        };
+
+        app.review_launcher_enter_filter();
+        for c in "zulu".chars() {
+            app.review_launcher_filter_push_char(c);
+        }
+        app.review_launcher_lock_filter();
+        assert_eq!(
+            app.review_launcher_selected_index(),
+            Some(1),
+            "sanity: the filter must resolve to the second real branch"
+        );
+
+        app.review_launcher_confirm();
+
+        assert!(
+            matches!(
+                app.mode,
+                Mode::ReviewLauncher {
+                    tab: LauncherTab::Branches,
+                    ..
+                }
+            ),
+            "the launcher stays open and on the Branches tab, got {:?}",
+            app.mode
+        );
+        assert!(
+            app.status_message
+                .as_deref()
+                .is_some_and(|m| m.contains("feature") && m.contains('q')),
+            "the hint must name the branch under review and point at q, got {:?}",
+            app.status_message
+        );
+        // `BranchListOps::worktree_add`/`git_common_dir`/`default_base` all
+        // panic — reaching this assertion without a panic proves none of
+        // them ran, even though the filter translated the cursor to a
+        // non-zero real index before the guard ran.
     }
 
     // -- Commits tab: data loading (FR-11) -----------------------------------

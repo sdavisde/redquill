@@ -655,6 +655,7 @@ fn example_config_documents_every_modal_action_exactly_once() {
             LauncherAction::JumpToTop,
             LauncherAction::JumpToBottom,
             LauncherAction::Confirm,
+            LauncherAction::EnterFilter,
             LauncherAction::Close,
         ],
         launcher_action_name,

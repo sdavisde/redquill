@@ -4,7 +4,8 @@ use crate::diff::FileDiff;
 use crate::git::RawFilePatch;
 use crate::ui::keymap::KeySeq;
 use crate::ui::modal_keys::{
-    COMPOSE_HINTS, LIST_KEYS, ModalKeymaps, PEEK_KEYS, STAGING_KEYS, SWITCHER_KEYS,
+    COMPOSE_HINTS, LIST_KEYS, ModalKeymaps, PEEK_KEYS, REVIEW_LAUNCHER_KEYS, STAGING_KEYS,
+    SWITCHER_KEYS,
 };
 use crate::ui::{App, Mode, Row, dispatch_key};
 
@@ -359,6 +360,22 @@ fn switcher_mode_hints() {
             "Enter",
             "/",
             "Esc"
+        ]
+    );
+}
+
+#[test]
+fn review_launcher_mode_hints() {
+    let entries = modal_hints(&REVIEW_LAUNCHER_KEYS);
+    assert_eq!(
+        labels(&entries),
+        vec![
+            "switch tab",
+            "move",
+            "confirm",
+            "filter",
+            "close",
+            "all commits"
         ]
     );
 }

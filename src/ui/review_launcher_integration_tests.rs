@@ -106,6 +106,32 @@ fn assert_inside_tempdir(path: &Path, tmp: &TempDir) {
     );
 }
 
+/// A repo on `main` (checked out, clean) with a "many candidate branches"
+/// shape: `feature-apple` and `feature-apricot` share a `feature` prefix a
+/// `/feature` query narrows to (excluding `gamma` and the checked-out
+/// `main`) — the fixture for spec 12 FR-12's fuzzy-filter journey (`R`,
+/// `/`, type a fragment, `j` to move within the narrowed view, `Enter`
+/// starts the right one). `feature-apricot` gets its own tip commit so the
+/// two candidates are trivially distinguishable if a test needs to.
+fn repo_with_many_candidate_branches() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    assert_inside_tempdir(dir, &tmp);
+    git(dir, &["init", "-q", "-b", "main"]);
+    configure_identity(dir);
+    write(dir, "a.rs", "fn a() {}\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "initial"]);
+    git(dir, &["branch", "feature-apple"]);
+    git(dir, &["branch", "gamma"]);
+    git(dir, &["branch", "feature-apricot"]);
+    git(dir, &["checkout", "-q", "feature-apricot"]);
+    write(dir, "a.rs", "fn a() { apricot(); }\n");
+    git(dir, &["commit", "-aq", "-m", "apricot tip"]);
+    git(dir, &["checkout", "-q", "main"]);
+    tmp
+}
+
 /// A repo on `main` (checked out, clean) with one commit, plus a `feature`
 /// branch (not checked out anywhere) one commit ahead that changes `a.rs` —
 /// the fixture for a successful in-app review start with exactly one
@@ -966,6 +992,147 @@ fn launcher_commits_tab_enter_opens_a_commit_during_an_active_review_session() {
     assert!(
         app.in_review_session(),
         "the review session itself must be untouched by the peek"
+    );
+
+    drop(tmp);
+}
+
+// -- Scenarios: `/` fuzzy filter (spec 12 FR-12) -----------------------------
+
+/// Journey C: `R`, `/`, type a fragment, `j` to move within the narrowed
+/// view, `Enter` starts a review of the branch actually under the cursor —
+/// not just the first filtered match — proving the filtered position
+/// translates to the right real branch before the reroot machinery ever
+/// runs. Mirrors `switcher.rs`'s own
+/// `filter_narrows_branches_motion_moves_within_it_and_confirm_switches_to_it`
+/// test, dynamically capturing which branch ends up selected rather than
+/// hardcoding the fuzzy matcher's tie-break order between the two
+/// `feature-*` candidates.
+#[test]
+fn filter_narrows_branches_motion_moves_within_it_and_confirm_reroots_into_the_filtered_branch() {
+    let tmp = repo_with_many_candidate_branches();
+    let dir = tmp.path();
+    let mut app = app_for(dir);
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('R'));
+    assert_eq!(
+        app.launcher_branches
+            .iter()
+            .map(|b| b.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["feature-apple", "feature-apricot", "gamma"],
+        "for-each-ref lists local branches alphabetically"
+    );
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('/'));
+    for c in "feature".chars() {
+        press(&mut app, &keymap, &mut pending, KeyCode::Char(c));
+    }
+    assert_eq!(
+        app.launcher_filter.as_ref().map(|f| f.len()),
+        Some(2),
+        "gamma must be excluded"
+    );
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter); // locks the filter
+    assert!(
+        !app.launcher_filter.as_ref().unwrap().is_editing(),
+        "Enter while editing must lock, not confirm"
+    );
+    dump_frame(
+        "filter narrowed to the two feature-* branches, locked",
+        &app,
+        &keymap,
+    );
+
+    let first = app
+        .review_launcher_selected_index()
+        .expect("a locked non-empty filter must resolve to a real index");
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('j'));
+    let second = app
+        .review_launcher_selected_index()
+        .expect("moving within a two-row filtered view must stay resolved");
+    assert_ne!(first, second, "j must move within the filtered view");
+    let target_name = app.launcher_branches[second].name.clone();
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter); // confirms the filtered (moved-to) selection
+
+    assert_eq!(
+        app.mode,
+        Mode::Normal,
+        "a Normal-origin launcher restores to Normal after a successful start, got {:?}",
+        app.mode
+    );
+    assert!(
+        matches!(&app.target, DiffTarget::Review { branch, .. } if branch == &target_name),
+        "Enter must start review of the filtered, `j`-selected branch ({target_name}), got {:?}",
+        app.target
+    );
+    dump_frame(
+        "landed in the review session started from a filtered selection",
+        &app,
+        &keymap,
+    );
+
+    drop(tmp);
+}
+
+/// The Commits tab's ahead-of-base list is just as `/`-filterable as
+/// Branches: narrowing to a fragment that matches exactly one of two real
+/// commits, then confirming, opens that specific commit — not just
+/// whichever one the raw (unfiltered) cursor position would have named.
+#[test]
+fn filter_narrows_the_commits_tab_and_confirm_opens_the_filtered_commit() {
+    let tmp = repo_on_feature_with_two_commits_ahead_of_main();
+    let dir = tmp.path();
+    let mut app = app_for(dir);
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('R'));
+    press(&mut app, &keymap, &mut pending, KeyCode::Tab); // -> Commits
+    drain_launcher_commits(&mut app);
+    assert_eq!(
+        app.launcher_commits
+            .iter()
+            .map(|c| c.subject.as_str())
+            .collect::<Vec<_>>(),
+        vec!["feature commit two", "feature commit one"],
+        "ahead-of-base, newest first"
+    );
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('/'));
+    for c in "one".chars() {
+        press(&mut app, &keymap, &mut pending, KeyCode::Char(c));
+    }
+    assert_eq!(
+        app.launcher_filter.as_ref().map(|f| f.len()),
+        Some(1),
+        "only the \"commit one\" subject must match \"one\""
+    );
+    dump_frame(
+        "Commits tab filtered to a single fragment match",
+        &app,
+        &keymap,
+    );
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter); // locks the filter
+    press(&mut app, &keymap, &mut pending, KeyCode::Enter); // confirms it, opening the commit
+
+    assert!(app.viewing_commit(), "a commit view must now be open");
+    let opened = app
+        .active_commit
+        .clone()
+        .expect("commit header must be set");
+    assert_eq!(
+        opened.subject, "feature commit one",
+        "Enter must open the filtered commit, not the raw cursor's row-0 default"
+    );
+    dump_frame(
+        "opened the filtered commit via a locked Commits-tab filter",
+        &app,
+        &keymap,
     );
 
     drop(tmp);

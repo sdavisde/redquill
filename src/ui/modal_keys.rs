@@ -1231,8 +1231,9 @@ pub(super) static CONFIRM_REMOTE_OP_KEYS: LazyLock<Vec<ModalBinding<ConfirmRemot
 /// [`SwitcherAction`] for the first five — tab toggle, cursor pair, confirm,
 /// close — plus the shared motion set beyond plain step (spec 12 FR-12,
 /// half/full-page paging, jump-to-extremes — see [`SwitcherAction`]'s
-/// identical doc note on jump-to-top's single-`g` divergence) and the one
-/// launcher-specific row (`ToggleAllCommits`).
+/// identical doc note on jump-to-top's single-`g` divergence), the `/`
+/// filter (spec 12 FR-12), and the one launcher-specific row
+/// (`ToggleAllCommits`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LauncherAction {
     ToggleTab,
@@ -1247,6 +1248,8 @@ pub(super) enum LauncherAction {
     /// Acts on the highlighted row of the active tab (see
     /// [`super::app::App::review_launcher_confirm`]).
     Confirm,
+    /// Enters the `/` filter (see `super::list_filter`), spec 12 FR-12.
+    EnterFilter,
     Close,
     /// The Commits tab's "all commits" toggle — switches its data source
     /// between ahead-of-base and the full recent-HEAD log (see
@@ -1266,6 +1269,7 @@ pub(super) fn launcher_action_name(action: LauncherAction) -> &'static str {
         LauncherAction::JumpToTop => "jump-to-top",
         LauncherAction::JumpToBottom => "jump-to-bottom",
         LauncherAction::Confirm => "confirm",
+        LauncherAction::EnterFilter => "enter-filter",
         LauncherAction::Close => "close",
         LauncherAction::ToggleAllCommits => "toggle-all-commits",
     }
@@ -1283,6 +1287,7 @@ pub(super) fn launcher_action_from_name(name: &str) -> Option<LauncherAction> {
         "jump-to-top" => LauncherAction::JumpToTop,
         "jump-to-bottom" => LauncherAction::JumpToBottom,
         "confirm" => LauncherAction::Confirm,
+        "enter-filter" => LauncherAction::EnterFilter,
         "close" => LauncherAction::Close,
         "toggle-all-commits" => LauncherAction::ToggleAllCommits,
         _ => return None,
@@ -1385,11 +1390,20 @@ pub(super) static REVIEW_LAUNCHER_KEYS: LazyLock<Vec<ModalBinding<LauncherAction
                 }),
             },
             ModalBinding {
+                description: "Filter (fuzzy, narrows the active tab)",
+                keys: vec![ModalKey::plain(KeyCode::Char('/'))],
+                action: LauncherAction::EnterFilter,
+                footer: Some(FooterHint {
+                    rank: 4,
+                    label: "filter",
+                }),
+            },
+            ModalBinding {
                 description: "Close",
                 keys: vec![ModalKey::plain(KeyCode::Esc)],
                 action: LauncherAction::Close,
                 footer: Some(FooterHint {
-                    rank: 4,
+                    rank: 5,
                     label: "close",
                 }),
             },
@@ -1398,7 +1412,7 @@ pub(super) static REVIEW_LAUNCHER_KEYS: LazyLock<Vec<ModalBinding<LauncherAction
                 keys: vec![ModalKey::plain(KeyCode::Char('a'))],
                 action: LauncherAction::ToggleAllCommits,
                 footer: Some(FooterHint {
-                    rank: 5,
+                    rank: 6,
                     label: "all commits",
                 }),
             },
@@ -3520,6 +3534,13 @@ index 111..222 100644
                             "Launcher {label}: modal stays open (no backend attached)"
                         );
                     }
+                    LauncherAction::EnterFilter => {
+                        handle_review_launcher_key(&mut app, key.event());
+                        assert!(
+                            app.launcher_filter.is_some(),
+                            "Launcher {label}: must enter filter mode"
+                        );
+                    }
                     LauncherAction::Close => {
                         handle_review_launcher_key(&mut app, key.event());
                         assert_eq!(
@@ -4185,14 +4206,14 @@ index 111..222 100644
     }
 
     /// FR-10's no-shadow requirement: every context gaining the `/` filter
-    /// (List, Staging, the accepted panel, Switcher) must resolve `/` to
-    /// `EnterFilter` specifically — not some pre-existing row that happened
-    /// to already claim the key. `resolve` returns the *first* matching
-    /// row, so if any other action had already bound `/` ahead of
-    /// `EnterFilter`'s row, this would observe that action instead and fail,
-    /// proving the check has teeth (not just "no row raised a config-merge
-    /// collision warning," which a same-table check like this doesn't even
-    /// need config to demonstrate).
+    /// (List, Staging, the accepted panel, Switcher, the Review launcher —
+    /// spec 12 FR-12/FR-13) must resolve `/` to `EnterFilter` specifically —
+    /// not some pre-existing row that happened to already claim the key.
+    /// `resolve` returns the *first* matching row, so if any other action
+    /// had already bound `/` ahead of `EnterFilter`'s row, this would
+    /// observe that action instead and fail, proving the check has teeth
+    /// (not just "no row raised a config-merge collision warning," which a
+    /// same-table check like this doesn't even need config to demonstrate).
     #[test]
     fn filter_key_does_not_shadow_any_existing_binding_in_gaining_tables() {
         let slash = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
@@ -4208,6 +4229,10 @@ index 111..222 100644
         assert_eq!(
             resolve(&SWITCHER_KEYS, slash),
             Some(SwitcherAction::EnterFilter)
+        );
+        assert_eq!(
+            resolve(&REVIEW_LAUNCHER_KEYS, slash),
+            Some(LauncherAction::EnterFilter)
         );
     }
 

@@ -166,6 +166,18 @@ const SWITCHER_FILTER_HOOKS: FilterHooks = FilterHooks {
     clear: |app| app.switcher_clear_filter(),
 };
 
+/// [`FilterHooks`] for the Review launcher's active-tab filter
+/// (`App::launcher_filter`), spec 12 FR-12.
+const LAUNCHER_FILTER_HOOKS: FilterHooks = FilterHooks {
+    is_active: |app| app.launcher_filter.is_some(),
+    is_editing: |app| app.launcher_filter.as_ref().is_some_and(|f| f.is_editing()),
+    push_char: |app, c| app.review_launcher_filter_push_char(c),
+    backspace: |app| app.review_launcher_filter_backspace(),
+    lock: |app| app.review_launcher_lock_filter(),
+    resume_editing: |app| app.review_launcher_resume_filter_editing(),
+    clear: |app| app.review_launcher_clear_filter(),
+};
+
 /// Handles one key event while [`super::Mode::Compose`] is active. Resolves
 /// against `app.modal_keys.compose` first; an unresolved, unmodified `Char`
 /// inserts as literal text (never remappable, per the free-text-mode
@@ -641,12 +653,16 @@ pub(super) fn handle_switcher_key(app: &mut App, key: KeyEvent) {
 /// (the Review launcher modal, `R`, `Scope::Global`): `Tab`/`Shift-Tab`/
 /// `h`/`l`/arrows switch between the Branches and Commits tabs, the shared
 /// motion set (`j`/`k`, half/full-page paging, jump-to-extremes, count
-/// prefixes — spec 12 FR-12) moves the cursor, `Enter` confirms the
-/// highlighted row — starts a branch review on the Branches tab, opens a
-/// read-only commit view on the Commits tab — `Esc` closes the modal back to
-/// the mode `R` was pressed from, and `a` toggles the Commits tab between
-/// its ahead-of-base list and the full recent-HEAD log.
+/// prefixes — spec 12 FR-12) moves the cursor, `/` filters the active tab
+/// (spec 12 FR-12), `Enter` confirms the highlighted row — starts a branch
+/// review on the Branches tab, opens a read-only commit view on the Commits
+/// tab — `Esc` closes the modal back to the mode `R` was pressed from, and
+/// `a` toggles the Commits tab between its ahead-of-base list and the full
+/// recent-HEAD log.
 pub(super) fn handle_review_launcher_key(app: &mut App, key: KeyEvent) {
+    if intercept_filter(app, key, &LAUNCHER_FILTER_HOOKS) {
+        return;
+    }
     let count = match intercept_motion_count(app, key) {
         MotionIntercept::Handled => return,
         MotionIntercept::Resolve(count) => count,
@@ -673,6 +689,7 @@ pub(super) fn handle_review_launcher_key(app: &mut App, key: KeyEvent) {
         LauncherAction::JumpToTop => app.review_launcher_jump_to_top(),
         LauncherAction::JumpToBottom => app.review_launcher_jump_to_bottom(),
         LauncherAction::Confirm => app.review_launcher_confirm(),
+        LauncherAction::EnterFilter => app.review_launcher_enter_filter(),
         LauncherAction::Close => app.close_review_launcher(),
         LauncherAction::ToggleAllCommits => app.review_launcher_toggle_all_commits(),
     }

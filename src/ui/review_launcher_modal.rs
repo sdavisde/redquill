@@ -104,8 +104,19 @@ fn commits_empty_state_line(table: &[ModalBinding<LauncherAction>], all_commits:
 /// key once a load has landed with nothing in it, or real
 /// [`CommitLogEntry`] rows rendered via [`history_item`] (matching the
 /// History tab's row style exactly) — newest first, cursor starting on the
-/// newest.
-fn commits_rows(app: &App, theme: &Theme, content_width: usize) -> Vec<ListItem<'static>> {
+/// newest. `order` restricts which commits render and in what sequence
+/// (indices into the active source, in render order — the full `0..len`
+/// identity order with no active filter, or
+/// [`super::list_filter::ListFilter::indices`]'s filtered/ranked order
+/// otherwise, spec 12 FR-12); the loading/raw-empty states above take
+/// priority over `order` since a filter has nothing real to narrow yet in
+/// either case.
+fn commits_rows(
+    app: &App,
+    order: &[usize],
+    theme: &Theme,
+    content_width: usize,
+) -> Vec<ListItem<'static>> {
     if app.launcher_commits_loading() {
         return vec![ListItem::new(Line::from(Span::styled(
             "  loading\u{2026}",
@@ -123,8 +134,9 @@ fn commits_rows(app: &App, theme: &Theme, content_width: usize) -> Vec<ListItem<
         )))];
     }
     let now = now_unix();
-    commits
+    order
         .iter()
+        .filter_map(|&i| commits.get(i))
         .map(|c| history_item(c, false, now, theme, content_width))
         .collect()
 }
@@ -132,16 +144,20 @@ fn commits_rows(app: &App, theme: &Theme, content_width: usize) -> Vec<ListItem<
 /// The Branches tab's rows: local branches excluding the current one,
 /// mirroring the retired review-branch modal's `no other local branches`
 /// empty state exactly (nothing to review when every branch is checked out
-/// already, or the repo has only one).
-fn branch_rows(branches: &[LocalBranch], theme: &Theme) -> Vec<ListItem<'static>> {
+/// already, or the repo has only one) — regardless of `order`, since
+/// filtering nothing is still nothing. `order` restricts which branches
+/// render and in what sequence (see [`commits_rows`]'s identical
+/// convention, spec 12 FR-12).
+fn branch_rows(branches: &[LocalBranch], order: &[usize], theme: &Theme) -> Vec<ListItem<'static>> {
     if branches.is_empty() {
         return vec![ListItem::new(Line::from(Span::styled(
             "  no other local branches",
             Style::default().fg(theme.footer_text),
         )))];
     }
-    branches
+    order
         .iter()
+        .filter_map(|&i| branches.get(i))
         .map(|b| ListItem::new(Line::from(Span::raw(format!("  {}", b.name)))))
         .collect()
 }
@@ -168,6 +184,14 @@ fn hint_line(table: &[ModalBinding<LauncherAction>]) -> String {
 /// Renders the Review launcher modal, centered over `area`. A no-op if
 /// `app.mode` isn't [`super::app::Mode::ReviewLauncher`] (the caller should
 /// only invoke this in that mode).
+///
+/// A `/` filter (spec 12 FR-12) adds a one-row chrome line below the
+/// outcome-hint line showing the live/locked query, narrows the active
+/// tab's rows to the filtered view, and shows a "no matches" hint in place
+/// of a blank list; an underlying empty/loading tab keeps its pre-existing
+/// hint regardless (see [`branch_rows`]/[`commits_rows`]'s identical
+/// precedence — mirrors [`super::switcher_modal::render`]'s equivalent
+/// filter-chrome layout for the switcher modal).
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let super::app::Mode::ReviewLauncher { tab, cursor, .. } = app.mode else {
         return;
@@ -196,7 +220,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(inner)
     };
     let hint_area = rows[0];
-    let list_area = rows[1];
+    let mut list_area = rows[1];
 
     frame.render_widget(
         Line::from(Span::styled(
@@ -206,16 +230,62 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         hint_area,
     );
 
+    let chrome_area = if app.launcher_filter.is_some() {
+        let [chrome, rest] =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(list_area);
+        list_area = rest;
+        Some(chrome)
+    } else {
+        None
+    };
+    if let (Some(chrome_area), Some(filter)) = (chrome_area, app.launcher_filter.as_ref()) {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                super::list_filter::chrome_text(filter),
+                Style::default().fg(app.theme.search_prompt),
+            ))),
+            chrome_area,
+        );
+    }
+
+    let raw_len = match tab {
+        LauncherTab::Branches => app.launcher_branches.len(),
+        LauncherTab::Commits => app.launcher_commits_rows().len(),
+    };
+    let loading = tab == LauncherTab::Commits && app.launcher_commits_loading();
+    if raw_len > 0
+        && !loading
+        && let Some(filter) = app.launcher_filter.as_ref().filter(|f| f.is_empty())
+    {
+        let hint = Paragraph::new(super::list_filter::empty_hint(filter));
+        frame.render_widget(hint, list_area);
+        if let Some(message) = &app.status_message {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    message.clone(),
+                    Style::default().fg(app.theme.status_message),
+                ))),
+                rows[2],
+            );
+        }
+        return;
+    }
+
+    let order: Vec<usize> = match &app.launcher_filter {
+        Some(f) => f.indices().to_vec(),
+        None => (0..raw_len).collect(),
+    };
+
     let (items, selectable) = match tab {
         LauncherTab::Branches => (
-            branch_rows(&app.launcher_branches, &app.theme),
-            !app.launcher_branches.is_empty(),
+            branch_rows(&app.launcher_branches, &order, &app.theme),
+            !app.launcher_branches.is_empty() && !order.is_empty(),
         ),
         LauncherTab::Commits => {
             let selectable =
-                !app.launcher_commits_loading() && !app.launcher_commits_rows().is_empty();
+                !loading && !app.launcher_commits_rows().is_empty() && !order.is_empty();
             (
-                commits_rows(app, &app.theme, list_area.width as usize),
+                commits_rows(app, &order, &app.theme, list_area.width as usize),
                 selectable,
             )
         }
@@ -444,5 +514,99 @@ index 111..222 100644
         assert!(content.contains("switch tab"));
         assert!(content.contains("confirm"));
         assert!(content.contains("close"));
+    }
+
+    // -- `/` filter chrome (spec 12 FR-12) ------------------------------------
+
+    fn two_branches() -> Vec<LocalBranch> {
+        vec![
+            LocalBranch {
+                name: "alpha".to_string(),
+                is_current: false,
+                worktree: None,
+            },
+            LocalBranch {
+                name: "zulu".to_string(),
+                is_current: false,
+                worktree: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn filter_chrome_shows_the_live_query_and_narrows_the_branches_tab() {
+        let mut app = App::new(vec![sample_file()]);
+        app.launcher_branches = two_branches();
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::Branches,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        let labels: Vec<String> = app
+            .launcher_branches
+            .iter()
+            .map(|b| b.name.clone())
+            .collect();
+        let mut filter = super::super::list_filter::ListFilter::open(&labels);
+        filter.push_char('z', &labels);
+        app.launcher_filter = Some(filter);
+
+        let content = render_launcher(&app);
+        assert!(
+            content.contains("/z"),
+            "must show the live query:\n{content}"
+        );
+        assert!(
+            content.contains("zulu"),
+            "the matching branch must render:\n{content}"
+        );
+        assert!(
+            !content.contains("alpha"),
+            "the non-matching branch must be narrowed out:\n{content}"
+        );
+    }
+
+    #[test]
+    fn filter_empty_state_renders_a_no_matches_hint_instead_of_a_blank_list() {
+        let mut app = App::new(vec![sample_file()]);
+        app.launcher_branches = two_branches();
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::Branches,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        let labels: Vec<String> = app
+            .launcher_branches
+            .iter()
+            .map(|b| b.name.clone())
+            .collect();
+        let mut filter = super::super::list_filter::ListFilter::open(&labels);
+        filter.push_char('q', &labels);
+        filter.lock();
+        app.launcher_filter = Some(filter);
+
+        let content = render_launcher(&app);
+        assert!(
+            content.contains("no matches"),
+            "an empty filtered view must show the hint, not a blank list:\n{content}"
+        );
+    }
+
+    #[test]
+    fn an_empty_branch_list_keeps_its_own_empty_state_even_under_a_filter() {
+        // Filtering nothing is still nothing — the underlying "no other
+        // local branches" hint must win over the filter's generic
+        // "no matches" hint (mirrors `switcher_modal`'s identical
+        // precedence).
+        let mut app = App::new(vec![sample_file()]);
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::Branches,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.launcher_filter = Some(super::super::list_filter::ListFilter::open(&[]));
+
+        let content = render_launcher(&app);
+        assert!(content.contains("no other local branches"));
     }
 }
