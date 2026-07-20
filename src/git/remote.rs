@@ -127,6 +127,11 @@ impl PrRef {
         self.number
     }
 
+    /// Which forge's special-ref convention this ref uses.
+    pub fn kind(&self) -> PrRefKind {
+        self.kind
+    }
+
     /// The provider's special ref that resolves to this PR/MR's head
     /// commit (e.g. `refs/pull/42/head`).
     pub fn source_ref(&self) -> String {

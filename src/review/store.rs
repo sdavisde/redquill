@@ -157,6 +157,25 @@ pub struct ForgeMetadata {
     /// The head commit SHA as of the last successful fetch, for detecting
     /// the author pushing new commits on the next open/refresh.
     pub last_head_sha: String,
+    /// The MR's diff refs as of the last successful fetch (GitLab only) —
+    /// pinned at open time so submitted comment positions describe the same
+    /// diff snapshot the reviewer actually saw, even if the author pushes
+    /// mid-review. Omitted entirely when absent (GitHub reviews, or state
+    /// persisted before this field existed), leaving the on-disk shape
+    /// unchanged; an absent value degrades to a submit-time fetch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_refs: Option<PersistedDiffRefs>,
+}
+
+/// The three SHAs a GitLab MR positions notes against, as plain persisted
+/// data. Deliberately a local mirror of `forge`'s `DiffRefs` rather than a
+/// reuse of it: this pure-persistence layer stays free of forge types, and
+/// the presentation layer converts at the boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistedDiffRefs {
+    pub base_sha: String,
+    pub start_sha: String,
+    pub head_sha: String,
 }
 
 /// Which forge a [`ForgeMetadata`] block targets. Renamed explicitly
@@ -590,6 +609,7 @@ mod tests {
                     number: 42,
                     title: String::new(),
                     last_head_sha: "abc123def456".to_string(),
+                    diff_refs: None,
                 }),
             },
         );
@@ -628,6 +648,7 @@ mod tests {
             number: 7,
             title: "Fix the widget".to_string(),
             last_head_sha: "deadbeef".to_string(),
+            diff_refs: None,
         };
         let json = serde_json::to_string(&meta).unwrap();
         assert!(
@@ -636,6 +657,46 @@ mod tests {
         );
         let round_tripped: ForgeMetadata = serde_json::from_str(&json).unwrap();
         assert_eq!(round_tripped, meta);
+    }
+
+    /// A pinned diff-refs block serializes and round-trips; an absent one
+    /// omits the key entirely, and a forge block persisted before the field
+    /// existed still loads (with no pin).
+    #[test]
+    fn forge_block_diff_refs_round_trip_and_stay_backward_compatible() {
+        let meta = ForgeMetadata {
+            provider: ForgeProviderKind::GitLab,
+            host: "gitlab.com".to_string(),
+            number: 9,
+            title: String::new(),
+            last_head_sha: "deadbeef".to_string(),
+            diff_refs: Some(PersistedDiffRefs {
+                base_sha: "b0".to_string(),
+                start_sha: "s0".to_string(),
+                head_sha: "h0".to_string(),
+            }),
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(
+            json.contains(
+                "\"diff_refs\":{\"base_sha\":\"b0\",\"start_sha\":\"s0\",\"head_sha\":\"h0\"}"
+            ),
+            "pinned refs must serialize: {json}"
+        );
+        let round_tripped: ForgeMetadata = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, meta);
+
+        let unpinned = ForgeMetadata {
+            diff_refs: None,
+            ..meta
+        };
+        let json = serde_json::to_string(&unpinned).unwrap();
+        assert!(!json.contains("diff_refs"), "absent pin must omit: {json}");
+
+        let pre_field =
+            r#"{"provider":"gitlab","host":"gitlab.com","number":9,"last_head_sha":"deadbeef"}"#;
+        let loaded: ForgeMetadata = serde_json::from_str(pre_field).unwrap();
+        assert_eq!(loaded.diff_refs, None);
     }
 
     /// A forge block whose title is empty omits the key entirely, so a review
@@ -648,6 +709,7 @@ mod tests {
             number: 7,
             title: String::new(),
             last_head_sha: "deadbeef".to_string(),
+            diff_refs: None,
         };
         let json = serde_json::to_string(&meta).unwrap();
         assert!(

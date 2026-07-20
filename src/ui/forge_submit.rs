@@ -417,12 +417,21 @@ impl App {
                     .map(|discussion_id| (r.id, discussion_id))
             })
             .collect();
+        // The diff refs pinned when the review was opened (GitLab): submitted
+        // positions must describe the diff snapshot the reviewer read, not
+        // whatever the MR's head is by submit time.
+        let pinned_diff_refs = forge.diff_refs.as_ref().map(|refs| crate::forge::DiffRefs {
+            base_sha: refs.base_sha.clone(),
+            start_sha: refs.start_sha.clone(),
+            head_sha: refs.head_sha.clone(),
+        });
         let submitter = self.stage_ops().and_then(|ops| {
             ops.async_forge_submitter(
                 forge.provider,
                 forge.number,
                 forge.last_head_sha.clone(),
                 reply_discussions,
+                pinned_diff_refs,
             )
         });
         let Some(submitter) = submitter else {

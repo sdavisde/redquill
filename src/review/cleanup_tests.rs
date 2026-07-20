@@ -22,6 +22,7 @@ fn forge_review(number: u64, title: &str) -> PersistedReview {
             number,
             title: title.to_string(),
             last_head_sha: "abc".to_string(),
+            diff_refs: None,
         }),
     }
 }

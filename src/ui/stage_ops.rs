@@ -138,10 +138,15 @@ pub enum PrCheckoutOutcome {
     /// The managed branch is fetched and the worktree is ready at
     /// `worktree_path`. `moved` is true when the fetched head differs from
     /// the stored one (an author push), so the caller can report demotions.
+    /// `diff_refs` is the MR's current diff snapshot, fetched alongside the
+    /// head for GitLab reviews so submit positions can be pinned to the
+    /// snapshot the reviewer sees; `None` for GitHub or when the best-effort
+    /// fetch fails (submit then falls back to fetching at submit time).
     Ready {
         head_sha: String,
         moved: bool,
         worktree_path: std::path::PathBuf,
+        diff_refs: Option<forge::DiffRefs>,
     },
     /// The fetch failed; nothing local was destroyed. `stale_worktree` is
     /// `Some` when a prior checkout still exists that the user may review as
@@ -427,16 +432,20 @@ pub trait StageOps {
     /// dispatched by `provider` to the GitHub reviews-endpoint sequence or the
     /// GitLab draft-notes sequence. `head_sha` anchors GitHub file-level
     /// comments; `reply_discussions` maps each drafted reply's store id to its
-    /// GitLab discussion string id (empty and ignored for GitHub). The default
-    /// returns `None`, keeping non-`Send` fakes and git-less contexts off the
-    /// live-write path entirely — the only path that ever runs a forge write.
-    /// [`GitRunner`] overrides it.
+    /// GitLab discussion string id (empty and ignored for GitHub);
+    /// `pinned_diff_refs` is the GitLab diff snapshot captured at review-open
+    /// time, used instead of a submit-time fetch so positions describe the
+    /// diff the reviewer saw (`None` falls back to fetching at submit time).
+    /// The default returns `None`, keeping non-`Send` fakes and git-less
+    /// contexts off the live-write path entirely — the only path that ever
+    /// runs a forge write. [`GitRunner`] overrides it.
     fn async_forge_submitter(
         &self,
         _provider: crate::review::store::ForgeProviderKind,
         _number: u64,
         _head_sha: String,
         _reply_discussions: HashMap<usize, String>,
+        _pinned_diff_refs: Option<forge::DiffRefs>,
     ) -> Option<AsyncForgeSubmitter> {
         None
     }
@@ -736,6 +745,7 @@ impl StageOps for GitRunner {
         number: u64,
         head_sha: String,
         reply_discussions: HashMap<usize, String>,
+        pinned_diff_refs: Option<forge::DiffRefs>,
     ) -> Option<AsyncForgeSubmitter> {
         use crate::review::store::ForgeProviderKind;
         // The real live-write path, dispatched by provider. Agents never reach
@@ -747,17 +757,24 @@ impl StageOps for GitRunner {
                 forge::run_submit_sequence(&batch, &executor)
             }
             ForgeProviderKind::GitLab => {
-                // The MR's diff refs pin every position hash; without them no
-                // note can be placed, so a fetch failure fails the whole submit
-                // (before anything is written).
-                let diff_refs = match forge::mr_detail(number) {
-                    Ok(detail) => detail.diff_refs,
-                    Err(e) => {
-                        return forge::SubmitReport {
-                            failure: Some(forge::diagnose::submit_error_headline(&e)),
-                            ..forge::SubmitReport::default()
-                        };
-                    }
+                // The MR's diff refs pin every position hash. The refs captured
+                // at review-open describe the exact diff the reviewer read, so
+                // they win over a fresh fetch (which could name a newer diff
+                // the on-screen line numbers no longer match). Only a session
+                // with no pinned refs fetches here — and without any refs no
+                // note can be placed, so that fetch failing fails the whole
+                // submit (before anything is written).
+                let diff_refs = match &pinned_diff_refs {
+                    Some(refs) => refs.clone(),
+                    None => match forge::mr_detail(number) {
+                        Ok(detail) => detail.diff_refs,
+                        Err(e) => {
+                            return forge::SubmitReport {
+                                failure: Some(forge::diagnose::submit_error_headline(&e)),
+                                ..forge::SubmitReport::default()
+                            };
+                        }
+                    },
                 };
                 let gitlab_batch = gitlab_batch_from(&batch, &diff_refs, &reply_discussions);
                 let executor = forge::GlabSubmitExecutor::new(number);
@@ -782,6 +799,21 @@ fn git_error_headline(e: &GitError) -> String {
             .trim()
             .to_string(),
         other => other.to_string(),
+    }
+}
+
+/// The MR diff snapshot captured while opening a review, for pinning
+/// submit-time note positions to what the reviewer actually sees. GitLab
+/// only — GitHub positions carry no diff refs — and best-effort: a failed
+/// detail read degrades to `None` (submit then fetches its own), never a
+/// failed checkout. Runs a network read, so only ever called off the render
+/// thread (inside the checkout fetch).
+fn open_time_diff_refs(pr_ref: &PrRef) -> Option<forge::DiffRefs> {
+    match pr_ref.kind() {
+        crate::git::PrRefKind::GitLab => forge::mr_detail(pr_ref.number())
+            .ok()
+            .map(|detail| detail.diff_refs),
+        crate::git::PrRefKind::GitHub => None,
     }
 }
 
@@ -822,6 +854,7 @@ fn pr_checkout_fetch(runner: &GitRunner, request: PrCheckoutRequest) -> PrChecko
                 head_sha,
                 moved: false,
                 worktree_path: path,
+                diff_refs: open_time_diff_refs(&request.pr_ref),
             },
             Err(e) => PrCheckoutOutcome::Failed {
                 message: git_error_headline(&e),
@@ -846,6 +879,7 @@ fn pr_checkout_fetch(runner: &GitRunner, request: PrCheckoutRequest) -> PrChecko
             head_sha: remote_head,
             moved: false,
             worktree_path: request.worktree_path,
+            diff_refs: open_time_diff_refs(&request.pr_ref),
         };
     }
 
@@ -870,6 +904,7 @@ fn pr_checkout_fetch(runner: &GitRunner, request: PrCheckoutRequest) -> PrChecko
             head_sha: remote_head,
             moved: true,
             worktree_path: path,
+            diff_refs: open_time_diff_refs(&request.pr_ref),
         },
         Err(e) => PrCheckoutOutcome::Failed {
             message: git_error_headline(&e),

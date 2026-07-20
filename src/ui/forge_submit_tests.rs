@@ -36,6 +36,7 @@ fn github_review_app(paths: &[&str]) -> App {
         number: 25,
         title: String::new(),
         last_head_sha: "deadbeef".to_string(),
+        diff_refs: None,
     });
     app
 }
@@ -70,6 +71,7 @@ fn gitlab_review_app(paths: &[&str]) -> App {
         number: 7,
         title: String::new(),
         last_head_sha: "deadbeef".to_string(),
+        diff_refs: None,
     });
     app
 }
