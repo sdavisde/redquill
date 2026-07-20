@@ -114,11 +114,70 @@ fn review_comments_command_has_the_fixed_argv_and_hardened_env() {
         vec![
             OsStr::new("api"),
             OsStr::new("repos/{owner}/{repo}/pulls/42/comments"),
+            OsStr::new("--paginate"),
         ]
     );
     let envs: Vec<_> = cmd.get_envs().collect();
     assert!(envs.contains(&(OsStr::new("GH_PROMPT_DISABLED"), Some(OsStr::new("1")))));
     assert!(envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))));
+}
+
+#[test]
+fn review_comments_command_paginates_to_fetch_every_page() {
+    // A PR with more than the default 30 comments must fetch in full — the
+    // `--paginate` flag is what makes that happen, so it's argv-pinned here.
+    let cmd = review_comments_command(1);
+    let args: Vec<&OsStr> = cmd.get_args().collect();
+    assert!(args.contains(&OsStr::new("--paginate")));
+}
+
+// -- review_threads_resolved_command (GraphQL resolution overlay) ------------
+
+#[test]
+fn review_threads_resolved_command_has_the_fixed_argv_and_hardened_env() {
+    let cmd = review_threads_resolved_command("octocat", "redquill", 42);
+    assert_eq!(cmd.get_program(), OsStr::new("gh"));
+    let args: Vec<String> = cmd
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(args[0], "api");
+    assert_eq!(args[1], "graphql");
+    // owner/name/number ride as typed GraphQL variable fields, never spliced
+    // into the query text.
+    assert!(args.contains(&"owner=octocat".to_string()));
+    assert!(args.contains(&"name=redquill".to_string()));
+    assert!(args.contains(&"number=42".to_string()));
+    // The query itself is a fixed constant carrying only `$owner`/`$name`/
+    // `$number` placeholders — nothing from the caller is interpolated in.
+    assert!(args.iter().any(|a| a.starts_with("query=")));
+    assert!(
+        args.iter()
+            .all(|a| !a.contains("octocat") || a == "owner=octocat")
+    );
+    let envs: Vec<_> = cmd.get_envs().collect();
+    assert!(envs.contains(&(OsStr::new("GH_PROMPT_DISABLED"), Some(OsStr::new("1")))));
+    assert!(envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))));
+}
+
+#[test]
+fn review_threads_resolved_command_varies_only_by_typed_values() {
+    let a = review_threads_resolved_command("o", "r", 1);
+    let b = review_threads_resolved_command("o", "r", 2);
+    let a_args: Vec<String> = a
+        .get_args()
+        .map(|x| x.to_string_lossy().into_owned())
+        .collect();
+    let b_args: Vec<String> = b
+        .get_args()
+        .map(|x| x.to_string_lossy().into_owned())
+        .collect();
+    assert!(a_args.contains(&"number=1".to_string()));
+    assert!(b_args.contains(&"number=2".to_string()));
+    // Same query text in both — the number is a variable, not part of it.
+    let a_query = a_args.iter().find(|x| x.starts_with("query=")).unwrap();
+    let b_query = b_args.iter().find(|x| x.starts_with("query=")).unwrap();
+    assert_eq!(a_query, b_query);
 }
 
 #[test]

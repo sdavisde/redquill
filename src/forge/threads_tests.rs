@@ -309,7 +309,10 @@ fn parse_outdated_fallback_applies_even_when_the_thread_has_replies() {
 // -- resolved state -----------------------------------------------------------
 
 #[test]
-fn parse_always_reports_unresolved_since_the_rest_endpoint_carries_no_such_field() {
+fn rest_parse_alone_reports_unresolved_since_the_rest_endpoint_carries_no_such_field() {
+    // The REST parser by itself never sees a resolution field, so it always
+    // yields `resolved: false`; resolution is layered on afterward by
+    // `apply_resolved_states` from a separate GraphQL read.
     let json = wrap(&[raw_comment_json(RawCommentFixture {
         id: 1,
         in_reply_to: None,
@@ -321,6 +324,107 @@ fn parse_always_reports_unresolved_since_the_rest_endpoint_carries_no_such_field
         body: "body",
     })]);
     let threads = parse_review_comments_json(&json).unwrap();
+    assert!(!threads[0].resolved);
+}
+
+// -- resolution overlay (GraphQL) --------------------------------------------
+
+/// A captured-shape GraphQL `reviewThreads` payload: one resolved thread
+/// (root databaseId 1) and one open thread (root databaseId 100).
+const RESOLVED_GRAPHQL_FIXTURE: &str = r#"{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "reviewThreads": {
+          "nodes": [
+            {
+              "isResolved": true,
+              "isOutdated": false,
+              "comments": { "nodes": [ { "databaseId": 1 } ] }
+            },
+            {
+              "isResolved": false,
+              "isOutdated": false,
+              "comments": { "nodes": [ { "databaseId": 100 } ] }
+            }
+          ]
+        }
+      }
+    }
+  }
+}"#;
+
+#[test]
+fn parse_resolved_thread_states_maps_root_id_to_is_resolved() {
+    let states = parse_resolved_thread_states(RESOLVED_GRAPHQL_FIXTURE).unwrap();
+    assert_eq!(states.get(&1), Some(&true));
+    assert_eq!(states.get(&100), Some(&false));
+    assert_eq!(states.len(), 2);
+}
+
+#[test]
+fn parse_resolved_thread_states_is_total_over_an_errors_only_payload() {
+    // An unauthorized/errors-only GraphQL response has no `data.repository`;
+    // it must parse to an empty map (silent degradation), not an error.
+    let json = r#"{"data":{"repository":null},"errors":[{"message":"Not Found"}]}"#;
+    let states = parse_resolved_thread_states(json).unwrap();
+    assert!(states.is_empty());
+}
+
+#[test]
+fn parse_resolved_thread_states_rejects_malformed_json() {
+    let err = parse_resolved_thread_states("not json").unwrap_err();
+    assert!(matches!(err, ForgeError::Parse { cli: "gh", .. }));
+}
+
+#[test]
+fn apply_resolved_states_flips_only_matching_threads() {
+    let comments = wrap(&[
+        raw_comment_json(RawCommentFixture {
+            id: 1,
+            in_reply_to: None,
+            path: "src/a.rs",
+            side: "RIGHT",
+            line: Some(10),
+            login: "author",
+            created_at: "2026-07-01T10:00:00Z",
+            body: "resolved thread",
+        }),
+        raw_comment_json(RawCommentFixture {
+            id: 100,
+            in_reply_to: None,
+            path: "src/b.rs",
+            side: "RIGHT",
+            line: Some(20),
+            login: "author",
+            created_at: "2026-07-01T10:00:00Z",
+            body: "open thread",
+        }),
+    ]);
+    let mut threads = parse_review_comments_json(&comments).unwrap();
+    let states = parse_resolved_thread_states(RESOLVED_GRAPHQL_FIXTURE).unwrap();
+    apply_resolved_states(&mut threads, &states);
+
+    let resolved = threads.iter().find(|t| t.id == 1).unwrap();
+    let open = threads.iter().find(|t| t.id == 100).unwrap();
+    assert!(resolved.resolved);
+    assert!(!open.resolved);
+}
+
+#[test]
+fn apply_resolved_states_leaves_a_thread_untouched_when_absent_from_the_map() {
+    let comments = wrap(&[raw_comment_json(RawCommentFixture {
+        id: 7,
+        in_reply_to: None,
+        path: "src/a.rs",
+        side: "RIGHT",
+        line: Some(1),
+        login: "author",
+        created_at: "2026-07-01T10:00:00Z",
+        body: "body",
+    })]);
+    let mut threads = parse_review_comments_json(&comments).unwrap();
+    apply_resolved_states(&mut threads, &HashMap::new());
     assert!(!threads[0].resolved);
 }
 

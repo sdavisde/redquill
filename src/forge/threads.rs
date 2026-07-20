@@ -14,9 +14,18 @@
 //!   documented "outdated" signal, and it's the only one this endpoint
 //!   gives us. GitHub's REST API has **no thread-resolution field** at all
 //!   (`resolved`/`is_resolved` only exists on `PullRequestReviewThread` via
-//!   the GraphQL API); every thread built here therefore parses with
-//!   `resolved: false`. The field stays on [`Thread`] so a later change can
-//!   populate it from a separate signal without reshaping this type.
+//!   the GraphQL API); every thread built by [`parse_review_comments_json`]
+//!   therefore parses with `resolved: false`.
+//!
+//! Resolution is layered on separately, best-effort, from a second read: a
+//! GraphQL `reviewThreads` query supplies each thread's `isResolved`, keyed
+//! back onto the REST-built thread by the root comment's `databaseId` (which
+//! equals the REST comment `id` this model uses as a [`Thread::id`]). See
+//! [`parse_resolved_thread_states`] and [`apply_resolved_states`]. The
+//! contract is silent degradation: if the GraphQL read fails, is
+//! unauthorized, or returns nothing, threads simply stay `resolved: false`
+//! and render as open conversations — never an error, never a blocked
+//! review.
 //!
 //! [`Side`] is reused from `crate::annotate` rather than redefined here:
 //! it's the same "which side of the diff" concept a `Target::Line`
@@ -75,8 +84,10 @@ pub struct Thread {
     pub root: ThreadComment,
     /// Ordered oldest-first; a 5-reply back-and-forth reads top-to-bottom.
     pub replies: Vec<ThreadComment>,
-    /// Always `false` from JSON construction — see the module doc for why
-    /// this endpoint can't supply it.
+    /// `false` from [`parse_review_comments_json`] alone (the REST endpoint
+    /// carries no resolution field); populated best-effort afterward by
+    /// [`apply_resolved_states`] from a separate GraphQL read — see the
+    /// module doc.
     pub resolved: bool,
     /// Derived from the root's diff position being unmappable; mirrors
     /// `anchor` being [`ThreadAnchor::File`] but named separately since
@@ -116,6 +127,99 @@ pub fn parse_review_comments_json(json: &str) -> Result<Vec<Thread>, ForgeError>
         message: e.to_string(),
     })?;
     Ok(build_threads(raw))
+}
+
+/// The GraphQL `reviewThreads` response shape, trimmed to the two facts the
+/// resolution overlay needs: each thread's `isResolved` and its root
+/// comment's `databaseId` (the join key back onto a REST-built [`Thread`]).
+/// Every level is optional so a partial or error-shaped payload parses to an
+/// empty map rather than failing — the silent-degradation contract.
+#[derive(Debug, Deserialize)]
+struct ResolvedGraphqlResponse {
+    #[serde(default)]
+    data: Option<ResolvedData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResolvedData {
+    #[serde(default)]
+    repository: Option<ResolvedRepository>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResolvedRepository {
+    #[serde(default, rename = "pullRequest")]
+    pull_request: Option<ResolvedPullRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResolvedPullRequest {
+    #[serde(rename = "reviewThreads")]
+    review_threads: ResolvedThreadConnection,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResolvedThreadConnection {
+    #[serde(default)]
+    nodes: Vec<ResolvedThreadNode>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResolvedThreadNode {
+    #[serde(rename = "isResolved")]
+    is_resolved: bool,
+    comments: ResolvedCommentConnection,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResolvedCommentConnection {
+    #[serde(default)]
+    nodes: Vec<ResolvedCommentNode>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResolvedCommentNode {
+    #[serde(default, rename = "databaseId")]
+    database_id: Option<u64>,
+}
+
+/// Parses the GraphQL `reviewThreads` payload into a `root-comment-id ->
+/// isResolved` map. Pure — fixture-tested — and total over shape: a payload
+/// missing any level (an `errors`-only response, an unauthorized read)
+/// yields an empty map, which [`apply_resolved_states`] then treats as "no
+/// thread known-resolved", leaving every thread open.
+pub fn parse_resolved_thread_states(json: &str) -> Result<HashMap<u64, bool>, ForgeError> {
+    let response: ResolvedGraphqlResponse =
+        serde_json::from_str(json).map_err(|e| ForgeError::Parse {
+            cli: "gh",
+            message: e.to_string(),
+        })?;
+    let mut states = HashMap::new();
+    let Some(pr) = response
+        .data
+        .and_then(|d| d.repository)
+        .and_then(|r| r.pull_request)
+    else {
+        return Ok(states);
+    };
+    for node in pr.review_threads.nodes {
+        if let Some(root_id) = node.comments.nodes.first().and_then(|c| c.database_id) {
+            states.insert(root_id, node.is_resolved);
+        }
+    }
+    Ok(states)
+}
+
+/// Overlays resolution state (from [`parse_resolved_thread_states`]) onto
+/// REST-built threads, keyed by root id. A thread absent from `states` keeps
+/// its existing (`false`) value, so a stale or partial GraphQL read never
+/// flips a thread to resolved by omission.
+pub fn apply_resolved_states(threads: &mut [Thread], states: &HashMap<u64, bool>) {
+    for thread in threads.iter_mut() {
+        if let Some(resolved) = states.get(&thread.id) {
+            thread.resolved = *resolved;
+        }
+    }
 }
 
 /// Groups a flat comment list into threads, root-first in order of each

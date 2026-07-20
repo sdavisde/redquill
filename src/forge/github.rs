@@ -4,13 +4,16 @@
 //! repo argument is ever built from user input — the argv is entirely
 //! fixed.
 
+use std::collections::HashMap;
 use std::process::Command;
 use std::time::Duration;
 
 use serde::Deserialize;
 
 use super::process::{harden, run_captured_with_timeout};
-use super::threads::{Thread, parse_review_comments_json};
+use super::threads::{
+    Thread, apply_resolved_states, parse_resolved_thread_states, parse_review_comments_json,
+};
 use super::{ForgeError, PullRequest};
 
 /// The exact `--json` field list `gh pr list` is asked for — fixed at the
@@ -116,21 +119,62 @@ const REVIEW_COMMENTS_TIMEOUT: Duration = Duration::from_secs(15);
 /// the repository of the current working directory — the same "no repo
 /// argument built from caller input" contract [`pr_list_command`] follows —
 /// so the PR number, typed as `u64` end-to-end, is the only variable part
-/// of the endpoint path.
+/// of the endpoint path. `--paginate` follows every page so a PR with more
+/// than the default 30 comments fetches in full (the endpoint returns a JSON
+/// array, which `gh` combines across pages into one array `serde` still
+/// parses whole).
 pub fn review_comments_command(number: u64) -> Command {
     let mut cmd = Command::new("gh");
     cmd.args([
         "api",
         &format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments"),
+        "--paginate",
     ]);
     harden(&mut cmd);
     cmd
 }
 
-/// Runs the review-comments fetch and returns ordered threads. Like
-/// [`list_open_prs`], the only function here that actually spawns a
-/// process — [`parse_review_comments_json`] carries the fixture coverage.
-pub fn fetch_review_threads(number: u64) -> Result<Vec<Thread>, ForgeError> {
+/// The GraphQL query fetching each review thread's `isResolved` plus its root
+/// comment's `databaseId` (the join key back onto a REST-built [`Thread`]).
+/// Read-only; the REST endpoint has no resolution field, so this second read
+/// is the only way to know a thread is resolved.
+const REVIEW_THREADS_RESOLVED_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes { isResolved comments(first: 1) { nodes { databaseId } } } } } } }";
+
+/// Builds the fixed argv for the read-only `gh api graphql` resolution query.
+/// `owner`/`name` come from the user's own `origin` slug and `number` is a
+/// `u64` end-to-end; all three ride as typed GraphQL variables (`-f`/`-F`
+/// fields), never interpolated into the query text, so there is no
+/// string-assembled command line.
+pub fn review_threads_resolved_command(owner: &str, repo: &str, number: u64) -> Command {
+    let mut cmd = Command::new("gh");
+    cmd.args([
+        "api".to_string(),
+        "graphql".to_string(),
+        "-f".to_string(),
+        format!("owner={owner}"),
+        "-f".to_string(),
+        format!("name={repo}"),
+        "-F".to_string(),
+        format!("number={number}"),
+        "-f".to_string(),
+        format!("query={REVIEW_THREADS_RESOLVED_QUERY}"),
+    ]);
+    harden(&mut cmd);
+    cmd
+}
+
+/// Runs the review-comments fetch and returns ordered threads, with each
+/// thread's resolution state overlaid best-effort from a second, read-only
+/// GraphQL query. `repo_slug` (`owner/repo`, from the `origin` URL) drives
+/// that overlay; a `None` slug, or any failure of the GraphQL read, simply
+/// leaves every thread `resolved: false` — the review continues either way.
+/// Like [`list_open_prs`], the only function here that spawns a process;
+/// [`parse_review_comments_json`]/[`parse_resolved_thread_states`] carry the
+/// fixture coverage.
+pub fn fetch_review_threads(
+    repo_slug: Option<&str>,
+    number: u64,
+) -> Result<Vec<Thread>, ForgeError> {
     let mut cmd = review_comments_command(number);
     let output =
         run_captured_with_timeout(&mut cmd, REVIEW_COMMENTS_TIMEOUT).map_err(|source| {
@@ -155,7 +199,28 @@ pub fn fetch_review_threads(number: u64) -> Result<Vec<Thread>, ForgeError> {
     }
 
     let json = String::from_utf8_lossy(&output.stdout);
-    parse_review_comments_json(&json)
+    let mut threads = parse_review_comments_json(&json)?;
+    if let Some((owner, repo)) = repo_slug.and_then(|s| s.rsplit_once('/'))
+        && let Some(states) = fetch_resolved_states(owner, repo, number)
+    {
+        apply_resolved_states(&mut threads, &states);
+    }
+    Ok(threads)
+}
+
+/// Best-effort read of the resolution overlay: spawns the GraphQL query and
+/// parses it, returning `None` on any failure (spawn error, non-zero exit,
+/// unparseable output) so the caller keeps unresolved threads rather than
+/// surfacing an error. Never spawned on the render loop (see
+/// [`fetch_review_threads`]'s callers).
+fn fetch_resolved_states(owner: &str, repo: &str, number: u64) -> Option<HashMap<u64, bool>> {
+    let mut cmd = review_threads_resolved_command(owner, repo, number);
+    let output = run_captured_with_timeout(&mut cmd, REVIEW_COMMENTS_TIMEOUT).ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let json = String::from_utf8_lossy(&output.stdout);
+    parse_resolved_thread_states(&json).ok()
 }
 
 #[cfg(test)]
