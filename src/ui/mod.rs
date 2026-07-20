@@ -1158,5 +1158,9 @@ mod review_launcher_integration_tests;
 mod pr_checkout_integration_tests;
 
 #[cfg(test)]
+#[path = "cleanup_integration_tests.rs"]
+mod cleanup_integration_tests;
+
+#[cfg(test)]
 #[path = "motion_coverage_tests.rs"]
 mod motion_coverage_tests;

@@ -137,7 +137,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 - [x] 4.5 Amend CLAUDE.md guardrails in the same change: product ceiling gains exactly the confirmed submit flow + `redquill/pr/*` namespace writes; forbidden list extended (merge/close, comment edit/delete, resolve); agent ceiling restated (no forge writes, fakes + scratch repos only). Add a docs-drift test asserting the guardrail section names the forge-submit ceiling and the `redquill/pr/` namespace (same pattern as the FR-6 docs check).
 - [x] 4.6 Run all four gates; hand live dogfood to the user: submit a mixed-batch review to PR #25, capture transcript + screenshot, then a second submit proving nothing re-sends. (Agent-side complete: all four gates green, fakes-only proofs in `13-proofs/13-task-04-proofs.md`. Live dogfood is **user-performed, pending** per the hard agent ceiling — steps recorded in the proof file.)
 
-### [~] 5.0 Clean up finished PR reviews safely from the launcher
+### [x] 5.0 Clean up finished PR reviews safely from the launcher
 
 **User verification:** After a reviewed PR merges or closes, the Pull Requests tab shows "N finished review(s)"; pressing the cleanup key lists them (with a warning for any unpublished comments) and, only after you confirm, removes each one's worktree, branch, and saved state — verifiable by the tab count reaching zero and `git branch` no longer showing `redquill/pr/…`. Declining leaves everything untouched.
 
@@ -154,7 +154,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 - [x] 5.1 TDD finished-set detection: managed `redquill/pr/*` branches with a state entry, minus the open-PR set from the existing list call (no extra network); pure function + tests incl. never-reviewed and still-open cases.
 - [x] 5.2 Finished-reviews footer on the PRs tab (count line, renders alongside list or empty state) and a cleanup keymap action opening the confirm modal: per-entry PR number/title, worktree path, unpublished-annotation count when nonzero.
 - [x] 5.3 Confirmed deletion sequence per entry: `git worktree remove` → `worktree prune` → managed-branch delete → state-entry removal (v3 save); per-entry failure → one-line diagnostic, continue, end-of-run outcome summary; decline path mutates nothing.
-- [ ] 5.4 Tempdir integration tests for confirm, decline, unpublished-warning, and locked-worktree continuation; journey transcript with before/after `git worktree list` / `git branch` / `review-state.json`; all four gates.
+- [x] 5.4 Tempdir integration tests for confirm, decline, unpublished-warning, and locked-worktree continuation; journey transcript with before/after `git worktree list` / `git branch` / `review-state.json`; all four gates.
 
 ### [ ] 6.0 The same experience end-to-end on GitLab, including self-managed hosts with zero config
 
