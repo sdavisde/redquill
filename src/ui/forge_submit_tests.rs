@@ -34,6 +34,7 @@ fn github_review_app(paths: &[&str]) -> App {
         provider: ForgeProviderKind::GitHub,
         host: "github.com".to_string(),
         number: 25,
+        title: String::new(),
         last_head_sha: "deadbeef".to_string(),
     });
     app

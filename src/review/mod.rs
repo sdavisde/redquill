@@ -9,9 +9,11 @@
 //! Persistence (`review-state.json`, blob-SHA reconciliation, GC) lives in
 //! the `store`/`reconcile` submodules.
 
+pub mod cleanup;
 mod model;
 mod reconcile;
 pub mod store;
 
+pub use cleanup::{FinishedReview, finished_reviews};
 pub use model::{ReviewStatus, accept, toggle_accept, toggle_defer};
 pub use reconcile::reconcile;

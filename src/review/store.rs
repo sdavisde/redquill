@@ -146,6 +146,14 @@ pub struct ForgeMetadata {
     pub host: String,
     /// The PR (GitHub) or MR (GitLab) number.
     pub number: u64,
+    /// The PR/MR title as of the last checkout, retained so the cleanup
+    /// modal can name a finished review whose PR is no longer in the open
+    /// list (its title can't be re-fetched without a network call). Omitted
+    /// from the JSON entirely when empty (a review persisted before this
+    /// field existed, or a title that couldn't be read), so an empty title
+    /// leaves the on-disk shape byte-identical to a title-less forge block.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
     /// The head commit SHA as of the last successful fetch, for detecting
     /// the author pushing new commits on the next open/refresh.
     pub last_head_sha: String,
@@ -580,6 +588,7 @@ mod tests {
                     provider: ForgeProviderKind::GitHub,
                     host: "github.com".to_string(),
                     number: 42,
+                    title: String::new(),
                     last_head_sha: "abc123def456".to_string(),
                 }),
             },
@@ -606,6 +615,45 @@ mod tests {
 
         let round_tripped: ReviewStateFile = serde_json::from_str(&json).unwrap();
         assert_eq!(round_tripped, state);
+    }
+
+    /// A non-empty `title` serializes (right after `number`) and round-trips
+    /// — the field the cleanup modal reads to name a finished review whose PR
+    /// is no longer in the open set.
+    #[test]
+    fn forge_block_with_title_round_trips() {
+        let meta = ForgeMetadata {
+            provider: ForgeProviderKind::GitHub,
+            host: "github.com".to_string(),
+            number: 7,
+            title: "Fix the widget".to_string(),
+            last_head_sha: "deadbeef".to_string(),
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(
+            json.contains("\"number\":7,\"title\":\"Fix the widget\",\"last_head_sha\""),
+            "title must serialize between number and last_head_sha: {json}"
+        );
+        let round_tripped: ForgeMetadata = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, meta);
+    }
+
+    /// A forge block whose title is empty omits the key entirely, so a review
+    /// persisted before the field existed stays on-disk-identical.
+    #[test]
+    fn forge_block_with_empty_title_omits_the_key() {
+        let meta = ForgeMetadata {
+            provider: ForgeProviderKind::GitHub,
+            host: "github.com".to_string(),
+            number: 7,
+            title: String::new(),
+            last_head_sha: "deadbeef".to_string(),
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(
+            !json.contains("title"),
+            "empty title must be omitted: {json}"
+        );
     }
 
     // -- Schema v3: replies field -----------------------------------------------

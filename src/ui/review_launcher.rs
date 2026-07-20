@@ -851,6 +851,7 @@ impl App {
                     provider: ctx.provider,
                     host: ctx.host.clone(),
                     number: ctx.number,
+                    title: ctx.title.clone(),
                     last_head_sha: head_sha.unwrap_or_default(),
                 });
                 self.review_stale = stale;
