@@ -145,10 +145,28 @@ fn a_fresh_cache_instance_starts_uncached() {
 }
 
 #[test]
-fn glab_placeholder_checker_always_reports_no_credentials() {
-    let checker = GlabCredentialChecker;
-    assert!(!checker.has_credentials(&host("git.example.com")));
-    assert!(!checker.has_credentials(&host("github.com")));
+fn glab_authenticated_custom_host_resolves_gitlab_via_the_ladder() {
+    let gh = FakeChecker::new(false);
+    let glab = FakeChecker::new(true);
+    let resolution = resolve_provider(&host("git.client-host.example"), &gh, &glab);
+    assert_eq!(
+        resolution,
+        ProviderResolution::Resolved(ProviderKind::GitLab)
+    );
+}
+
+#[test]
+fn both_clis_authenticated_for_a_custom_host_is_ambiguous_unresolved() {
+    let gh = FakeChecker::new(true);
+    let glab = FakeChecker::new(true);
+    let resolution = resolve_provider(&host("git.client-host.example"), &gh, &glab);
+    assert_eq!(
+        resolution,
+        ProviderResolution::Unresolved {
+            hostname: "git.client-host.example".to_string(),
+            reason: UnresolvedReason::Ambiguous,
+        }
+    );
 }
 
 #[test]
@@ -170,4 +188,90 @@ fn gh_auth_token_command_has_the_fixed_argv_and_hardened_env() {
     assert!(envs.contains(&(OsStr::new("GH_PROMPT_DISABLED"), Some(OsStr::new("1")))));
     assert!(envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))));
     assert!(envs.contains(&(OsStr::new("GIT_TERMINAL_PROMPT"), Some(OsStr::new("0")))));
+}
+
+#[test]
+fn glab_config_get_token_command_has_the_fixed_argv_and_hardened_env() {
+    let h = host("git.example.com");
+    let cmd = glab_config_get_token_command(&h);
+    assert_eq!(cmd.get_program(), OsStr::new("glab"));
+    let args: Vec<&OsStr> = cmd.get_args().collect();
+    assert_eq!(
+        args,
+        vec![
+            OsStr::new("config"),
+            OsStr::new("get"),
+            OsStr::new("token"),
+            OsStr::new("--host"),
+            OsStr::new("git.example.com"),
+        ]
+    );
+    let envs: Vec<_> = cmd.get_envs().collect();
+    assert!(envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))));
+    assert!(envs.contains(&(OsStr::new("GIT_TERMINAL_PROMPT"), Some(OsStr::new("0")))));
+}
+
+#[test]
+fn glab_config_get_token_command_interpolates_only_the_typed_hostname() {
+    let one = glab_config_get_token_command(&host("one.example.com"));
+    let two = glab_config_get_token_command(&host("two.example.com"));
+    let args_one: Vec<&OsStr> = one.get_args().collect();
+    let args_two: Vec<&OsStr> = two.get_args().collect();
+    assert_eq!(args_one[..4], args_two[..4]);
+    assert_ne!(args_one[4], args_two[4]);
+}
+
+// -- stdout_indicates_credential (glab's combined status+emptiness contract) -
+
+/// Builds a real `ExitStatus` without ever spawning `glab` — `true`/`false`
+/// are universally present system binaries, the same trick `process.rs`'s
+/// own tests use, so this stays deterministic across machines regardless of
+/// whether `glab` is installed.
+fn status(success: bool) -> std::process::ExitStatus {
+    let bin = if success { "true" } else { "false" };
+    std::process::Command::new(bin)
+        .status()
+        .expect("spawning a universally present system binary must succeed")
+}
+
+fn captured(success: bool, stdout: &[u8]) -> CapturedOutput {
+    CapturedOutput {
+        status: status(success),
+        stdout: stdout.to_vec(),
+        stderr: Vec::new(),
+    }
+}
+
+#[test]
+fn success_with_non_empty_stdout_indicates_a_credential() {
+    assert!(stdout_indicates_credential(&captured(
+        true,
+        b"glpat-fake-token-value"
+    )));
+}
+
+#[test]
+fn success_with_empty_stdout_indicates_no_credential() {
+    assert!(!stdout_indicates_credential(&captured(true, b"")));
+}
+
+#[test]
+fn success_with_only_whitespace_stdout_indicates_no_credential() {
+    assert!(!stdout_indicates_credential(&captured(true, b"\n")));
+}
+
+#[test]
+fn failure_with_non_empty_stdout_indicates_no_credential() {
+    // A non-zero exit is treated as authoritative "no credential" even if
+    // something unexpected showed up on stdout — the combined check
+    // requires both signals to agree.
+    assert!(!stdout_indicates_credential(&captured(
+        false,
+        b"some output"
+    )));
+}
+
+#[test]
+fn failure_with_empty_stdout_indicates_no_credential() {
+    assert!(!stdout_indicates_credential(&captured(false, b"")));
 }

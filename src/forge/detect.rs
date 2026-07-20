@@ -4,12 +4,31 @@
 //! invocations are hidden behind [`CredentialChecker`] so the ladder itself
 //! ([`resolve_provider`]) is exercised entirely with fakes — nothing here
 //! ever spawns a process in a test.
+//!
+//! **glab credential-lookup contract**: `gh auth token --hostname <h>`
+//! (used by [`GhCredentialChecker`]) has a clean exit-status contract —
+//! success means "has a credential", every other outcome (including a
+//! nonzero exit) means "doesn't" — with stdout never even captured, so a
+//! token can never reach this process's memory. `glab` has no confirmed
+//! equivalent single-purpose command; the best local-only read is `glab
+//! config get token --host <h>`, a plain config-store lookup (no network
+//! call, unlike `glab auth status`, which can probe the host). This could
+//! not be verified against a real `glab` (not installed on this machine),
+//! so [`GlabCredentialChecker`] does not trust exit status alone: it treats
+//! a host as credentialed only when the command *both* exits successfully
+//! *and* prints non-empty stdout, on the theory that a config-store miss is
+//! at least as likely to print empty output with a zero exit as it is to
+//! fail outright. The token text itself is discarded the moment that
+//! emptiness check is made ([`stdout_indicates_credential`]) — it is never
+//! stored past that check, logged, or returned to any caller.
 
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use super::process::{harden, wait_status_with_timeout};
+use super::process::{
+    CapturedOutput, harden, harden_glab, run_captured_with_timeout, wait_status_with_timeout,
+};
 use super::remote_url::Hostname;
 
 /// How long a real credential-lookup CLI invocation may run before it's
@@ -46,9 +65,8 @@ pub enum ProviderResolution {
 
 /// Injectable seam for "does this CLI hold credentials for this host?" so
 /// resolution can be exercised without ever spawning a process. The real
-/// `gh` implementation is [`GhCredentialChecker`]; `glab`'s
-/// ([`GlabCredentialChecker`]) is a placeholder until its lookup command is
-/// finalized against the pinned glab version.
+/// `gh` implementation is [`GhCredentialChecker`]; `glab`'s is
+/// [`GlabCredentialChecker`] — see the module doc for its lookup contract.
 pub trait CredentialChecker {
     fn has_credentials(&self, hostname: &Hostname) -> bool;
 }
@@ -158,17 +176,44 @@ fn gh_auth_token_command(hostname: &Hostname) -> Command {
     cmd
 }
 
-/// Placeholder `glab` credential checker: always reports no credentials
-/// until the real lookup command is finalized against the pinned glab
-/// version. An unknown host with only glab credentials therefore resolves
-/// `Unresolved` rather than `GitLab` until then — acceptable for this
-/// GitHub-only slice.
+/// The real `glab` credential checker: `glab config get token --host <h>`,
+/// exit status *and* stdout emptiness combined — see the module doc for why
+/// exit status alone isn't trusted here the way it is for `gh`. The
+/// captured stdout bytes are inspected only for emptiness
+/// ([`stdout_indicates_credential`]) and dropped immediately after; no
+/// token content is ever stored, logged, or returned.
 pub struct GlabCredentialChecker;
 
 impl CredentialChecker for GlabCredentialChecker {
-    fn has_credentials(&self, _hostname: &Hostname) -> bool {
-        false
+    fn has_credentials(&self, hostname: &Hostname) -> bool {
+        run_captured_with_timeout(
+            &mut glab_config_get_token_command(hostname),
+            CREDENTIAL_CHECK_TIMEOUT,
+        )
+        .map(|output| stdout_indicates_credential(&output))
+        .unwrap_or(false)
     }
+}
+
+/// Builds the fixed argv for `glab config get token --host <h>`, with
+/// prompts disabled. Split out from
+/// [`GlabCredentialChecker::has_credentials`] so the exact command shape is
+/// unit-testable without ever spawning it, mirroring
+/// [`gh_auth_token_command`].
+fn glab_config_get_token_command(hostname: &Hostname) -> Command {
+    let mut cmd = Command::new("glab");
+    cmd.args(["config", "get", "token", "--host", hostname.as_str()]);
+    harden_glab(&mut cmd);
+    cmd
+}
+
+/// The credential-presence decision described in the module doc: success
+/// *and* non-empty stdout. Checking emptiness over raw bytes (never
+/// materialized as a `String` beyond this) is the last place the captured
+/// output is touched — the caller drops `output` immediately after this
+/// call returns, so no token content outlives this function.
+fn stdout_indicates_credential(output: &CapturedOutput) -> bool {
+    output.status.success() && !output.stdout.iter().all(u8::is_ascii_whitespace)
 }
 
 #[cfg(test)]
