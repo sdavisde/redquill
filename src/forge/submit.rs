@@ -41,6 +41,18 @@ pub struct SubmitBatch {
     pub plan: ReviewSubmissionPlan,
     pub replies: Vec<SubmitReplyItem>,
     pub include_review_post: bool,
+    /// Annotations whose private GitLab draft note already exists
+    /// server-side from a prior stopped run — the GitLab sequence skips
+    /// re-creating those drafts and lets its bulk publish flip them, so a
+    /// retry never duplicates a comment. Always empty on the GitHub path,
+    /// which stages no drafts.
+    pub draft_created_annotation_ids: Vec<usize>,
+    /// Replies whose GitLab draft already exists — same contract as
+    /// [`SubmitBatch::draft_created_annotation_ids`].
+    pub draft_created_reply_ids: Vec<usize>,
+    /// Whether the summary/verdict body's GitLab draft already exists —
+    /// same contract, for the one batch item that carries no store id.
+    pub summary_draft_created: bool,
 }
 
 /// What one submit run accomplished: which annotations and replies are now
@@ -62,6 +74,18 @@ pub struct SubmitReport {
     /// The one-line diagnostic that stopped the run, or `None` when the whole
     /// batch published.
     pub failure: Option<String>,
+    /// Store ids of annotations whose private GitLab draft note now exists
+    /// server-side but was **not** published (the run stopped before its
+    /// bulk publish). The caller records these so a resubmit creates only
+    /// the still-missing drafts; a successful bulk publish moves every
+    /// drafted id into `published_annotation_ids` instead. Always empty on
+    /// the GitHub path.
+    pub draft_annotation_ids: Vec<usize>,
+    /// Reply counterpart to [`SubmitReport::draft_annotation_ids`].
+    pub draft_reply_ids: Vec<usize>,
+    /// Whether the summary/verdict body now exists as an unpublished GitLab
+    /// draft — the id-less counterpart to the two draft lists.
+    pub summary_draft_created: bool,
 }
 
 /// The three positioned GitHub write operations the driver sequences, behind

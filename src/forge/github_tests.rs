@@ -211,6 +211,7 @@ fn annotation(id: usize, target: Target, classification: Classification, body: &
         body: body.to_string(),
         source: Source::WorkingTree,
         published: false,
+        draft_created: false,
     }
 }
 

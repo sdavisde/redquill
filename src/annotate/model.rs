@@ -377,6 +377,12 @@ pub struct Annotation {
     /// is authoritative on screen). Never affects the stdout markdown, which
     /// includes every annotation regardless of published state.
     pub published: bool,
+    /// Whether a private GitLab draft note for this annotation already
+    /// exists server-side from a stopped submit run — created but not yet
+    /// bulk-published. A resubmit skips re-creating such drafts and lets
+    /// its bulk publish flip them; cleared once published. Always `false`
+    /// on the GitHub path, which stages no drafts.
+    pub draft_created: bool,
 }
 
 /// Validates and normalizes an annotation body: trims surrounding

@@ -357,6 +357,9 @@ fn apply_outcome_marks_published_items_and_reports_a_clean_success() {
         published_reply_ids: vec![r0],
         review_submitted: true,
         failure: None,
+        draft_annotation_ids: vec![],
+        draft_reply_ids: vec![],
+        summary_draft_created: false,
     });
 
     assert!(app.annotations.unpublished().next().is_none());
@@ -390,6 +393,9 @@ fn apply_outcome_on_mid_failure_reports_the_published_unpublished_split() {
         published_reply_ids: vec![],
         review_submitted: true,
         failure: Some("file boom".to_string()),
+        draft_annotation_ids: vec![],
+        draft_reply_ids: vec![],
+        summary_draft_created: false,
     });
 
     // One published, one still unpublished; the flag is set so a resume skips
@@ -400,6 +406,98 @@ fn apply_outcome_on_mid_failure_reports_the_published_unpublished_split() {
     assert!(msg.contains("1 published"), "status: {msg}");
     assert!(msg.contains("1 unpublished"), "status: {msg}");
     assert!(msg.contains("file boom"), "status: {msg}");
+}
+
+#[test]
+fn apply_outcome_records_pending_drafts_and_the_resubmit_batch_skips_them() {
+    let mut app = gitlab_review_app(&["src/a.rs"]);
+    let a0 = app
+        .annotations
+        .add(
+            Target::line("src/a.rs", 2, Side::New),
+            Classification::Issue,
+            "fix",
+        )
+        .unwrap();
+    let a1 = app
+        .annotations
+        .add(Target::file("src/a.rs"), Classification::Praise, "nice")
+        .unwrap();
+    let r0 = app.replies.add(100, "agreed").unwrap();
+
+    // A stopped GitLab run created drafts for a0, the summary, and r0, but
+    // published nothing.
+    app.apply_submit_outcome(SubmitReport {
+        published_annotation_ids: vec![],
+        published_reply_ids: vec![],
+        review_submitted: false,
+        failure: Some("boom".to_string()),
+        draft_annotation_ids: vec![a0],
+        draft_reply_ids: vec![r0],
+        summary_draft_created: true,
+    });
+
+    assert!(
+        app.annotations
+            .iter()
+            .find(|a| a.id == a0)
+            .unwrap()
+            .draft_created
+    );
+    assert!(
+        !app.annotations
+            .iter()
+            .find(|a| a.id == a1)
+            .unwrap()
+            .draft_created
+    );
+    assert!(app.replies.get(r0).unwrap().draft_created);
+    assert!(app.forge_summary_draft_created);
+    assert!(!app.forge_review_submitted);
+
+    // The next batch still contains every unpublished item but flags the
+    // existing drafts so the sequence creates only what's missing.
+    let batch = app.build_submit_batch(Verdict::Comment, Some("overall"));
+    assert_eq!(batch.draft_created_annotation_ids, vec![a0]);
+    assert_eq!(batch.draft_created_reply_ids, vec![r0]);
+    assert!(batch.summary_draft_created);
+    assert_eq!(batch.plan.comment_annotation_ids, vec![a0]);
+    assert_eq!(batch.plan.file_comment_follow_ups.len(), 1);
+}
+
+#[test]
+fn apply_outcome_publishing_clears_draft_state() {
+    let mut app = gitlab_review_app(&["src/a.rs"]);
+    let a0 = app
+        .annotations
+        .add(
+            Target::line("src/a.rs", 2, Side::New),
+            Classification::Issue,
+            "fix",
+        )
+        .unwrap();
+    let r0 = app.replies.add(100, "agreed").unwrap();
+    let _ = app.annotations.set_draft_created(a0, true);
+    app.replies.set_draft_created(r0, true);
+    app.forge_summary_draft_created = true;
+
+    app.apply_submit_outcome(SubmitReport {
+        published_annotation_ids: vec![a0],
+        published_reply_ids: vec![r0],
+        review_submitted: true,
+        failure: None,
+        draft_annotation_ids: vec![],
+        draft_reply_ids: vec![],
+        summary_draft_created: false,
+    });
+
+    let a = app.annotations.iter().find(|a| a.id == a0).unwrap();
+    assert!(a.published);
+    assert!(!a.draft_created, "publishing consumes the pending draft");
+    let r = app.replies.get(r0).unwrap();
+    assert!(r.published);
+    assert!(!r.draft_created);
+    assert!(!app.forge_summary_draft_created);
 }
 
 // -- request-changes requires a summary (blocked confirm) --------------------

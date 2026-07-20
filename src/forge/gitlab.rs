@@ -523,30 +523,39 @@ pub fn build_note_position(diff_refs: &DiffRefs, target: &NoteTarget) -> NotePos
 }
 
 /// One positioned note to publish: the originating annotation's store id (so a
-/// success marks it published), its body, and its diff position.
+/// success marks it published), its body, its diff position, and whether a
+/// prior stopped run already created its private draft (so this run skips
+/// the create and only publishes).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitlabNote {
     pub annotation_id: usize,
     pub body: String,
     pub position: NotePosition,
+    pub draft_created: bool,
 }
 
 /// One drafted reply to publish: its store id, the discussion string id it
-/// answers (GitLab replies target the *discussion*, not the root note), and
-/// its body.
+/// answers (GitLab replies target the *discussion*, not the root note), its
+/// body, and whether its private draft already exists from a prior stopped
+/// run (same skip contract as [`GitlabNote::draft_created`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitlabReply {
     pub reply_id: usize,
     pub discussion_id: String,
     pub body: String,
+    pub draft_created: bool,
 }
 
 /// The full batch one GitLab submit run publishes: an optional review summary
 /// (posted as a non-positioned note), the positioned annotation notes, the
 /// drafted replies, and whether to approve after publishing.
+/// `summary_draft_created` marks the summary's private draft as already
+/// existing from a prior stopped run, the id-less counterpart to the
+/// per-item `draft_created` flags.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GitlabSubmitBatch {
     pub summary: Option<String>,
+    pub summary_draft_created: bool,
     pub notes: Vec<GitlabNote>,
     pub replies: Vec<GitlabReply>,
     pub approve: bool,
@@ -602,16 +611,6 @@ fn is_draft_notes_unavailable(e: &ForgeError) -> bool {
     }
 }
 
-/// A stopped run that published nothing — its diagnostic in `failure`. Used
-/// when a draft create or the bulk-publish fails: drafts are author-only, so
-/// no teammate ever saw a partial batch.
-fn nothing_published(e: &ForgeError) -> SubmitReport {
-    SubmitReport {
-        failure: Some(submit_error_headline(e)),
-        ..SubmitReport::default()
-    }
-}
-
 /// Whether the draft path even ran to completion, or bailed on the very first
 /// create because the endpoint is unavailable (→ visible fallback).
 enum DraftAttempt {
@@ -622,10 +621,14 @@ enum DraftAttempt {
 /// Runs one GitLab submit pass over `batch` against `exec`. Prefers the
 /// near-atomic draft-notes path — every note staged privately, then one
 /// bulk-publish makes the whole batch visible at once, then `approve` when
-/// asked — so a failure before bulk-publish leaves nothing on the MR. When the
-/// instance has no draft-notes API (a `404` on the first create), it falls back
-/// to sequential visible discussions with the Unit-4 per-item published
-/// marking. A caller that rebuilds the next batch from only the
+/// asked — so a failure before bulk-publish leaves nothing *visible* on the
+/// MR. A stopped run reports which items' private drafts were created
+/// (`draft_*` fields) so the caller can record them: a resubmit then skips
+/// re-creating those drafts (its bulk publish flips every pending draft,
+/// including previously orphaned ones) and never duplicates a comment. When
+/// the instance has no draft-notes API (a `404` on the first create), it
+/// falls back to sequential visible discussions with the Unit-4 per-item
+/// published marking. A caller that rebuilds the next batch from only the
 /// still-unpublished set re-sends nothing that already landed.
 pub fn run_gitlab_submit_sequence(
     batch: &GitlabSubmitBatch,
@@ -638,52 +641,102 @@ pub fn run_gitlab_submit_sequence(
 }
 
 /// The draft-notes attempt: create the summary note, then each positioned
-/// note, then each reply as private drafts; a `404` on the *first* create means
-/// the endpoint is unavailable (→ [`DraftAttempt::Unavailable`]); any other
-/// create failure, or a bulk-publish failure, stops with nothing published
-/// (drafts are invisible). On bulk-publish success every item is marked
-/// published together; a later `approve` failure leaves the (already published)
-/// comments in place with the diagnostic surfaced.
+/// note, then each reply as private drafts — skipping any item whose draft
+/// already exists from a prior stopped run — then one bulk publish. A `404`
+/// on the *first* create, with no prior drafts anywhere, means the endpoint
+/// is unavailable (→ [`DraftAttempt::Unavailable`]); any other create
+/// failure stops with nothing published and the already-created drafts
+/// reported per-item (drafts are invisible to teammates, but they exist
+/// server-side — re-creating them on retry would duplicate). A bulk-publish
+/// failure likewise reports every item as drafted-but-unpublished. On
+/// bulk-publish success every item — including drafts carried over from a
+/// prior run — is marked published together; a later `approve` failure
+/// leaves the (already published) comments in place with the diagnostic
+/// surfaced.
 fn try_draft_submit(batch: &GitlabSubmitBatch, exec: &dyn GitlabSubmitExecutor) -> DraftAttempt {
-    let mut created = 0usize;
+    // Drafts left behind by a prior stopped run: their existence both
+    // disarms the 404 fallback (the endpoint demonstrably exists) and
+    // forces the bulk publish even if this run creates nothing new.
+    let precreated = batch.summary_draft_created
+        || batch.notes.iter().any(|n| n.draft_created)
+        || batch.replies.iter().any(|r| r.draft_created);
+    let mut summary_drafted = batch.summary_draft_created;
+    let mut drafted_annotations: Vec<usize> = Vec::new();
+    let mut drafted_replies: Vec<usize> = Vec::new();
+    let mut fresh_creates = 0usize;
 
-    if let Some(summary) = &batch.summary {
+    let stopped = |summary_drafted: bool,
+                   drafted_annotations: Vec<usize>,
+                   drafted_replies: Vec<usize>,
+                   e: &ForgeError| {
+        DraftAttempt::Completed(SubmitReport {
+            draft_annotation_ids: drafted_annotations,
+            draft_reply_ids: drafted_replies,
+            summary_draft_created: summary_drafted,
+            failure: Some(submit_error_headline(e)),
+            ..SubmitReport::default()
+        })
+    };
+
+    if let Some(summary) = &batch.summary
+        && !summary_drafted
+    {
         match exec.create_draft_note(summary, None, None) {
-            Ok(()) => created += 1,
-            Err(e) if is_draft_notes_unavailable(&e) => return DraftAttempt::Unavailable,
-            Err(e) => return DraftAttempt::Completed(nothing_published(&e)),
+            Ok(()) => {
+                fresh_creates += 1;
+                summary_drafted = true;
+            }
+            Err(e) if !precreated && is_draft_notes_unavailable(&e) => {
+                return DraftAttempt::Unavailable;
+            }
+            Err(e) => return stopped(summary_drafted, drafted_annotations, drafted_replies, &e),
         }
     }
     for note in &batch.notes {
+        if note.draft_created {
+            drafted_annotations.push(note.annotation_id);
+            continue;
+        }
         match exec.create_draft_note(&note.body, Some(&note.position), None) {
-            Ok(()) => created += 1,
-            Err(e) if created == 0 && is_draft_notes_unavailable(&e) => {
+            Ok(()) => {
+                fresh_creates += 1;
+                drafted_annotations.push(note.annotation_id);
+            }
+            Err(e) if fresh_creates == 0 && !precreated && is_draft_notes_unavailable(&e) => {
                 return DraftAttempt::Unavailable;
             }
-            Err(e) => return DraftAttempt::Completed(nothing_published(&e)),
+            Err(e) => return stopped(summary_drafted, drafted_annotations, drafted_replies, &e),
         }
     }
     for reply in &batch.replies {
+        if reply.draft_created {
+            drafted_replies.push(reply.reply_id);
+            continue;
+        }
         match exec.create_draft_note(&reply.body, None, Some(&reply.discussion_id)) {
-            Ok(()) => created += 1,
-            Err(e) if created == 0 && is_draft_notes_unavailable(&e) => {
+            Ok(()) => {
+                fresh_creates += 1;
+                drafted_replies.push(reply.reply_id);
+            }
+            Err(e) if fresh_creates == 0 && !precreated && is_draft_notes_unavailable(&e) => {
                 return DraftAttempt::Unavailable;
             }
-            Err(e) => return DraftAttempt::Completed(nothing_published(&e)),
+            Err(e) => return stopped(summary_drafted, drafted_annotations, drafted_replies, &e),
         }
     }
 
-    if created > 0
+    if (fresh_creates > 0 || precreated)
         && let Err(e) = exec.bulk_publish_drafts()
     {
-        return DraftAttempt::Completed(nothing_published(&e));
+        // Every draft in the batch now exists server-side; none is visible.
+        return stopped(summary_drafted, drafted_annotations, drafted_replies, &e);
     }
 
     let mut report = SubmitReport {
         published_annotation_ids: batch.notes.iter().map(|n| n.annotation_id).collect(),
         published_reply_ids: batch.replies.iter().map(|r| r.reply_id).collect(),
         review_submitted: true,
-        failure: None,
+        ..SubmitReport::default()
     };
     if batch.approve
         && let Err(e) = exec.approve()

@@ -125,6 +125,12 @@ pub struct PersistedReply {
     /// reply's on-disk shape is unaffected by this field's existence.
     #[serde(default, skip_serializing_if = "is_false")]
     pub published: bool,
+    /// Whether a private GitLab draft note for this reply exists
+    /// server-side but is not yet published — mirrors
+    /// [`crate::annotate::PersistedAnnotation`]'s same flag and follows the
+    /// same absent-when-`false` compatibility contract.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub draft_created: bool,
 }
 
 /// `skip_serializing_if` predicate: omit a `bool` field when it is `false`.
@@ -519,6 +525,7 @@ mod tests {
                     body: "fix this".to_string(),
                     source: Source::WorkingTree,
                     published: false,
+                    draft_created: false,
                 }],
                 replies: Vec::new(),
                 forge: None,
@@ -742,11 +749,13 @@ mod tests {
                         thread_id: 100,
                         body: "agreed, will fix".to_string(),
                         published: false,
+                        draft_created: false,
                     },
                     PersistedReply {
                         thread_id: 200,
                         body: "why not use the helper here?".to_string(),
                         published: false,
+                        draft_created: false,
                     },
                 ],
                 forge: None,
@@ -799,6 +808,7 @@ mod tests {
             thread_id: 1,
             body: "agreed".to_string(),
             published: true,
+            draft_created: false,
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(
@@ -863,6 +873,7 @@ mod tests {
                 body: "fix this".to_string(),
                 source: Source::WorkingTree,
                 published: false,
+                draft_created: false,
             }]
         );
 

@@ -458,7 +458,9 @@ pub trait StageOps {
 /// non-positioned note (only when `include_review_post`, so a resume never
 /// re-posts it), each reply carries its GitLab discussion id (replies with no
 /// resolved discussion id are dropped — they can't be positioned), and an
-/// `APPROVE` event becomes the approve flag.
+/// `APPROVE` event becomes the approve flag. Items whose private draft a
+/// prior stopped run already created carry `draft_created`, so the sequence
+/// skips re-creating them.
 fn gitlab_batch_from(
     batch: &forge::SubmitBatch,
     diff_refs: &forge::DiffRefs,
@@ -494,6 +496,7 @@ fn gitlab_batch_from(
             annotation_id,
             body: comment.body.clone(),
             position,
+            draft_created: batch.draft_created_annotation_ids.contains(&annotation_id),
         });
     }
     for follow_up in &plan.file_comment_follow_ups {
@@ -507,6 +510,9 @@ fn gitlab_batch_from(
             annotation_id: follow_up.annotation_id,
             body: follow_up.body.clone(),
             position,
+            draft_created: batch
+                .draft_created_annotation_ids
+                .contains(&follow_up.annotation_id),
         });
     }
     let replies = batch
@@ -519,6 +525,7 @@ fn gitlab_batch_from(
                     reply_id: r.reply_id,
                     discussion_id: discussion_id.clone(),
                     body: r.body.clone(),
+                    draft_created: batch.draft_created_reply_ids.contains(&r.reply_id),
                 })
         })
         .collect();
@@ -529,6 +536,7 @@ fn gitlab_batch_from(
     };
     forge::GitlabSubmitBatch {
         summary,
+        summary_draft_created: batch.summary_draft_created,
         notes,
         replies,
         approve: plan.payload.event == "APPROVE",

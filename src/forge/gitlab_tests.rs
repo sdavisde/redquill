@@ -796,6 +796,7 @@ impl GitlabSubmitExecutor for FakeExec {
 fn note(id: usize, body: &str) -> GitlabNote {
     GitlabNote {
         annotation_id: id,
+        draft_created: false,
         body: body.to_string(),
         position: build_note_position(
             &diff_refs(),
@@ -814,6 +815,7 @@ fn reply(id: usize, discussion: &str, body: &str) -> GitlabReply {
         reply_id: id,
         discussion_id: discussion.to_string(),
         body: body.to_string(),
+        draft_created: false,
     }
 }
 
@@ -821,6 +823,7 @@ fn reply(id: usize, discussion: &str, body: &str) -> GitlabReply {
 fn draft_path_creates_all_drafts_then_bulk_publishes_then_approves_in_order() {
     let batch = GitlabSubmitBatch {
         summary: Some("looks good overall".to_string()),
+        summary_draft_created: false,
         notes: vec![note(1, "fix this"), note(2, "and this")],
         replies: vec![reply(5, "ddd", "agreed")],
         approve: true,
@@ -869,6 +872,7 @@ fn draft_path_creates_all_drafts_then_bulk_publishes_then_approves_in_order() {
 fn draft_create_failure_before_publish_publishes_nothing() {
     let batch = GitlabSubmitBatch {
         summary: None,
+        summary_draft_created: false,
         notes: vec![note(1, "a"), note(2, "b")],
         replies: vec![],
         approve: true,
@@ -891,12 +895,19 @@ fn draft_create_failure_before_publish_publishes_nothing() {
     assert!(report.published_reply_ids.is_empty());
     assert!(!report.review_submitted);
     assert_eq!(report.failure.as_deref(), Some("boom"));
+    // The first draft was created before the stop: it exists server-side as
+    // a private draft, and the report says so — a resubmit must not
+    // re-create it.
+    assert_eq!(report.draft_annotation_ids, vec![1]);
+    assert!(report.draft_reply_ids.is_empty());
+    assert!(!report.summary_draft_created);
 }
 
 #[test]
 fn bulk_publish_failure_publishes_nothing() {
     let batch = GitlabSubmitBatch {
         summary: None,
+        summary_draft_created: false,
         notes: vec![note(1, "a")],
         replies: vec![],
         approve: false,
@@ -909,12 +920,144 @@ fn bulk_publish_failure_publishes_nothing() {
     assert!(report.published_annotation_ids.is_empty());
     assert!(!report.review_submitted);
     assert_eq!(report.failure.as_deref(), Some("publish failed"));
+    // Every draft was created; only the publish failed — all reported as
+    // pending drafts so a retry only bulk-publishes.
+    assert_eq!(report.draft_annotation_ids, vec![1]);
+}
+
+#[test]
+fn resubmit_skips_already_created_drafts_and_bulk_publishes_the_whole_set() {
+    // Note 1's draft survived a prior stopped run; note 2's create failed
+    // then. The retry creates only note 2's draft, then one bulk publish
+    // flips both — and both are reported published.
+    let mut precreated = note(1, "a");
+    precreated.draft_created = true;
+    let batch = GitlabSubmitBatch {
+        summary: None,
+        summary_draft_created: false,
+        notes: vec![precreated, note(2, "b")],
+        replies: vec![],
+        approve: false,
+    };
+    let exec = FakeExec::default();
+    let report = run_gitlab_submit_sequence(&batch, &exec);
+
+    let calls = exec.calls.borrow().clone();
+    assert_eq!(
+        calls,
+        vec![
+            Call::Draft {
+                body: "b".to_string(),
+                positioned: true,
+                reply_to: None
+            },
+            Call::BulkPublish,
+        ]
+    );
+    assert_eq!(report.published_annotation_ids, vec![1, 2]);
+    assert!(report.draft_annotation_ids.is_empty());
+    assert!(report.review_submitted);
+    assert!(report.failure.is_none());
+}
+
+#[test]
+fn resubmit_with_only_precreated_drafts_still_bulk_publishes() {
+    let mut precreated = note(1, "a");
+    precreated.draft_created = true;
+    let batch = GitlabSubmitBatch {
+        summary: None,
+        summary_draft_created: false,
+        notes: vec![precreated],
+        replies: vec![],
+        approve: false,
+    };
+    let exec = FakeExec::default();
+    let report = run_gitlab_submit_sequence(&batch, &exec);
+    assert_eq!(exec.calls.borrow().clone(), vec![Call::BulkPublish]);
+    assert_eq!(report.published_annotation_ids, vec![1]);
+    assert!(report.review_submitted);
+}
+
+#[test]
+fn resubmit_skips_an_already_drafted_summary_and_reply() {
+    let mut predrafted_reply = reply(5, "ddd", "agreed");
+    predrafted_reply.draft_created = true;
+    let batch = GitlabSubmitBatch {
+        summary: Some("overall".to_string()),
+        summary_draft_created: true,
+        notes: vec![],
+        replies: vec![predrafted_reply],
+        approve: false,
+    };
+    let exec = FakeExec::default();
+    let report = run_gitlab_submit_sequence(&batch, &exec);
+    // No creates at all — both drafts exist — just the publish.
+    assert_eq!(exec.calls.borrow().clone(), vec![Call::BulkPublish]);
+    assert_eq!(report.published_reply_ids, vec![5]);
+    assert!(report.review_submitted);
+}
+
+#[test]
+fn a_stop_reports_precreated_drafts_alongside_fresh_ones() {
+    // Note 1 pre-drafted, note 2 freshly drafted, note 3's create fails:
+    // the report carries both existing drafts so the caller's records stay
+    // complete, and nothing is published.
+    let mut precreated = note(1, "a");
+    precreated.draft_created = true;
+    let batch = GitlabSubmitBatch {
+        summary: None,
+        summary_draft_created: false,
+        notes: vec![precreated, note(2, "b"), note(3, "c")],
+        replies: vec![],
+        approve: false,
+    };
+    // Draft index 1 is note 3's create (note 2's is index 0).
+    let exec = FakeExec {
+        fail_draft_error_at: Some(1),
+        ..FakeExec::default()
+    };
+    let report = run_gitlab_submit_sequence(&batch, &exec);
+    assert!(report.published_annotation_ids.is_empty());
+    assert_eq!(report.draft_annotation_ids, vec![1, 2]);
+    assert_eq!(report.failure.as_deref(), Some("boom"));
+}
+
+#[test]
+fn a_404_with_precreated_drafts_is_an_error_not_the_visible_fallback() {
+    // Drafts already exist server-side, so the endpoint demonstrably works:
+    // a 404 on the next create must not switch to visible discussions
+    // (which would duplicate the pending drafts once published).
+    let mut precreated = note(1, "a");
+    precreated.draft_created = true;
+    let batch = GitlabSubmitBatch {
+        summary: None,
+        summary_draft_created: false,
+        notes: vec![precreated, note(2, "b")],
+        replies: vec![],
+        approve: false,
+    };
+    let exec = FakeExec {
+        fail_draft_unavailable_at: Some(0),
+        ..FakeExec::default()
+    };
+    let report = run_gitlab_submit_sequence(&batch, &exec);
+    assert!(
+        !exec
+            .calls
+            .borrow()
+            .iter()
+            .any(|c| matches!(c, Call::Discussion { .. })),
+        "must not fall back to visible discussions"
+    );
+    assert!(report.failure.is_some());
+    assert_eq!(report.draft_annotation_ids, vec![1]);
 }
 
 #[test]
 fn missing_draft_notes_api_falls_back_to_visible_discussions_with_per_item_marking() {
     let batch = GitlabSubmitBatch {
         summary: Some("summary".to_string()),
+        summary_draft_created: false,
         notes: vec![note(1, "a"), note(2, "b")],
         replies: vec![reply(9, "ddd", "reply body")],
         approve: false,
@@ -967,6 +1110,7 @@ fn missing_draft_notes_api_falls_back_to_visible_discussions_with_per_item_marki
 fn fallback_stops_mid_sequence_and_reports_only_what_published() {
     let batch = GitlabSubmitBatch {
         summary: None,
+        summary_draft_created: false,
         notes: vec![note(1, "a"), note(2, "b"), note(3, "c")],
         replies: vec![],
         approve: false,
@@ -989,6 +1133,7 @@ fn fallback_stops_mid_sequence_and_reports_only_what_published() {
 fn approve_is_only_sent_when_the_verdict_is_approve() {
     let batch = GitlabSubmitBatch {
         summary: None,
+        summary_draft_created: false,
         notes: vec![note(1, "a")],
         replies: vec![],
         approve: false,
@@ -1010,6 +1155,7 @@ fn approve_is_only_sent_when_the_verdict_is_approve() {
 fn approve_failure_after_publish_keeps_items_published_and_surfaces_the_diagnostic() {
     let batch = GitlabSubmitBatch {
         summary: None,
+        summary_draft_created: false,
         notes: vec![note(1, "a")],
         replies: vec![],
         approve: true,

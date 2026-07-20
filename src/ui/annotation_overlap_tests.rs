@@ -11,6 +11,7 @@ fn ann(id: usize, target: Target) -> Annotation {
         body: "note".to_string(),
         source: Source::default(),
         published: false,
+        draft_created: false,
     }
 }
 

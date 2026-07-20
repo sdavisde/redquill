@@ -126,6 +126,7 @@ fn unpublished_annotations_and_replies_are_counted() {
             body: "unpublished".to_string(),
             source: Source::WorkingTree,
             published: false,
+            draft_created: false,
         },
         PersistedAnnotation {
             target: Target::line("a.rs", 2, Side::New),
@@ -133,6 +134,7 @@ fn unpublished_annotations_and_replies_are_counted() {
             body: "already sent".to_string(),
             source: Source::WorkingTree,
             published: true,
+            draft_created: false,
         },
     ];
     review.replies = vec![
@@ -140,11 +142,13 @@ fn unpublished_annotations_and_replies_are_counted() {
             thread_id: 10,
             body: "queued".to_string(),
             published: false,
+            draft_created: false,
         },
         PersistedReply {
             thread_id: 11,
             body: "sent".to_string(),
             published: true,
+            draft_created: false,
         },
     ];
     let mut reviews = BTreeMap::new();

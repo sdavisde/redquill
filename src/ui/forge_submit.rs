@@ -390,6 +390,20 @@ impl App {
             plan,
             replies,
             include_review_post: !self.forge_review_submitted,
+            // Drafts a prior stopped GitLab run already created server-side:
+            // the sequence skips re-creating them so a retry can't duplicate.
+            draft_created_annotation_ids: unpublished
+                .iter()
+                .filter(|a| a.draft_created)
+                .map(|a| a.id)
+                .collect(),
+            draft_created_reply_ids: self
+                .replies
+                .unpublished()
+                .filter(|r| r.draft_created)
+                .map(|r| r.id)
+                .collect(),
+            summary_draft_created: self.forge_summary_draft_created,
         }
     }
 
@@ -475,14 +489,29 @@ impl App {
     /// failed mid-sequence. Rebuilds rows so a now-published annotation's
     /// in-diff row can defer to its forge copy.
     pub(super) fn apply_submit_outcome(&mut self, report: SubmitReport) {
+        // Record which drafts a stopped GitLab run left behind server-side,
+        // so the next submit creates only what's missing.
+        for id in &report.draft_annotation_ids {
+            let _ = self.annotations.set_draft_created(*id, true);
+        }
+        for id in &report.draft_reply_ids {
+            self.replies.set_draft_created(*id, true);
+        }
+        if report.summary_draft_created {
+            self.forge_summary_draft_created = true;
+        }
         for id in &report.published_annotation_ids {
             let _ = self.annotations.set_published(*id, true);
+            // A published item's draft no longer exists as a pending draft.
+            let _ = self.annotations.set_draft_created(*id, false);
         }
         for id in &report.published_reply_ids {
             self.replies.set_published(*id, true);
+            self.replies.set_draft_created(*id, false);
         }
         if report.review_submitted {
             self.forge_review_submitted = true;
+            self.forge_summary_draft_created = false;
         }
         self.persist_review_state();
         let published = report.published_annotation_ids.len() + report.published_reply_ids.len();
