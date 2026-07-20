@@ -86,9 +86,9 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 
 - [x] 2.1 TDD git-layer PR fetch: a closed `PrRef` type (provider ref pattern + integer PR number) producing fixed-shape argv for `git fetch origin <special-ref>:refs/heads/redquill/pr/<n>` (forced form only for that namespace — structurally unable to name any other ref), plus plain base-ref fetch; `GIT_TERMINAL_PROMPT=0`; managed-branch list/delete helpers restricted to the `redquill/pr/` prefix.
 - [x] 2.2 TDD `src/review/store.rs` schema v3: optional forge block on `PersistedReview` (provider, host, number, last head SHA); v2 files load silently with absent fields; deterministic serialization; byte-stable round-trip for non-forge reviews; bump `SCHEMA_VERSION`, keep corrupt-file salvage behavior.
-- [ ] 2.3 Wire `Enter` on a PR row: guards (in-session, single-in-flight) → head fetch → base fetch → `ensure_review_worktree(redquill/pr/<n>)` → reconciled state load → reroot onto `DiffTarget::Review` with the PR's base; store forge metadata in v3.
-- [ ] 2.4 Head-move handling: compare fetched head SHA to stored `last head SHA`; on move, remove managed worktree → forced namespace ref update → re-add worktree → reconcile; emit "PR updated — N accepted file(s) changed"; wire the existing manual refresh action to re-run the same check mid-session.
-- [ ] 2.5 Fetch-failure path: existing local state untouched, one-line diagnostic, stale-labeled session entry when a prior worktree exists.
+- [x] 2.3 Wire `Enter` on a PR row: guards (in-session, single-in-flight) → head fetch → base fetch → `ensure_review_worktree(redquill/pr/<n>)` → reconciled state load → reroot onto `DiffTarget::Review` with the PR's base; store forge metadata in v3.
+- [x] 2.4 Head-move handling: compare fetched head SHA to stored `last head SHA`; on move, remove managed worktree → forced namespace ref update → re-add worktree → reconcile; emit "PR updated — N accepted file(s) changed"; wire the existing manual refresh action to re-run the same check mid-session.
+- [x] 2.5 Fetch-failure path: existing local state untouched, one-line diagnostic, stale-labeled session entry when a prior worktree exists.
 - [ ] 2.6 Tempdir integration tests: scratch bare origin advertising `refs/pull/1/head`-style refs — happy path, fork-style head (no matching origin branch), head-move demotion, fetch failure; canonicalized paths.
 - [ ] 2.7 Capture the journey transcript (checkout → author push → reopen shows demotions); run all four gates.
 

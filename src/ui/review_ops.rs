@@ -129,10 +129,11 @@ impl App {
             worktree_path,
             files,
             annotations,
-            // No forge-backed session exists yet on this branch: `App`
-            // carries no PR/MR identity to attach here until the PR
-            // checkout flow (spec 13 unit 2) wires one in.
-            forge: None,
+            // A PR/MR review carries its forge identity (provider, host,
+            // number, last-fetched head SHA) so a reopen can detect the
+            // author pushing new commits; a plain local-branch review leaves
+            // this `None`.
+            forge: self.review_forge.clone(),
         };
         self.review_save_in_flight = true;
         self.review_save_tasks.spawn(move || {

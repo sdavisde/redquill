@@ -18,7 +18,7 @@ use crate::forge::{
 };
 use crate::git::{
     BranchStatus, ChangeKind, CommitLogEntry, CommitLogRange, CommitSummary, DiffTarget,
-    FileStatus, GitError, GitRunner, LocalBranch, RawFilePatch, StashEntry, StatusCode,
+    FileStatus, GitError, GitRunner, LocalBranch, PrRef, RawFilePatch, StashEntry, StatusCode,
     WorktreeEntry,
 };
 use crate::search::{FileCandidate, merge_candidates};
@@ -110,6 +110,61 @@ pub enum PrFetchOutcome {
         prs: Vec<PullRequest>,
     },
 }
+
+/// Everything the background PR-checkout fetch needs, resolved on the render
+/// thread and handed to the fetcher: which PR (a closed [`PrRef`]), its base
+/// branch, its managed branch/worktree location, whether a worktree already
+/// exists (a reopen), and the head SHA last fetched (to detect an author
+/// push). Plain data so it crosses the thread boundary alongside the fetcher.
+#[derive(Debug, Clone)]
+pub struct PrCheckoutRequest {
+    /// The closed PR head reference — the only thing that can name a forced
+    /// refspec, and only ever the `redquill/pr/<n>` namespace.
+    pub pr_ref: PrRef,
+    /// The PR's base branch name (e.g. `main`), plain-fetched so
+    /// `origin/<base_ref>` resolves for the review's diff base.
+    pub base_ref: String,
+    /// The managed branch short name (`redquill/pr/<n>`).
+    pub managed_branch: String,
+    /// The managed worktree's resolved path.
+    pub worktree_path: std::path::PathBuf,
+    /// Whether that worktree already exists (a reopen) vs. a first checkout.
+    pub worktree_exists: bool,
+    /// The head SHA persisted from the last fetch, compared against a fresh
+    /// peek to decide whether the author pushed new commits. `None` on a
+    /// first checkout (or when prior state was lost).
+    pub stored_head_sha: Option<String>,
+}
+
+/// The outcome of a background PR checkout: either a ready worktree (with the
+/// freshly-fetched head SHA and whether the author pushed since last time),
+/// or a failure that left local state untouched — carrying the stale worktree
+/// path when a prior checkout still exists for the user to review offline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrCheckoutOutcome {
+    /// The managed branch is fetched and the worktree is ready at
+    /// `worktree_path`. `moved` is true when the fetched head differs from
+    /// the stored one (an author push), so the caller can report demotions.
+    Ready {
+        head_sha: String,
+        moved: bool,
+        worktree_path: std::path::PathBuf,
+    },
+    /// The fetch failed; nothing local was destroyed. `stale_worktree` is
+    /// `Some` when a prior checkout still exists that the user may review as
+    /// a clearly-labeled stale session.
+    Failed {
+        message: String,
+        stale_worktree: Option<std::path::PathBuf>,
+    },
+}
+
+/// A `Send` closure running a whole [`PrCheckoutRequest`] off the render
+/// thread — the network fetches plus the local worktree add/remove — and
+/// returning a [`PrCheckoutOutcome`] the render thread finishes into a review
+/// session. Like [`AsyncPrListFetcher`] it returns a value that already
+/// encodes every failure mode, so there is no outer `Result`.
+pub type AsyncPrCheckoutFetcher = Box<dyn Fn(PrCheckoutRequest) -> PrCheckoutOutcome + Send>;
 
 /// The git operations the TUI needs for staging and refresh, kept behind a
 /// trait so [`super::App`]'s staging logic is unit-testable without a real
@@ -289,6 +344,33 @@ pub trait StageOps {
     fn async_pr_list_fetcher(&self) -> Option<AsyncPrListFetcher> {
         None
     }
+    /// A `Send` closure running a [`PrCheckoutRequest`] off the render thread
+    /// (see [`AsyncPrCheckoutFetcher`]). The default returns `None`, keeping
+    /// non-`Send` fakes (and git-less contexts) on a synchronous fallback via
+    /// [`StageOps::pr_checkout`]; [`GitRunner`] overrides it by cloning
+    /// itself into the closure.
+    fn async_pr_checkout_fetcher(&self) -> Option<AsyncPrCheckoutFetcher> {
+        None
+    }
+    /// Runs a [`PrCheckoutRequest`] synchronously — the fallback the PR
+    /// checkout flow takes when [`StageOps::async_pr_checkout_fetcher`]
+    /// returns `None`. The default degrades to a failure with no stale
+    /// fallback (a git-less/navigation-only fake can't fetch anything),
+    /// matching every other read-model default's "unavailable, not a panic"
+    /// contract.
+    fn pr_checkout(&self, request: PrCheckoutRequest) -> PrCheckoutOutcome {
+        let _ = request;
+        PrCheckoutOutcome::Failed {
+            message: "PR checkout unavailable (no git backend)".to_string(),
+            stale_worktree: None,
+        }
+    }
+    /// `origin`'s forge hostname (`git remote get-url origin` parsed to a
+    /// host), for stamping a PR review's forge metadata. The default returns
+    /// `None`; [`GitRunner`] overrides it.
+    fn origin_hostname(&self) -> Option<String> {
+        None
+    }
 }
 
 impl StageOps for GitRunner {
@@ -430,6 +512,133 @@ impl StageOps for GitRunner {
         // Same cloned-handle trick as `async_review_builder`.
         let runner = self.clone();
         Some(Box::new(move || pr_fetch_outcome(&runner)))
+    }
+
+    fn pr_checkout(&self, request: PrCheckoutRequest) -> PrCheckoutOutcome {
+        pr_checkout_fetch(self, request)
+    }
+
+    fn async_pr_checkout_fetcher(&self) -> Option<AsyncPrCheckoutFetcher> {
+        // Same cloned-handle trick as `async_review_builder`.
+        let runner = self.clone();
+        Some(Box::new(move |request| pr_checkout_fetch(&runner, request)))
+    }
+
+    fn origin_hostname(&self) -> Option<String> {
+        let url = self.origin_url().ok().flatten()?;
+        forge::parse_origin_hostname(&url)
+            .ok()
+            .map(|h| h.as_str().to_string())
+    }
+}
+
+/// The one-line diagnostic a [`GitError`] contributes to a
+/// [`PrCheckoutOutcome::Failed`]: a `Command` error's first stderr line
+/// (git's stderr is often multi-line; the session shows one actionable
+/// line), or the error's own `Display` otherwise. Mirrors
+/// [`forge_error_headline`].
+fn git_error_headline(e: &GitError) -> String {
+    match e {
+        GitError::Command { stderr, .. } if !stderr.trim().is_empty() => stderr
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or(stderr)
+            .trim()
+            .to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Runs a whole [`PrCheckoutRequest`] against `runner` (rooted at the repo,
+/// outside any review worktree): the network fetches and the local worktree
+/// add/remove, returning a [`PrCheckoutOutcome`] the render thread finishes
+/// into a review session. Only ever called off the render thread.
+///
+/// A first checkout force-fetches the PR head into the managed branch, then
+/// adds the worktree. A reopen first *peeks* the remote head into
+/// `FETCH_HEAD` (git refuses to force-update the managed branch while it is
+/// checked out): an unchanged head reuses the worktree as-is; a moved head
+/// recreates it (remove → forced update → re-add). A failed fetch destroys
+/// nothing and, when a prior worktree survives, offers it as a stale
+/// fallback — except in the narrow window after a moved-head worktree
+/// removal, where a subsequent fetch failure (right after a *successful*
+/// peek proved connectivity, so vanishingly unlikely) has no worktree left
+/// to fall back to; a retry then takes the first-checkout path.
+fn pr_checkout_fetch(runner: &GitRunner, request: PrCheckoutRequest) -> PrCheckoutOutcome {
+    if !request.worktree_exists {
+        if let Err(e) = runner.fetch_pr_head(&request.pr_ref) {
+            return PrCheckoutOutcome::Failed {
+                message: git_error_headline(&e),
+                stale_worktree: None,
+            };
+        }
+        // Best-effort: `origin/<base>` may already resolve; a genuine
+        // unresolved base surfaces later as a reroot/diff error.
+        let _ = runner.fetch_base_ref(&request.base_ref);
+        let head_sha = runner
+            .commit_sha_of(&request.managed_branch)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        return match super::review_session::ensure_review_worktree(runner, &request.managed_branch)
+        {
+            Ok(path) => PrCheckoutOutcome::Ready {
+                head_sha,
+                moved: false,
+                worktree_path: path,
+            },
+            Err(e) => PrCheckoutOutcome::Failed {
+                message: git_error_headline(&e),
+                stale_worktree: None,
+            },
+        };
+    }
+
+    let remote_head = match runner.peek_pr_head(&request.pr_ref) {
+        Ok(sha) => sha,
+        Err(e) => {
+            return PrCheckoutOutcome::Failed {
+                message: git_error_headline(&e),
+                stale_worktree: Some(request.worktree_path.clone()),
+            };
+        }
+    };
+    let moved = request.stored_head_sha.as_deref() != Some(remote_head.as_str());
+    if !moved {
+        let _ = runner.fetch_base_ref(&request.base_ref);
+        return PrCheckoutOutcome::Ready {
+            head_sha: remote_head,
+            moved: false,
+            worktree_path: request.worktree_path,
+        };
+    }
+
+    // The author pushed: recreate the worktree so the forced managed-branch
+    // update (refused while the branch is checked out) can run.
+    if let Err(e) = runner.worktree_remove(&request.worktree_path) {
+        return PrCheckoutOutcome::Failed {
+            message: git_error_headline(&e),
+            stale_worktree: Some(request.worktree_path.clone()),
+        };
+    }
+    let _ = runner.worktree_prune();
+    if let Err(e) = runner.fetch_pr_head(&request.pr_ref) {
+        return PrCheckoutOutcome::Failed {
+            message: git_error_headline(&e),
+            stale_worktree: None,
+        };
+    }
+    let _ = runner.fetch_base_ref(&request.base_ref);
+    match super::review_session::ensure_review_worktree(runner, &request.managed_branch) {
+        Ok(path) => PrCheckoutOutcome::Ready {
+            head_sha: remote_head,
+            moved: true,
+            worktree_path: path,
+        },
+        Err(e) => PrCheckoutOutcome::Failed {
+            message: git_error_headline(&e),
+            stale_worktree: None,
+        },
     }
 }
 

@@ -11,7 +11,7 @@ use super::log::{COMMIT_LOG_FORMAT, CommitLogEntry, CommitLogRange, parse_commit
 use super::ls_files::parse_ls_files_z;
 use super::remote::{
     MANAGED_PR_BRANCH_PREFIX, PrRef, base_fetch_command, delete_managed_pr_branch_command,
-    pr_fetch_command,
+    pr_fetch_command, pr_peek_fetch_command,
 };
 use super::stash::{STASH_LIST_FORMAT, StashEntry, parse_stash_list};
 use super::status::{FileStatus, StatusSnapshot, parse_porcelain_v2, parse_porcelain_v2_full};
@@ -456,6 +456,40 @@ impl GitRunner {
     /// the exact argv shape.
     pub fn fetch_base_ref(&self, base: &str) -> Result<(), GitError> {
         run_prebuilt(&mut base_fetch_command(base, &self.root))
+    }
+
+    /// Peeks `pr_ref`'s current head SHA on `origin` **without** updating the
+    /// managed branch: a plain fetch of the special ref into `FETCH_HEAD`
+    /// (see [`pr_peek_fetch_command`]), then `git rev-parse FETCH_HEAD`. Used
+    /// on reopen to detect whether the PR author pushed new commits before
+    /// deciding whether to recreate the worktree — the forced managed-branch
+    /// update git refuses while that branch is checked out. Fails with
+    /// [`GitError`] (offline, ref not advertised, auth expired) rather than
+    /// touching any local state.
+    pub fn peek_pr_head(&self, pr_ref: &PrRef) -> Result<String, GitError> {
+        run_prebuilt(&mut pr_peek_fetch_command(pr_ref, &self.root))?;
+        let out = self.run_utf8(&["rev-parse", "FETCH_HEAD"])?;
+        Ok(out.trim().to_string())
+    }
+
+    /// Resolves `rev` to its full commit SHA (`git rev-parse --verify -q
+    /// <rev>^{commit}`). `Ok(None)` — never an error — when `rev` doesn't
+    /// resolve to a commit; a genuine failure to run git still surfaces as
+    /// `Err`. Used to read a freshly-fetched managed branch's tip.
+    pub fn commit_sha_of(&self, rev: &str) -> Result<Option<String>, GitError> {
+        let spec = format!("{rev}^{{commit}}");
+        let args = ["rev-parse", "--verify", "-q", spec.as_str()];
+        let output = Command::new("git")
+            .current_dir(&self.root)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(map_spawn_err)?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let out = String::from_utf8(output.stdout).map_err(GitError::Utf8)?;
+        Ok(Some(out.trim().to_string()))
     }
 
     /// Returns the local branches currently under the managed PR/MR review

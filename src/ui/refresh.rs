@@ -60,13 +60,62 @@ impl App {
         Ok(())
     }
 
-    /// The `R` action: an unconditional refresh with a footer acknowledgement,
-    /// so a manual reload always confirms it ran even when nothing changed.
+    /// The refresh action: an unconditional refresh with a footer
+    /// acknowledgement, so a manual reload always confirms it ran even when
+    /// nothing changed.
+    ///
+    /// In a forge PR review session it *also* re-runs the fetch-on-open head
+    /// check first: a fresh peek re-fetches the PR head and, if the author
+    /// pushed, transparently recreates the worktree and re-reconciles (see
+    /// [`App::spawn_pr_checkout`]) so previously-accepted files whose blobs
+    /// changed drop back to `ChangedSinceAccepted`. The plain working-tree
+    /// rebuild below still runs for the local view; the checkout completes
+    /// asynchronously and re-roots when it lands.
     pub(super) fn manual_refresh(&mut self) {
+        if self.maybe_refresh_pr_head() {
+            return;
+        }
         match self.rebuild_from_git() {
             Ok(()) => self.set_status_message("refreshed"),
             Err(e) => self.set_status_message(format!("refresh failed: {e}")),
         }
+    }
+
+    /// When the current session is a forge PR review, kicks off a mid-session
+    /// PR checkout (the same head-move check a reopen runs) and returns
+    /// `true`; returns `false` for a plain local review or working-tree view,
+    /// leaving [`App::manual_refresh`] to do its ordinary rebuild. A checkout
+    /// already in flight is left to finish (also returns `true`, so the
+    /// refresh doesn't double up).
+    fn maybe_refresh_pr_head(&mut self) -> bool {
+        let Some(forge) = self.review_forge.clone() else {
+            return false;
+        };
+        if self.pr_checkout_in_flight.is_some() {
+            self.set_status_message("a PR refresh is already running \u{2014} wait for it");
+            return true;
+        }
+        // The review's diff base is `origin/<base>`; recover the plain base
+        // branch name the fetch needs by stripping that prefix.
+        let base_ref = match &self.target {
+            crate::git::DiffTarget::Review { base, .. } => {
+                base.strip_prefix("origin/").unwrap_or(base).to_string()
+            }
+            _ => return false,
+        };
+        self.set_status_message(format!(
+            "checking #{} for new commits \u{2026}",
+            forge.number
+        ));
+        self.spawn_pr_checkout(
+            forge.number,
+            base_ref,
+            forge.host.clone(),
+            format!("#{}", forge.number),
+            forge.provider,
+            true,
+        );
+        true
     }
 
     /// The *synchronous* fallback for the working-tree poll, used only when the

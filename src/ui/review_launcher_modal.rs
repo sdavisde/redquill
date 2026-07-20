@@ -784,6 +784,7 @@ index 111..222 100644
             title: title.to_string(),
             author: author.to_string(),
             head_ref: head_ref.to_string(),
+            base_ref: "main".to_string(),
             is_draft,
             updated_at: "2026-07-15T12:00:00Z".to_string(),
         }

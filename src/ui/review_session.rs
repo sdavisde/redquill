@@ -44,21 +44,35 @@ pub fn resolve_review_base(
 /// git's own error message (unknown branch, branch checked out elsewhere,
 /// path collision, ...) without side effects on failure.
 pub fn ensure_review_worktree(ops: &dyn StageOps, branch: &str) -> Result<PathBuf, GitError> {
-    let common_dir = ops.git_common_dir()?;
-    let dir_name = sanitize_branch_dir_name(branch);
-    let worktree_path = common_dir.join("redquill").join("worktrees").join(dir_name);
+    let worktree_path = review_worktree_path(ops, branch)?;
 
-    let already_registered = worktree_path.exists()
-        && ops
-            .worktree_list()?
-            .iter()
-            .any(|entry| paths_match(&entry.path, &worktree_path));
-
-    if !already_registered {
+    if !worktree_registered(ops, &worktree_path)? {
         ops.worktree_add(&worktree_path, branch)?;
     }
 
     Ok(worktree_path)
+}
+
+/// The managed worktree path a review of `branch` resolves to
+/// (`<git-common-dir>/redquill/worktrees/<sanitized-branch>`) — the single
+/// place that layout is computed, shared by [`ensure_review_worktree`] and
+/// the PR-checkout flow (which must know the path to test for an existing
+/// worktree before deciding whether to recreate it).
+pub fn review_worktree_path(ops: &dyn StageOps, branch: &str) -> Result<PathBuf, GitError> {
+    let common_dir = ops.git_common_dir()?;
+    let dir_name = sanitize_branch_dir_name(branch);
+    Ok(common_dir.join("redquill").join("worktrees").join(dir_name))
+}
+
+/// Whether `worktree_path` is a live, git-registered worktree (both present
+/// on disk and known to `git worktree list`) — a paused review to reuse
+/// rather than recreate.
+pub fn worktree_registered(ops: &dyn StageOps, worktree_path: &Path) -> Result<bool, GitError> {
+    Ok(worktree_path.exists()
+        && ops
+            .worktree_list()?
+            .iter()
+            .any(|entry| paths_match(&entry.path, worktree_path)))
 }
 
 /// Resolves `<git-common-dir>/redquill/review-state.json`'s path through

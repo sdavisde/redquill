@@ -187,6 +187,24 @@ pub fn base_fetch_command(base: &str, root: &Path) -> Command {
     cmd
 }
 
+/// Builds a plain (never forced) `git fetch origin <special-ref>` with **no**
+/// destination refspec, so the fetch lands in `FETCH_HEAD` only and never
+/// updates any branch — the read-only "has the PR head moved?" peek used on
+/// reopen before deciding whether to recreate the managed worktree. Reading
+/// `FETCH_HEAD` afterward yields the remote head SHA without ever touching
+/// the managed branch (which git refuses to force-update while it is checked
+/// out in a worktree). The special ref comes only from [`PrRef::source_ref`],
+/// after a `--` separator. `GIT_TERMINAL_PROMPT=0`, matching every other git
+/// invocation.
+pub fn pr_peek_fetch_command(pr_ref: &PrRef, root: &Path) -> Command {
+    let source = pr_ref.source_ref();
+    let mut cmd = Command::new("git");
+    cmd.current_dir(root);
+    cmd.args(["fetch", "origin", "--", source.as_str()]);
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    cmd
+}
+
 /// Builds `git branch -D redquill/pr/<n>` — force-delete, because a managed
 /// PR branch is unrelated history fetched from another repo and will
 /// essentially never be "merged" from this repo's perspective, so a plain
@@ -413,6 +431,52 @@ mod tests {
     #[test]
     fn base_fetch_command_disables_the_terminal_prompt() {
         let cmd = base_fetch_command("main", Path::new("."));
+        let prompt = cmd
+            .get_envs()
+            .find(|(k, _)| *k == OsStr::new("GIT_TERMINAL_PROMPT"))
+            .and_then(|(_, v)| v);
+        assert_eq!(prompt, Some(OsStr::new("0")));
+    }
+
+    // -- pr_peek_fetch_command ------------------------------------------------
+
+    #[test]
+    fn pr_peek_fetch_command_argv_has_no_destination_refspec() {
+        let pr_ref = PrRef::new(PrRefKind::GitHub, 7);
+        let cmd = pr_peek_fetch_command(&pr_ref, Path::new("/repo"));
+        assert_eq!(cmd.get_program(), OsStr::new("git"));
+        // The source ref stands alone (no `:dest`), so the fetch only writes
+        // FETCH_HEAD and can never update a branch.
+        assert_eq!(
+            args_of(&cmd),
+            vec!["fetch", "origin", "--", "refs/pull/7/head"]
+        );
+        assert_eq!(cmd.get_current_dir(), Some(Path::new("/repo")));
+    }
+
+    #[test]
+    fn pr_peek_fetch_command_is_never_forced_and_names_no_managed_ref() {
+        for kind in [PrRefKind::GitHub, PrRefKind::GitLab] {
+            for number in [1_u64, 42, 999] {
+                let cmd = pr_peek_fetch_command(&PrRef::new(kind, number), Path::new("."));
+                let args = args_of(&cmd);
+                let last = args.last().expect("refspec arg present");
+                assert!(!last.starts_with('+'), "the peek must never be forced");
+                assert!(
+                    !last.contains(':'),
+                    "the peek must carry no destination refspec: {last:?}"
+                );
+                assert!(
+                    !last.contains("redquill/pr/"),
+                    "the peek must never name the managed branch: {last:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pr_peek_fetch_command_disables_the_terminal_prompt() {
+        let cmd = pr_peek_fetch_command(&PrRef::new(PrRefKind::GitHub, 1), Path::new("."));
         let prompt = cmd
             .get_envs()
             .find(|(k, _)| *k == OsStr::new("GIT_TERMINAL_PROMPT"))

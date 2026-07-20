@@ -65,7 +65,7 @@ pub use log::{COMMIT_LOG_FORMAT, CommitLogEntry, CommitLogRange, parse_commit_lo
 pub use ls_files::parse_ls_files_z;
 pub use remote::{
     MANAGED_PR_BRANCH_PREFIX, PrRef, PrRefKind, RemoteOp, base_fetch_command,
-    delete_managed_pr_branch_command, pr_fetch_command, remote_command,
+    delete_managed_pr_branch_command, pr_fetch_command, pr_peek_fetch_command, remote_command,
 };
 pub use runner::GitRunner;
 pub use stage::{build_hunk_patch, build_line_patch};

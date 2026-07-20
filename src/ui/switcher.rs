@@ -592,6 +592,12 @@ impl App {
         self.repo_root = Some(new_root);
         self.stage_ops = Some(Box::new(runner));
         self.target = target;
+        // Any prior PR/MR session identity belongs to the old root; the PR
+        // checkout flow re-stamps forge metadata after this returns, and a
+        // plain branch/worktree re-root has none. Clearing here keeps a
+        // stale forge block or stale label from leaking across the swap.
+        self.review_forge = None;
+        self.review_stale = false;
         self.apply_snapshot(snapshot);
         Ok(())
     }

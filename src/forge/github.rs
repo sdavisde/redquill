@@ -14,7 +14,8 @@ use super::{ForgeError, PullRequest};
 
 /// The exact `--json` field list `gh pr list` is asked for — fixed at the
 /// listing's field set, never composed from caller input.
-pub const PR_LIST_JSON_FIELDS: &str = "number,title,author,headRefName,isDraft,updatedAt";
+pub const PR_LIST_JSON_FIELDS: &str =
+    "number,title,author,headRefName,baseRefName,isDraft,updatedAt";
 
 /// How long a `gh pr list` invocation may run before it's treated as
 /// failed and killed. Generous relative to the credential-check timeout
@@ -69,6 +70,8 @@ struct RawPr {
     author: RawAuthor,
     #[serde(rename = "headRefName")]
     head_ref_name: String,
+    #[serde(rename = "baseRefName")]
+    base_ref_name: String,
     #[serde(rename = "isDraft")]
     is_draft: bool,
     #[serde(rename = "updatedAt")]
@@ -95,6 +98,7 @@ pub fn parse_pr_list_json(json: &str) -> Result<Vec<PullRequest>, ForgeError> {
             title: r.title,
             author: r.author.login,
             head_ref: r.head_ref_name,
+            base_ref: r.base_ref_name,
             is_draft: r.is_draft,
             updated_at: r.updated_at,
         })

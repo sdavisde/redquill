@@ -125,8 +125,18 @@ pub(super) fn render(
     branch: &str,
     accepted: usize,
     total: usize,
+    stale: bool,
 ) {
     let fg = Style::default().fg(theme.review_banner_fg);
+    // A stale PR checkout (entered after a fetch failure left a prior
+    // worktree) folds a visible marker into the branch label so the reviewer
+    // can't miss that the checkout may lag the PR's real head.
+    let label = if stale {
+        format!("{branch} \u{26A0} STALE")
+    } else {
+        branch.to_string()
+    };
+    let branch = label.as_str();
     let spans = match layout(branch, accepted, total, area.width as usize) {
         BannerLayout::Clipped(s) => vec![Span::styled(s, fg.add_modifier(Modifier::BOLD))],
         BannerLayout::Full { branch, pad, count } => vec![
@@ -150,6 +160,54 @@ pub(super) fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    /// Flattens a full-width banner render into a plain string.
+    fn render_line(branch: &str, accepted: usize, total: usize, stale: bool) -> String {
+        let backend = TestBackend::new(80, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                render(
+                    frame,
+                    area,
+                    &Theme::default(),
+                    branch,
+                    accepted,
+                    total,
+                    stale,
+                );
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect()
+    }
+
+    #[test]
+    fn stale_checkout_renders_a_visible_stale_marker() {
+        let line = render_line("redquill/pr/7", 0, 3, true);
+        assert!(
+            line.contains("STALE"),
+            "a stale PR checkout must render a STALE marker: {line:?}"
+        );
+        assert!(line.contains("redquill/pr/7"));
+    }
+
+    #[test]
+    fn fresh_checkout_renders_no_stale_marker() {
+        let line = render_line("redquill/pr/7", 0, 3, false);
+        assert!(
+            !line.contains("STALE"),
+            "a fresh session must not render a STALE marker: {line:?}"
+        );
+    }
 
     #[test]
     fn fits_unchanged_when_width_is_generous() {

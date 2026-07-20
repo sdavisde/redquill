@@ -41,6 +41,9 @@ pub struct PullRequest {
     pub author: String,
     /// The source branch name (`headRefName` on GitHub).
     pub head_ref: String,
+    /// The target/base branch name (`baseRefName` on GitHub) the PR merges
+    /// into — the ref a review's `base...head` diff is taken against.
+    pub base_ref: String,
     pub is_draft: bool,
     /// Provider-formatted timestamp string, verbatim — no local parsing or
     /// timezone conversion happens at this layer.

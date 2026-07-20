@@ -503,6 +503,27 @@ pub struct App {
     /// separate from `launcher_commits_tasks` so their results are drained
     /// independently (see [`App::poll_launcher_prs`]).
     pub(super) launcher_prs_tasks: BackgroundTasks<PrFetchOutcome>,
+    /// The single background PR checkout (`Enter` on a PR row, or a mid-
+    /// session refresh) in flight, if any — single-flight, so a second
+    /// `Enter` or refresh can't stack a concurrent fetch/worktree op (see
+    /// [`App::spawn_pr_checkout`]/[`App::poll_pr_checkout`]).
+    pub(super) pr_checkout_in_flight: Option<super::review_launcher::InFlightPrCheckout>,
+    /// Bumped to invalidate a straggling PR checkout spawned before the bump.
+    pub(super) pr_checkout_generation: u64,
+    /// The background-task poller PR checkouts run through, separate from the
+    /// PR-list poller so their results drain independently.
+    pub(super) pr_checkout_tasks: BackgroundTasks<super::stage_ops::PrCheckoutOutcome>,
+    /// The forge identity of the review session in flight, when it is a PR/MR
+    /// review — stamped into persisted state by [`App::persist_review_state`]
+    /// so a reopen can detect the author pushing new commits. `None` for a
+    /// plain local-branch review.
+    pub(super) review_forge: Option<crate::review::store::ForgeMetadata>,
+    /// Whether the current review session is a *stale* PR checkout: entered
+    /// after a fetch failure left a prior worktree in place. Renders a STALE
+    /// marker in the review banner so the reviewer knows the checkout may
+    /// lag the PR's real head. Always false for a fresh checkout or a local
+    /// branch review.
+    pub(super) review_stale: bool,
     /// The set of collapsed directory keys in the git panel's file tree (see
     /// [`super::file_tree`]). An `App` field rather than [`Mode::Panel`]
     /// state because a folded directory must stay folded across the panel
@@ -564,6 +585,11 @@ pub struct App {
     /// repository instead. `None` outside a review session, or in
     /// git-less/test contexts that never call finish.
     pub(super) review_origin_ops: Option<Box<dyn StageOps>>,
+    /// The origin repository root the PR-checkout fetch/worktree ops run
+    /// from (outside any managed worktree), captured when a PR review session
+    /// starts so a mid-session refresh can re-root a fresh origin runner for
+    /// the fetch. `None` outside a PR review session.
+    pub(super) review_origin_root: Option<PathBuf>,
     /// The path `<git-common-dir>/redquill/review-state.json` resolves to
     /// for this session, set once at startup by
     /// [`App::set_review_state_path`]. `None` outside a review session (or
@@ -730,6 +756,11 @@ impl App {
             launcher_prs_in_flight: None,
             launcher_prs_generation: 0,
             launcher_prs_tasks: BackgroundTasks::new(),
+            pr_checkout_in_flight: None,
+            pr_checkout_generation: 0,
+            pr_checkout_tasks: BackgroundTasks::new(),
+            review_forge: None,
+            review_stale: false,
             panel_collapsed_dirs: HashSet::new(),
             active_commit: None,
             suspended_view: None,
@@ -741,6 +772,7 @@ impl App {
             file_view_return_mode: Mode::Normal,
             project_search: None,
             review_origin_ops: None,
+            review_origin_root: None,
             review_state_path: None,
             review_blob_shas: HashMap::new(),
             review_save_tasks: BackgroundTasks::new(),

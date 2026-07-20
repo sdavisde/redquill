@@ -16,6 +16,7 @@ const FIXTURE_TWO_PRS: &str = r#"[
       "name": "The Octocat"
     },
     "headRefName": "feature/widget",
+    "baseRefName": "main",
     "isDraft": false,
     "updatedAt": "2026-07-18T12:34:56Z"
   },
@@ -29,6 +30,7 @@ const FIXTURE_TWO_PRS: &str = r#"[
       "name": "Hu Bot"
     },
     "headRefName": "wip/gizmo",
+    "baseRefName": "develop",
     "isDraft": true,
     "updatedAt": "2026-07-19T08:00:00Z"
   }
@@ -57,7 +59,7 @@ fn pr_list_command_has_the_fixed_argv_and_hardened_env() {
 fn pr_list_json_fields_are_exactly_fr4s_set() {
     assert_eq!(
         PR_LIST_JSON_FIELDS,
-        "number,title,author,headRefName,isDraft,updatedAt"
+        "number,title,author,headRefName,baseRefName,isDraft,updatedAt"
     );
 }
 
@@ -70,12 +72,14 @@ fn parse_pr_list_json_maps_a_fixture_into_typed_rows() {
     assert_eq!(rows[0].title, "Add widget support");
     assert_eq!(rows[0].author, "octocat");
     assert_eq!(rows[0].head_ref, "feature/widget");
+    assert_eq!(rows[0].base_ref, "main");
     assert!(!rows[0].is_draft);
     assert_eq!(rows[0].updated_at, "2026-07-18T12:34:56Z");
 
     assert_eq!(rows[1].number, 43);
     assert_eq!(rows[1].author, "hubot");
     assert_eq!(rows[1].head_ref, "wip/gizmo");
+    assert_eq!(rows[1].base_ref, "develop");
     assert!(rows[1].is_draft);
 }
 
@@ -93,7 +97,7 @@ fn parse_pr_list_json_rejects_malformed_json() {
 
 #[test]
 fn parse_pr_list_json_rejects_a_row_missing_a_required_field() {
-    let missing_number = r#"[{"title":"x","author":{"login":"o"},"headRefName":"h","isDraft":false,"updatedAt":"t"}]"#;
+    let missing_number = r#"[{"title":"x","author":{"login":"o"},"headRefName":"h","baseRefName":"b","isDraft":false,"updatedAt":"t"}]"#;
     let err = parse_pr_list_json(missing_number).unwrap_err();
     assert!(matches!(err, ForgeError::Parse { cli: "gh", .. }));
 }

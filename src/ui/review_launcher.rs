@@ -27,17 +27,21 @@
 //! to a real index before dispatch, never bypasses the guard that dispatch
 //! itself performs first.
 
+use std::path::PathBuf;
+
 use crate::forge::PullRequest;
-use crate::git::{CommitLogEntry, CommitLogRange, DiffTarget, GitRunner};
+use crate::git::{CommitLogEntry, CommitLogRange, DiffTarget, GitRunner, PrRef, PrRefKind};
+use crate::review::ReviewStatus;
+use crate::review::store::{ForgeMetadata, ForgeProviderKind};
 
 use super::app::{App, Mode, ModeOrigin};
 use super::background::TaskId;
 use super::list_filter::ListFilter;
 use super::review_session::{
     ensure_review_worktree, load_reconciled_review_state, resolve_review_base,
-    resolve_review_state_path,
+    resolve_review_state_path, review_worktree_path, worktree_registered,
 };
-use super::stage_ops::PrFetchOutcome;
+use super::stage_ops::{PrCheckoutOutcome, PrCheckoutRequest, PrFetchOutcome, StageOps};
 
 /// A background ahead-of-base commit-log fetch awaiting completion. Mirrors
 /// [`super::history::InFlightHistory`]'s shape exactly — the Commits tab's
@@ -62,6 +66,46 @@ pub(super) struct InFlightLauncherPrs {
     pub(super) id: TaskId,
     /// The generation captured when this fetch was spawned.
     pub(super) generation: u64,
+}
+
+/// Everything needed to finish a PR checkout into a review session once its
+/// background fetch/worktree work lands — carried alongside the in-flight
+/// task (and reused verbatim on the synchronous fallback path) so the poll
+/// handler doesn't have to re-derive any of it. Plain owned data.
+#[derive(Debug, Clone)]
+pub(super) struct PrCheckoutContext {
+    /// The PR/MR number.
+    pub(super) number: u64,
+    /// Which forge this PR lives on, for the persisted forge block.
+    pub(super) provider: ForgeProviderKind,
+    /// The forge hostname, for the persisted forge block.
+    pub(super) host: String,
+    /// The PR's plain base branch name (e.g. `main`); the review's diff base
+    /// is `origin/<base_ref>`.
+    pub(super) base_ref: String,
+    /// The managed branch short name (`redquill/pr/<n>`).
+    pub(super) managed_branch: String,
+    /// The PR title, for the "reviewing #N …" status line.
+    pub(super) title: String,
+    /// The resolved `review-state.json` path, for reconciliation and saves.
+    pub(super) state_path: Option<PathBuf>,
+    /// The origin repo root (outside any worktree), for discovering the
+    /// finish-time origin runner and re-rooting a mid-session refresh.
+    pub(super) origin_root: Option<PathBuf>,
+    /// Whether this checkout was kicked off mid-session (a refresh) rather
+    /// than from the launcher — governs whether the launcher is closed and
+    /// whether a stale fallback re-roots or just relabels the live session.
+    pub(super) from_session: bool,
+}
+
+/// A background PR checkout awaiting completion: its [`TaskId`], the
+/// generation captured at spawn (a straggler from before a bump is dropped),
+/// and the [`PrCheckoutContext`] the poll handler finishes with.
+#[derive(Debug, Clone)]
+pub(super) struct InFlightPrCheckout {
+    pub(super) id: TaskId,
+    pub(super) generation: u64,
+    pub(super) ctx: PrCheckoutContext,
 }
 
 /// Which tab of the Review launcher is active.
@@ -487,19 +531,350 @@ impl App {
         self.open_commit_view(sha);
     }
 
-    /// Pull Requests tab `Enter`: names the highlighted PR in a status line
-    /// rather than starting a review — PR checkout is unimplemented until
-    /// PR-review wiring lands, and a stub keeps `Enter` from being silently
-    /// inert in the meantime. A no-op on an out-of-range cursor (empty,
-    /// still loading, or a degraded state with nothing selectable).
+    /// Pull Requests tab `Enter`: starts a worktree-backed review session on
+    /// the highlighted PR, reusing the unchanged spec-08 machinery
+    /// ([`ensure_review_worktree`], reconciliation, [`App::reroot`] onto
+    /// [`DiffTarget::Review`]) exactly as the Branches tab does, differing
+    /// only in the fetch that precedes it: the PR head is fetched into
+    /// `redquill/pr/<n>` and the base ref plain-fetched so `origin/<base>`
+    /// resolves. The fetch runs off the render loop (see
+    /// [`App::spawn_pr_checkout`]).
+    ///
+    /// Guarded first by the in-session check (a nested review is
+    /// unsupported), second by the single-in-flight rules a running remote
+    /// op or an already-running checkout impose — mirroring
+    /// [`App::confirm_launcher_branch_review`]. A no-op on an out-of-range
+    /// cursor (empty, still loading, or a degraded state with nothing
+    /// selectable).
     fn confirm_launcher_pr(&mut self, cursor: usize) {
+        if self.in_review_session() {
+            self.set_status_message(format!(
+                "already reviewing {} \u{2014} press q to finish or pause",
+                self.review_branch().unwrap_or("this branch")
+            ));
+            return;
+        }
+        if let Some(label) = self.running_op_label() {
+            self.set_status_message(format!(
+                "{label} is running \u{2014} wait before starting a review"
+            ));
+            return;
+        }
+        if self.pr_checkout_in_flight.is_some() {
+            self.set_status_message("a PR checkout is already running \u{2014} wait for it");
+            return;
+        }
         let Some(pr) = self.launcher_prs_rows().get(cursor) else {
             return;
         };
-        self.set_status_message(format!(
-            "PR review not yet available (#{} {})",
-            pr.number, pr.title
-        ));
+        let number = pr.number;
+        let title = pr.title.clone();
+        let base_ref = pr.base_ref.clone();
+        // GitHub is the only provider with PR checkout wired in this unit;
+        // GitLab arrives in a later unit and will pass its own kind here.
+        let host = self
+            .stage_ops
+            .as_deref()
+            .and_then(|ops| ops.origin_hostname())
+            .unwrap_or_default();
+        self.set_status_message(format!("checking out #{number} \u{2026}"));
+        self.spawn_pr_checkout(
+            number,
+            base_ref,
+            host,
+            title,
+            ForgeProviderKind::GitHub,
+            false,
+        );
+    }
+
+    /// Maps a persisted forge provider to the special-ref kind naming its
+    /// PR/MR head.
+    fn pr_ref_kind(provider: ForgeProviderKind) -> PrRefKind {
+        match provider {
+            ForgeProviderKind::GitHub => PrRefKind::GitHub,
+            ForgeProviderKind::GitLab => PrRefKind::GitLab,
+        }
+    }
+
+    /// Kicks off a background PR checkout: resolves the managed branch /
+    /// worktree location and stored head SHA on the render thread, then hands
+    /// the whole fetch-and-worktree sequence to a `Send` fetcher off it
+    /// ([`super::stage_ops::AsyncPrCheckoutFetcher`]), draining the result in
+    /// [`App::poll_pr_checkout`]. Falls back to a synchronous checkout for
+    /// backends that can't cross a thread boundary (test fakes, git-less
+    /// contexts), matching every other lazy-load path's fallback shape.
+    ///
+    /// `from_session` distinguishes a launcher-initiated checkout (the
+    /// current `stage_ops` is the origin repo) from a mid-session refresh
+    /// (the origin ops are [`App::review_origin_ops`], since `stage_ops` is
+    /// then rooted inside the managed worktree).
+    pub(super) fn spawn_pr_checkout(
+        &mut self,
+        number: u64,
+        base_ref: String,
+        host: String,
+        title: String,
+        provider: ForgeProviderKind,
+        from_session: bool,
+    ) {
+        if self.pr_checkout_in_flight.is_some() {
+            return;
+        }
+        let pr_ref = PrRef::new(Self::pr_ref_kind(provider), number);
+        let managed_branch = pr_ref.managed_branch();
+        let origin_root = if from_session {
+            self.review_origin_root.clone()
+        } else {
+            self.repo_root.clone()
+        };
+
+        // All origin-ops reads happen inside this block so the immutable
+        // borrow of `self` ends before the mutable `spawn`/state writes.
+        let prepared = {
+            let origin_ops: &dyn StageOps = if from_session {
+                match self.review_origin_ops.as_deref() {
+                    Some(ops) => ops,
+                    None => {
+                        self.set_status_message("refresh unavailable (no origin git backend)");
+                        return;
+                    }
+                }
+            } else {
+                match self.stage_ops.as_deref() {
+                    Some(ops) => ops,
+                    None => {
+                        self.set_status_message("review unavailable (no git backend)");
+                        return;
+                    }
+                }
+            };
+            let worktree_path = match review_worktree_path(origin_ops, &managed_branch) {
+                Ok(path) => path,
+                Err(e) => {
+                    self.set_status_message(format!("review failed: {e}"));
+                    return;
+                }
+            };
+            let worktree_exists = worktree_registered(origin_ops, &worktree_path).unwrap_or(false);
+            let state_path = resolve_review_state_path(origin_ops).ok();
+            let stored_head_sha = state_path
+                .as_ref()
+                .and_then(|path| stored_pr_head_sha(path, &managed_branch));
+            let request = PrCheckoutRequest {
+                pr_ref,
+                base_ref: base_ref.clone(),
+                managed_branch: managed_branch.clone(),
+                worktree_path,
+                worktree_exists,
+                stored_head_sha,
+            };
+            let fetcher = origin_ops.async_pr_checkout_fetcher();
+            (request, state_path, fetcher)
+        };
+        let (request, state_path, fetcher) = prepared;
+
+        let ctx = PrCheckoutContext {
+            number,
+            provider,
+            host,
+            base_ref,
+            managed_branch,
+            title,
+            state_path,
+            origin_root,
+            from_session,
+        };
+
+        match fetcher {
+            Some(fetcher) => {
+                let generation = self.pr_checkout_generation;
+                let id = self.pr_checkout_tasks.spawn(move || fetcher(request));
+                self.pr_checkout_in_flight = Some(InFlightPrCheckout {
+                    id,
+                    generation,
+                    ctx,
+                });
+            }
+            None => {
+                // Synchronous fallback: the backend can't cross a thread
+                // boundary, so run the checkout inline and finish immediately.
+                let outcome = self
+                    .stage_ops
+                    .as_deref()
+                    .map(|ops| ops.pr_checkout(request.clone()))
+                    .unwrap_or(PrCheckoutOutcome::Failed {
+                        message: "PR checkout unavailable (no git backend)".to_string(),
+                        stale_worktree: None,
+                    });
+                self.finish_pr_checkout(outcome, ctx);
+            }
+        }
+    }
+
+    /// Drains a completed background PR checkout (once per event-loop tick,
+    /// alongside [`App::poll_launcher_prs`]). Drops a stale result — spawned
+    /// before `pr_checkout_generation` was bumped — or a task-panic result
+    /// (surfaced as a one-line diagnostic that leaves local state untouched);
+    /// otherwise finishes the checkout into a review session.
+    pub(super) fn poll_pr_checkout(&mut self) {
+        for (id, result) in self.pr_checkout_tasks.poll() {
+            let Some(in_flight) = self.pr_checkout_in_flight.clone() else {
+                continue;
+            };
+            if in_flight.id != id {
+                continue;
+            }
+            self.pr_checkout_in_flight = None;
+            if in_flight.generation != self.pr_checkout_generation {
+                continue;
+            }
+            let outcome = result.unwrap_or(PrCheckoutOutcome::Failed {
+                message: "PR checkout task panicked".to_string(),
+                stale_worktree: None,
+            });
+            self.finish_pr_checkout(outcome, in_flight.ctx);
+        }
+    }
+
+    /// Finishes a PR checkout: on a ready worktree, re-roots onto a
+    /// [`DiffTarget::Review`] (`origin/<base>` … `redquill/pr/<n>`) exactly as
+    /// a branch review would, reconciles persisted progress, stamps the
+    /// session's forge metadata, and reports demotions when the author
+    /// pushed. On a failed fetch nothing local is destroyed: a surviving
+    /// prior worktree is entered as a clearly-labeled stale session, and
+    /// otherwise a one-line diagnostic surfaces with all local state intact.
+    fn finish_pr_checkout(&mut self, outcome: PrCheckoutOutcome, ctx: PrCheckoutContext) {
+        match outcome {
+            PrCheckoutOutcome::Ready {
+                head_sha,
+                moved,
+                worktree_path,
+            } => self.enter_pr_review(ctx, worktree_path, Some(head_sha), moved, false),
+            PrCheckoutOutcome::Failed {
+                message,
+                stale_worktree,
+            } => {
+                match stale_worktree {
+                    Some(_) if ctx.from_session => {
+                        // Already reviewing this worktree; just relabel it
+                        // stale and surface the diagnostic, touching nothing.
+                        self.review_stale = true;
+                        self.set_status_message(format!(
+                            "PR fetch failed ({message}) \u{2014} checkout may be stale"
+                        ));
+                    }
+                    Some(path) => {
+                        let stored = ctx
+                            .state_path
+                            .as_ref()
+                            .and_then(|p| stored_pr_head_sha(p, &ctx.managed_branch));
+                        self.enter_pr_review(ctx, path, stored, false, true);
+                        // The stale entry succeeded (or degraded); layer the
+                        // fetch diagnostic on top so the reason is visible.
+                        if self.review_stale {
+                            self.set_status_message(format!(
+                                "PR fetch failed ({message}) \u{2014} reviewing stale checkout"
+                            ));
+                        }
+                    }
+                    None => {
+                        self.set_status_message(format!("PR fetch failed: {message}"));
+                        if !ctx.from_session {
+                            self.close_review_launcher();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The shared "re-root onto a PR worktree and wire up the review session"
+    /// tail of [`App::finish_pr_checkout`], used by both the ready path and
+    /// the stale-fallback path. `head_sha` seeds the persisted forge block's
+    /// last-fetched SHA; `stale` marks the banner.
+    fn enter_pr_review(
+        &mut self,
+        ctx: PrCheckoutContext,
+        worktree_path: PathBuf,
+        head_sha: Option<String>,
+        moved: bool,
+        stale: bool,
+    ) {
+        let session_runner = match GitRunner::discover_in(&worktree_path) {
+            Ok(runner) => runner,
+            Err(e) => {
+                self.set_status_message(format!("review failed: {e}"));
+                if !ctx.from_session {
+                    self.close_review_launcher();
+                }
+                return;
+            }
+        };
+        let base = format!("origin/{}", ctx.base_ref);
+        let reconciled = ctx
+            .state_path
+            .as_ref()
+            .map(|path| load_reconciled_review_state(&session_runner, path, &ctx.managed_branch));
+        let origin_runner = ctx
+            .origin_root
+            .as_deref()
+            .and_then(|root| GitRunner::discover_in(root).ok());
+        let target = DiffTarget::Review {
+            base,
+            branch: ctx.managed_branch.clone(),
+        };
+        match self.reroot(session_runner, target) {
+            Ok(()) => {
+                self.review_origin_root = ctx.origin_root.clone();
+                if let Some(origin) = origin_runner {
+                    self.set_review_origin_ops(Box::new(origin));
+                }
+                if let Some(path) = ctx.state_path.clone() {
+                    self.set_review_state_path(path);
+                }
+                let demoted = reconciled
+                    .as_ref()
+                    .map(|(states, _, _)| {
+                        states
+                            .values()
+                            .filter(|s| **s == ReviewStatus::ChangedSinceAccepted)
+                            .count()
+                    })
+                    .unwrap_or(0);
+                if let Some((states, blob_shas, annotations)) = reconciled {
+                    self.set_review_states(states, blob_shas);
+                    self.restore_review_annotations(annotations);
+                }
+                self.review_forge = Some(ForgeMetadata {
+                    provider: ctx.provider,
+                    host: ctx.host.clone(),
+                    number: ctx.number,
+                    last_head_sha: head_sha.unwrap_or_default(),
+                });
+                self.review_stale = stale;
+                // Persist immediately so the forge block (and the head SHA a
+                // reopen compares against) lands even before any accept.
+                self.persist_review_state();
+                if !ctx.from_session {
+                    self.close_review_launcher_after_start();
+                    self.after_panel_coherence();
+                }
+                if moved {
+                    self.set_status_message(format!(
+                        "PR updated \u{2014} {demoted} accepted file(s) changed"
+                    ));
+                } else if !stale {
+                    self.set_status_message(format!("reviewing #{} {}", ctx.number, ctx.title));
+                }
+            }
+            Err(e) => {
+                self.set_status_message(format!("review failed: {e}"));
+                if !ctx.from_session {
+                    self.close_review_launcher();
+                }
+            }
+        }
     }
 
     /// Branches-tab `Enter`: starts a worktree-backed review session on the
@@ -874,6 +1249,18 @@ impl App {
             }
         }
     }
+}
+
+/// Reads the head SHA a PR review under `managed_branch` last fetched, from
+/// its persisted forge block — the value a reopen compares against a fresh
+/// peek to decide whether the author pushed. `None` when nothing is
+/// persisted yet, or the entry carries no forge block.
+fn stored_pr_head_sha(state_path: &std::path::Path, managed_branch: &str) -> Option<String> {
+    crate::review::store::load(state_path)
+        .reviews
+        .get(managed_branch)
+        .and_then(|review| review.forge.as_ref())
+        .map(|forge| forge.last_head_sha.clone())
 }
 
 #[cfg(test)]
@@ -1902,6 +2289,7 @@ index 111..222 100644
             title: title.to_string(),
             author: "octocat".to_string(),
             head_ref: "feature".to_string(),
+            base_ref: "main".to_string(),
             is_draft: false,
             updated_at: "2026-07-19T00:00:00Z".to_string(),
         }
@@ -2077,10 +2465,17 @@ index 111..222 100644
         assert!(app.launcher_prs.is_none());
     }
 
-    // -- Pull Requests tab: confirm is a stub (Enter) --------------------
+    // -- Pull Requests tab: confirm initiates a checkout (Enter) ----------
 
+    /// `Enter` on a PR row now initiates a checkout rather than a stub
+    /// status. Against this minimal `SyncPrListOps` fake (no `git_common_dir`,
+    /// so the managed-worktree path can't be resolved) the synchronous
+    /// checkout fallback degrades to a "review failed" status without ever
+    /// changing mode or touching real state — the guard-and-degrade contract.
+    /// The real end-to-end checkout is covered by the tempdir integration
+    /// tests (`pr_checkout_integration_tests.rs`).
     #[test]
-    fn confirm_on_prs_tab_sets_a_status_message_and_does_not_change_mode() {
+    fn confirm_on_prs_tab_initiates_a_checkout_and_degrades_without_a_real_backend() {
         let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
             repo_label: "org/repo".to_string(),
             prs: vec![pr(7, "add widgets")],
@@ -2104,7 +2499,39 @@ index 111..222 100644
         assert!(
             app.status_message
                 .as_deref()
-                .is_some_and(|m| m.contains('7') && m.contains("add widgets")),
+                .is_some_and(|m| m.contains("review failed")),
+            "a backend that can't resolve the worktree path must degrade to a \
+             review-failed status, got {:?}",
+            app.status_message
+        );
+    }
+
+    /// The in-session guard: `Enter` on a PR row while already reviewing must
+    /// emit the same hint the Branches tab does and start no checkout.
+    #[test]
+    fn confirm_on_prs_tab_during_a_review_session_emits_the_hint_and_starts_nothing() {
+        let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(7, "add widgets")],
+        });
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.ensure_launcher_prs_loaded();
+        app.target = DiffTarget::Review {
+            base: "main".to_string(),
+            branch: "feature".to_string(),
+        };
+
+        app.review_launcher_confirm();
+
+        assert!(app.pr_checkout_in_flight.is_none(), "no checkout may start");
+        assert!(
+            app.status_message
+                .as_deref()
+                .is_some_and(|m| m.contains("feature") && m.contains('q')),
             "got {:?}",
             app.status_message
         );

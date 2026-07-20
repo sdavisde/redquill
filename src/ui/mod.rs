@@ -723,7 +723,15 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     if let Some(banner_area) = banner_area {
         let (accepted, total) = app.review_progress();
         let branch = app.review_branch().unwrap_or_default();
-        review_banner::render(frame, banner_area, &app.theme, branch, accepted, total);
+        review_banner::render(
+            frame,
+            banner_area,
+            &app.theme,
+            branch,
+            accepted,
+            total,
+            app.review_stale,
+        );
     }
     if let Some(sidebar_area) = sidebar_area {
         git_panel::render(frame, sidebar_area, app, keymap);
@@ -1058,6 +1066,9 @@ fn event_loop(
         // Drain any completed Review launcher Pull Requests-tab fetch, same
         // cadence as the other pollers.
         app.poll_launcher_prs();
+        // Drain a completed background PR checkout (Enter on a PR row, or a
+        // mid-session refresh) into a review session, same cadence.
+        app.poll_pr_checkout();
         // Drain any completed fuzzy-finder candidate-list load, same
         // cadence as the other pollers.
         app.poll_finder();
