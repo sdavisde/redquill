@@ -14,7 +14,7 @@
 //! (draft notes + bulk-publish) is a later unit; this driver stays
 //! GitHub-specific.
 
-use super::diagnose::error_headline;
+use super::diagnose::submit_error_headline;
 use super::{ForgeError, ReviewPayload, ReviewSubmissionPlan};
 
 /// One drafted reply queued for the post-review follow-up phase: the reply's
@@ -69,7 +69,9 @@ pub struct SubmitReport {
 /// builds its own `gh api` argv from typed values and streams a
 /// machine-serialized JSON body on stdin (see `super::github`); none takes a
 /// string-assembled command line. Errors are the shared [`ForgeError`], whose
-/// first stderr line the caller surfaces.
+/// first stderr line the caller surfaces (plus a next-step hint when the
+/// failure is HTTP-401/403-shaped — see
+/// [`super::diagnose::submit_error_headline`]).
 pub trait ForgeSubmitExecutor {
     /// Publishes the whole review (line comments + verdict + summary) in one
     /// atomic reviews-endpoint POST.
@@ -104,7 +106,7 @@ pub fn run_submit_sequence(batch: &SubmitBatch, exec: &dyn ForgeSubmitExecutor) 
     // does carry a verdict or comment still posts the review.
     if batch.include_review_post && batch.plan.payload.carries_content() {
         if let Err(e) = exec.submit_review(&batch.plan.payload) {
-            report.failure = Some(error_headline(&e));
+            report.failure = Some(submit_error_headline(&e));
             return report;
         }
         report.review_submitted = true;
@@ -117,7 +119,7 @@ pub fn run_submit_sequence(batch: &SubmitBatch, exec: &dyn ForgeSubmitExecutor) 
 
     for follow_up in &batch.plan.file_comment_follow_ups {
         if let Err(e) = exec.post_file_comment(&follow_up.path, &follow_up.body) {
-            report.failure = Some(error_headline(&e));
+            report.failure = Some(submit_error_headline(&e));
             return report;
         }
         report
@@ -127,7 +129,7 @@ pub fn run_submit_sequence(batch: &SubmitBatch, exec: &dyn ForgeSubmitExecutor) 
 
     for reply in &batch.replies {
         if let Err(e) = exec.post_reply(reply.thread_id, &reply.body) {
-            report.failure = Some(error_headline(&e));
+            report.failure = Some(submit_error_headline(&e));
             return report;
         }
         report.published_reply_ids.push(reply.reply_id);

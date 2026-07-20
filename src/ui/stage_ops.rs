@@ -750,7 +750,7 @@ impl StageOps for GitRunner {
                     Ok(detail) => detail.diff_refs,
                     Err(e) => {
                         return forge::SubmitReport {
-                            failure: Some(forge::diagnose::error_headline(&e)),
+                            failure: Some(forge::diagnose::submit_error_headline(&e)),
                             ..forge::SubmitReport::default()
                         };
                     }

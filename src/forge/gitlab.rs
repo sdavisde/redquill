@@ -59,7 +59,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::annotate::Side;
 
-use super::diagnose::error_headline;
+use super::diagnose::submit_error_headline;
 use super::process::{harden_glab, run_captured_with_timeout, run_with_input_and_timeout};
 use super::submit::SubmitReport;
 use super::threads::{Thread, ThreadAnchor, ThreadComment};
@@ -591,7 +591,7 @@ fn is_draft_notes_unavailable(e: &ForgeError) -> bool {
 /// no teammate ever saw a partial batch.
 fn nothing_published(e: &ForgeError) -> SubmitReport {
     SubmitReport {
-        failure: Some(error_headline(e)),
+        failure: Some(submit_error_headline(e)),
         ..SubmitReport::default()
     }
 }
@@ -672,7 +672,7 @@ fn try_draft_submit(batch: &GitlabSubmitBatch, exec: &dyn GitlabSubmitExecutor) 
     if batch.approve
         && let Err(e) = exec.approve()
     {
-        report.failure = Some(error_headline(&e));
+        report.failure = Some(submit_error_headline(&e));
     }
     DraftAttempt::Completed(report)
 }
@@ -690,7 +690,7 @@ fn run_visible_fallback(
     if let Some(summary) = &batch.summary
         && let Err(e) = exec.create_discussion(summary, None)
     {
-        report.failure = Some(error_headline(&e));
+        report.failure = Some(submit_error_headline(&e));
         return report;
     }
     // The review-level content (the summary) is now visible; mark it so a
@@ -699,14 +699,14 @@ fn run_visible_fallback(
     report.review_submitted = true;
     for note in &batch.notes {
         if let Err(e) = exec.create_discussion(&note.body, Some(&note.position)) {
-            report.failure = Some(error_headline(&e));
+            report.failure = Some(submit_error_headline(&e));
             return report;
         }
         report.published_annotation_ids.push(note.annotation_id);
     }
     for reply in &batch.replies {
         if let Err(e) = exec.create_discussion_reply(&reply.discussion_id, &reply.body) {
-            report.failure = Some(error_headline(&e));
+            report.failure = Some(submit_error_headline(&e));
             return report;
         }
         report.published_reply_ids.push(reply.reply_id);
@@ -714,7 +714,7 @@ fn run_visible_fallback(
     if batch.approve
         && let Err(e) = exec.approve()
     {
-        report.failure = Some(error_headline(&e));
+        report.failure = Some(submit_error_headline(&e));
     }
     report
 }
