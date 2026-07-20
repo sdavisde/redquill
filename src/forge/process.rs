@@ -30,6 +30,18 @@ pub(crate) fn harden(cmd: &mut Command) {
     cmd.env("GIT_TERMINAL_PROMPT", "0");
 }
 
+/// The `glab` equivalent of [`harden`]. `glab` has no confirmed analog of
+/// `GH_PROMPT_DISABLED` (unverified locally — `glab` isn't installed on this
+/// machine to check against); every `glab` invocation this crate builds is
+/// a read (`mr list`, `mr view`/`api`, `config get`) fully specified by
+/// argv, so none of them hit an interactive prompt regardless. `NO_COLOR`
+/// and disabling git's own terminal prompt (in case `glab` shells out to
+/// git) still apply, matching every other subprocess this crate spawns.
+pub(crate) fn harden_glab(cmd: &mut Command) {
+    cmd.env("NO_COLOR", "1");
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+}
+
 /// Runs `cmd` to completion, returning its exit status — killing (and
 /// reaping) it if it hasn't exited within `timeout`. Never reads
 /// stdout/stderr itself: a caller that must guarantee output never enters
@@ -187,6 +199,15 @@ mod tests {
         harden(&mut cmd);
         let envs: Vec<_> = cmd.get_envs().collect();
         assert!(envs.contains(&(OsStr::new("GH_PROMPT_DISABLED"), Some(OsStr::new("1")))));
+        assert!(envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))));
+        assert!(envs.contains(&(OsStr::new("GIT_TERMINAL_PROMPT"), Some(OsStr::new("0")))));
+    }
+
+    #[test]
+    fn harden_glab_sets_color_and_terminal_prompt_env() {
+        let mut cmd = Command::new("true");
+        harden_glab(&mut cmd);
+        let envs: Vec<_> = cmd.get_envs().collect();
         assert!(envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))));
         assert!(envs.contains(&(OsStr::new("GIT_TERMINAL_PROMPT"), Some(OsStr::new("0")))));
     }

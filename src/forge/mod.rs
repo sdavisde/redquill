@@ -7,7 +7,10 @@
 //! - [`ForgeProvider`] — the trait every provider (GitHub, GitLab)
 //!   implements: list PRs, read PR detail, fetch comment threads, submit a
 //!   review, and report capability flags. UI code talks only to this trait,
-//!   never to `gh`/`glab` directly, so it's testable with fakes.
+//!   never to `gh`/`glab` directly, so it's testable with fakes. The
+//!   `gitlab` module supplies GitLab's reads (MR listing, detail with
+//!   `diff_refs`) into the same typed rows `github` produces; it isn't
+//!   wired behind the trait itself yet.
 //! - [`PullRequest`] — one row of a PR/MR listing.
 //! - [`PrDetail`] — a minimal stand-in for a richer shape later work
 //!   fleshes out; present now only so the trait surface compiles.
@@ -24,6 +27,7 @@
 
 mod detect;
 mod github;
+mod gitlab;
 mod process;
 mod remote_url;
 mod submit;
@@ -38,6 +42,10 @@ pub use github::{
     ReviewPayload, ReviewSubmissionPlan, build_review_payload, fetch_review_threads,
     file_comment_command, list_open_prs, parse_pr_list_json, pr_list_command, reply_command,
     review_comments_command, review_threads_resolved_command, submit_review_command,
+};
+pub use gitlab::{
+    DiffRefs, MrDetail, list_open_mrs, mr_detail, mr_detail_command, mr_list_command,
+    parse_mr_detail_json, parse_mr_list_json,
 };
 pub use remote_url::{Hostname, RemoteUrlError, parse_origin_hostname, parse_origin_repo_slug};
 pub use submit::{
