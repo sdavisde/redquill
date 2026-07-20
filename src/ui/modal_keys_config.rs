@@ -161,6 +161,7 @@ pub(super) fn effective_modal_keys(
         accepted_panel: modal_keys::ACCEPTED_PANEL_KEYS.clone(),
         confirm_remote_op: modal_keys::CONFIRM_REMOTE_OP_KEYS.clone(),
         thread_view: modal_keys::THREAD_VIEW_KEYS.clone(),
+        submit_forge: modal_keys::SUBMIT_FORGE_KEYS.clone(),
     };
 
     // Every mode name the config actually provided a table for that isn't

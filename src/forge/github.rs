@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::annotate::{Annotation, Classification, Side, Target};
 
-use super::process::{harden, run_captured_with_timeout};
+use super::process::{harden, run_captured_with_timeout, run_with_input_and_timeout};
+use super::submit::ForgeSubmitExecutor;
 use super::threads::{
     Thread, apply_resolved_states, parse_resolved_thread_states, parse_review_comments_json,
 };
@@ -306,6 +307,13 @@ pub struct FileCommentFollowUp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewSubmissionPlan {
     pub payload: ReviewPayload,
+    /// The store ids of the annotations that became `payload.comments`
+    /// entries, in the same order — so the submit-sequence driver can mark
+    /// each published once the (atomic) reviews-endpoint POST succeeds. The
+    /// `comments` array itself carries no id (GitHub doesn't want one), so
+    /// this parallel list is how a success is attributed back to the local
+    /// annotations.
+    pub comment_annotation_ids: Vec<usize>,
     pub file_comment_follow_ups: Vec<FileCommentFollowUp>,
 }
 
@@ -324,12 +332,14 @@ pub fn build_review_payload(
     summary: Option<&str>,
 ) -> ReviewSubmissionPlan {
     let mut comments = Vec::new();
+    let mut comment_annotation_ids = Vec::new();
     let mut file_comment_follow_ups = Vec::new();
 
     for annotation in annotations {
         let body = classification_prefixed_body(annotation.classification, &annotation.body);
         match &annotation.target {
             Target::Line { path, line, side } => {
+                comment_annotation_ids.push(annotation.id);
                 comments.push(ReviewCommentPayload {
                     path: path.clone(),
                     body,
@@ -345,6 +355,7 @@ pub fn build_review_payload(
                 end,
                 side,
             } => {
+                comment_annotation_ids.push(annotation.id);
                 comments.push(ReviewCommentPayload {
                     path: path.clone(),
                     body,
@@ -355,6 +366,7 @@ pub fn build_review_payload(
                 });
             }
             Target::Hunk { path, start, end } => {
+                comment_annotation_ids.push(annotation.id);
                 comments.push(ReviewCommentPayload {
                     path: path.clone(),
                     body,
@@ -383,7 +395,171 @@ pub fn build_review_payload(
             event: event_str(verdict),
             comments,
         },
+        comment_annotation_ids,
         file_comment_follow_ups,
+    }
+}
+
+// -- Submit-sequence argv builders (the three write endpoints) ---------------
+
+/// Builds the fixed argv for the reviews-endpoint POST
+/// (`gh api --method POST repos/{owner}/{repo}/pulls/<n>/reviews --input -`).
+/// The JSON body (a [`ReviewPayload`]) is streamed on stdin (`--input -`)
+/// rather than assembled into argv, so a nested `comments` array stays
+/// machine-serialized and the argv itself is entirely fixed but for the PR
+/// number (`u64` end-to-end). The `{owner}`/`{repo}` placeholders are
+/// substituted by `gh` from the current working directory's repo — the same
+/// "no repo argument built from caller input" contract [`pr_list_command`]
+/// follows.
+pub fn submit_review_command(number: u64) -> Command {
+    let mut cmd = Command::new("gh");
+    cmd.args([
+        "api",
+        "--method",
+        "POST",
+        &format!("repos/{{owner}}/{{repo}}/pulls/{number}/reviews"),
+        "--input",
+        "-",
+    ]);
+    harden(&mut cmd);
+    cmd
+}
+
+/// Builds the fixed argv for a single file-level comment POST
+/// (`gh api --method POST repos/{owner}/{repo}/pulls/<n>/comments --input -`).
+/// The body (`{body, commit_id, path, subject_type: "file"}`) rides on stdin;
+/// only the PR number is variable, and it is a `u64`.
+pub fn file_comment_command(number: u64) -> Command {
+    let mut cmd = Command::new("gh");
+    cmd.args([
+        "api",
+        "--method",
+        "POST",
+        &format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments"),
+        "--input",
+        "-",
+    ]);
+    harden(&mut cmd);
+    cmd
+}
+
+/// Builds the fixed argv for a reply POST against a thread root
+/// (`gh api --method POST repos/{owner}/{repo}/pulls/<n>/comments/<id>/replies --input -`).
+/// Both the PR number and the root comment id are `u64` end-to-end; the reply
+/// body (`{body}`) rides on stdin.
+pub fn reply_command(number: u64, comment_id: u64) -> Command {
+    let mut cmd = Command::new("gh");
+    cmd.args([
+        "api",
+        "--method",
+        "POST",
+        &format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments/{comment_id}/replies"),
+        "--input",
+        "-",
+    ]);
+    harden(&mut cmd);
+    cmd
+}
+
+/// How long any one submit-sequence write (`gh api` POST) may run before it's
+/// treated as failed and killed. Same budget as the reads — a real network
+/// round trip, not a local store lookup.
+const SUBMIT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// The live GitHub submit executor: holds the PR number and the head commit
+/// SHA the file-level comments must anchor to, and runs the three `gh api`
+/// POSTs by streaming a machine-serialized JSON body on each call's stdin.
+/// Constructed only on the human dogfood path (the sole place forge writes
+/// run — agents never build one); the pure sequencing over the
+/// [`ForgeSubmitExecutor`] seam is what carries the fixture coverage, so this
+/// thin runner is deliberately untested (exercising it needs a real `gh` and
+/// a live PR).
+pub struct GhSubmitExecutor {
+    number: u64,
+    /// The PR head commit SHA, required by the single-comment endpoint for a
+    /// file-level (`subject_type: file`) comment.
+    head_sha: String,
+}
+
+impl GhSubmitExecutor {
+    pub fn new(number: u64, head_sha: String) -> GhSubmitExecutor {
+        GhSubmitExecutor { number, head_sha }
+    }
+
+    /// Runs one hardened `gh api` POST with `body` on stdin, mapping a missing
+    /// CLI, a spawn failure, and a non-zero exit into the shared
+    /// [`ForgeError`] shape (`command` names the endpoint for diagnostics).
+    fn post(&self, mut cmd: Command, command: &str, body: Vec<u8>) -> Result<(), ForgeError> {
+        let output =
+            run_with_input_and_timeout(&mut cmd, body, SUBMIT_TIMEOUT).map_err(|source| {
+                if source.kind() == std::io::ErrorKind::NotFound {
+                    ForgeError::CliNotFound { cli: "gh" }
+                } else {
+                    ForgeError::Spawn { cli: "gh", source }
+                }
+            })?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(ForgeError::Command {
+                cli: "gh",
+                command: command.to_string(),
+                code: output
+                    .status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "signal".to_string()),
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            })
+        }
+    }
+}
+
+/// A file-level comment's JSON body (`subject_type: file`, anchored to the
+/// head commit).
+#[derive(Serialize)]
+struct FileCommentBody<'a> {
+    body: &'a str,
+    commit_id: &'a str,
+    path: &'a str,
+    subject_type: &'a str,
+}
+
+/// A reply's JSON body — just the text.
+#[derive(Serialize)]
+struct ReplyBody<'a> {
+    body: &'a str,
+}
+
+impl ForgeSubmitExecutor for GhSubmitExecutor {
+    fn submit_review(&self, payload: &ReviewPayload) -> Result<(), ForgeError> {
+        let body = serde_json::to_vec(payload).map_err(|e| ForgeError::Parse {
+            cli: "gh",
+            message: e.to_string(),
+        })?;
+        self.post(submit_review_command(self.number), "pulls reviews", body)
+    }
+
+    fn post_file_comment(&self, path: &str, body: &str) -> Result<(), ForgeError> {
+        let json = serde_json::to_vec(&FileCommentBody {
+            body,
+            commit_id: &self.head_sha,
+            path,
+            subject_type: "file",
+        })
+        .map_err(|e| ForgeError::Parse {
+            cli: "gh",
+            message: e.to_string(),
+        })?;
+        self.post(file_comment_command(self.number), "pulls comments", json)
+    }
+
+    fn post_reply(&self, thread_id: u64, body: &str) -> Result<(), ForgeError> {
+        let json = serde_json::to_vec(&ReplyBody { body }).map_err(|e| ForgeError::Parse {
+            cli: "gh",
+            message: e.to_string(),
+        })?;
+        self.post(reply_command(self.number, thread_id), "pulls replies", json)
     }
 }
 

@@ -173,6 +173,15 @@ pub type AsyncPrCheckoutFetcher = Box<dyn Fn(PrCheckoutRequest) -> PrCheckoutOut
 /// indirection as the other `Async*` aliases.
 pub type AsyncThreadFetcher = Box<dyn Fn(u64) -> Result<Vec<Thread>, String> + Send>;
 
+/// A `Send` closure running one whole submit sequence — the reviews-endpoint
+/// POST plus the sequential follow-ups — off the render thread, returning the
+/// [`SubmitReport`] the render thread finishes into per-item published marks
+/// and a status line. The batch is fully resolved on the render thread (see
+/// [`super::forge_submit`]); the closure only runs it. Like the other `Async*`
+/// aliases it returns a value that already encodes every failure mode, so
+/// there is no outer `Result`.
+pub type AsyncForgeSubmitter = Box<dyn Fn(forge::SubmitBatch) -> forge::SubmitReport + Send>;
+
 /// The git operations the TUI needs for staging and refresh, kept behind a
 /// trait so [`super::App`]'s staging logic is unit-testable without a real
 /// repository. [`GitRunner`] is the production implementation. Read-model
@@ -378,12 +387,30 @@ pub trait StageOps {
     fn origin_hostname(&self) -> Option<String> {
         None
     }
+    /// `origin`'s `owner/repo` slug (`git remote get-url origin` parsed), for
+    /// the submit modal's `#N on host/org/repo` target line. The default
+    /// returns `None`; [`GitRunner`] overrides it.
+    fn origin_repo_slug(&self) -> Option<String> {
+        None
+    }
     /// A `Send` closure fetching one PR's comment threads off the render
     /// thread (see [`AsyncThreadFetcher`]). The default returns `None`,
     /// keeping non-`Send` fakes (and git-less contexts) thread-overlay-free;
     /// [`GitRunner`] overrides it by cloning itself into the closure and
     /// resolving `origin`'s `owner/repo` slug for the resolution overlay.
     fn async_thread_fetcher(&self) -> Option<AsyncThreadFetcher> {
+        None
+    }
+    /// A `Send` closure that publishes one previewed batch to PR `number`,
+    /// anchoring any file-level comments to `head_sha` (see
+    /// [`AsyncForgeSubmitter`]). The default returns `None`, keeping non-`Send`
+    /// fakes and git-less contexts off the live-write path entirely — the only
+    /// path that ever runs a forge write. [`GitRunner`] overrides it.
+    fn async_forge_submitter(
+        &self,
+        _number: u64,
+        _head_sha: String,
+    ) -> Option<AsyncForgeSubmitter> {
         None
     }
 }
@@ -546,6 +573,11 @@ impl StageOps for GitRunner {
             .map(|h| h.as_str().to_string())
     }
 
+    fn origin_repo_slug(&self) -> Option<String> {
+        let url = self.origin_url().ok().flatten()?;
+        forge::parse_origin_repo_slug(&url)
+    }
+
     fn async_thread_fetcher(&self) -> Option<AsyncThreadFetcher> {
         // Same cloned-handle trick as `async_review_builder`. The `owner/repo`
         // slug feeds the (best-effort) resolution overlay; a missing slug just
@@ -558,6 +590,17 @@ impl StageOps for GitRunner {
                 .flatten()
                 .and_then(|url| forge::parse_origin_repo_slug(&url));
             forge::fetch_review_threads(slug.as_deref(), number).map_err(|e| e.to_string())
+        }))
+    }
+
+    fn async_forge_submitter(&self, number: u64, head_sha: String) -> Option<AsyncForgeSubmitter> {
+        // The real live-write path: build the GitHub executor from the typed
+        // PR number + head SHA and run the sequence over it. Agents never
+        // reach this (fakes return the default `None`); it exists only for the
+        // human dogfood.
+        Some(Box::new(move |batch| {
+            let executor = forge::GhSubmitExecutor::new(number, head_sha.clone());
+            forge::run_submit_sequence(&batch, &executor)
         }))
     }
 }

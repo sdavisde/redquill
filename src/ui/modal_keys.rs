@@ -1240,6 +1240,78 @@ pub(super) static THREAD_VIEW_KEYS: LazyLock<Vec<ModalBinding<ThreadViewAction>>
         ]
     });
 
+// -- Submit-review modal ------------------------------------------------------
+
+/// What a control key does in the submit-review modal
+/// ([`super::app::Mode::SubmitForge`]): confirm the publish, cancel it, cycle
+/// the verdict picker, or delete a summary character. Free-text like
+/// Compose/Search — every printable char extends the summary (a hand-written
+/// fallback in [`super::modes::handle_submit_forge_key`], never remappable) —
+/// so this table documents only the control keys. Not config-remappable yet;
+/// see the module doc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SubmitForgeAction {
+    /// Publishes the previewed batch (see
+    /// [`super::app::App::submit_forge_confirm`]) — the only key that begins a
+    /// forge write.
+    Confirm,
+    /// Closes the modal, sending nothing.
+    Cancel,
+    /// Cycles the verdict picker forward.
+    VerdictNext,
+    /// Cycles the verdict picker backward.
+    VerdictPrev,
+    /// Deletes the last summary character.
+    DeleteChar,
+}
+
+/// The submit-review modal's control-key table, for the help overlay, footer
+/// strip, and [`super::modes::handle_submit_forge_key`]'s dispatch.
+pub(super) static SUBMIT_FORGE_KEYS: LazyLock<Vec<ModalBinding<SubmitForgeAction>>> =
+    LazyLock::new(|| {
+        vec![
+            ModalBinding {
+                description: "Submit the review (publishes to the forge)",
+                keys: vec![ModalKey::plain(KeyCode::Enter)],
+                action: SubmitForgeAction::Confirm,
+                footer: Some(FooterHint {
+                    rank: 1,
+                    label: "submit",
+                }),
+            },
+            ModalBinding {
+                description: "Cancel — close this modal, send nothing",
+                keys: vec![ModalKey::plain(KeyCode::Esc)],
+                action: SubmitForgeAction::Cancel,
+                footer: Some(FooterHint {
+                    rank: 2,
+                    label: "cancel",
+                }),
+            },
+            ModalBinding {
+                description: "Next verdict (comment / approve / request changes)",
+                keys: vec![ModalKey::plain(KeyCode::Tab)],
+                action: SubmitForgeAction::VerdictNext,
+                footer: Some(FooterHint {
+                    rank: 3,
+                    label: "verdict",
+                }),
+            },
+            ModalBinding {
+                description: "Previous verdict",
+                keys: vec![ModalKey::plain(KeyCode::BackTab)],
+                action: SubmitForgeAction::VerdictPrev,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Delete summary character",
+                keys: vec![ModalKey::plain(KeyCode::Backspace)],
+                action: SubmitForgeAction::DeleteChar,
+                footer: None,
+            },
+        ]
+    });
+
 // -- Pull/push confirm modal --------------------------------------------------
 
 /// What a key does in the pull/push confirm modal (`p`/`P` in a review
@@ -2684,6 +2756,9 @@ pub struct ModalKeymaps {
     /// The imported-thread overlay. Not config-remappable yet — see
     /// [`THREAD_VIEW_KEYS`].
     pub(super) thread_view: Vec<ModalBinding<ThreadViewAction>>,
+    /// The submit-review modal. Not config-remappable yet — see
+    /// [`SUBMIT_FORGE_KEYS`].
+    pub(super) submit_forge: Vec<ModalBinding<SubmitForgeAction>>,
     /// The shared `/` list-filter editing sub-state (see
     /// [`FILTER_EDIT_KEYS`]) — one table reused by every filter-gaining
     /// context (list, staging, accepted panel, switcher).
@@ -2710,6 +2785,7 @@ impl Default for ModalKeymaps {
             accepted_panel: ACCEPTED_PANEL_KEYS.clone(),
             confirm_remote_op: CONFIRM_REMOTE_OP_KEYS.clone(),
             thread_view: THREAD_VIEW_KEYS.clone(),
+            submit_forge: SUBMIT_FORGE_KEYS.clone(),
             filter_edit: FILTER_EDIT_KEYS.clone(),
         }
     }

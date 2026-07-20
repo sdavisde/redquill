@@ -26,6 +26,7 @@ mod detect;
 mod github;
 mod process;
 mod remote_url;
+mod submit;
 mod threads;
 
 pub use detect::{
@@ -33,11 +34,15 @@ pub use detect::{
     ProviderResolution, ResolutionCache, UnresolvedReason, resolve_provider,
 };
 pub use github::{
-    FileCommentFollowUp, PR_LIST_JSON_FIELDS, ReviewCommentPayload, ReviewPayload,
-    ReviewSubmissionPlan, build_review_payload, fetch_review_threads, list_open_prs,
-    parse_pr_list_json, pr_list_command, review_comments_command, review_threads_resolved_command,
+    FileCommentFollowUp, GhSubmitExecutor, PR_LIST_JSON_FIELDS, ReviewCommentPayload,
+    ReviewPayload, ReviewSubmissionPlan, build_review_payload, fetch_review_threads,
+    file_comment_command, list_open_prs, parse_pr_list_json, pr_list_command, reply_command,
+    review_comments_command, review_threads_resolved_command, submit_review_command,
 };
 pub use remote_url::{Hostname, RemoteUrlError, parse_origin_hostname, parse_origin_repo_slug};
+pub use submit::{
+    ForgeSubmitExecutor, SubmitBatch, SubmitReplyItem, SubmitReport, run_submit_sequence,
+};
 pub use threads::{
     Thread, ThreadAnchor, ThreadComment, ThreadOverlayStore, apply_resolved_states,
     parse_resolved_thread_states, parse_review_comments_json,

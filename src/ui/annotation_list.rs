@@ -41,7 +41,8 @@ impl App {
             | Mode::ProjectSearch
             | Mode::EndReview { .. }
             | Mode::ConfirmRemoteOp { .. }
-            | Mode::ThreadView => {}
+            | Mode::ThreadView
+            | Mode::SubmitForge => {}
             Mode::Normal | Mode::Visual { .. } => {
                 let total = self.list_total_len();
                 if total > 0 {

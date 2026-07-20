@@ -19,7 +19,7 @@ use super::modal_keys::{
     self, AcceptedPanelAction, CommitMessageAction, ComposeAction, ConfirmRemoteOpAction,
     EndReviewAction, FilterEditAction, FinderAction, LauncherAction, ListAction, PeekAction,
     ProjectSearchInputAction, ProjectSearchResultsAction, SearchAction, StagingAction,
-    SwitcherAction, ThreadViewAction,
+    SubmitForgeAction, SwitcherAction, ThreadViewAction,
 };
 use super::motion;
 
@@ -548,6 +548,34 @@ pub(super) fn handle_thread_view_key(app: &mut App, key: KeyEvent) {
         ThreadViewAction::ScrollUp => apply_motion_n_times(count, || app.thread_view_scroll_up()),
         ThreadViewAction::Reply => app.open_reply_compose(),
         ThreadViewAction::Close => app.close_thread_view(),
+    }
+}
+
+/// Handles one key event while [`super::Mode::SubmitForge`] is active (the
+/// submit-review modal): printable chars extend the optional summary (never
+/// remappable), and the control keys — Enter confirms the publish, Esc
+/// cancels, Tab/Shift-Tab cycle the verdict, Backspace deletes — resolve
+/// against `app.modal_keys.submit_forge` first. See
+/// [`modal_keys::SUBMIT_FORGE_KEYS`] (control keys only; free-text chars are
+/// the exemption every free-text mode's hint table carries). Confirm is the
+/// only key that begins a forge write — the modal is the safety boundary.
+pub(super) fn handle_submit_forge_key(app: &mut App, key: KeyEvent) {
+    let Some(action) = modal_keys::resolve(&app.modal_keys.submit_forge, key) else {
+        if let KeyCode::Char(c) = key.code
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            app.submit_forge_insert_char(c);
+        }
+        return;
+    };
+    match action {
+        SubmitForgeAction::Confirm => app.submit_forge_confirm(),
+        SubmitForgeAction::Cancel => app.close_submit_forge(),
+        SubmitForgeAction::VerdictNext => app.submit_forge_verdict_next(),
+        SubmitForgeAction::VerdictPrev => app.submit_forge_verdict_prev(),
+        SubmitForgeAction::DeleteChar => app.submit_forge_delete_char(),
     }
 }
 

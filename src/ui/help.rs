@@ -104,7 +104,8 @@ fn group_of(action: Action) -> &'static str {
         | RecenterCursor | ScrollCursorTop | ScrollCursorBottom => "Navigation",
         EnterVisual | Compose | EditAnnotation | DeleteAnnotation => "Annotate",
         ToggleStage | StageFile | ToggleStagingPanel => "Stage",
-        ToggleAccept | AcceptFile | ToggleDefer | OpenThread | NextThread | PrevThread => "Review",
+        ToggleAccept | AcceptFile | ToggleDefer | OpenThread | NextThread | PrevThread
+        | SubmitForgeReview => "Review",
         Search | SearchNext | SearchPrev | SearchWordForward | SearchWordBackward => "Search",
         ToggleList | ToggleHelp | FocusGitPanel | ToggleCommandLog | Refresh | OpenFileFinder
         | OpenProjectSearch | OpenEditor | DismissConfigWarning | OpenReviewLauncher => "Panels",
@@ -189,7 +190,10 @@ pub(super) fn binding_hidden(
         || (!review_session
             && matches!(
                 action,
-                Action::ToggleAccept | Action::AcceptFile | Action::ToggleDefer
+                Action::ToggleAccept
+                    | Action::AcceptFile
+                    | Action::ToggleDefer
+                    | Action::SubmitForgeReview
             ))
 }
 
@@ -222,7 +226,7 @@ fn modal_hints<A: Clone>(table: &[ModalBinding<A>]) -> Vec<(String, &'static str
 /// applies), so only one of the two ever documents itself here at a time,
 /// exactly like `Action::ToggleStage`/`Action::ToggleAccept`'s mutual
 /// exclusion in [`binding_hidden`].
-fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 15] {
+fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 16] {
     let staging_section = if review_session {
         (
             "Accepted files panel (s, review sessions)",
@@ -270,6 +274,10 @@ fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 
         (
             "Thread overlay (T, PR review session)",
             modal_hints(&modal_keys.thread_view),
+        ),
+        (
+            "Submit review (U, PR review session)",
+            modal_hints(&modal_keys.submit_forge),
         ),
     ]
 }

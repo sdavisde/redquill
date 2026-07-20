@@ -158,6 +158,13 @@ pub enum Mode {
     /// `T` on a line/file that has a thread; the focused thread and scroll
     /// live in [`App::thread_view`].
     ThreadView,
+    /// The submit-review modal is open (`submit-forge-review`, PR review
+    /// sessions only): a grouped batch preview of every unpublished comment
+    /// and reply, a capability-driven verdict picker, and an optional
+    /// summary. The safety boundary — nothing is sent until the reviewer
+    /// confirms from here. Its selection/edit state lives in
+    /// [`App::submit_forge`] (see [`super::forge_submit`]).
+    SubmitForge,
 }
 
 /// Where a modal-launching gesture was pressed from, so closing that modal
@@ -549,6 +556,25 @@ pub struct App {
     /// The expandable thread-view overlay's state, `Some` only while
     /// [`Mode::ThreadView`] is active (see [`super::forge_threads`]).
     pub(super) thread_view: Option<super::forge_threads::ThreadViewState>,
+    /// The submit-review modal's state, `Some` only while
+    /// [`Mode::SubmitForge`] is active (see [`super::forge_submit`]).
+    pub(super) submit_forge: Option<super::forge_submit::SubmitForgeState>,
+    /// The background poller the forge submit sequence runs through, separate
+    /// from the other pollers so its result drains independently (see
+    /// [`App::poll_forge_submit`]).
+    pub(super) forge_submit_tasks: BackgroundTasks<crate::forge::SubmitReport>,
+    /// The single in-flight submit run, if any (single-flight, so a second
+    /// `submit` can't spawn a duplicate sequence while one is publishing).
+    pub(super) forge_submit_in_flight: Option<super::forge_submit::InFlightSubmit>,
+    /// Bumped whenever a submit is spawned so a straggling result from a
+    /// superseded run is dropped on arrival (mirrors `thread_fetch_generation`).
+    pub(super) forge_submit_generation: u64,
+    /// Whether this session's review POST has already landed on the forge —
+    /// set once a submit run's reviews-endpoint POST succeeds, so a *resume*
+    /// after a mid-sequence follow-up failure skips the review POST rather
+    /// than re-posting (and double-delivering) the verdict. Session-scoped;
+    /// resets on a fresh session.
+    pub(super) forge_review_submitted: bool,
     /// The reviewer's locally drafted replies to imported PR threads, held
     /// separate from `annotations` so they never reach the stdout markdown
     /// stream, and separate from `thread_overlay` (teammates' read-only
@@ -799,6 +825,11 @@ impl App {
             thread_fetch_generation: 0,
             threads_unavailable: false,
             thread_view: None,
+            submit_forge: None,
+            forge_submit_tasks: BackgroundTasks::new(),
+            forge_submit_in_flight: None,
+            forge_submit_generation: 0,
+            forge_review_submitted: false,
             replies: super::draft_reply::DraftReplyStore::new(),
             panel_collapsed_dirs: HashSet::new(),
             active_commit: None,
@@ -1213,6 +1244,7 @@ impl App {
             Action::OpenThread => self.open_thread_view(),
             Action::NextThread => self.next_thread(),
             Action::PrevThread => self.prev_thread(),
+            Action::SubmitForgeReview => self.open_submit_forge(),
             // `Quit`/`QuitDiscard` end the session; `OpenEditor` suspends the
             // TUI to spawn the configured editor. Both are intercepted by
             // `super::dispatch_key` before reaching here (see `Action::Quit`'s

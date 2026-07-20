@@ -211,6 +211,12 @@ pub enum Action {
     /// `gT` in the diff view: moves the cursor to the previous imported
     /// thread's anchor (wrapping).
     PrevThread,
+    /// `U` in the diff view: opens the submit-review modal in a forge PR
+    /// review session (see [`super::app::Mode::SubmitForge`]). A no-op with a
+    /// status hint everywhere else (a plain review session, or no review) —
+    /// nothing is ever sent from the keypress itself; the modal is the safety
+    /// boundary.
+    SubmitForgeReview,
 }
 
 /// The kebab-case config action-name for every [`Action`] variant (the
@@ -292,6 +298,7 @@ pub(crate) fn action_name(action: Action) -> &'static str {
         OpenThread => "open-thread",
         NextThread => "next-thread",
         PrevThread => "prev-thread",
+        SubmitForgeReview => "submit-forge-review",
     }
 }
 
@@ -372,6 +379,7 @@ pub(crate) fn action_from_name(name: &str) -> Option<Action> {
         "open-thread" => OpenThread,
         "next-thread" => NextThread,
         "prev-thread" => PrevThread,
+        "submit-forge-review" => SubmitForgeReview,
         _ => return None,
     })
 }
@@ -742,6 +750,16 @@ impl Keymap {
                     PrevThread,
                     "Jump to previous comment thread",
                 ),
+                // Submit the whole review (comments, replies, verdict) from
+                // the confirm modal — PR review sessions only, a no-op hint
+                // elsewhere. `U` (uppercase, "pUblish/submit") was free in
+                // this scope.
+                d(
+                    KeySeq::one(Char('U'), none),
+                    SubmitForgeReview,
+                    "Submit review to the forge (PR review)",
+                )
+                .footer(9, "submit"),
                 d(
                     KeySeq::one(Char('a'), none),
                     ToggleList,

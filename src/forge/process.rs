@@ -4,7 +4,7 @@
 //! background thread these calls are always meant to run from, never the
 //! render loop itself.
 
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -108,6 +108,74 @@ pub(crate) fn run_captured_with_timeout(
     })
 }
 
+/// Runs `cmd` to completion with `input` streamed to its stdin, capturing
+/// stdout and stderr under the same hard wall-clock timeout as
+/// [`run_captured_with_timeout`]. The stdin write, stdout drain, and stderr
+/// drain each run on their own thread so none can deadlock against another
+/// (or against this thread's timeout poll) when a pipe buffer fills. Used by
+/// the submit-sequence executor, whose `gh api --input -` calls take their
+/// JSON body on stdin; a child that outlives `timeout` is killed and its
+/// output discarded.
+pub(crate) fn run_with_input_and_timeout(
+    cmd: &mut Command,
+    input: Vec<u8>,
+    timeout: Duration,
+) -> io::Result<CapturedOutput> {
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn()?;
+
+    let stdin_handle = child.stdin.take().map(|mut pipe| {
+        thread::spawn(move || {
+            let _ = pipe.write_all(&input);
+            // Dropping `pipe` here closes the child's stdin so it sees EOF.
+        })
+    });
+    let stdout_handle = child.stdout.take().map(|mut pipe| {
+        thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = pipe.read_to_end(&mut buf);
+            buf
+        })
+    });
+    let stderr_handle = child.stderr.take().map(|mut pipe| {
+        thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = pipe.read_to_end(&mut buf);
+            buf
+        })
+    });
+
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "process timed out"));
+        }
+        thread::sleep(POLL_INTERVAL);
+    };
+
+    if let Some(h) = stdin_handle {
+        let _ = h.join();
+    }
+    let stdout = stdout_handle
+        .map(|h| h.join().unwrap_or_default())
+        .unwrap_or_default();
+    let stderr = stderr_handle
+        .map(|h| h.join().unwrap_or_default())
+        .unwrap_or_default();
+    Ok(CapturedOutput {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +238,28 @@ mod tests {
             start.elapsed() < Duration::from_secs(2),
             "should return shortly after the timeout, not wait out the full sleep"
         );
+    }
+
+    #[test]
+    fn run_with_input_streams_stdin_to_the_child() {
+        let mut cmd = Command::new("cat");
+        let output = run_with_input_and_timeout(
+            &mut cmd,
+            b"{\"body\":\"hi\"}".to_vec(),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"{\"body\":\"hi\"}");
+    }
+
+    #[test]
+    fn run_with_input_kills_a_slow_command_and_returns_promptly() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("5");
+        let start = Instant::now();
+        let result = run_with_input_and_timeout(&mut cmd, Vec::new(), Duration::from_millis(100));
+        assert!(result.is_err());
+        assert!(start.elapsed() < Duration::from_secs(2));
     }
 }

@@ -494,4 +494,85 @@ fn mixed_batch_serializes_to_the_exact_reviews_endpoint_json() {
         }],
         "the file-target annotation must route to the follow-up set, not the comments array"
     );
+
+    // The parallel id list attributes each comments-array entry back to its
+    // annotation, in input order, so a successful review POST marks exactly
+    // those published; the file target's id (3) is not in it.
+    assert_eq!(plan.comment_annotation_ids, vec![0, 1, 2]);
+}
+
+// -- Submit-sequence argv builders (the three write endpoints) --------------
+
+#[test]
+fn submit_review_command_has_the_fixed_post_argv_with_stdin_input() {
+    let cmd = submit_review_command(42);
+    assert_eq!(cmd.get_program(), OsStr::new("gh"));
+    let args: Vec<&OsStr> = cmd.get_args().collect();
+    assert_eq!(
+        args,
+        vec![
+            OsStr::new("api"),
+            OsStr::new("--method"),
+            OsStr::new("POST"),
+            OsStr::new("repos/{owner}/{repo}/pulls/42/reviews"),
+            OsStr::new("--input"),
+            OsStr::new("-"),
+        ]
+    );
+    let envs: Vec<_> = cmd.get_envs().collect();
+    assert!(envs.contains(&(OsStr::new("GH_PROMPT_DISABLED"), Some(OsStr::new("1")))));
+    assert!(envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))));
+}
+
+#[test]
+fn file_comment_command_has_the_fixed_post_argv_with_stdin_input() {
+    let cmd = file_comment_command(7);
+    assert_eq!(cmd.get_program(), OsStr::new("gh"));
+    let args: Vec<&OsStr> = cmd.get_args().collect();
+    assert_eq!(
+        args,
+        vec![
+            OsStr::new("api"),
+            OsStr::new("--method"),
+            OsStr::new("POST"),
+            OsStr::new("repos/{owner}/{repo}/pulls/7/comments"),
+            OsStr::new("--input"),
+            OsStr::new("-"),
+        ]
+    );
+    let envs: Vec<_> = cmd.get_envs().collect();
+    assert!(envs.contains(&(OsStr::new("GH_PROMPT_DISABLED"), Some(OsStr::new("1")))));
+}
+
+#[test]
+fn reply_command_carries_the_typed_pr_number_and_comment_id() {
+    let cmd = reply_command(42, 9988);
+    let args: Vec<&OsStr> = cmd.get_args().collect();
+    assert_eq!(
+        args,
+        vec![
+            OsStr::new("api"),
+            OsStr::new("--method"),
+            OsStr::new("POST"),
+            OsStr::new("repos/{owner}/{repo}/pulls/42/comments/9988/replies"),
+            OsStr::new("--input"),
+            OsStr::new("-"),
+        ]
+    );
+}
+
+#[test]
+fn submit_argv_varies_only_by_the_typed_values() {
+    // No path is ever string-assembled from free text: distinct PR numbers /
+    // comment ids produce distinct, typed-only endpoint paths.
+    let one: Vec<String> = reply_command(1, 2)
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let two: Vec<String> = reply_command(3, 4)
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert!(one.contains(&"repos/{owner}/{repo}/pulls/1/comments/2/replies".to_string()));
+    assert!(two.contains(&"repos/{owner}/{repo}/pulls/3/comments/4/replies".to_string()));
 }
