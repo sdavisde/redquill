@@ -12,10 +12,25 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 use crate::annotate::{Annotation, Side, Target};
+use crate::forge::{Thread, ThreadAnchor};
 
 use super::app::App;
+use super::draft_reply::DraftReply;
 use super::keymap::{Action, Keymap, Scope};
 use super::theme::Theme;
+
+/// One row of the annotation-list panel: either an annotation (by store id)
+/// or a drafted reply (by reply id). Annotations always precede replies, in
+/// each store's insertion order, so the panel index space is a stable
+/// concatenation the filter and every verb translate through
+/// [`App::list_real_index`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ListEntry {
+    /// An annotation, by its [`AnnotationStore`](crate::annotate::AnnotationStore) id.
+    Annotation(usize),
+    /// A drafted reply, by its [`DraftReplyStore`](super::draft_reply::DraftReplyStore) id.
+    Reply(usize),
+}
 
 fn side_marker(side: Side) -> &'static str {
     match side {
@@ -67,6 +82,44 @@ pub(super) fn filter_label(annotation: &Annotation) -> String {
     )
 }
 
+/// Where a reply's thread anchors, for the panel row's location column: the
+/// resolved `path:line` (or file) when the thread is in the current overlay,
+/// falling back to `#<thread_id>` when it isn't (an outdated fetch, or a
+/// resumed reply whose thread hasn't been re-fetched yet).
+fn reply_where(reply: &DraftReply, thread: Option<&Thread>) -> String {
+    match thread.map(|t| &t.anchor) {
+        Some(ThreadAnchor::Position { path, line, .. }) => format!("{path}:{line}"),
+        Some(ThreadAnchor::File { path }) => path.clone(),
+        None => format!("#{}", reply.thread_id),
+    }
+}
+
+/// One rendered row for a drafted reply: a `↳` reply marker, the thread's
+/// location, a `[reply]` tag (styled like a classification tag so replies
+/// sit visually alongside annotations), and the reply's first body line.
+fn reply_item_line(reply: &DraftReply, thread: Option<&Thread>, theme: &Theme) -> Line<'static> {
+    let first_line = reply.body.lines().next().unwrap_or("");
+    Line::from(vec![
+        Span::raw(format!("\u{21b3} {} ", reply_where(reply, thread))),
+        Span::styled(
+            "[reply] ".to_string(),
+            Style::default().fg(theme.classification_tag),
+        ),
+        Span::raw(first_line.to_string()),
+    ])
+}
+
+/// The plain-text filter label for a drafted reply — the same text
+/// [`reply_item_line`] renders, minus styling, including the `reply` marker
+/// so a `/` filter for "reply" surfaces exactly the drafted replies.
+pub(super) fn reply_filter_label(reply: &DraftReply, thread: Option<&Thread>) -> String {
+    let first_line = reply.body.lines().next().unwrap_or("");
+    format!(
+        "\u{21b3} {} [reply] {first_line}",
+        reply_where(reply, thread)
+    )
+}
+
 /// Renders the annotation list panel into `area`. An empty store (and no
 /// active filter) renders a hint line instead of an empty list; the hint's
 /// key is resolved from `keymap` (diff scope, [`Action::Compose`]) rather
@@ -82,7 +135,7 @@ pub(super) fn filter_label(annotation: &Annotation) -> String {
 pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
     let block = Block::default().borders(Borders::ALL).title("notes");
 
-    if app.annotations.is_empty() && app.list_filter.is_none() {
+    if app.annotations.is_empty() && app.replies.is_empty() && app.list_filter.is_none() {
         let text = match keymap.label_for(Scope::Diff, Action::Compose) {
             Some(key) => format!("no annotations yet — press {key} to add one"),
             None => "no annotations yet".to_string(),
@@ -120,18 +173,32 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
         return;
     }
 
+    // The unified entry order (annotations, then replies) the filter indices
+    // and every list verb translate through.
+    let entries = app.list_entries();
+    let entry_item = |entry: &ListEntry| -> ListItem<'static> {
+        match *entry {
+            ListEntry::Annotation(id) => match app.annotations.iter().find(|a| a.id == id) {
+                Some(a) => ListItem::new(item_line(a, &app.theme)),
+                None => ListItem::new(Line::from(String::new())),
+            },
+            ListEntry::Reply(id) => match app.replies.get(id) {
+                Some(reply) => {
+                    let thread = app.thread_overlay.find(reply.thread_id);
+                    ListItem::new(reply_item_line(reply, thread, &app.theme))
+                }
+                None => ListItem::new(Line::from(String::new())),
+            },
+        }
+    };
     let items: Vec<ListItem> = match app.list_filter.as_ref() {
         Some(filter) => filter
             .indices()
             .iter()
-            .filter_map(|&i| app.annotations.iter().nth(i))
-            .map(|a| ListItem::new(item_line(a, &app.theme)))
+            .filter_map(|&i| entries.get(i))
+            .map(entry_item)
             .collect(),
-        None => app
-            .annotations
-            .iter()
-            .map(|a| ListItem::new(item_line(a, &app.theme)))
-            .collect(),
+        None => entries.iter().map(entry_item).collect(),
     };
     let list = List::new(items).highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 

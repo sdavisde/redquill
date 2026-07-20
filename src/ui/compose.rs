@@ -17,10 +17,17 @@ pub struct ComposeState {
     pub classification: Classification,
     /// The body text being edited.
     pub buffer: TextBuffer,
-    /// `Some(id)` when editing an existing annotation (submit calls
-    /// `edit`/`set_classification`); `None` when composing a new one
-    /// (submit calls `add`).
+    /// `Some(id)` when editing an existing item (submit updates it in place);
+    /// `None` when composing a new one (submit adds). In reply mode
+    /// ([`thread_id`](Self::thread_id) is `Some`) the id is the draft reply's
+    /// id; otherwise it is the annotation's id.
     pub editing_id: Option<usize>,
+    /// `Some(thread_root_id)` when this compose is drafting a reply to an
+    /// imported PR thread rather than an annotation — `submit_compose`
+    /// branches on it, and the modal renders a reply header instead of a
+    /// target/classification title. `None` for the ordinary annotation
+    /// compose (the vast majority of opens).
+    pub thread_id: Option<u64>,
 }
 
 impl ComposeState {
@@ -32,6 +39,7 @@ impl ComposeState {
             classification: Classification::Issue,
             buffer: TextBuffer::new(),
             editing_id: None,
+            thread_id: None,
         }
     }
 
@@ -48,6 +56,33 @@ impl ComposeState {
             classification,
             buffer: TextBuffer::from_str(body),
             editing_id: Some(id),
+            thread_id: None,
+        }
+    }
+
+    /// Starts drafting a brand-new reply to the thread whose root comment id
+    /// is `thread_id`. The `target`/`classification` are inert placeholders
+    /// in reply mode — a reply answers a thread, not a diff anchor — so they
+    /// carry harmless defaults the modal never renders.
+    pub fn reply(thread_id: u64) -> ComposeState {
+        ComposeState {
+            target: Target::file(String::new()),
+            classification: Classification::Issue,
+            buffer: TextBuffer::new(),
+            editing_id: None,
+            thread_id: Some(thread_id),
+        }
+    }
+
+    /// Starts editing an existing draft reply (`reply_id`) to thread
+    /// `thread_id`, pre-filled with its body.
+    pub fn editing_reply(reply_id: usize, thread_id: u64, body: &str) -> ComposeState {
+        ComposeState {
+            target: Target::file(String::new()),
+            classification: Classification::Issue,
+            buffer: TextBuffer::from_str(body),
+            editing_id: Some(reply_id),
+            thread_id: Some(thread_id),
         }
     }
 }

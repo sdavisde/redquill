@@ -472,6 +472,7 @@ fn launcher_reroots_into_a_bannered_review_session_with_persisted_marks_restored
             worktree_path: dir.join("unused-in-this-fixture"),
             files,
             annotations: Vec::new(),
+            replies: Vec::new(),
             forge: None,
         },
     )

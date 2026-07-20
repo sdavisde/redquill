@@ -16,6 +16,7 @@ use super::App;
 use super::Mode;
 use super::list_filter::ListFilter;
 use super::list_panel;
+use super::list_panel::ListEntry;
 
 impl App {
     /// Toggles the annotation list panel: opens it from Normal/Visual, closes
@@ -42,8 +43,9 @@ impl App {
             | Mode::ConfirmRemoteOp { .. }
             | Mode::ThreadView => {}
             Mode::Normal | Mode::Visual { .. } => {
-                if !self.annotations.is_empty() {
-                    self.list_cursor = self.list_cursor.min(self.annotations.len() - 1);
+                let total = self.list_total_len();
+                if total > 0 {
+                    self.list_cursor = self.list_cursor.min(total - 1);
                 }
                 self.mode = Mode::List;
                 self.motion_count = None;
@@ -58,36 +60,86 @@ impl App {
         self.list_filter = None;
     }
 
-    /// Builds the annotation list's `/`-filterable labels, in the same
-    /// insertion order `annotations.iter()`/`list_cursor` already index
-    /// over, so a filtered position always maps back to the right
-    /// annotation.
-    fn list_filter_labels(&self) -> Vec<String> {
-        self.annotations
+    /// The list panel's unified entry order: every annotation (by store id),
+    /// then every drafted reply (by reply id), each in its store's insertion
+    /// order. The one index space the filter labels, the rendered rows, and
+    /// every verb agree on — with no drafted replies it's exactly the
+    /// annotation list, so the panel behaves identically to before replies
+    /// existed.
+    pub(super) fn list_entries(&self) -> Vec<ListEntry> {
+        let mut entries: Vec<ListEntry> = self
+            .annotations
             .iter()
-            .map(list_panel::filter_label)
+            .map(|a| ListEntry::Annotation(a.id))
+            .collect();
+        entries.extend(self.replies.iter().map(|r| ListEntry::Reply(r.id)));
+        entries
+    }
+
+    /// The total number of panel entries (annotations + replies) — the raw
+    /// (unfiltered) row count.
+    fn list_total_len(&self) -> usize {
+        self.annotations.len() + self.replies.len()
+    }
+
+    /// Builds the annotation list's `/`-filterable labels, in the same
+    /// insertion order `list_entries()`/`list_cursor` already index over, so
+    /// a filtered position always maps back to the right entry (annotation or
+    /// reply).
+    fn list_filter_labels(&self) -> Vec<String> {
+        self.list_entries()
+            .iter()
+            .map(|entry| self.entry_filter_label(entry))
             .collect()
     }
 
+    /// The `/`-filterable label for one entry — an annotation's own label, or
+    /// a reply's thread-anchored label (resolving the thread from the overlay
+    /// for its location column).
+    fn entry_filter_label(&self, entry: &ListEntry) -> String {
+        match *entry {
+            ListEntry::Annotation(id) => self
+                .annotations
+                .iter()
+                .find(|a| a.id == id)
+                .map(list_panel::filter_label)
+                .unwrap_or_default(),
+            ListEntry::Reply(id) => self
+                .replies
+                .get(id)
+                .map(|reply| {
+                    list_panel::reply_filter_label(reply, self.thread_overlay.find(reply.thread_id))
+                })
+                .unwrap_or_default(),
+        }
+    }
+
     /// The list panel's effective row count: the active filter's filtered
-    /// view when one is set, the full annotation count otherwise. Every
-    /// motion clamps against this instead of `annotations.len()` directly,
-    /// so paging/jumping moves through what the user sees (spec 12's
+    /// view when one is set, the full entry count otherwise. Every motion
+    /// clamps against this instead of `annotations.len()` directly, so
+    /// paging/jumping moves through what the user sees (spec 12's
     /// filtered-view design constraint).
     fn list_effective_len(&self) -> usize {
         self.list_filter
             .as_ref()
-            .map_or(self.annotations.len(), ListFilter::len)
+            .map_or(self.list_total_len(), ListFilter::len)
     }
 
     /// Translates `list_cursor` (a filtered position while a filter is
-    /// active, a raw index otherwise) into a real annotation index. The one
-    /// point every verb (jump/edit/delete) routes through.
+    /// active, a raw index otherwise) into a real entry index. The one point
+    /// every verb (jump/edit/delete) routes through.
     fn list_real_index(&self) -> Option<usize> {
         match &self.list_filter {
             Some(f) => f.real_index(self.list_cursor),
-            None => (self.list_cursor < self.annotations.len()).then_some(self.list_cursor),
+            None => (self.list_cursor < self.list_total_len()).then_some(self.list_cursor),
         }
+    }
+
+    /// The entry the list cursor is focused on, resolved through the active
+    /// filter — the one dispatch point the jump/edit/delete verbs branch on.
+    fn focused_list_entry(&self) -> Option<ListEntry> {
+        let index = self.list_real_index()?;
+        self.list_entries().into_iter().nth(index)
     }
 
     /// Enters filter mode (`/`): a no-op if it's already active (`/` while
@@ -119,7 +171,7 @@ impl App {
         self.list_filter = None;
         self.list_cursor = self
             .list_cursor
-            .min(self.annotations.len().saturating_sub(1));
+            .min(self.list_total_len().saturating_sub(1));
     }
 
     /// Appends `c` to the active filter's query and re-clamps the cursor
@@ -208,22 +260,42 @@ impl App {
         self.list_cursor = super::motion::jump_bottom(self.list_effective_len());
     }
 
-    /// Switches to the focused annotation's file, places the cursor on its
-    /// anchor row, and closes the list panel. A no-op if the store is
-    /// empty or the annotation's file/anchor can no longer be found.
+    /// Switches to the focused entry's location and closes the list panel:
+    /// an annotation jumps to its file/anchor row; a reply jumps to its
+    /// thread's anchor row. A no-op that just closes the panel if nothing is
+    /// focused or the location can no longer be found.
     pub fn jump_to_focused_annotation(&mut self) {
-        let Some(index) = self.list_real_index() else {
-            self.mode = Mode::Normal;
-            self.list_filter = None;
-            return;
-        };
-        let Some(id) = self.annotations.iter().nth(index).map(|a| a.id) else {
-            self.mode = Mode::Normal;
-            self.list_filter = None;
-            return;
-        };
-        self.list_filter = None;
-        self.jump_to_annotation(id);
+        match self.focused_list_entry() {
+            Some(ListEntry::Annotation(id)) => {
+                self.list_filter = None;
+                self.jump_to_annotation(id);
+            }
+            Some(ListEntry::Reply(id)) => {
+                self.list_filter = None;
+                self.jump_to_reply(id);
+            }
+            None => {
+                self.mode = Mode::Normal;
+                self.list_filter = None;
+            }
+        }
+    }
+
+    /// Moves the diff cursor to the anchor row of a drafted reply's thread
+    /// and closes the panel. Falls back to just closing when the thread is no
+    /// longer in the overlay (e.g. it wasn't re-fetched this session).
+    fn jump_to_reply(&mut self, reply_id: usize) {
+        let row = self
+            .replies
+            .get(reply_id)
+            .and_then(|reply| self.thread_overlay.find(reply.thread_id))
+            .and_then(|thread| self.thread_anchor_row(thread));
+        if let Some(row) = row {
+            self.view.cursor = row;
+            self.view.scroll = 0;
+            self.view.ensure_visible();
+        }
+        self.mode = Mode::Normal;
     }
 
     fn jump_to_annotation(&mut self, id: usize) {
@@ -263,28 +335,40 @@ impl App {
         self.mode = Mode::Normal;
     }
 
-    /// Opens Compose pre-filled with the focused annotation for editing (the
-    /// filtered selection, while a filter is active).
+    /// Opens Compose pre-filled with the focused entry for editing (the
+    /// filtered selection, while a filter is active): an annotation edits its
+    /// body/classification; a reply edits its body in reply mode.
     pub fn edit_focused_annotation(&mut self) {
-        let Some(index) = self.list_real_index() else {
-            return;
-        };
-        let Some(id) = self.annotations.iter().nth(index).map(|a| a.id) else {
-            return;
-        };
-        self.open_compose_for(id);
+        match self.focused_list_entry() {
+            Some(ListEntry::Annotation(id)) => self.open_compose_for(id),
+            Some(ListEntry::Reply(id)) => self.open_reply_compose_for(id),
+            None => {}
+        }
     }
 
-    /// Deletes the focused annotation (the filtered selection, while a
-    /// filter is active). No confirmation — deletion is cheap to redo.
+    /// Opens Compose in reply mode over an existing draft reply. A no-op if
+    /// the reply id is unknown.
+    fn open_reply_compose_for(&mut self, reply_id: usize) {
+        let Some(reply) = self.replies.get(reply_id) else {
+            return;
+        };
+        self.compose = Some(super::compose::ComposeState::editing_reply(
+            reply.id,
+            reply.thread_id,
+            &reply.body,
+        ));
+        self.mode = Mode::Compose;
+    }
+
+    /// Deletes the focused entry — annotation or reply (the filtered
+    /// selection, while a filter is active). No confirmation — deletion is
+    /// cheap to redo.
     pub fn delete_focused_annotation(&mut self) {
-        let Some(index) = self.list_real_index() else {
-            return;
-        };
-        let Some(id) = self.annotations.iter().nth(index).map(|a| a.id) else {
-            return;
-        };
-        self.delete_annotation_by_id(id);
+        match self.focused_list_entry() {
+            Some(ListEntry::Annotation(id)) => self.delete_annotation_by_id(id),
+            Some(ListEntry::Reply(id)) => self.delete_reply_by_id(id),
+            None => {}
+        }
     }
 
     /// Removes the annotation with `id` from the store, re-clamps the list
@@ -296,13 +380,30 @@ impl App {
     /// dropped) so a delete keeps the reviewer in their narrowed view.
     pub(super) fn delete_annotation_by_id(&mut self, id: usize) {
         let _ = self.annotations.remove(id);
-        if let Some(f) = self.list_filter.as_mut() {
-            let labels: Vec<String> = self
-                .annotations
-                .iter()
-                .map(list_panel::filter_label)
-                .collect();
-            f.refresh(&labels);
+        self.after_list_delete();
+    }
+
+    /// Removes the drafted reply with `reply_id`, then runs the same
+    /// filter-rerank / cursor-clamp / rebuild / save-on-change tail the
+    /// annotation delete uses, so deleting a reply from the panel behaves
+    /// identically. A no-op if `reply_id` is unknown.
+    pub(super) fn delete_reply_by_id(&mut self, reply_id: usize) {
+        if !self.replies.remove(reply_id) {
+            return;
+        }
+        self.after_list_delete();
+    }
+
+    /// Shared tail for a panel delete (annotation or reply): reranks an
+    /// active filter against the shrunken entry list (rather than dropping
+    /// it, so the reviewer stays in their narrowed view), re-clamps the list
+    /// cursor, rebuilds the diff rows, and saves-on-change.
+    fn after_list_delete(&mut self) {
+        if self.list_filter.is_some() {
+            let labels = self.list_filter_labels();
+            if let Some(f) = self.list_filter.as_mut() {
+                f.refresh(&labels);
+            }
         }
         let len = self.list_effective_len();
         self.list_cursor = if len == 0 {
@@ -561,5 +662,61 @@ index 111..222 100644
         if std::env::var("RQ_JOURNEY_DUMP").is_ok() {
             eprintln!("{log}");
         }
+    }
+
+    // -- Draft replies in the annotation-list panel (FR-14) -----------------
+
+    #[test]
+    fn a_drafted_reply_appears_as_a_reply_entry_with_its_marker() {
+        let mut app = App::new(vec![sample_file()]);
+        app.annotations
+            .add(Target::file("src/main.rs"), Classification::Issue, "fix")
+            .unwrap();
+        app.replies.add(42, "answering the thread");
+
+        let entries = app.list_entries();
+        assert_eq!(entries.len(), 2, "one annotation, then one reply");
+        assert!(matches!(entries[0], ListEntry::Annotation(_)));
+        assert!(matches!(entries[1], ListEntry::Reply(_)));
+
+        // The reply's filter label carries the `↳` marker and the word
+        // "reply", so a `/reply` filter surfaces exactly the drafted replies.
+        let labels = app.list_filter_labels();
+        assert!(
+            labels[1].contains('\u{21b3}') && labels[1].contains("reply"),
+            "reply label must carry its marker: {:?}",
+            labels[1]
+        );
+    }
+
+    #[test]
+    fn editing_a_focused_reply_opens_compose_in_reply_mode() {
+        let mut app = App::new(vec![sample_file()]);
+        app.replies.add(77, "original reply");
+        app.mode = Mode::List;
+        app.list_cursor = 0; // the only entry is the reply
+
+        app.edit_focused_annotation();
+
+        assert_eq!(app.mode, Mode::Compose);
+        let compose = app.compose.as_ref().unwrap();
+        assert_eq!(compose.thread_id, Some(77));
+        assert_eq!(compose.buffer.text(), "original reply");
+    }
+
+    #[test]
+    fn deleting_a_focused_reply_removes_it_from_the_store() {
+        let mut app = App::new(vec![sample_file()]);
+        app.annotations
+            .add(Target::file("src/main.rs"), Classification::Issue, "fix")
+            .unwrap();
+        app.replies.add(88, "to be deleted");
+        app.mode = Mode::List;
+        app.list_cursor = 1; // the reply follows the one annotation
+
+        app.delete_focused_annotation();
+
+        assert!(app.replies.is_empty(), "the reply must be gone");
+        assert_eq!(app.annotations.len(), 1, "the annotation is untouched");
     }
 }

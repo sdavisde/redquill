@@ -110,7 +110,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 - [x] 3.1 TDD `src/forge/threads.rs`: thread model (root + ordered replies via `in_reply_to` linkage, author, timestamp, resolved/outdated state) and anchor mapping (path + side + line → diff anchor; unmappable → file-level), built from GitHub review-comment fixture JSON.
 - [x] 3.2 GitHub thread fetch: fixed argv `gh api` call for PR review comments, async through a fetcher seam; overlay store separate from annotations — never persisted, never serialized to stdout (regression-guard test on `markdown.rs` output).
 - [x] 3.3 UI overlay: single-cell gutter markers on annotated lines, expandable thread view (conversation order, nested replies, collapsed resolved/outdated with labels), next/prev-thread navigation; keys chosen against the shared tables (no shadowing), footer hints + `?` sections, drift tests green.
-- [ ] 3.4 Reply drafting: compose flow consistent with annotation compose; drafts target the thread root, are editable/deletable, appear in the annotation list with a reply marker, persist in schema v3 (thread id + body) and restore on reopen.
+- [x] 3.4 Reply drafting: compose flow consistent with annotation compose; drafts target the thread root, are editable/deletable, appear in the annotation list with a reply marker, persist in schema v3 (thread id + body) and restore on reopen.
 - [ ] 3.5 Published-copy dedupe (FR-15): annotations marked published are not rendered as local annotations at their anchor once the forge copy is present in fetched threads.
 - [ ] 3.6 Fetch-failure notice ("comments unavailable") without blocking review entry; scripted fake-provider journey transcript; all four gates.
 

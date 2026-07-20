@@ -275,7 +275,7 @@ fn run_tui(config: &RunConfig) -> anyhow::Result<()> {
         // stale `Accepted` file starts marked `ChangedSinceAccepted` and
         // un-collapsed from the very first frame.
         if let Some(state_path) = &review_state_path {
-            let (states, blob_shas, annotations) =
+            let (states, blob_shas, annotations, replies) =
                 load_reconciled_review_state(&runner, state_path, branch);
             app.set_review_states(states, blob_shas);
             app.set_review_state_path(state_path.clone());
@@ -284,6 +284,7 @@ fn run_tui(config: &RunConfig) -> anyhow::Result<()> {
             // annotation list and in-diff markers already reflect them on
             // the very first frame.
             app.restore_review_annotations(annotations);
+            app.restore_review_replies(replies);
         }
         app.set_review_origin_ops(Box::new(discovered));
     }
@@ -642,6 +643,7 @@ mod tests {
                     worktree_path: repo.path().join("wt").join(branch),
                     files: Default::default(),
                     annotations: Default::default(),
+                    replies: Vec::new(),
                     forge: None,
                 },
             )
@@ -678,6 +680,7 @@ mod tests {
                 worktree_path: repo.path().join("wt"),
                 files: Default::default(),
                 annotations: Default::default(),
+                replies: Vec::new(),
                 forge: None,
             },
         )

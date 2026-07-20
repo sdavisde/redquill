@@ -124,11 +124,16 @@ impl App {
             );
         }
         let annotations = crate::annotate::snapshot(&self.annotations);
+        let replies = self.replies.snapshot();
         let review = PersistedReview {
             base,
             worktree_path,
             files,
             annotations,
+            // Drafted replies to imported forge threads, kept with the same
+            // review entry so one write saves both and a reopen restores
+            // them; empty for a plain local-branch review.
+            replies,
             // A PR/MR review carries its forge identity (provider, host,
             // number, last-fetched head SHA) so a reopen can detect the
             // author pushing new commits; a plain local-branch review leaves
@@ -156,6 +161,18 @@ impl App {
         }
         crate::annotate::restore_all(&mut self.annotations, persisted);
         self.refresh_rows();
+    }
+
+    /// Replays `persisted` draft replies into `self.replies` on a PR review's
+    /// bootstrap, right alongside [`App::restore_review_annotations`], so a
+    /// resumed session keeps its queued replies (they reappear in the
+    /// annotation-list panel). A no-op for an empty list — the ordinary case
+    /// for a first review or a local-branch review, which has none.
+    pub fn restore_review_replies(&mut self, persisted: Vec<crate::review::store::PersistedReply>) {
+        if persisted.is_empty() {
+            return;
+        }
+        self.replies.restore(persisted);
     }
 
     /// The path of the file under the cursor, or `None` on an empty diff.
@@ -789,5 +806,58 @@ mod tests {
         let mut app = review_app(&["a.rs"]);
         app.restore_review_annotations(Vec::new());
         assert!(app.annotations.is_empty());
+    }
+
+    // -- Draft replies persist and restore -----------------------------------
+
+    /// A drafted reply is snapshotted into the same persisted review entry as
+    /// annotations and file statuses (one write), so a save-on-change lands
+    /// it on disk under the `replies` key.
+    #[test]
+    fn drafting_a_reply_persists_it_to_disk() {
+        let (mut app, _tmp) = persisting_review_app(&[]);
+        let path = app.review_state_path.clone().unwrap();
+
+        app.replies.add(555, "agreed, will fix");
+        app.persist_review_state();
+        wait_for_review_save(&mut app);
+
+        let state = store::load(&path);
+        let review = state.reviews.get("feature").expect("branch entry saved");
+        assert_eq!(review.replies.len(), 1);
+        assert_eq!(review.replies[0].thread_id, 555);
+        assert_eq!(review.replies[0].body, "agreed, will fix");
+    }
+
+    #[test]
+    fn restore_review_replies_replays_into_the_store() {
+        use crate::review::store::PersistedReply;
+
+        let mut app = review_app(&["a.rs"]);
+        app.restore_review_replies(vec![
+            PersistedReply {
+                thread_id: 10,
+                body: "first".to_string(),
+            },
+            PersistedReply {
+                thread_id: 20,
+                body: "second".to_string(),
+            },
+        ]);
+
+        assert_eq!(app.replies.len(), 2);
+        let pairs: Vec<(u64, &str)> = app
+            .replies
+            .iter()
+            .map(|r| (r.thread_id, r.body.as_str()))
+            .collect();
+        assert_eq!(pairs, vec![(10, "first"), (20, "second")]);
+    }
+
+    #[test]
+    fn restore_review_replies_with_an_empty_list_is_a_no_op() {
+        let mut app = review_app(&["a.rs"]);
+        app.restore_review_replies(Vec::new());
+        assert!(app.replies.is_empty());
     }
 }

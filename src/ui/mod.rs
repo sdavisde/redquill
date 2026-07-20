@@ -30,6 +30,7 @@ mod confirm_remote_op_modal;
 mod diff_view;
 mod diff_view_state;
 mod diff_wrap;
+mod draft_reply;
 mod editor;
 mod end_review;
 mod end_review_modal;

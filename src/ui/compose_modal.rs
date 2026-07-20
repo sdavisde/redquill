@@ -65,12 +65,35 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         return;
     };
 
-    let title = format!(
-        "{} — {}",
-        target_label(&compose.target),
-        compose.classification.label()
-    );
-    let footer = " Enter submit  Shift-Enter/Ctrl-j newline  Ctrl-t class  Esc cancel ";
+    // Reply mode renders a thread-anchored header (no classification, since a
+    // reply answers a thread rather than classifying a diff line); the
+    // ordinary annotation compose keeps its target/classification title.
+    let (title, footer) = match compose.thread_id {
+        Some(thread_id) => {
+            let where_ = app
+                .thread_overlay
+                .find(thread_id)
+                .map(|t| match &t.anchor {
+                    crate::forge::ThreadAnchor::Position { path, line, .. } => {
+                        format!("{path}:{line}")
+                    }
+                    crate::forge::ThreadAnchor::File { path } => path.clone(),
+                })
+                .unwrap_or_else(|| "thread".to_string());
+            (
+                format!("reply to {where_}"),
+                " Enter submit  Shift-Enter/Ctrl-j newline  Esc cancel ",
+            )
+        }
+        None => (
+            format!(
+                "{} — {}",
+                target_label(&compose.target),
+                compose.classification.label()
+            ),
+            " Enter submit  Shift-Enter/Ctrl-j newline  Ctrl-t class  Esc cancel ",
+        ),
+    };
 
     // Soft-wrap against the modal's inner width (60% slice minus the two
     // border columns), so the wrapped-row count sets the modal height and the

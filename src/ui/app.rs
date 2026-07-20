@@ -549,6 +549,13 @@ pub struct App {
     /// The expandable thread-view overlay's state, `Some` only while
     /// [`Mode::ThreadView`] is active (see [`super::forge_threads`]).
     pub(super) thread_view: Option<super::forge_threads::ThreadViewState>,
+    /// The reviewer's locally drafted replies to imported PR threads, held
+    /// separate from `annotations` so they never reach the stdout markdown
+    /// stream, and separate from `thread_overlay` (teammates' read-only
+    /// comments). Snapshotted alongside annotations by
+    /// [`App::persist_review_state`] and restored on reopen. Empty outside a
+    /// PR review. Shown in the annotation-list panel with a reply marker.
+    pub(super) replies: super::draft_reply::DraftReplyStore,
     /// The set of collapsed directory keys in the git panel's file tree (see
     /// [`super::file_tree`]). An `App` field rather than [`Mode::Panel`]
     /// state because a folded directory must stay folded across the panel
@@ -792,6 +799,7 @@ impl App {
             thread_fetch_generation: 0,
             threads_unavailable: false,
             thread_view: None,
+            replies: super::draft_reply::DraftReplyStore::new(),
             panel_collapsed_dirs: HashSet::new(),
             active_commit: None,
             suspended_view: None,
@@ -1418,6 +1426,23 @@ impl App {
         let body = compose.buffer.text();
         if body.trim().is_empty() {
             self.mode = Mode::Normal;
+            return;
+        }
+
+        if let Some(thread_id) = compose.thread_id {
+            // Reply mode: add or edit a draft reply rather than an annotation.
+            // Replies never carry a classification and never reach stdout.
+            match compose.editing_id {
+                Some(reply_id) => {
+                    self.replies.edit(reply_id, &body);
+                }
+                None => {
+                    self.replies.add(thread_id, &body);
+                }
+            }
+            self.mode = Mode::Normal;
+            self.refresh_rows();
+            self.persist_review_state();
             return;
         }
 

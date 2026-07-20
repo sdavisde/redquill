@@ -101,13 +101,15 @@ pub fn paths_match(a: &Path, b: &Path) -> bool {
 }
 
 /// [`load_reconciled_review_state`]'s return shape: reconciled file statuses,
-/// their 1:1 blob-SHA companion map, and this branch's persisted
-/// annotations verbatim — named so clippy's `type_complexity` lint (and any
-/// reader) doesn't have to parse a three-deep nested tuple inline.
+/// their 1:1 blob-SHA companion map, this branch's persisted annotations
+/// verbatim, and its persisted draft replies verbatim — named so clippy's
+/// `type_complexity` lint (and any reader) doesn't have to parse a
+/// four-deep nested tuple inline.
 pub type ReconciledReviewState = (
     HashMap<String, ReviewStatus>,
     HashMap<String, Option<String>>,
     Vec<PersistedAnnotation>,
+    Vec<crate::review::store::PersistedReply>,
 );
 
 /// Loads and reconciles `branch`'s persisted review state against its
@@ -134,7 +136,7 @@ pub fn load_reconciled_review_state(
 ) -> ReconciledReviewState {
     let state = store::load(state_path);
     let Some(review) = state.reviews.get(branch) else {
-        return (HashMap::new(), HashMap::new(), Vec::new());
+        return (HashMap::new(), HashMap::new(), Vec::new(), Vec::new());
     };
     let mut current_shas = HashMap::new();
     for path in review.files.keys() {
@@ -152,7 +154,12 @@ pub fn load_reconciled_review_state(
             blob_shas.insert(path.clone(), entry.blob_sha.clone());
         }
     }
-    (statuses, blob_shas, review.annotations.clone())
+    (
+        statuses,
+        blob_shas,
+        review.annotations.clone(),
+        review.replies.clone(),
+    )
 }
 
 #[cfg(test)]
@@ -282,6 +289,7 @@ mod tests {
                 worktree_path: repo.path().to_path_buf(),
                 files,
                 annotations: Vec::new(),
+                replies: Vec::new(),
                 forge: None,
             },
         )
@@ -291,7 +299,7 @@ mod tests {
         write(repo.path(), "a.rs", "fn a() { changed(); }\n");
         git(repo.path(), &["commit", "-aqm", "change a.rs"]);
 
-        let (states, blob_shas, annotations) =
+        let (states, blob_shas, annotations, _replies) =
             load_reconciled_review_state(&runner, &state_path, "main");
         assert!(
             annotations.is_empty(),
@@ -321,7 +329,7 @@ mod tests {
         let common_dir = runner.git_common_dir().unwrap();
         let state_path = common_dir.join("redquill").join("review-state.json");
 
-        let (states, blob_shas, annotations) =
+        let (states, blob_shas, annotations, _replies) =
             load_reconciled_review_state(&runner, &state_path, "main");
 
         assert!(states.is_empty());
@@ -352,12 +360,13 @@ mod tests {
                     body: "note".to_string(),
                     source: Source::WorkingTree,
                 }],
+                replies: Vec::new(),
                 forge: None,
             },
         )
         .unwrap();
 
-        let (_, _, annotations) = load_reconciled_review_state(&runner, &state_path, "main");
+        let (_, _, annotations, _) = load_reconciled_review_state(&runner, &state_path, "main");
 
         assert_eq!(annotations.len(), 1);
         assert_eq!(annotations[0].body, "note");

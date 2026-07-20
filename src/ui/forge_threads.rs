@@ -153,7 +153,7 @@ impl App {
     /// header row when the line isn't in the current buffer — e.g. a
     /// collapsed section), or the file header for a file-level
     /// ([`ThreadAnchor::File`], outdated) thread.
-    fn thread_anchor_row(&self, thread: &Thread) -> Option<usize> {
+    pub(super) fn thread_anchor_row(&self, thread: &Thread) -> Option<usize> {
         match &thread.anchor {
             ThreadAnchor::Position { path, side, line } => {
                 let target = Target::line(path.clone(), *line, *side);
@@ -214,6 +214,17 @@ impl App {
     pub(super) fn close_thread_view(&mut self) {
         self.thread_view = None;
         self.mode = Mode::Normal;
+    }
+
+    /// `r` in the thread overlay: closes the overlay and opens Compose in
+    /// reply mode, targeting the open thread's root. A no-op when no thread
+    /// is open (the key is only reachable from [`Mode::ThreadView`]).
+    pub(super) fn open_reply_compose(&mut self) {
+        let Some(tv) = self.thread_view.take() else {
+            return;
+        };
+        self.compose = Some(super::compose::ComposeState::reply(tv.root_id));
+        self.mode = Mode::Compose;
     }
 
     /// Scrolls the open thread overlay down one line (clamped by the render's

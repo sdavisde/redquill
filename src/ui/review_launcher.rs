@@ -835,16 +835,17 @@ impl App {
                 }
                 let demoted = reconciled
                     .as_ref()
-                    .map(|(states, _, _)| {
+                    .map(|(states, _, _, _)| {
                         states
                             .values()
                             .filter(|s| **s == ReviewStatus::ChangedSinceAccepted)
                             .count()
                     })
                     .unwrap_or(0);
-                if let Some((states, blob_shas, annotations)) = reconciled {
+                if let Some((states, blob_shas, annotations, replies)) = reconciled {
                     self.set_review_states(states, blob_shas);
                     self.restore_review_annotations(annotations);
+                    self.restore_review_replies(replies);
                 }
                 self.review_forge = Some(ForgeMetadata {
                     provider: ctx.provider,
@@ -984,9 +985,10 @@ impl App {
                 if let Some(path) = state_path {
                     self.set_review_state_path(path);
                 }
-                if let Some((states, blob_shas, annotations)) = reconciled {
+                if let Some((states, blob_shas, annotations, replies)) = reconciled {
                     self.set_review_states(states, blob_shas);
                     self.restore_review_annotations(annotations);
+                    self.restore_review_replies(replies);
                 }
                 self.close_review_launcher_after_start();
                 self.after_panel_coherence();

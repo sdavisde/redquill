@@ -1172,8 +1172,8 @@ pub(super) static END_REVIEW_KEYS: LazyLock<Vec<ModalBinding<EndReviewAction>>> 
 // -- Thread view overlay ------------------------------------------------------
 
 /// What a key does in the imported-thread overlay
-/// ([`super::app::Mode::ThreadView`]): a read-only conversation viewer, so
-/// just scroll and close. Not config-remappable yet — see
+/// ([`super::app::Mode::ThreadView`]): scroll the read-only conversation,
+/// draft a reply to it, or close. Not config-remappable yet — see
 /// [`THREAD_VIEW_KEYS`] and the module doc.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ThreadViewAction {
@@ -1182,6 +1182,9 @@ pub(super) enum ThreadViewAction {
     ScrollDown,
     /// Scroll the conversation up one line.
     ScrollUp,
+    /// Draft a reply to this thread (see
+    /// [`super::app::App::open_reply_compose`]).
+    Reply,
     /// Close the overlay, returning to the diff.
     Close,
 }
@@ -1214,6 +1217,15 @@ pub(super) static THREAD_VIEW_KEYS: LazyLock<Vec<ModalBinding<ThreadViewAction>>
                 footer: None,
             },
             ModalBinding {
+                description: "Reply to this thread",
+                keys: vec![ModalKey::plain(KeyCode::Char('r'))],
+                action: ThreadViewAction::Reply,
+                footer: Some(FooterHint {
+                    rank: 2,
+                    label: "reply",
+                }),
+            },
+            ModalBinding {
                 description: "Close the thread overlay",
                 keys: vec![
                     ModalKey::plain(KeyCode::Char('q')),
@@ -1221,7 +1233,7 @@ pub(super) static THREAD_VIEW_KEYS: LazyLock<Vec<ModalBinding<ThreadViewAction>>
                 ],
                 action: ThreadViewAction::Close,
                 footer: Some(FooterHint {
-                    rank: 2,
+                    rank: 3,
                     label: "close",
                 }),
             },
@@ -3755,6 +3767,23 @@ index 111..222 100644
                             app.thread_view.as_ref().map(|tv| tv.scroll),
                             Some(0),
                             "Thread view {label}: scroll-up retreats the scroll offset"
+                        );
+                    }
+                    ThreadViewAction::Reply => {
+                        handle_thread_view_key(&mut app, key.event());
+                        assert_eq!(
+                            app.mode,
+                            Mode::Compose,
+                            "Thread view {label}: reply opens Compose"
+                        );
+                        assert_eq!(
+                            app.compose.as_ref().and_then(|c| c.thread_id),
+                            Some(1),
+                            "Thread view {label}: reply targets the open thread's root"
+                        );
+                        assert!(
+                            app.thread_view.is_none(),
+                            "Thread view {label}: reply closes the overlay"
                         );
                     }
                     ThreadViewAction::Close => {

@@ -24,9 +24,10 @@ use thiserror::Error;
 /// version-mismatched file degrades to empty per this module's
 /// silent-degradation contract, the same as any other corrupt file.
 ///
-/// v2 -> v3 added [`PersistedReview::forge`] (optional; absent for a plain
+/// v2 -> v3 added [`PersistedReview::forge`] and
+/// [`PersistedReview::replies`] (both optional; absent for a plain
 /// local-branch review). The migration is silent and additive: a v2 file
-/// has no `forge` key anywhere, which `#[serde(default)]` reads as `None`
+/// has neither key anywhere, which `#[serde(default)]` reads as `None`/empty
 /// exactly like any other missing-field default in this schema, so no
 /// explicit version-branching parse logic exists or is needed. A v2-era
 /// review's JSON round-trips byte-identically through this schema version
@@ -87,6 +88,16 @@ pub struct PersistedReview {
     /// [`PersistedFile::blob_sha`]'s "omit rather than write empty" convention.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub annotations: Vec<crate::annotate::PersistedAnnotation>,
+    /// This review's locally drafted replies to imported forge threads, in
+    /// insertion order — each a `(thread_id, body)` pair (see
+    /// [`PersistedReply`]). Held separate from `annotations` because a reply
+    /// answers a teammate's existing thread rather than anchoring to a diff
+    /// line, and — unlike an annotation — never reaches the stdout markdown
+    /// stream. Omitted from the JSON entirely when empty, matching
+    /// `annotations`' convention, so a review with no drafted replies is
+    /// on-disk-identical to one from before this field existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replies: Vec<PersistedReply>,
     /// Which forge PR/MR this review targets, when it is one — `None` for a
     /// plain local-branch review (spec 08's original flow). Omitted from
     /// the JSON entirely when absent, mirroring
@@ -95,6 +106,19 @@ pub struct PersistedReview {
     /// unaffected by this field's existence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forge: Option<ForgeMetadata>,
+}
+
+/// One locally drafted reply to an imported forge thread: the thread it
+/// answers (its root comment id) and the reply body. Local until the review
+/// is submitted; persisted so a resumed session keeps queued replies. Never
+/// serialized to stdout — replies are not annotations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistedReply {
+    /// The root comment id of the thread this reply targets.
+    pub thread_id: u64,
+    /// The reply body, guaranteed non-empty after trimming by the drafting
+    /// path that produced it.
+    pub body: String,
 }
 
 /// A PR/MR review's forge identity and fetch bookkeeping: which provider
@@ -286,6 +310,7 @@ mod tests {
                 worktree_path: PathBuf::from("/tmp/redquill/worktrees/feature-1234"),
                 files,
                 annotations: Vec::new(),
+                replies: Vec::new(),
                 forge: None,
             },
         );
@@ -421,6 +446,7 @@ mod tests {
                 worktree_path: PathBuf::from("/tmp/wt"),
                 files: BTreeMap::new(),
                 annotations: Vec::new(),
+                replies: Vec::new(),
                 forge: None,
             },
         )
@@ -454,6 +480,7 @@ mod tests {
                     body: "fix this".to_string(),
                     source: Source::WorkingTree,
                 }],
+                replies: Vec::new(),
                 forge: None,
             },
         );
@@ -501,11 +528,13 @@ mod tests {
             worktree_path: PathBuf::from("/tmp/wt"),
             files: BTreeMap::new(),
             annotations: Vec::new(),
+            replies: Vec::new(),
             forge: None,
         };
         let json = serde_json::to_string(&review).unwrap();
         assert!(json.contains("\"files\":{}"));
         assert!(!json.contains("annotations"));
+        assert!(!json.contains("replies"));
         assert!(!json.contains("forge"));
     }
 
@@ -533,6 +562,7 @@ mod tests {
                 worktree_path: PathBuf::from("/tmp/wt"),
                 files: BTreeMap::new(),
                 annotations: Vec::new(),
+                replies: Vec::new(),
                 forge: Some(ForgeMetadata {
                     provider: ForgeProviderKind::GitHub,
                     host: "github.com".to_string(),
@@ -563,6 +593,129 @@ mod tests {
 
         let round_tripped: ReviewStateFile = serde_json::from_str(&json).unwrap();
         assert_eq!(round_tripped, state);
+    }
+
+    // -- Schema v3: replies field -----------------------------------------------
+
+    /// Byte-exact round-trip for the `replies` field on a forge review,
+    /// locking its exact shape: a `[{thread_id, body}, ...]` array nested
+    /// directly under the review entry, positioned between `annotations` and
+    /// `forge`, each element a bare thread-id/body pair.
+    #[test]
+    fn replies_field_round_trips_byte_exact() {
+        let mut state = ReviewStateFile {
+            version: SCHEMA_VERSION,
+            reviews: BTreeMap::new(),
+        };
+        state.reviews.insert(
+            "redquill/pr/7".to_string(),
+            PersistedReview {
+                base: "main".to_string(),
+                worktree_path: PathBuf::from("/tmp/wt"),
+                files: BTreeMap::new(),
+                annotations: Vec::new(),
+                replies: vec![
+                    PersistedReply {
+                        thread_id: 100,
+                        body: "agreed, will fix".to_string(),
+                    },
+                    PersistedReply {
+                        thread_id: 200,
+                        body: "why not use the helper here?".to_string(),
+                    },
+                ],
+                forge: None,
+            },
+        );
+
+        let json = serde_json::to_string_pretty(&state).unwrap();
+        let expected = r#"{
+  "version": 3,
+  "reviews": {
+    "redquill/pr/7": {
+      "base": "main",
+      "worktree_path": "/tmp/wt",
+      "files": {},
+      "replies": [
+        {
+          "thread_id": 100,
+          "body": "agreed, will fix"
+        },
+        {
+          "thread_id": 200,
+          "body": "why not use the helper here?"
+        }
+      ]
+    }
+  }
+}"#;
+        assert_eq!(json, expected);
+
+        let round_tripped: ReviewStateFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, state);
+    }
+
+    /// A v3 review that carries annotations but no replies loads with an
+    /// empty `replies` list and no `replies` key on re-serialization — the
+    /// "absent replies stays absent" counterpart to the annotations/forge
+    /// omission tests, proving the new field never leaks into a review that
+    /// never drafted a reply.
+    #[test]
+    fn v3_review_without_replies_loads_and_reserializes_clean() {
+        use crate::annotate::{Classification, PersistedAnnotation, Side, Source, Target};
+
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("review-state.json");
+        let json = r#"{
+  "version": 3,
+  "reviews": {
+    "feature": {
+      "base": "main",
+      "worktree_path": "/tmp/wt",
+      "files": {},
+      "annotations": [
+        {
+          "target": {
+            "kind": "line",
+            "path": "src/lib.rs",
+            "line": 10,
+            "side": "new"
+          },
+          "classification": "issue",
+          "body": "fix this",
+          "source": "working_tree"
+        }
+      ]
+    }
+  }
+}"#;
+        std::fs::write(&path, json).unwrap();
+
+        let state = load(&path);
+        assert!(
+            !tmp.path().join("review-state.json.corrupt").exists(),
+            "a v3 review without replies must never be moved aside as corrupt"
+        );
+        let review = state.reviews.get("feature").expect("entry must load");
+        assert!(
+            review.replies.is_empty(),
+            "a review with no replies key must default to an empty list"
+        );
+        assert_eq!(
+            review.annotations,
+            vec![PersistedAnnotation {
+                target: Target::line("src/lib.rs", 10, Side::New),
+                classification: Classification::Issue,
+                body: "fix this".to_string(),
+                source: Source::WorkingTree,
+            }]
+        );
+
+        let reserialized = serde_json::to_string_pretty(&state).unwrap();
+        assert_eq!(
+            reserialized, json,
+            "a review with no replies must re-serialize byte-identically — no replies key appears"
+        );
     }
 
     /// A v2 file (`"version": 2`, no `forge` key anywhere) must load as a
@@ -627,6 +780,7 @@ mod tests {
                 worktree_path: PathBuf::from("/tmp/wt"),
                 files: BTreeMap::new(),
                 annotations: Vec::new(),
+                replies: Vec::new(),
                 forge: None,
             },
         )
@@ -775,6 +929,7 @@ mod tests {
                 worktree_path: PathBuf::from("/tmp/wt"),
                 files: BTreeMap::new(),
                 annotations: Vec::new(),
+                replies: Vec::new(),
                 forge: None,
             },
         )
@@ -801,6 +956,7 @@ mod tests {
                 worktree_path: PathBuf::from("/tmp/wt2"),
                 files: BTreeMap::new(),
                 annotations: Vec::new(),
+                replies: Vec::new(),
                 forge: None,
             },
         )
@@ -826,6 +982,7 @@ mod tests {
                 worktree_path: PathBuf::from("/tmp/wt"),
                 files: BTreeMap::new(),
                 annotations: Vec::new(),
+                replies: Vec::new(),
                 forge: None,
             },
         )
@@ -847,6 +1004,7 @@ mod tests {
                 worktree_path: PathBuf::from("/tmp/wt2"),
                 files: BTreeMap::new(),
                 annotations: Vec::new(),
+                replies: Vec::new(),
                 forge: None,
             },
         );
@@ -890,6 +1048,7 @@ mod tests {
                 worktree_path: PathBuf::from("/tmp/wt-deleted"),
                 files: BTreeMap::new(),
                 annotations: Vec::new(),
+                replies: Vec::new(),
                 forge: None,
             },
         );

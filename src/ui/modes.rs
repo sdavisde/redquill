@@ -546,6 +546,7 @@ pub(super) fn handle_thread_view_key(app: &mut App, key: KeyEvent) {
             apply_motion_n_times(count, || app.thread_view_scroll_down())
         }
         ThreadViewAction::ScrollUp => apply_motion_n_times(count, || app.thread_view_scroll_up()),
+        ThreadViewAction::Reply => app.open_reply_compose(),
         ThreadViewAction::Close => app.close_thread_view(),
     }
 }
