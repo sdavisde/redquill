@@ -58,16 +58,32 @@ fn target_summary(target: &Target) -> String {
     }
 }
 
+/// The bracket tag marking a row (annotation or reply) already published to
+/// the forge — styled with the same color the git panel uses for "already
+/// landed" state (`staged_indicator`), so a published row reads as visually
+/// settled the way a fully-staged file does.
+const PUBLISHED_TAG: &str = "[published] ";
+
+fn published_span(theme: &Theme) -> Span<'static> {
+    Span::styled(PUBLISHED_TAG, Style::default().fg(theme.staged_indicator))
+}
+
 fn item_line(annotation: &Annotation, theme: &Theme) -> Line<'static> {
     let first_line = annotation.body.lines().next().unwrap_or("");
-    Line::from(vec![
-        Span::raw(format!("{} ", target_summary(&annotation.target))),
-        Span::styled(
-            format!("[{}] ", annotation.classification.label()),
-            Style::default().fg(theme.classification_tag),
-        ),
-        Span::raw(first_line.to_string()),
-    ])
+    let mut spans = Vec::new();
+    if annotation.published {
+        spans.push(published_span(theme));
+    }
+    spans.push(Span::raw(format!(
+        "{} ",
+        target_summary(&annotation.target)
+    )));
+    spans.push(Span::styled(
+        format!("[{}] ", annotation.classification.label()),
+        Style::default().fg(theme.classification_tag),
+    ));
+    spans.push(Span::raw(first_line.to_string()));
+    Line::from(spans)
 }
 
 /// The plain-text label [`super::list_filter`]'s fuzzy matcher ranks an
@@ -75,8 +91,13 @@ fn item_line(annotation: &Annotation, theme: &Theme) -> Line<'static> {
 /// renders, minus styling, so "what you see is what you can filter on."
 pub(super) fn filter_label(annotation: &Annotation) -> String {
     let first_line = annotation.body.lines().next().unwrap_or("");
+    let published_tag = if annotation.published {
+        PUBLISHED_TAG
+    } else {
+        ""
+    };
     format!(
-        "{} [{}] {first_line}",
+        "{published_tag}{} [{}] {first_line}",
         target_summary(&annotation.target),
         annotation.classification.label()
     )
@@ -99,14 +120,20 @@ fn reply_where(reply: &DraftReply, thread: Option<&Thread>) -> String {
 /// sit visually alongside annotations), and the reply's first body line.
 fn reply_item_line(reply: &DraftReply, thread: Option<&Thread>, theme: &Theme) -> Line<'static> {
     let first_line = reply.body.lines().next().unwrap_or("");
-    Line::from(vec![
-        Span::raw(format!("\u{21b3} {} ", reply_where(reply, thread))),
-        Span::styled(
-            "[reply] ".to_string(),
-            Style::default().fg(theme.classification_tag),
-        ),
-        Span::raw(first_line.to_string()),
-    ])
+    let mut spans = Vec::new();
+    if reply.published {
+        spans.push(published_span(theme));
+    }
+    spans.push(Span::raw(format!(
+        "\u{21b3} {} ",
+        reply_where(reply, thread)
+    )));
+    spans.push(Span::styled(
+        "[reply] ".to_string(),
+        Style::default().fg(theme.classification_tag),
+    ));
+    spans.push(Span::raw(first_line.to_string()));
+    Line::from(spans)
 }
 
 /// The plain-text filter label for a drafted reply — the same text
@@ -114,8 +141,9 @@ fn reply_item_line(reply: &DraftReply, thread: Option<&Thread>, theme: &Theme) -
 /// so a `/` filter for "reply" surfaces exactly the drafted replies.
 pub(super) fn reply_filter_label(reply: &DraftReply, thread: Option<&Thread>) -> String {
     let first_line = reply.body.lines().next().unwrap_or("");
+    let published_tag = if reply.published { PUBLISHED_TAG } else { "" };
     format!(
-        "\u{21b3} {} [reply] {first_line}",
+        "{published_tag}\u{21b3} {} [reply] {first_line}",
         reply_where(reply, thread)
     )
 }

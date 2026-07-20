@@ -534,6 +534,52 @@ mod tests {
         assert_eq!(render_markdown(&store), expected);
     }
 
+    // -- published state never affects stdout (spec 13 FR-20) -------------------
+
+    /// The published flag is a forge-submit bookkeeping concern only —
+    /// `render_markdown` must emit an identical byte stream whether an
+    /// annotation is published or not, and a published annotation must still
+    /// appear in the output at all. Mirrors
+    /// `crate::ui::draft_reply::tests::draft_replies_never_change_annotation_markdown_output`
+    /// and `crate::forge::threads::tests::fetched_threads_never_change_annotation_markdown_output`.
+    #[test]
+    fn published_state_never_changes_markdown_output() {
+        let mut unpublished = AnnotationStore::new();
+        let id = unpublished
+            .add(Target::file("a.rs"), Classification::Issue, "please fix")
+            .unwrap();
+        let before = render_markdown(&unpublished);
+
+        let mut published = unpublished.clone();
+        published.set_published(id, true).unwrap();
+        let after = render_markdown(&published);
+
+        assert_eq!(
+            before, after,
+            "publishing an annotation must never change the stdout markdown"
+        );
+        assert!(
+            after.contains("please fix"),
+            "a published annotation must still reach stdout, exactly like an unpublished one"
+        );
+    }
+
+    #[test]
+    fn a_mixed_batch_of_published_and_unpublished_annotations_all_reach_stdout() {
+        let mut store = AnnotationStore::new();
+        let id0 = store
+            .add(Target::file("a.rs"), Classification::Issue, "one")
+            .unwrap();
+        store
+            .add(Target::file("b.rs"), Classification::Nit, "two")
+            .unwrap();
+        store.set_published(id0, true).unwrap();
+
+        let rendered = render_markdown(&store);
+        assert!(rendered.contains("[issue] one"));
+        assert!(rendered.contains("[nit] two"));
+    }
+
     #[test]
     fn non_worktree_only_session_has_no_leading_blank_group() {
         let mut store = AnnotationStore::new();

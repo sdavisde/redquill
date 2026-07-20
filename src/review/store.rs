@@ -119,6 +119,18 @@ pub struct PersistedReply {
     /// The reply body, guaranteed non-empty after trimming by the drafting
     /// path that produced it.
     pub body: String,
+    /// Whether this reply was already published to the forge. Defaults to
+    /// `false` and is omitted from the JSON entirely when `false`, mirroring
+    /// [`crate::annotate::PersistedAnnotation::published`] — an unpublished
+    /// reply's on-disk shape is unaffected by this field's existence.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub published: bool,
+}
+
+/// `skip_serializing_if` predicate: omit a `bool` field when it is `false`.
+/// Mirrors `crate::annotate::persist::is_false`.
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// A PR/MR review's forge identity and fetch bookkeeping: which provider
@@ -619,10 +631,12 @@ mod tests {
                     PersistedReply {
                         thread_id: 100,
                         body: "agreed, will fix".to_string(),
+                        published: false,
                     },
                     PersistedReply {
                         thread_id: 200,
                         body: "why not use the helper here?".to_string(),
+                        published: false,
                     },
                 ],
                 forge: None,
@@ -654,6 +668,35 @@ mod tests {
 
         let round_tripped: ReviewStateFile = serde_json::from_str(&json).unwrap();
         assert_eq!(round_tripped, state);
+    }
+
+    /// A `PersistedReply` with no `published` key defaults to unpublished —
+    /// the reply counterpart to
+    /// `crate::annotate::persist::tests::persisted_annotation_missing_published_defaults_to_false`.
+    #[test]
+    fn persisted_reply_missing_published_defaults_to_false() {
+        let json = r#"{"thread_id":1,"body":"note"}"#;
+        let entry: PersistedReply = serde_json::from_str(json).unwrap();
+        assert!(!entry.published);
+    }
+
+    /// A published reply carries the flag on disk and round-trips — the
+    /// reply counterpart to
+    /// `crate::annotate::persist::tests::published_true_serializes_the_key_and_round_trips`.
+    #[test]
+    fn published_reply_serializes_the_key_and_round_trips() {
+        let entry = PersistedReply {
+            thread_id: 1,
+            body: "agreed".to_string(),
+            published: true,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(
+            json.contains("\"published\":true"),
+            "a published reply must carry the flag on disk: {json}"
+        );
+        let round_tripped: PersistedReply = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, entry);
     }
 
     /// A v3 review that carries annotations but no replies loads with an

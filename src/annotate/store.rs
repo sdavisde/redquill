@@ -160,6 +160,14 @@ impl AnnotationStore {
             .iter()
             .filter(move |a| a.target.path() == path)
     }
+
+    /// Iterates, in insertion order, over annotations not yet published to
+    /// the forge — the set a submit-review payload builder consumes (see
+    /// `crate::forge::github::build_review_payload`), so a re-submit after a
+    /// prior success sends only what's left.
+    pub fn unpublished(&self) -> impl Iterator<Item = &Annotation> {
+        self.annotations.iter().filter(|a| !a.published)
+    }
 }
 
 #[cfg(test)]
@@ -356,5 +364,52 @@ mod tests {
             .add(Target::file("a.rs"), Classification::Nit, "note")
             .unwrap();
         assert_eq!(store.for_path("missing.rs").count(), 0);
+    }
+
+    // -- unpublished ------------------------------------------------------------
+
+    #[test]
+    fn unpublished_returns_every_annotation_when_none_are_published() {
+        let mut store = AnnotationStore::new();
+        store
+            .add(Target::file("a.rs"), Classification::Nit, "one")
+            .unwrap();
+        store
+            .add(Target::file("b.rs"), Classification::Issue, "two")
+            .unwrap();
+        assert_eq!(store.unpublished().count(), 2);
+    }
+
+    #[test]
+    fn unpublished_excludes_annotations_marked_published() {
+        let mut store = AnnotationStore::new();
+        let id0 = store
+            .add(Target::file("a.rs"), Classification::Nit, "sent already")
+            .unwrap();
+        let id1 = store
+            .add(Target::file("b.rs"), Classification::Issue, "still draft")
+            .unwrap();
+        store.set_published(id0, true).unwrap();
+
+        let remaining: Vec<usize> = store.unpublished().map(|a| a.id).collect();
+        assert_eq!(remaining, vec![id1]);
+    }
+
+    #[test]
+    fn unpublished_preserves_insertion_order() {
+        let mut store = AnnotationStore::new();
+        let id0 = store
+            .add(Target::file("a.rs"), Classification::Nit, "first")
+            .unwrap();
+        let id1 = store
+            .add(Target::file("b.rs"), Classification::Nit, "second")
+            .unwrap();
+        let id2 = store
+            .add(Target::file("c.rs"), Classification::Nit, "third")
+            .unwrap();
+        store.set_published(id1, true).unwrap();
+
+        let remaining: Vec<usize> = store.unpublished().map(|a| a.id).collect();
+        assert_eq!(remaining, vec![id0, id2]);
     }
 }

@@ -29,6 +29,11 @@ pub struct DraftReply {
     pub thread_id: u64,
     /// The reply body, non-empty after trimming.
     pub body: String,
+    /// Whether this reply has already been published to the forge. `false`
+    /// for a freshly drafted reply; set once the review is submitted so it
+    /// is excluded from future submits — mirrors
+    /// [`crate::annotate::Annotation::published`].
+    pub published: bool,
 }
 
 /// An in-memory, insertion-ordered collection of draft replies.
@@ -60,6 +65,7 @@ impl DraftReplyStore {
             id,
             thread_id,
             body: trimmed.to_string(),
+            published: false,
         });
         Some(id)
     }
@@ -97,9 +103,34 @@ impl DraftReplyStore {
         self.replies.iter().find(|r| r.id == id)
     }
 
+    /// Sets the published flag of the reply with `id` — used both by the
+    /// submit flow (marking a reply published on a successful post) and by
+    /// the session-start restore path (replaying a persisted published
+    /// state). Returns whether a reply was updated. Mirrors
+    /// `AnnotationStore::set_published`.
+    pub fn set_published(&mut self, id: usize, published: bool) -> bool {
+        match self.replies.iter_mut().find(|r| r.id == id) {
+            Some(reply) => {
+                reply.published = published;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Iterates over replies in insertion order.
     pub fn iter(&self) -> impl Iterator<Item = &DraftReply> {
         self.replies.iter()
+    }
+
+    /// Iterates, in insertion order, over replies not yet published to the
+    /// forge — the reply counterpart to `AnnotationStore::unpublished`, so a
+    /// re-submit after a prior success sends only what's left. Exercised
+    /// only by tests today; the submit-sequence driver (a later unit) is its
+    /// first production caller, hence the non-test-only `allow`.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn unpublished(&self) -> impl Iterator<Item = &DraftReply> {
+        self.replies.iter().filter(|r| !r.published)
     }
 
     /// The number of drafted replies.
@@ -121,6 +152,7 @@ impl DraftReplyStore {
             .map(|r| PersistedReply {
                 thread_id: r.thread_id,
                 body: r.body.clone(),
+                published: r.published,
             })
             .collect()
     }
@@ -128,12 +160,18 @@ impl DraftReplyStore {
     /// Replays `persisted` into the store, in order, assigning fresh
     /// sequential ids — the session-start restore path. A record whose body
     /// is empty after trimming (only reachable from hand-edited JSON) is
-    /// skipped rather than failing the whole restore. Returns the number
-    /// actually restored.
+    /// skipped rather than failing the whole restore. `add` always creates
+    /// an unpublished reply, so a restored already-published one is marked
+    /// back afterward — mirrors `crate::annotate::persist::restore_all`.
+    /// Returns the number actually restored.
     pub fn restore(&mut self, persisted: Vec<PersistedReply>) -> usize {
         let mut restored = 0;
         for entry in persisted {
-            if self.add(entry.thread_id, entry.body).is_some() {
+            let published = entry.published;
+            if let Some(id) = self.add(entry.thread_id, entry.body) {
+                if published {
+                    self.set_published(id, true);
+                }
                 restored += 1;
             }
         }
@@ -213,15 +251,63 @@ mod tests {
             PersistedReply {
                 thread_id: 1,
                 body: "  ".to_string(),
+                published: false,
             },
             PersistedReply {
                 thread_id: 2,
                 body: "kept".to_string(),
+                published: false,
             },
         ]);
         assert_eq!(n, 1);
         assert_eq!(store.len(), 1);
         assert_eq!(store.iter().next().unwrap().body, "kept");
+    }
+
+    // -- published flag -------------------------------------------------------
+
+    #[test]
+    fn add_creates_an_unpublished_reply() {
+        let mut store = DraftReplyStore::new();
+        let id = store.add(1, "note").unwrap();
+        assert!(!store.get(id).unwrap().published);
+    }
+
+    #[test]
+    fn set_published_flips_the_flag_and_reports_unknown_ids() {
+        let mut store = DraftReplyStore::new();
+        let id = store.add(1, "note").unwrap();
+        assert!(store.set_published(id, true));
+        assert!(store.get(id).unwrap().published);
+        assert!(!store.set_published(999, true));
+    }
+
+    #[test]
+    fn unpublished_excludes_replies_marked_published() {
+        let mut store = DraftReplyStore::new();
+        let id0 = store.add(1, "sent already").unwrap();
+        let id1 = store.add(2, "still draft").unwrap();
+        store.set_published(id0, true);
+
+        let remaining: Vec<usize> = store.unpublished().map(|r| r.id).collect();
+        assert_eq!(remaining, vec![id1]);
+    }
+
+    #[test]
+    fn snapshot_and_restore_preserve_the_published_flag() {
+        let mut store = DraftReplyStore::new();
+        let id0 = store.add(1, "sent already").unwrap();
+        store.add(2, "still draft").unwrap();
+        store.set_published(id0, true);
+
+        let snap = store.snapshot();
+        assert!(snap[0].published);
+        assert!(!snap[1].published);
+
+        let mut restored = DraftReplyStore::new();
+        restored.restore(snap);
+        let flags: Vec<bool> = restored.iter().map(|r| r.published).collect();
+        assert_eq!(flags, vec![true, false]);
     }
 
     /// Draft replies live entirely outside the annotation store, so the

@@ -719,4 +719,62 @@ index 111..222 100644
         assert!(app.replies.is_empty(), "the reply must be gone");
         assert_eq!(app.annotations.len(), 1, "the annotation is untouched");
     }
+
+    // -- Published indicator in the list panel (spec 13 T4.2) ---------------
+
+    #[test]
+    fn a_published_annotations_filter_label_carries_the_published_tag() {
+        let mut app = App::new(vec![sample_file()]);
+        let id = app
+            .annotations
+            .add(Target::file("src/main.rs"), Classification::Issue, "fix")
+            .unwrap();
+        app.annotations.set_published(id, true).unwrap();
+
+        let labels = app.list_filter_labels();
+        assert!(
+            labels[0].starts_with("[published] "),
+            "a published annotation's label must lead with the published tag: {:?}",
+            labels[0]
+        );
+    }
+
+    #[test]
+    fn an_unpublished_annotations_filter_label_carries_no_published_tag() {
+        let mut app = App::new(vec![sample_file()]);
+        app.annotations
+            .add(Target::file("src/main.rs"), Classification::Issue, "fix")
+            .unwrap();
+
+        let labels = app.list_filter_labels();
+        assert!(!labels[0].contains("[published]"));
+    }
+
+    #[test]
+    fn a_published_replys_filter_label_carries_the_published_tag() {
+        let mut app = App::new(vec![sample_file()]);
+        let id = app.replies.add(42, "answering the thread").unwrap();
+        app.replies.set_published(id, true);
+
+        let labels = app.list_filter_labels();
+        assert!(
+            labels[0].starts_with("[published] "),
+            "a published reply's label must lead with the published tag: {:?}",
+            labels[0]
+        );
+        assert!(
+            labels[0].contains('\u{21b3}') && labels[0].contains("reply"),
+            "the published tag must not replace the existing reply marker: {:?}",
+            labels[0]
+        );
+    }
+
+    #[test]
+    fn an_unpublished_replys_filter_label_carries_no_published_tag() {
+        let mut app = App::new(vec![sample_file()]);
+        app.replies.add(42, "answering the thread");
+
+        let labels = app.list_filter_labels();
+        assert!(!labels[0].contains("[published]"));
+    }
 }

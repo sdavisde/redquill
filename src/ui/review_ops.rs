@@ -839,10 +839,12 @@ mod tests {
             PersistedReply {
                 thread_id: 10,
                 body: "first".to_string(),
+                published: false,
             },
             PersistedReply {
                 thread_id: 20,
                 body: "second".to_string(),
+                published: false,
             },
         ]);
 
