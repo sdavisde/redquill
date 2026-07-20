@@ -93,6 +93,11 @@ pub struct Thread {
     /// `anchor` being [`ThreadAnchor::File`] but named separately since
     /// "outdated" is the cause and file-level attachment is the effect.
     pub outdated: bool,
+    /// GitLab's discussion string id — the target a reply must be posted
+    /// against (a discussion, not a note, unlike [`Thread::id`]). `None` for
+    /// GitHub, whose replies target the root comment id in [`Thread::id`]
+    /// directly; `Some` only for an imported GitLab discussion.
+    pub discussion_id: Option<String>,
 }
 
 /// The raw shape of one entry in the review-comments JSON array. Only the
@@ -266,6 +271,9 @@ fn build_threads(raw: Vec<RawComment>) -> Vec<Thread> {
             replies,
             resolved: false,
             outdated: root_raw.line.is_none(),
+            // GitHub replies target the root comment id directly, so no
+            // discussion id is carried.
+            discussion_id: None,
         });
     }
     threads

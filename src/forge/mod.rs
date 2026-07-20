@@ -45,9 +45,10 @@ pub use github::{
     review_comments_command, review_threads_resolved_command, submit_review_command,
 };
 pub use gitlab::{
-    DiffRefs, MrDetail, discussions_command, fetch_discussions, list_open_mrs, mr_detail,
-    mr_detail_command, mr_list_command, parse_discussions_json, parse_mr_detail_json,
-    parse_mr_list_json,
+    DiffRefs, GitlabNote, GitlabReply, GitlabSubmitBatch, GitlabSubmitExecutor, GlabSubmitExecutor,
+    MrDetail, NotePosition, NoteTarget, build_note_position, discussions_command,
+    fetch_discussions, list_open_mrs, mr_detail, mr_detail_command, mr_list_command,
+    parse_discussions_json, parse_mr_detail_json, parse_mr_list_json, run_gitlab_submit_sequence,
 };
 pub use remote_url::{Hostname, RemoteUrlError, parse_origin_hostname, parse_origin_repo_slug};
 pub use submit::{

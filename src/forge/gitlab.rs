@@ -55,11 +55,12 @@
 use std::process::Command;
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::annotate::Side;
 
-use super::process::{harden_glab, run_captured_with_timeout};
+use super::process::{harden_glab, run_captured_with_timeout, run_with_input_and_timeout};
+use super::submit::SubmitReport;
 use super::threads::{Thread, ThreadAnchor, ThreadComment};
 use super::{ForgeError, PullRequest};
 
@@ -302,6 +303,9 @@ pub fn fetch_discussions(iid: u64) -> Result<Vec<Thread>, ForgeError> {
 /// The raw shape of one entry in the discussions JSON array.
 #[derive(Debug, Deserialize)]
 struct RawDiscussion {
+    /// The discussion's own string id — GitLab's reply target (a reply is a
+    /// note appended to *this* discussion, not to the root note's id).
+    id: String,
     #[serde(default)]
     individual_note: bool,
     #[serde(default)]
@@ -371,6 +375,9 @@ fn build_thread(raw: RawDiscussion) -> Option<Thread> {
         replies,
         resolved,
         outdated,
+        // Carry GitLab's discussion string id so a drafted reply can target
+        // the discussion (not the root note id) at submit time.
+        discussion_id: Some(raw.id),
     })
 }
 
@@ -428,6 +435,542 @@ fn to_thread_comment(raw: &RawNote) -> ThreadComment {
         author: raw.author.username.clone(),
         created_at: raw.created_at.clone(),
         body: raw.body.clone(),
+    }
+}
+
+// -- Submit: position hashes, draft-notes sequence, visible fallback ----------
+
+/// How long any one `glab api`/`glab mr approve` submit write may run before
+/// it's treated as failed and killed. Same budget the reads use.
+const SUBMIT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// A GitLab diff-note position, built from an annotation's side/line data and
+/// the MR's [`DiffRefs`] — the reverse of the [`anchor_for`] import mapping.
+/// A `"text"` position carries exactly one of `new_line`/`old_line` (the side
+/// the annotation is on); a `"file"` position carries neither. `new_path` and
+/// `old_path` both hold the annotation's path: annotations don't track a
+/// rename's old path, and GitLab requires both for a text position on a file
+/// that isn't renamed. Serialized straight into a draft-note / discussion body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NotePosition {
+    pub base_sha: String,
+    pub start_sha: String,
+    pub head_sha: String,
+    pub position_type: &'static str,
+    pub new_path: String,
+    pub old_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_line: Option<u32>,
+}
+
+/// What an annotation anchors to, as a position-hash input: a specific line on
+/// one side of the diff, or a whole file. A multi-line span (`Range`/`Hunk`)
+/// collapses to its end line on the same side before reaching here, mirroring
+/// how the GitHub review payload anchors a span at its `line`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoteTarget {
+    Line { path: String, side: Side, line: u32 },
+    File { path: String },
+}
+
+/// Builds the [`NotePosition`] for one annotation against the MR's `diff_refs`:
+/// an added/context (`New`-side) line fills `new_line`, a removed (`Old`-side)
+/// line fills `old_line`, and a file target is a `"file"` position with no
+/// line — the reverse of the discussions-import mapping.
+pub fn build_note_position(diff_refs: &DiffRefs, target: &NoteTarget) -> NotePosition {
+    let base = |position_type, path: &str, new_line, old_line| NotePosition {
+        base_sha: diff_refs.base_sha.clone(),
+        start_sha: diff_refs.start_sha.clone(),
+        head_sha: diff_refs.head_sha.clone(),
+        position_type,
+        new_path: path.to_string(),
+        old_path: path.to_string(),
+        new_line,
+        old_line,
+    };
+    match target {
+        NoteTarget::Line {
+            path,
+            side: Side::New,
+            line,
+        } => base("text", path, Some(*line), None),
+        NoteTarget::Line {
+            path,
+            side: Side::Old,
+            line,
+        } => base("text", path, None, Some(*line)),
+        NoteTarget::File { path } => base("file", path, None, None),
+    }
+}
+
+/// One positioned note to publish: the originating annotation's store id (so a
+/// success marks it published), its body, and its diff position.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitlabNote {
+    pub annotation_id: usize,
+    pub body: String,
+    pub position: NotePosition,
+}
+
+/// One drafted reply to publish: its store id, the discussion string id it
+/// answers (GitLab replies target the *discussion*, not the root note), and
+/// its body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitlabReply {
+    pub reply_id: usize,
+    pub discussion_id: String,
+    pub body: String,
+}
+
+/// The full batch one GitLab submit run publishes: an optional review summary
+/// (posted as a non-positioned note), the positioned annotation notes, the
+/// drafted replies, and whether to approve after publishing.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GitlabSubmitBatch {
+    pub summary: Option<String>,
+    pub notes: Vec<GitlabNote>,
+    pub replies: Vec<GitlabReply>,
+    pub approve: bool,
+}
+
+/// The GitLab write operations the submit driver sequences, behind one seam so
+/// the near-atomic draft path, the visible fallback, and the approve step are
+/// all testable with a recording fake — no `glab` on PATH, no network (agents
+/// never run the real writes; see the repo guardrails). Every method builds
+/// its own `glab` argv from typed values.
+pub trait GitlabSubmitExecutor {
+    /// Creates one private draft note: positioned (annotation), a plain review
+    /// summary (`position` and `reply` both `None`), or a reply to a discussion
+    /// (`reply` = its string id). Invisible to others until [`Self::bulk_publish_drafts`].
+    fn create_draft_note(
+        &self,
+        body: &str,
+        position: Option<&NotePosition>,
+        in_reply_to_discussion_id: Option<&str>,
+    ) -> Result<(), ForgeError>;
+
+    /// Publishes every draft note on the MR at once — the moment the whole
+    /// batch becomes visible.
+    fn bulk_publish_drafts(&self) -> Result<(), ForgeError>;
+
+    /// The visible-fallback create for a positioned annotation or a plain
+    /// summary (`position` `None`) — posts immediately, no draft staging.
+    fn create_discussion(
+        &self,
+        body: &str,
+        position: Option<&NotePosition>,
+    ) -> Result<(), ForgeError>;
+
+    /// The visible-fallback reply: a note appended to an existing discussion.
+    fn create_discussion_reply(&self, discussion_id: &str, body: &str) -> Result<(), ForgeError>;
+
+    /// Approves the MR (only ever called when the verdict is approve).
+    fn approve(&self) -> Result<(), ForgeError>;
+}
+
+/// The one-line diagnostic a [`ForgeError`] contributes to a stopped run —
+/// a `Command` error's first non-empty stderr line, else its `Display`.
+/// Mirrors `super::submit::error_headline`.
+fn error_headline(e: &ForgeError) -> String {
+    match e {
+        ForgeError::Command { stderr, .. } if !stderr.trim().is_empty() => stderr
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or(stderr)
+            .trim()
+            .to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Whether a draft-note create failed because the instance has no draft-notes
+/// API (older GitLab) rather than a genuine error — the signal to fall back to
+/// visible discussions. Recognized from a `404`-shaped `Command` error, the
+/// documented response for the missing endpoint.
+fn is_draft_notes_unavailable(e: &ForgeError) -> bool {
+    match e {
+        ForgeError::Command { code, stderr, .. } => {
+            code == "404"
+                || stderr.contains("404")
+                || stderr.to_ascii_lowercase().contains("not found")
+        }
+        _ => false,
+    }
+}
+
+/// A stopped run that published nothing — its diagnostic in `failure`. Used
+/// when a draft create or the bulk-publish fails: drafts are author-only, so
+/// no teammate ever saw a partial batch.
+fn nothing_published(e: &ForgeError) -> SubmitReport {
+    SubmitReport {
+        failure: Some(error_headline(e)),
+        ..SubmitReport::default()
+    }
+}
+
+/// Whether the draft path even ran to completion, or bailed on the very first
+/// create because the endpoint is unavailable (→ visible fallback).
+enum DraftAttempt {
+    Completed(SubmitReport),
+    Unavailable,
+}
+
+/// Runs one GitLab submit pass over `batch` against `exec`. Prefers the
+/// near-atomic draft-notes path — every note staged privately, then one
+/// bulk-publish makes the whole batch visible at once, then `approve` when
+/// asked — so a failure before bulk-publish leaves nothing on the MR. When the
+/// instance has no draft-notes API (a `404` on the first create), it falls back
+/// to sequential visible discussions with the Unit-4 per-item published
+/// marking. A caller that rebuilds the next batch from only the
+/// still-unpublished set re-sends nothing that already landed.
+pub fn run_gitlab_submit_sequence(
+    batch: &GitlabSubmitBatch,
+    exec: &dyn GitlabSubmitExecutor,
+) -> SubmitReport {
+    match try_draft_submit(batch, exec) {
+        DraftAttempt::Completed(report) => report,
+        DraftAttempt::Unavailable => run_visible_fallback(batch, exec),
+    }
+}
+
+/// The draft-notes attempt: create the summary note, then each positioned
+/// note, then each reply as private drafts; a `404` on the *first* create means
+/// the endpoint is unavailable (→ [`DraftAttempt::Unavailable`]); any other
+/// create failure, or a bulk-publish failure, stops with nothing published
+/// (drafts are invisible). On bulk-publish success every item is marked
+/// published together; a later `approve` failure leaves the (already published)
+/// comments in place with the diagnostic surfaced.
+fn try_draft_submit(batch: &GitlabSubmitBatch, exec: &dyn GitlabSubmitExecutor) -> DraftAttempt {
+    let mut created = 0usize;
+
+    if let Some(summary) = &batch.summary {
+        match exec.create_draft_note(summary, None, None) {
+            Ok(()) => created += 1,
+            Err(e) if is_draft_notes_unavailable(&e) => return DraftAttempt::Unavailable,
+            Err(e) => return DraftAttempt::Completed(nothing_published(&e)),
+        }
+    }
+    for note in &batch.notes {
+        match exec.create_draft_note(&note.body, Some(&note.position), None) {
+            Ok(()) => created += 1,
+            Err(e) if created == 0 && is_draft_notes_unavailable(&e) => {
+                return DraftAttempt::Unavailable;
+            }
+            Err(e) => return DraftAttempt::Completed(nothing_published(&e)),
+        }
+    }
+    for reply in &batch.replies {
+        match exec.create_draft_note(&reply.body, None, Some(&reply.discussion_id)) {
+            Ok(()) => created += 1,
+            Err(e) if created == 0 && is_draft_notes_unavailable(&e) => {
+                return DraftAttempt::Unavailable;
+            }
+            Err(e) => return DraftAttempt::Completed(nothing_published(&e)),
+        }
+    }
+
+    if created > 0
+        && let Err(e) = exec.bulk_publish_drafts()
+    {
+        return DraftAttempt::Completed(nothing_published(&e));
+    }
+
+    let mut report = SubmitReport {
+        published_annotation_ids: batch.notes.iter().map(|n| n.annotation_id).collect(),
+        published_reply_ids: batch.replies.iter().map(|r| r.reply_id).collect(),
+        review_submitted: true,
+        failure: None,
+    };
+    if batch.approve
+        && let Err(e) = exec.approve()
+    {
+        report.failure = Some(error_headline(&e));
+    }
+    DraftAttempt::Completed(report)
+}
+
+/// The visible-discussions fallback (no draft-notes API): post the summary,
+/// then each positioned note, then each reply, one at a time — marking each
+/// item published as its own write lands and stopping at the first failure, so
+/// a resume re-sends only the remainder (the Unit-4 discipline).
+fn run_visible_fallback(
+    batch: &GitlabSubmitBatch,
+    exec: &dyn GitlabSubmitExecutor,
+) -> SubmitReport {
+    let mut report = SubmitReport::default();
+
+    if let Some(summary) = &batch.summary
+        && let Err(e) = exec.create_discussion(summary, None)
+    {
+        report.failure = Some(error_headline(&e));
+        return report;
+    }
+    // The review-level content (the summary) is now visible; mark it so a
+    // resume after a later per-item failure skips re-posting the summary (a
+    // summary discussion carries no id to exclude it by).
+    report.review_submitted = true;
+    for note in &batch.notes {
+        if let Err(e) = exec.create_discussion(&note.body, Some(&note.position)) {
+            report.failure = Some(error_headline(&e));
+            return report;
+        }
+        report.published_annotation_ids.push(note.annotation_id);
+    }
+    for reply in &batch.replies {
+        if let Err(e) = exec.create_discussion_reply(&reply.discussion_id, &reply.body) {
+            report.failure = Some(error_headline(&e));
+            return report;
+        }
+        report.published_reply_ids.push(reply.reply_id);
+    }
+    if batch.approve
+        && let Err(e) = exec.approve()
+    {
+        report.failure = Some(error_headline(&e));
+    }
+    report
+}
+
+// -- Submit argv builders (the draft-notes / discussions / approve endpoints) --
+
+/// `glab api --method POST projects/:id/merge_requests/<iid>/draft_notes --input -`.
+/// The JSON body (note text + optional position/reply target) streams on stdin,
+/// so the argv is fixed but for the `u64` iid.
+pub fn draft_note_command(iid: u64) -> Command {
+    let mut cmd = Command::new("glab");
+    cmd.args([
+        "api",
+        "--method",
+        "POST",
+        &format!("projects/:id/merge_requests/{iid}/draft_notes"),
+        "--input",
+        "-",
+    ]);
+    harden_glab(&mut cmd);
+    cmd
+}
+
+/// `glab api --method POST projects/:id/merge_requests/<iid>/draft_notes/bulk_publish`.
+pub fn bulk_publish_command(iid: u64) -> Command {
+    let mut cmd = Command::new("glab");
+    cmd.args([
+        "api",
+        "--method",
+        "POST",
+        &format!("projects/:id/merge_requests/{iid}/draft_notes/bulk_publish"),
+    ]);
+    harden_glab(&mut cmd);
+    cmd
+}
+
+/// `glab api --method POST projects/:id/merge_requests/<iid>/discussions --input -`
+/// (the visible-fallback create). Body (`body` + optional `position`) on stdin.
+pub fn discussion_create_command(iid: u64) -> Command {
+    let mut cmd = Command::new("glab");
+    cmd.args([
+        "api",
+        "--method",
+        "POST",
+        &format!("projects/:id/merge_requests/{iid}/discussions"),
+        "--input",
+        "-",
+    ]);
+    harden_glab(&mut cmd);
+    cmd
+}
+
+/// `glab api --method POST projects/:id/merge_requests/<iid>/discussions/<did>/notes --input -`
+/// (the visible-fallback reply). `did` is the discussion's own string id, from
+/// the discussions read — a hex hash, placed as a single path segment; the body
+/// (`body`) streams on stdin.
+pub fn discussion_reply_command(iid: u64, discussion_id: &str) -> Command {
+    let mut cmd = Command::new("glab");
+    cmd.args([
+        "api",
+        "--method",
+        "POST",
+        &format!("projects/:id/merge_requests/{iid}/discussions/{discussion_id}/notes"),
+        "--input",
+        "-",
+    ]);
+    harden_glab(&mut cmd);
+    cmd
+}
+
+/// `glab mr approve <iid>` — the approve verdict's own porcelain command.
+pub fn approve_command(iid: u64) -> Command {
+    let mut cmd = Command::new("glab");
+    cmd.args(["mr", "approve", &iid.to_string()]);
+    harden_glab(&mut cmd);
+    cmd
+}
+
+/// A draft note's JSON body: the text, plus at most one of a diff position
+/// (annotation) or an `in_reply_to_discussion_id` (reply). A bare `note`
+/// carries the review summary.
+#[derive(Serialize)]
+struct DraftNoteBody<'a> {
+    note: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    position: Option<&'a NotePosition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    in_reply_to_discussion_id: Option<&'a str>,
+}
+
+/// A visible discussion's JSON body: the text plus an optional diff position.
+#[derive(Serialize)]
+struct DiscussionBody<'a> {
+    body: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    position: Option<&'a NotePosition>,
+}
+
+/// A visible discussion reply's JSON body — just the text.
+#[derive(Serialize)]
+struct DiscussionReplyBody<'a> {
+    body: &'a str,
+}
+
+/// The live GitLab submit executor: holds the MR iid and runs each `glab api`
+/// POST by streaming a machine-serialized JSON body on stdin. Constructed only
+/// on the human dogfood path (agents never build one); the pure sequencing over
+/// the [`GitlabSubmitExecutor`] seam carries the fixture coverage, so this thin
+/// runner is deliberately untested (exercising it needs a real `glab` and a
+/// live MR).
+pub struct GlabSubmitExecutor {
+    number: u64,
+}
+
+impl GlabSubmitExecutor {
+    pub fn new(number: u64) -> GlabSubmitExecutor {
+        GlabSubmitExecutor { number }
+    }
+
+    /// Runs one hardened `glab api` POST with `body` on stdin, mapping a
+    /// missing CLI, a spawn failure, and a non-zero exit into [`ForgeError`]
+    /// (`command` names the endpoint for diagnostics).
+    fn post(&self, mut cmd: Command, command: String, body: Vec<u8>) -> Result<(), ForgeError> {
+        let output =
+            run_with_input_and_timeout(&mut cmd, body, SUBMIT_TIMEOUT).map_err(|source| {
+                if source.kind() == std::io::ErrorKind::NotFound {
+                    ForgeError::CliNotFound { cli: "glab" }
+                } else {
+                    ForgeError::Spawn {
+                        cli: "glab",
+                        source,
+                    }
+                }
+            })?;
+        status_into_result(output, command)
+    }
+}
+
+/// Maps a captured `glab` output into `Ok`/`ForgeError::Command`, shared by the
+/// stdin-body POSTs and the no-input approve.
+fn status_into_result(
+    output: super::process::CapturedOutput,
+    command: String,
+) -> Result<(), ForgeError> {
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(ForgeError::Command {
+            cli: "glab",
+            command,
+            code: output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_string()),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        })
+    }
+}
+
+impl GitlabSubmitExecutor for GlabSubmitExecutor {
+    fn create_draft_note(
+        &self,
+        body: &str,
+        position: Option<&NotePosition>,
+        in_reply_to_discussion_id: Option<&str>,
+    ) -> Result<(), ForgeError> {
+        let json = serde_json::to_vec(&DraftNoteBody {
+            note: body,
+            position,
+            in_reply_to_discussion_id,
+        })
+        .map_err(|e| ForgeError::Parse {
+            cli: "glab",
+            message: e.to_string(),
+        })?;
+        self.post(
+            draft_note_command(self.number),
+            "draft_notes".to_string(),
+            json,
+        )
+    }
+
+    fn bulk_publish_drafts(&self) -> Result<(), ForgeError> {
+        let mut cmd = bulk_publish_command(self.number);
+        let output = run_captured_with_timeout(&mut cmd, SUBMIT_TIMEOUT).map_err(|source| {
+            if source.kind() == std::io::ErrorKind::NotFound {
+                ForgeError::CliNotFound { cli: "glab" }
+            } else {
+                ForgeError::Spawn {
+                    cli: "glab",
+                    source,
+                }
+            }
+        })?;
+        status_into_result(output, "draft_notes/bulk_publish".to_string())
+    }
+
+    fn create_discussion(
+        &self,
+        body: &str,
+        position: Option<&NotePosition>,
+    ) -> Result<(), ForgeError> {
+        let json = serde_json::to_vec(&DiscussionBody { body, position }).map_err(|e| {
+            ForgeError::Parse {
+                cli: "glab",
+                message: e.to_string(),
+            }
+        })?;
+        self.post(
+            discussion_create_command(self.number),
+            "discussions".to_string(),
+            json,
+        )
+    }
+
+    fn create_discussion_reply(&self, discussion_id: &str, body: &str) -> Result<(), ForgeError> {
+        let json =
+            serde_json::to_vec(&DiscussionReplyBody { body }).map_err(|e| ForgeError::Parse {
+                cli: "glab",
+                message: e.to_string(),
+            })?;
+        self.post(
+            discussion_reply_command(self.number, discussion_id),
+            "discussions/notes".to_string(),
+            json,
+        )
+    }
+
+    fn approve(&self) -> Result<(), ForgeError> {
+        let mut cmd = approve_command(self.number);
+        let output = run_captured_with_timeout(&mut cmd, SUBMIT_TIMEOUT).map_err(|source| {
+            if source.kind() == std::io::ErrorKind::NotFound {
+                ForgeError::CliNotFound { cli: "glab" }
+            } else {
+                ForgeError::Spawn {
+                    cli: "glab",
+                    source,
+                }
+            }
+        })?;
+        status_into_result(output, "mr approve".to_string())
     }
 }
 

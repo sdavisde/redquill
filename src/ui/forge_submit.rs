@@ -49,6 +49,11 @@ pub(super) struct SubmitForgeState {
     pub(super) verdict_index: usize,
     pub(super) summary: String,
     pub(super) target_line: String,
+    /// An honest one-line disclosure of the provider's submit shape, shown
+    /// above the batch when the provider stages a near-atomic draft batch
+    /// (GitLab) — `None` for GitHub, whose one visible review POST needs no
+    /// caveat.
+    pub(super) disclosure: Option<String>,
 }
 
 impl SubmitForgeState {
@@ -93,6 +98,21 @@ pub(super) fn capabilities_for(kind: ForgeProviderKind) -> Capabilities {
             near_atomic_submit: true,
         },
     }
+}
+
+/// An honest disclosure of the provider's submit shape, for a provider that
+/// stages a near-atomic draft batch (GitLab). Deliberately names no version
+/// number (Open Question 4): the draft-notes vs. visible-comments split turns
+/// on the instance's API vintage, which redquill can't reliably detect and
+/// which would drift as a hard-coded threshold — so the copy states both
+/// behaviors and lets the outcome speak, rather than promising a version. Read
+/// straight from [`Capabilities`], so it tracks whatever a provider declares.
+pub(super) fn submit_disclosure(caps: Capabilities) -> Option<String> {
+    caps.near_atomic_submit.then(|| {
+        "Comments post as private drafts, published together on confirm; \
+         older GitLab instances receive them as visible comments instead."
+            .to_string()
+    })
 }
 
 /// The human label for a verdict in the picker.
@@ -245,7 +265,9 @@ impl App {
             self.set_status_message("submit already in progress");
             return;
         }
-        let verdicts = verdicts_for(capabilities_for(forge.provider));
+        let caps = capabilities_for(forge.provider);
+        let verdicts = verdicts_for(caps);
+        let disclosure = submit_disclosure(caps);
         let slug = self
             .stage_ops()
             .and_then(|ops| ops.origin_repo_slug())
@@ -256,6 +278,7 @@ impl App {
             verdict_index: 0,
             summary: String::new(),
             target_line,
+            disclosure,
         });
         self.mode = Mode::SubmitForge;
     }
@@ -361,9 +384,27 @@ impl App {
         let Some(forge) = self.review_forge.clone() else {
             return;
         };
-        let submitter = self
-            .stage_ops()
-            .and_then(|ops| ops.async_forge_submitter(forge.number, forge.last_head_sha.clone()));
+        // Resolve each still-unpublished reply's GitLab discussion string id
+        // from the live thread overlay (GitLab replies target the discussion,
+        // not the root note id). Empty for GitHub, which ignores it.
+        let reply_discussions: std::collections::HashMap<usize, String> = self
+            .replies
+            .unpublished()
+            .filter_map(|r| {
+                self.thread_overlay
+                    .find(r.thread_id)
+                    .and_then(|t| t.discussion_id.clone())
+                    .map(|discussion_id| (r.id, discussion_id))
+            })
+            .collect();
+        let submitter = self.stage_ops().and_then(|ops| {
+            ops.async_forge_submitter(
+                forge.provider,
+                forge.number,
+                forge.last_head_sha.clone(),
+                reply_discussions,
+            )
+        });
         let Some(submitter) = submitter else {
             self.set_status_message("submit unavailable (no forge backend)");
             return;
@@ -472,6 +513,15 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             .fg(theme.hunk_header)
             .add_modifier(Modifier::BOLD),
     )));
+    // Honest submit-shape disclosure (GitLab's draft/visible split).
+    if let Some(disclosure) = &state.disclosure {
+        lines.push(Line::from(Span::styled(
+            disclosure.clone(),
+            Style::default()
+                .fg(theme.gutter)
+                .add_modifier(Modifier::DIM),
+        )));
+    }
     lines.push(Line::from(String::new()));
 
     // Verdict picker — the selected one emphasized.

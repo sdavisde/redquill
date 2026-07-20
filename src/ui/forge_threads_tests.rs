@@ -59,6 +59,7 @@ fn positioned_thread(id: u64, path: &str, side: Side, line: u32, replies: usize)
             .collect(),
         resolved: false,
         outdated: false,
+        discussion_id: None,
     }
 }
 
@@ -604,6 +605,7 @@ fn thread_conversation_and_reply_journey_transcript() {
         ],
         resolved: false,
         outdated: false,
+        discussion_id: None,
     };
 
     // The fetch lands (as the background poller would apply it).

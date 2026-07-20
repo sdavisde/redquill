@@ -423,17 +423,102 @@ pub trait StageOps {
     fn resolved_pr_provider(&self) -> Option<ProviderKind> {
         None
     }
-    /// A `Send` closure that publishes one previewed batch to PR `number`,
-    /// anchoring any file-level comments to `head_sha` (see
-    /// [`AsyncForgeSubmitter`]). The default returns `None`, keeping non-`Send`
-    /// fakes and git-less contexts off the live-write path entirely — the only
-    /// path that ever runs a forge write. [`GitRunner`] overrides it.
+    /// A `Send` closure that publishes one previewed batch to PR/MR `number`,
+    /// dispatched by `provider` to the GitHub reviews-endpoint sequence or the
+    /// GitLab draft-notes sequence. `head_sha` anchors GitHub file-level
+    /// comments; `reply_discussions` maps each drafted reply's store id to its
+    /// GitLab discussion string id (empty and ignored for GitHub). The default
+    /// returns `None`, keeping non-`Send` fakes and git-less contexts off the
+    /// live-write path entirely — the only path that ever runs a forge write.
+    /// [`GitRunner`] overrides it.
     fn async_forge_submitter(
         &self,
+        _provider: crate::review::store::ForgeProviderKind,
         _number: u64,
         _head_sha: String,
+        _reply_discussions: HashMap<usize, String>,
     ) -> Option<AsyncForgeSubmitter> {
         None
+    }
+}
+
+/// Adapts the provider-neutral GitHub [`forge::SubmitBatch`] into a GitLab
+/// draft/discussion batch: each positioned review comment and file follow-up
+/// becomes a note with a position hash built from the MR's `diff_refs`
+/// (`RIGHT` side → new line, `LEFT` → old line), the summary body becomes a
+/// non-positioned note (only when `include_review_post`, so a resume never
+/// re-posts it), each reply carries its GitLab discussion id (replies with no
+/// resolved discussion id are dropped — they can't be positioned), and an
+/// `APPROVE` event becomes the approve flag.
+fn gitlab_batch_from(
+    batch: &forge::SubmitBatch,
+    diff_refs: &forge::DiffRefs,
+    reply_discussions: &HashMap<usize, String>,
+) -> forge::GitlabSubmitBatch {
+    use crate::annotate::Side;
+    let plan = &batch.plan;
+    let mut notes = Vec::new();
+    for (i, comment) in plan.payload.comments.iter().enumerate() {
+        let annotation_id = plan
+            .comment_annotation_ids
+            .get(i)
+            .copied()
+            .unwrap_or_default();
+        let side = if comment.side == "RIGHT" {
+            Side::New
+        } else {
+            Side::Old
+        };
+        let position = forge::build_note_position(
+            diff_refs,
+            &forge::NoteTarget::Line {
+                path: comment.path.clone(),
+                side,
+                line: comment.line,
+            },
+        );
+        notes.push(forge::GitlabNote {
+            annotation_id,
+            body: comment.body.clone(),
+            position,
+        });
+    }
+    for follow_up in &plan.file_comment_follow_ups {
+        let position = forge::build_note_position(
+            diff_refs,
+            &forge::NoteTarget::File {
+                path: follow_up.path.clone(),
+            },
+        );
+        notes.push(forge::GitlabNote {
+            annotation_id: follow_up.annotation_id,
+            body: follow_up.body.clone(),
+            position,
+        });
+    }
+    let replies = batch
+        .replies
+        .iter()
+        .filter_map(|r| {
+            reply_discussions
+                .get(&r.reply_id)
+                .map(|discussion_id| forge::GitlabReply {
+                    reply_id: r.reply_id,
+                    discussion_id: discussion_id.clone(),
+                    body: r.body.clone(),
+                })
+        })
+        .collect();
+    let summary = if batch.include_review_post && !plan.payload.body.is_empty() {
+        Some(plan.payload.body.clone())
+    } else {
+        None
+    };
+    forge::GitlabSubmitBatch {
+        summary,
+        notes,
+        replies,
+        approve: plan.payload.event == "APPROVE",
     }
 }
 
@@ -641,14 +726,39 @@ impl StageOps for GitRunner {
         }
     }
 
-    fn async_forge_submitter(&self, number: u64, head_sha: String) -> Option<AsyncForgeSubmitter> {
-        // The real live-write path: build the GitHub executor from the typed
-        // PR number + head SHA and run the sequence over it. Agents never
-        // reach this (fakes return the default `None`); it exists only for the
-        // human dogfood.
-        Some(Box::new(move |batch| {
-            let executor = forge::GhSubmitExecutor::new(number, head_sha.clone());
-            forge::run_submit_sequence(&batch, &executor)
+    fn async_forge_submitter(
+        &self,
+        provider: crate::review::store::ForgeProviderKind,
+        number: u64,
+        head_sha: String,
+        reply_discussions: HashMap<usize, String>,
+    ) -> Option<AsyncForgeSubmitter> {
+        use crate::review::store::ForgeProviderKind;
+        // The real live-write path, dispatched by provider. Agents never reach
+        // this (fakes return the default `None`); it exists only for the human
+        // dogfood.
+        Some(Box::new(move |batch| match provider {
+            ForgeProviderKind::GitHub => {
+                let executor = forge::GhSubmitExecutor::new(number, head_sha.clone());
+                forge::run_submit_sequence(&batch, &executor)
+            }
+            ForgeProviderKind::GitLab => {
+                // The MR's diff refs pin every position hash; without them no
+                // note can be placed, so a fetch failure fails the whole submit
+                // (before anything is written).
+                let diff_refs = match forge::mr_detail(number) {
+                    Ok(detail) => detail.diff_refs,
+                    Err(e) => {
+                        return forge::SubmitReport {
+                            failure: Some(forge_error_headline(&e)),
+                            ..forge::SubmitReport::default()
+                        };
+                    }
+                };
+                let gitlab_batch = gitlab_batch_from(&batch, &diff_refs, &reply_discussions);
+                let executor = forge::GlabSubmitExecutor::new(number);
+                forge::run_gitlab_submit_sequence(&gitlab_batch, &executor)
+            }
         }))
     }
 }

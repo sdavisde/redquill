@@ -537,3 +537,512 @@ fn a_discussion_with_no_notes_at_all_is_skipped_rather_than_panicking() {
     let threads = parse_discussions_json(json).unwrap();
     assert!(threads.is_empty());
 }
+
+#[test]
+fn imported_discussion_carries_its_string_id_for_reply_targeting() {
+    // The discussion's string id (not the root note's u64 id) is what a reply
+    // must target; import must carry it through so submit can reach it.
+    let threads = parse_discussions_json(FIXTURE_DISCUSSIONS).unwrap();
+    let t = threads.iter().find(|t| t.id == 7001).unwrap();
+    assert_eq!(t.discussion_id.as_deref(), Some("ggg777"));
+    assert_eq!(t.root.id, 7001, "the u64 id stays the root note id");
+}
+
+// -- Position-hash builder (build_note_position) ----------------------------
+
+fn diff_refs() -> DiffRefs {
+    DiffRefs {
+        base_sha: "base00".to_string(),
+        start_sha: "start0".to_string(),
+        head_sha: "head00".to_string(),
+    }
+}
+
+#[test]
+fn added_new_side_line_builds_a_text_position_with_only_new_line() {
+    let pos = build_note_position(
+        &diff_refs(),
+        &NoteTarget::Line {
+            path: "src/a.rs".to_string(),
+            side: Side::New,
+            line: 42,
+        },
+    );
+    assert_eq!(pos.position_type, "text");
+    assert_eq!(pos.new_line, Some(42));
+    assert_eq!(pos.old_line, None);
+    assert_eq!(pos.new_path, "src/a.rs");
+    assert_eq!(pos.old_path, "src/a.rs");
+    // The MR's diff refs are pinned onto every position.
+    assert_eq!(pos.base_sha, "base00");
+    assert_eq!(pos.start_sha, "start0");
+    assert_eq!(pos.head_sha, "head00");
+}
+
+#[test]
+fn removed_old_side_line_builds_a_text_position_with_only_old_line() {
+    let pos = build_note_position(
+        &diff_refs(),
+        &NoteTarget::Line {
+            path: "src/b.rs".to_string(),
+            side: Side::Old,
+            line: 17,
+        },
+    );
+    assert_eq!(pos.position_type, "text");
+    assert_eq!(pos.new_line, None);
+    assert_eq!(pos.old_line, Some(17));
+}
+
+#[test]
+fn file_target_builds_a_file_position_with_no_lines() {
+    let pos = build_note_position(
+        &diff_refs(),
+        &NoteTarget::File {
+            path: "src/whole.rs".to_string(),
+        },
+    );
+    assert_eq!(pos.position_type, "file");
+    assert_eq!(pos.new_line, None);
+    assert_eq!(pos.old_line, None);
+    assert_eq!(pos.new_path, "src/whole.rs");
+    assert_eq!(pos.old_path, "src/whole.rs");
+}
+
+#[test]
+fn text_position_serializes_only_the_present_line_and_never_a_null() {
+    let pos = build_note_position(
+        &diff_refs(),
+        &NoteTarget::Line {
+            path: "src/a.rs".to_string(),
+            side: Side::New,
+            line: 5,
+        },
+    );
+    let json = serde_json::to_string(&pos).unwrap();
+    assert!(json.contains("\"new_line\":5"));
+    assert!(
+        !json.contains("old_line"),
+        "absent side must be omitted, not null: {json}"
+    );
+    assert!(json.contains("\"position_type\":\"text\""));
+}
+
+// -- Submit sequence (fake executor) ----------------------------------------
+
+/// One recorded call the fake executor saw, in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Call {
+    Draft {
+        body: String,
+        positioned: bool,
+        reply_to: Option<String>,
+    },
+    BulkPublish,
+    Discussion {
+        body: String,
+        positioned: bool,
+    },
+    DiscussionReply {
+        discussion_id: String,
+        body: String,
+    },
+    Approve,
+}
+
+/// A recording [`GitlabSubmitExecutor`] that fails whichever calls a test
+/// programs it to (`fail_draft_at`: the 0-based draft index to 404 on;
+/// `fail_bulk`, `fail_nth_discussion`, `fail_approve`). Never touches a network.
+#[derive(Default)]
+struct FakeExec {
+    calls: std::cell::RefCell<Vec<Call>>,
+    draft_count: std::cell::Cell<usize>,
+    discussion_count: std::cell::Cell<usize>,
+    fail_draft_unavailable_at: Option<usize>,
+    fail_draft_error_at: Option<usize>,
+    fail_bulk: bool,
+    fail_discussion_at: Option<usize>,
+    fail_approve: bool,
+}
+
+fn command_err(code: &str, stderr: &str) -> ForgeError {
+    ForgeError::Command {
+        cli: "glab",
+        command: "x".to_string(),
+        code: code.to_string(),
+        stderr: stderr.to_string(),
+    }
+}
+
+impl GitlabSubmitExecutor for FakeExec {
+    fn create_draft_note(
+        &self,
+        body: &str,
+        position: Option<&NotePosition>,
+        in_reply_to_discussion_id: Option<&str>,
+    ) -> Result<(), ForgeError> {
+        let idx = self.draft_count.get();
+        self.draft_count.set(idx + 1);
+        self.calls.borrow_mut().push(Call::Draft {
+            body: body.to_string(),
+            positioned: position.is_some(),
+            reply_to: in_reply_to_discussion_id.map(str::to_string),
+        });
+        if self.fail_draft_unavailable_at == Some(idx) {
+            return Err(command_err("404", "404 Not Found"));
+        }
+        if self.fail_draft_error_at == Some(idx) {
+            return Err(command_err("1", "boom"));
+        }
+        Ok(())
+    }
+
+    fn bulk_publish_drafts(&self) -> Result<(), ForgeError> {
+        self.calls.borrow_mut().push(Call::BulkPublish);
+        if self.fail_bulk {
+            return Err(command_err("1", "publish failed"));
+        }
+        Ok(())
+    }
+
+    fn create_discussion(
+        &self,
+        body: &str,
+        position: Option<&NotePosition>,
+    ) -> Result<(), ForgeError> {
+        let idx = self.discussion_count.get();
+        self.discussion_count.set(idx + 1);
+        self.calls.borrow_mut().push(Call::Discussion {
+            body: body.to_string(),
+            positioned: position.is_some(),
+        });
+        if self.fail_discussion_at == Some(idx) {
+            return Err(command_err("1", "discussion failed"));
+        }
+        Ok(())
+    }
+
+    fn create_discussion_reply(&self, discussion_id: &str, body: &str) -> Result<(), ForgeError> {
+        self.calls.borrow_mut().push(Call::DiscussionReply {
+            discussion_id: discussion_id.to_string(),
+            body: body.to_string(),
+        });
+        Ok(())
+    }
+
+    fn approve(&self) -> Result<(), ForgeError> {
+        self.calls.borrow_mut().push(Call::Approve);
+        if self.fail_approve {
+            return Err(command_err("1", "approve failed"));
+        }
+        Ok(())
+    }
+}
+
+fn note(id: usize, body: &str) -> GitlabNote {
+    GitlabNote {
+        annotation_id: id,
+        body: body.to_string(),
+        position: build_note_position(
+            &diff_refs(),
+            &NoteTarget::Line {
+                path: "src/a.rs".to_string(),
+                side: Side::New,
+                line: id as u32,
+            },
+        ),
+    }
+}
+
+fn reply(id: usize, discussion: &str, body: &str) -> GitlabReply {
+    GitlabReply {
+        reply_id: id,
+        discussion_id: discussion.to_string(),
+        body: body.to_string(),
+    }
+}
+
+#[test]
+fn draft_path_creates_all_drafts_then_bulk_publishes_then_approves_in_order() {
+    let batch = GitlabSubmitBatch {
+        summary: Some("looks good overall".to_string()),
+        notes: vec![note(1, "fix this"), note(2, "and this")],
+        replies: vec![reply(5, "ddd", "agreed")],
+        approve: true,
+    };
+    let exec = FakeExec::default();
+    let report = run_gitlab_submit_sequence(&batch, &exec);
+
+    let calls = exec.calls.borrow().clone();
+    // Summary draft, two positioned drafts, one reply draft, THEN bulk publish,
+    // THEN approve — nothing published before the single bulk_publish.
+    assert_eq!(
+        calls,
+        vec![
+            Call::Draft {
+                body: "looks good overall".to_string(),
+                positioned: false,
+                reply_to: None
+            },
+            Call::Draft {
+                body: "fix this".to_string(),
+                positioned: true,
+                reply_to: None
+            },
+            Call::Draft {
+                body: "and this".to_string(),
+                positioned: true,
+                reply_to: None
+            },
+            Call::Draft {
+                body: "agreed".to_string(),
+                positioned: false,
+                reply_to: Some("ddd".to_string())
+            },
+            Call::BulkPublish,
+            Call::Approve,
+        ]
+    );
+    // On bulk-publish success every item is marked published at once.
+    assert_eq!(report.published_annotation_ids, vec![1, 2]);
+    assert_eq!(report.published_reply_ids, vec![5]);
+    assert!(report.review_submitted);
+    assert!(report.failure.is_none());
+}
+
+#[test]
+fn draft_create_failure_before_publish_publishes_nothing() {
+    let batch = GitlabSubmitBatch {
+        summary: None,
+        notes: vec![note(1, "a"), note(2, "b")],
+        replies: vec![],
+        approve: true,
+    };
+    // Second draft (index 1) fails with a non-404 error.
+    let exec = FakeExec {
+        fail_draft_error_at: Some(1),
+        ..FakeExec::default()
+    };
+    let report = run_gitlab_submit_sequence(&batch, &exec);
+
+    let calls = exec.calls.borrow().clone();
+    // No bulk publish, no approve — drafts are invisible, so nothing landed.
+    assert!(
+        !calls
+            .iter()
+            .any(|c| matches!(c, Call::BulkPublish | Call::Approve))
+    );
+    assert!(report.published_annotation_ids.is_empty());
+    assert!(report.published_reply_ids.is_empty());
+    assert!(!report.review_submitted);
+    assert_eq!(report.failure.as_deref(), Some("boom"));
+}
+
+#[test]
+fn bulk_publish_failure_publishes_nothing() {
+    let batch = GitlabSubmitBatch {
+        summary: None,
+        notes: vec![note(1, "a")],
+        replies: vec![],
+        approve: false,
+    };
+    let exec = FakeExec {
+        fail_bulk: true,
+        ..FakeExec::default()
+    };
+    let report = run_gitlab_submit_sequence(&batch, &exec);
+    assert!(report.published_annotation_ids.is_empty());
+    assert!(!report.review_submitted);
+    assert_eq!(report.failure.as_deref(), Some("publish failed"));
+}
+
+#[test]
+fn missing_draft_notes_api_falls_back_to_visible_discussions_with_per_item_marking() {
+    let batch = GitlabSubmitBatch {
+        summary: Some("summary".to_string()),
+        notes: vec![note(1, "a"), note(2, "b")],
+        replies: vec![reply(9, "ddd", "reply body")],
+        approve: false,
+    };
+    // The very first draft create 404s → fall back.
+    let exec = FakeExec {
+        fail_draft_unavailable_at: Some(0),
+        ..FakeExec::default()
+    };
+    let report = run_gitlab_submit_sequence(&batch, &exec);
+
+    let calls = exec.calls.borrow().clone();
+    // One failed draft attempt, then visible discussions (summary + 2 notes),
+    // then the reply — no bulk publish anywhere.
+    assert!(!calls.iter().any(|c| matches!(c, Call::BulkPublish)));
+    assert_eq!(
+        calls,
+        vec![
+            Call::Draft {
+                body: "summary".to_string(),
+                positioned: false,
+                reply_to: None
+            },
+            Call::Discussion {
+                body: "summary".to_string(),
+                positioned: false
+            },
+            Call::Discussion {
+                body: "a".to_string(),
+                positioned: true
+            },
+            Call::Discussion {
+                body: "b".to_string(),
+                positioned: true
+            },
+            Call::DiscussionReply {
+                discussion_id: "ddd".to_string(),
+                body: "reply body".to_string()
+            },
+        ]
+    );
+    // Per-item published marking (Unit-4 discipline), summary carries no id.
+    assert_eq!(report.published_annotation_ids, vec![1, 2]);
+    assert_eq!(report.published_reply_ids, vec![9]);
+    assert!(report.review_submitted);
+    assert!(report.failure.is_none());
+}
+
+#[test]
+fn fallback_stops_mid_sequence_and_reports_only_what_published() {
+    let batch = GitlabSubmitBatch {
+        summary: None,
+        notes: vec![note(1, "a"), note(2, "b"), note(3, "c")],
+        replies: vec![],
+        approve: false,
+    };
+    // Force fallback (first draft 404), then fail the 2nd visible discussion
+    // (index 1 of the discussion calls).
+    let exec = FakeExec {
+        fail_draft_unavailable_at: Some(0),
+        fail_discussion_at: Some(1),
+        ..FakeExec::default()
+    };
+    let report = run_gitlab_submit_sequence(&batch, &exec);
+    // First note published, the rest not — a resume rebuilt from the
+    // unpublished set re-sends only notes 2 and 3.
+    assert_eq!(report.published_annotation_ids, vec![1]);
+    assert_eq!(report.failure.as_deref(), Some("discussion failed"));
+}
+
+#[test]
+fn approve_is_only_sent_when_the_verdict_is_approve() {
+    let batch = GitlabSubmitBatch {
+        summary: None,
+        notes: vec![note(1, "a")],
+        replies: vec![],
+        approve: false,
+    };
+    let exec = FakeExec::default();
+    let report = run_gitlab_submit_sequence(&batch, &exec);
+    assert!(
+        !exec
+            .calls
+            .borrow()
+            .iter()
+            .any(|c| matches!(c, Call::Approve))
+    );
+    assert!(report.review_submitted);
+    assert!(report.failure.is_none());
+}
+
+#[test]
+fn approve_failure_after_publish_keeps_items_published_and_surfaces_the_diagnostic() {
+    let batch = GitlabSubmitBatch {
+        summary: None,
+        notes: vec![note(1, "a")],
+        replies: vec![],
+        approve: true,
+    };
+    let exec = FakeExec {
+        fail_approve: true,
+        ..FakeExec::default()
+    };
+    let report = run_gitlab_submit_sequence(&batch, &exec);
+    // The comments already published on bulk_publish; only the approve failed.
+    assert_eq!(report.published_annotation_ids, vec![1]);
+    assert!(report.review_submitted);
+    assert_eq!(report.failure.as_deref(), Some("approve failed"));
+}
+
+// -- Submit argv builders ---------------------------------------------------
+
+#[test]
+fn draft_note_command_is_a_fixed_post_with_stdin_body() {
+    let cmd = draft_note_command(42);
+    assert_eq!(cmd.get_program(), OsStr::new("glab"));
+    let args: Vec<&OsStr> = cmd.get_args().collect();
+    assert_eq!(
+        args,
+        vec![
+            OsStr::new("api"),
+            OsStr::new("--method"),
+            OsStr::new("POST"),
+            OsStr::new("projects/:id/merge_requests/42/draft_notes"),
+            OsStr::new("--input"),
+            OsStr::new("-"),
+        ]
+    );
+    let envs: Vec<_> = cmd.get_envs().collect();
+    assert!(envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))));
+}
+
+#[test]
+fn bulk_publish_command_is_a_fixed_post_with_no_body() {
+    let cmd = bulk_publish_command(7);
+    let args: Vec<&OsStr> = cmd.get_args().collect();
+    assert_eq!(
+        args,
+        vec![
+            OsStr::new("api"),
+            OsStr::new("--method"),
+            OsStr::new("POST"),
+            OsStr::new("projects/:id/merge_requests/7/draft_notes/bulk_publish"),
+        ]
+    );
+}
+
+#[test]
+fn discussion_and_reply_and_approve_commands_have_fixed_shapes() {
+    let disc = discussion_create_command(3);
+    let disc_args: Vec<String> = disc
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(disc_args[3], "projects/:id/merge_requests/3/discussions");
+
+    let reply = discussion_reply_command(3, "abc123");
+    let reply_args: Vec<String> = reply
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        reply_args[3],
+        "projects/:id/merge_requests/3/discussions/abc123/notes"
+    );
+
+    let approve = approve_command(3);
+    let approve_args: Vec<&OsStr> = approve.get_args().collect();
+    assert_eq!(
+        approve_args,
+        vec![OsStr::new("mr"), OsStr::new("approve"), OsStr::new("3")]
+    );
+}
+
+#[test]
+fn draft_and_reply_argv_interpolate_only_the_typed_iid_and_discussion_id() {
+    let one = draft_note_command(1);
+    let two = draft_note_command(2);
+    let a: Vec<&OsStr> = one.get_args().collect();
+    let b: Vec<&OsStr> = two.get_args().collect();
+    assert_ne!(a[3], b[3]);
+    assert_eq!(
+        a[3],
+        OsStr::new("projects/:id/merge_requests/1/draft_notes")
+    );
+}

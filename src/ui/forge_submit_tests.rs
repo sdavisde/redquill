@@ -57,6 +57,62 @@ fn gitlab_offers_comment_and_approve_only() {
     assert_eq!(verdicts_for(caps), vec![Verdict::Comment, Verdict::Approve]);
 }
 
+/// A GitLab MR review session, mirroring [`github_review_app`].
+fn gitlab_review_app(paths: &[&str]) -> App {
+    let mut app = App::new(paths.iter().map(|p| file(p)).collect());
+    app.target = DiffTarget::Review {
+        base: "main".to_string(),
+        branch: "redquill/pr/7".to_string(),
+    };
+    app.review_forge = Some(ForgeMetadata {
+        provider: ForgeProviderKind::GitLab,
+        host: "gitlab.com".to_string(),
+        number: 7,
+        title: String::new(),
+        last_head_sha: "deadbeef".to_string(),
+    });
+    app
+}
+
+#[test]
+fn gitlab_discloses_the_draft_submit_shape_without_naming_a_version() {
+    // The disclosure is capability-driven (near_atomic_submit) and, per the
+    // Open Question 4 copy decision, names no version number.
+    let github = submit_disclosure(capabilities_for(ForgeProviderKind::GitHub));
+    assert!(
+        github.is_none(),
+        "GitHub's single visible POST needs no caveat"
+    );
+
+    let gitlab = submit_disclosure(capabilities_for(ForgeProviderKind::GitLab))
+        .expect("GitLab discloses its draft/visible split");
+    assert!(gitlab.to_lowercase().contains("draft"));
+    assert!(
+        !gitlab.chars().any(|c| c.is_ascii_digit()),
+        "the disclosure must name no version number: {gitlab}"
+    );
+}
+
+#[test]
+fn opening_the_modal_on_gitlab_sets_the_disclosure_and_two_verdicts() {
+    let mut app = gitlab_review_app(&["src/a.rs"]);
+    app.open_submit_forge();
+    let state = app.submit_forge.as_ref().expect("modal opened");
+    assert_eq!(state.verdicts, vec![Verdict::Comment, Verdict::Approve]);
+    assert!(
+        state.disclosure.is_some(),
+        "GitLab modal must disclose its submit shape"
+    );
+}
+
+#[test]
+fn opening_the_modal_on_github_sets_no_disclosure() {
+    let mut app = github_review_app(&["src/a.rs"]);
+    app.open_submit_forge();
+    let state = app.submit_forge.as_ref().expect("modal opened");
+    assert!(state.disclosure.is_none());
+}
+
 // -- grouped preview + labels (FR-17) ----------------------------------------
 
 #[test]
