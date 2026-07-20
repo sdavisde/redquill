@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.17.1](https://github.com/sdavisde/redquill/compare/v0.17.0...v0.17.1) (2026-07-20)
+
+
+### Bug Fixes
+
+* **gitlab:** send explicit JSON Content-Type on submit POSTs ([2a8b171](https://github.com/sdavisde/redquill/commit/2a8b171eb008107babf528d9384415b2da746cb3))
+* **gitlab:** send explicit JSON Content-Type on submit POSTs ([237038f](https://github.com/sdavisde/redquill/commit/237038f22983760667916f9386a16c42bd3b16b4))
+
 ## [0.17.0](https://github.com/sdavisde/redquill/compare/v0.16.0...v0.17.0) (2026-07-20)
 
 
