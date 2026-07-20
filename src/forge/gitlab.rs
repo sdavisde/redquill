@@ -447,11 +447,14 @@ const SUBMIT_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// A GitLab diff-note position, built from an annotation's side/line data and
 /// the MR's [`DiffRefs`] — the reverse of the [`anchor_for`] import mapping.
-/// A `"text"` position carries exactly one of `new_line`/`old_line` (the side
-/// the annotation is on); a `"file"` position carries neither. `new_path` and
-/// `old_path` both hold the annotation's path: annotations don't track a
-/// rename's old path, and GitLab requires both for a text position on a file
-/// that isn't renamed. Serialized straight into a draft-note / discussion body.
+/// A `"text"` position on an added or removed line carries exactly one of
+/// `new_line`/`old_line`; one on a context line carries **both** (GitLab
+/// rejects a context-line position with only one side — see the import
+/// table in the module doc, which shows GitLab itself sending both); a
+/// `"file"` position carries neither. `new_path` and `old_path` both hold
+/// the annotation's path: annotations don't track a rename's old path, and
+/// GitLab requires both for a text position on a file that isn't renamed.
+/// Serialized straight into a draft-note / discussion body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NotePosition {
     pub base_sha: String,
@@ -469,17 +472,28 @@ pub struct NotePosition {
 /// What an annotation anchors to, as a position-hash input: a specific line on
 /// one side of the diff, or a whole file. A multi-line span (`Range`/`Hunk`)
 /// collapses to its end line on the same side before reaching here, mirroring
-/// how the GitHub review payload anchors a span at its `line`.
+/// how the GitHub review payload anchors a span at its `line`. `other_line`
+/// is the anchor line's number on the opposite diff side, present only for a
+/// context line (which exists on both sides).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NoteTarget {
-    Line { path: String, side: Side, line: u32 },
-    File { path: String },
+    Line {
+        path: String,
+        side: Side,
+        line: u32,
+        other_line: Option<u32>,
+    },
+    File {
+        path: String,
+    },
 }
 
 /// Builds the [`NotePosition`] for one annotation against the MR's `diff_refs`:
-/// an added/context (`New`-side) line fills `new_line`, a removed (`Old`-side)
-/// line fills `old_line`, and a file target is a `"file"` position with no
-/// line — the reverse of the discussions-import mapping.
+/// an added (`New`-side) line fills `new_line`, a removed (`Old`-side) line
+/// fills `old_line`, a context line (a counterpart is present) fills **both**
+/// — GitLab requires both sides for a position on an unchanged line — and a
+/// file target is a `"file"` position with no line. The reverse of the
+/// discussions-import mapping.
 pub fn build_note_position(diff_refs: &DiffRefs, target: &NoteTarget) -> NotePosition {
     let base = |position_type, path: &str, new_line, old_line| NotePosition {
         base_sha: diff_refs.base_sha.clone(),
@@ -496,12 +510,14 @@ pub fn build_note_position(diff_refs: &DiffRefs, target: &NoteTarget) -> NotePos
             path,
             side: Side::New,
             line,
-        } => base("text", path, Some(*line), None),
+            other_line,
+        } => base("text", path, Some(*line), *other_line),
         NoteTarget::Line {
             path,
             side: Side::Old,
             line,
-        } => base("text", path, None, Some(*line)),
+            other_line,
+        } => base("text", path, *other_line, Some(*line)),
         NoteTarget::File { path } => base("file", path, None, None),
     }
 }

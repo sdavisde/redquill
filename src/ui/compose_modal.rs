@@ -42,14 +42,19 @@ fn side_marker(side: Side) -> &'static str {
 /// The modal title's target label, e.g. `src/foo.rs:44 (+)`.
 fn target_label(target: &Target) -> String {
     match target {
-        Target::Line { path, line, side } => format!("{path}:{line} {}", side_marker(*side)),
+        Target::Line {
+            path, line, side, ..
+        } => format!("{path}:{line} {}", side_marker(*side)),
         Target::Range {
             path,
             start,
             end,
             side,
+            ..
         } => format!("{path}:{start}-{end} {}", side_marker(*side)),
-        Target::Hunk { path, start, end } => {
+        Target::Hunk {
+            path, start, end, ..
+        } => {
             format!("{path}:{start}-{end} {}", side_marker(Side::New))
         }
         Target::File { path } => path.clone(),

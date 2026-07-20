@@ -469,12 +469,16 @@ fn gitlab_batch_from(
         } else {
             Side::Old
         };
+        // A context-line anchor carries its opposite-side number; GitLab
+        // rejects a context position that names only one side.
+        let other_line = plan.comment_other_lines.get(i).copied().flatten();
         let position = forge::build_note_position(
             diff_refs,
             &forge::NoteTarget::Line {
                 path: comment.path.clone(),
                 side,
                 line: comment.line,
+                other_line,
             },
         );
         notes.push(forge::GitlabNote {

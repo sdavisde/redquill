@@ -208,7 +208,9 @@ fn anchor_label(target: &Target) -> String {
         Target::Range {
             path, start, end, ..
         } => format!("{path}:{start}-{end}"),
-        Target::Hunk { path, start, end } => format!("{path}:{start}-{end}"),
+        Target::Hunk {
+            path, start, end, ..
+        } => format!("{path}:{start}-{end}"),
         Target::File { path } => path.clone(),
         Target::WorktreeLine { path, line } => format!("{path}:{line}"),
         Target::WorktreeRange { path, start, end } => format!("{path}:{start}-{end}"),

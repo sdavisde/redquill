@@ -382,7 +382,11 @@ index 1..2 100644
     app.apply(Action::CursorDown); // hunk header
     app.apply(Action::CursorDown); // context line
     let target = app.target_for_cursor().unwrap();
-    assert_eq!(target, Target::line("f.rs", 1, Side::New));
+    // Context lines exist on both sides; the old-side number rides along.
+    assert_eq!(
+        target,
+        Target::line_with_other("f.rs", 1, Side::New, Some(1))
+    );
 }
 
 #[test]
@@ -495,8 +499,12 @@ index 1..2 100644
     app.apply(Action::CursorDown); // new2
     app.apply(Action::CursorDown); // ctx
     let target = app.target_for_visual(anchor).unwrap();
-    // new1=1, new2=2, ctx=3 -> spans 1..3 on the new side.
-    assert_eq!(target, Target::range("f.rs", 1, 3, Side::New).unwrap());
+    // new1=1, new2=2, ctx=3 -> spans 1..3 on the new side; the span ends on
+    // the context line (old 2), so its counterpart rides along.
+    assert_eq!(
+        target,
+        Target::range_with_other_end("f.rs", 1, 3, Side::New, Some(2)).unwrap()
+    );
 }
 
 #[test]

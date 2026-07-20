@@ -328,6 +328,13 @@ pub struct ReviewSubmissionPlan {
     /// this parallel list is how a success is attributed back to the local
     /// annotations.
     pub comment_annotation_ids: Vec<usize>,
+    /// Parallel to `payload.comments`: each comment's anchor-line number on
+    /// the *opposite* diff side, when the anchor is a context line (`None`
+    /// for single-sided anchors). Never serialized to GitHub — the reviews
+    /// payload keys on side+line alone — but the GitLab adapter needs both
+    /// numbers to position a context-line note, so the plan carries them
+    /// across the provider-neutral seam.
+    pub comment_other_lines: Vec<Option<u32>>,
     pub file_comment_follow_ups: Vec<FileCommentFollowUp>,
 }
 
@@ -381,13 +388,20 @@ pub fn build_review_payload(
 ) -> ReviewSubmissionPlan {
     let mut comments = Vec::new();
     let mut comment_annotation_ids = Vec::new();
+    let mut comment_other_lines = Vec::new();
     let mut file_comment_follow_ups = Vec::new();
 
     for annotation in annotations {
         let body = classification_prefixed_body(annotation.classification, &annotation.body);
         match &annotation.target {
-            Target::Line { path, line, side } => {
+            Target::Line {
+                path,
+                line,
+                side,
+                other_line,
+            } => {
                 comment_annotation_ids.push(annotation.id);
+                comment_other_lines.push(*other_line);
                 comments.push(ReviewCommentPayload {
                     path: path.clone(),
                     body,
@@ -402,8 +416,10 @@ pub fn build_review_payload(
                 start,
                 end,
                 side,
+                other_end,
             } => {
                 comment_annotation_ids.push(annotation.id);
+                comment_other_lines.push(*other_end);
                 comments.push(positioned_comment(
                     path.clone(),
                     body,
@@ -412,8 +428,14 @@ pub fn build_review_payload(
                     side_str(*side),
                 ));
             }
-            Target::Hunk { path, start, end } => {
+            Target::Hunk {
+                path,
+                start,
+                end,
+                other_end,
+            } => {
                 comment_annotation_ids.push(annotation.id);
+                comment_other_lines.push(*other_end);
                 comments.push(positioned_comment(
                     path.clone(),
                     body,
@@ -442,6 +464,7 @@ pub fn build_review_payload(
             comments,
         },
         comment_annotation_ids,
+        comment_other_lines,
         file_comment_follow_ups,
     }
 }

@@ -566,6 +566,7 @@ fn added_new_side_line_builds_a_text_position_with_only_new_line() {
             path: "src/a.rs".to_string(),
             side: Side::New,
             line: 42,
+            other_line: None,
         },
     );
     assert_eq!(pos.position_type, "text");
@@ -587,11 +588,63 @@ fn removed_old_side_line_builds_a_text_position_with_only_old_line() {
             path: "src/b.rs".to_string(),
             side: Side::Old,
             line: 17,
+            other_line: None,
         },
     );
     assert_eq!(pos.position_type, "text");
     assert_eq!(pos.new_line, None);
     assert_eq!(pos.old_line, Some(17));
+}
+
+#[test]
+fn context_line_with_a_counterpart_builds_a_text_position_with_both_lines() {
+    // GitLab 500s on a context-line position naming only one side; the
+    // import fixture shows GitLab itself sending both for a context line.
+    let pos = build_note_position(
+        &diff_refs(),
+        &NoteTarget::Line {
+            path: "src/c.rs".to_string(),
+            side: Side::New,
+            line: 8,
+            other_line: Some(6),
+        },
+    );
+    assert_eq!(pos.position_type, "text");
+    assert_eq!(pos.new_line, Some(8));
+    assert_eq!(pos.old_line, Some(6));
+}
+
+#[test]
+fn context_line_position_serializes_both_lines_byte_exactly() {
+    let pos = build_note_position(
+        &diff_refs(),
+        &NoteTarget::Line {
+            path: "src/c.rs".to_string(),
+            side: Side::New,
+            line: 8,
+            other_line: Some(6),
+        },
+    );
+    let json = serde_json::to_string(&pos).unwrap();
+    assert_eq!(
+        json,
+        r#"{"base_sha":"base00","start_sha":"start0","head_sha":"head00","position_type":"text","new_path":"src/c.rs","old_path":"src/c.rs","new_line":8,"old_line":6}"#
+    );
+}
+
+#[test]
+fn old_side_context_line_with_a_counterpart_fills_new_line_from_it() {
+    let pos = build_note_position(
+        &diff_refs(),
+        &NoteTarget::Line {
+            path: "src/c.rs".to_string(),
+            side: Side::Old,
+            line: 6,
+            other_line: Some(8),
+        },
+    );
+    assert_eq!(pos.new_line, Some(8));
+    assert_eq!(pos.old_line, Some(6));
 }
 
 #[test]
@@ -617,6 +670,7 @@ fn text_position_serializes_only_the_present_line_and_never_a_null() {
             path: "src/a.rs".to_string(),
             side: Side::New,
             line: 5,
+            other_line: None,
         },
     );
     let json = serde_json::to_string(&pos).unwrap();
@@ -749,6 +803,7 @@ fn note(id: usize, body: &str) -> GitlabNote {
                 path: "src/a.rs".to_string(),
                 side: Side::New,
                 line: id as u32,
+                other_line: None,
             },
         ),
     }
