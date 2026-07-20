@@ -12,13 +12,15 @@ config section of its own.
 
 | Provider | Transport | Status |
 | --- | --- | --- |
-| GitHub (github.com, GitHub Enterprise) | `gh` | **Works today** — listing PRs, opening a review session |
-| GitLab (gitlab.com, self-managed) | `glab` | **In progress** — hostname detection lands ahead of listing; the tab currently reports "GitLab isn't supported yet" once a GitLab host is detected |
+| GitHub (github.com, GitHub Enterprise) | `gh` | **Works today** — listing PRs, opening a review session, submitting a review |
+| GitLab (gitlab.com, self-managed) | `glab` | **Works today** — listing MRs, opening a review session, submitting a review (comment / approve) |
 
-If your `origin` points at a GitHub host, the Pull Requests tab is usable
-right now. If it points at GitLab, redquill correctly recognizes the host
-as GitLab but doesn't list MRs yet — that's a later unit of this feature,
-not a bug.
+Both forges are end-to-end: whichever one your `origin` points at, the
+Pull Requests tab lists it, opens a review session, shows existing comment
+threads, and publishes your review from the confirm modal. The only visible
+difference is the verdict set — GitLab has no "request changes" verdict, so
+the picker offers comment / approve only (see [Submitting a
+review](#submitting-a-review)).
 
 ## How zero-config detection works
 
@@ -34,12 +36,13 @@ logging into a CLI. Every time the tab loads, redquill:
    - Any other hostname (a self-hosted/enterprise instance) is resolved by
      asking each CLI whether it holds credentials for that host — `gh`
      via `gh auth token --hostname <host>` (exit status only; the token
-     itself is never read). Exactly one CLI reporting credentials
-     resolves the provider; zero or both leave it unresolved.
-   - The `glab` half of that credential check is still a placeholder
-     (finalized alongside the GitLab provider itself, later in this
-     feature) — until then, a self-hosted host that only `glab` knows
-     about will show up as unresolved even after `glab auth login`.
+     itself is never read), and `glab` via a local
+     `glab config get token --host <host>` lookup (a config-store read, not
+     a network probe; its output is inspected only for emptiness and
+     dropped immediately). A
+     `glab`-authenticated self-managed host therefore resolves to GitLab
+     with zero redquill configuration. Exactly one CLI reporting
+     credentials resolves the provider; zero or both leave it unresolved.
 3. Caches the result for the process's lifetime — one redquill session
    only ever reviews one repo, so the ladder never re-runs.
 
@@ -88,14 +91,6 @@ followed by one of:
 Shown when `origin`'s hostname isn't `github.com`/`gitlab.com` and neither
 (or both) CLIs report holding credentials for it. Run the login command
 for whichever forge actually hosts the repo.
-
-### GitLab detected, not supported yet
-
-> `GitLab isn't supported yet (<host>)`
-
-Shown once the host resolves to GitLab (`gitlab.com`, or a self-hosted
-instance once the `glab` credential check is finalized) but GitLab
-listing hasn't landed. GitHub works today; GitLab support is in progress.
 
 ### CLI not on PATH
 
@@ -150,8 +145,34 @@ diff view uses for additions, distinct from every state above. It means
 detection, auth, and the listing call all worked; there's simply nothing
 open right now.
 
+## Submitting a review
+
+Everything you draft — line/range comments, whole-file comments, thread
+replies, a verdict, an optional summary — is local until you confirm it
+from the submit modal. Nothing is ever sent on quit, and nothing is sent
+until that confirm.
+
+- **GitHub** posts one review (the reviews endpoint carries every
+  positioned comment plus the verdict and summary at once), then any
+  file-level comments and thread replies follow one at a time. Verdicts:
+  comment / approve / request changes.
+- **GitLab** stages every comment and reply as a *private draft note*,
+  then publishes the whole batch together with one `bulk_publish` — so a
+  failure partway through leaves nothing visible on the MR — and approves
+  only when the verdict is approve. On an older GitLab instance without the
+  draft-notes API, redquill falls back to posting each comment as a visible
+  discussion one at a time (marking each published as it lands, so a retry
+  re-sends only what didn't). The submit modal discloses which path applies.
+  Verdicts: comment / approve (GitLab has no "request changes" verdict).
+
+A re-submit only ever sends what hasn't already published, so a partial
+failure never double-posts.
+
 ## Security notes
 
-redquill never reads, stores, logs, or displays a forge token. The one
-command whose output could contain one (`gh auth token`) is run with its
-stdout and stderr discarded entirely — only its exit status is used.
+redquill never reads, stores, logs, or displays a forge token. The two
+commands whose output could contain one (`gh auth token`, `glab config get
+token`) are used only for presence — `gh auth token`'s output is discarded
+entirely and only its exit status read; `glab config get token`'s output is
+inspected only for emptiness and dropped immediately, never stored or
+logged.

@@ -156,7 +156,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 - [x] 5.3 Confirmed deletion sequence per entry: `git worktree remove` → `worktree prune` → managed-branch delete → state-entry removal (v3 save); per-entry failure → one-line diagnostic, continue, end-of-run outcome summary; decline path mutates nothing.
 - [x] 5.4 Tempdir integration tests for confirm, decline, unpublished-warning, and locked-worktree continuation; journey transcript with before/after `git worktree list` / `git branch` / `review-state.json`; all four gates.
 
-### [~] 6.0 The same experience end-to-end on GitLab, including self-managed hosts with zero config
+### [x] 6.0 The same experience end-to-end on GitLab, including self-managed hosts with zero config
 
 **User verification:** In a GitLab-backed repo (gitlab.com or a self-managed host where `glab` is logged in), the same tab lists open MRs with no redquill configuration; reviewing, threads, replies, and publishing all work, with the verdict choices honestly limited to what GitLab supports (comment / approve). The setup docs and in-tab prescriptions name `glab` commands for the exact host.
 
@@ -174,7 +174,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 
 - [x] 6.1 TDD `src/forge/gitlab.rs` reads: fixed argv for `glab mr list -F json` / MR detail (incl. `diff_refs`), fixture-based parse tests into the same typed rows; prompts disabled, kill-on-drop.
 - [x] 6.2 Resolve the glab credential-lookup open question against the pinned glab version (prefer a local-only command; document the choice in `detect.rs`); fill the 1.3 seam; add ladder tests for a glab-authenticated custom host.
-- [ ] 6.3 Wire GitLab through Units 1–2: `refs/merge-requests/<iid>/head` in the `PrRef` type, listing/checkout/head-move/cleanup flows passing existing tests against the GitLab provider fake.
+- [x] 6.3 Wire GitLab through Units 1–2: `refs/merge-requests/<iid>/head` in the `PrRef` type, listing/checkout/head-move/cleanup flows passing existing tests against the GitLab provider fake.
 - [x] 6.4 TDD discussions import: position-hash → thread-model anchor mapping (added → `new_line`, removed → `old_line`, context → both; file-type positions → file-level), fixture JSON from the discussions API.
-- [ ] 6.5 TDD GitLab submit: position-hash builder from annotation side/line + `diff_refs`; draft-notes create per item → `bulk_publish` → `glab mr approve` on approve verdict; sequential-discussions fallback with per-item published marking when draft notes are unavailable; capability flags (comment/approve) driving the 4.3 modal, with fallback disclosure; fake-provider tests for ordering, early-failure, fallback.
-- [ ] 6.6 Extend `docs/forge-setup.md` + FR-5 prescriptions for glab/hosted GitLab; run all four gates; hand live dogfood to the user (scratch GitLab project submit; read-only detection capture on the client host).
+- [x] 6.5 TDD GitLab submit: position-hash builder from annotation side/line + `diff_refs`; draft-notes create per item → `bulk_publish` → `glab mr approve` on approve verdict; sequential-discussions fallback with per-item published marking when draft notes are unavailable; capability flags (comment/approve) driving the 4.3 modal, with fallback disclosure; fake-provider tests for ordering, early-failure, fallback.
+- [x] 6.6 Extend `docs/forge-setup.md` + FR-5 prescriptions for glab/hosted GitLab; run all four gates; hand live dogfood to the user (scratch GitLab project submit; read-only detection capture on the client host).

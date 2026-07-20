@@ -69,7 +69,6 @@ fn forge_setup_docs_cover_every_fr5_degraded_state() {
         "glab auth login --hostname",
         "neither CLI holds credentials",
         "both CLIs hold credentials",
-        "isn't supported yet",
         "install gh: https://cli.github.com",
         "install glab: https://gitlab.com/gitlab-org/cli",
         "isn't on PATH",
@@ -84,6 +83,33 @@ fn forge_setup_docs_cover_every_fr5_degraded_state() {
     assert!(
         missing.is_empty(),
         "docs/forge-setup.md is missing coverage for: {missing:?}"
+    );
+}
+
+#[test]
+fn forge_setup_docs_cover_the_gitlab_end_to_end_reality() {
+    // GitLab is no longer "in progress": the docs must describe the local
+    // `glab` credential lookup (zero-config self-managed detection), the
+    // draft-notes submit with its visible fallback, and the comment/approve
+    // verdict limit — the shipped Unit-6 behavior, so the doc can't drift back
+    // to the retired "not supported yet" copy.
+    let must_contain = [
+        "glab config get token --host",
+        "draft note",
+        "bulk_publish",
+        "comment / approve",
+    ];
+    let missing: Vec<&str> = must_contain
+        .into_iter()
+        .filter(|s| !FORGE_SETUP_DOCS.contains(s))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "docs/forge-setup.md is missing GitLab coverage for: {missing:?}"
+    );
+    assert!(
+        !FORGE_SETUP_DOCS.contains("isn't supported yet"),
+        "the retired 'not supported yet' GitLab copy must be gone"
     );
 }
 
