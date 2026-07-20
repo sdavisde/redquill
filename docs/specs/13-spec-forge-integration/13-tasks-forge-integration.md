@@ -114,7 +114,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 - [x] 3.5 Published-copy dedupe (FR-15): annotations marked published are not rendered as local annotations at their anchor once the forge copy is present in fetched threads.
 - [x] 3.6 Fetch-failure notice ("comments unavailable") without blocking review entry; scripted fake-provider journey transcript; all four gates.
 
-### [ ] 4.0 Publish the whole review — comments, replies, verdict — from one previewed confirm screen (GitHub)
+### [~] 4.0 Publish the whole review — comments, replies, verdict — from one previewed confirm screen (GitHub)
 
 **User verification:** A "submit review" key opens a preview listing every unpublished comment and reply, a verdict choice (comment / approve / request changes), and an optional summary. Nothing is sent until you confirm; after confirming, the review appears on GitHub exactly as previewed (dogfood target: PR #25), and the published items are marked locally so re-submitting sends nothing twice. Quitting still prints your annotations to stdout exactly as today. CLAUDE.md's guardrails visibly document the new, narrow write ceiling.
 
@@ -130,7 +130,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 
 #### 4.0 Tasks
 
-- [ ] 4.1 TDD GitHub review payload builder in `src/forge/github.rs`: `Line`/`Range` → `side`/`line`/`start_line`/`start_side`, `Hunk` → new-side range, classification body prefixes, `event` from verdict, summary body; file-target annotations excluded from the array and routed to the follow-up set; worktree-anchored targets excluded as local-only.
+- [x] 4.1 TDD GitHub review payload builder in `src/forge/github.rs`: `Line`/`Range` → `side`/`line`/`start_line`/`start_side`, `Hunk` → new-side range, classification body prefixes, `event` from verdict, summary body; file-target annotations excluded from the array and routed to the follow-up set; worktree-anchored targets excluded as local-only.
 - [ ] 4.2 Annotation published state: marker on `Annotation`/`PersistedAnnotation` (v3, absent = unpublished), excluded from future submits, rendered with a published indicator in the annotation list; stdout `markdown.rs` byte-format untouched (regression tests).
 - [ ] 4.3 Submit modal (`src/ui/forge_submit.rs`): grouped-by-file batch preview (annotations with anchors + classifications, draft replies, local-only and posts-as-file-comment labels), capability-driven verdict picker, summary input, target line (`#N on host/org/repo`); `submit-forge-review` keymap action (non-shadowing default) live only in forge-PR review sessions; drift tests.
 - [ ] 4.4 Submit sequence driver: one reviews-endpoint POST (comments array + event + body) → sequential follow-ups (file comments via `subject_type: file`, replies via the replies endpoint), each marked published on success; mid-sequence failure stops, reports published/unpublished split, resume sends only remainder; fake-provider tests for ordering, marking, resume.

@@ -198,3 +198,300 @@ fn review_comments_command_interpolates_only_the_typed_pr_number() {
             .starts_with("repos/{owner}/{repo}/pulls/1/comments")
     );
 }
+
+// -- build_review_payload (submit-flow payload construction) ----------------
+
+use crate::annotate::Source;
+
+fn annotation(id: usize, target: Target, classification: Classification, body: &str) -> Annotation {
+    Annotation {
+        id,
+        target,
+        classification,
+        body: body.to_string(),
+        source: Source::WorkingTree,
+        published: false,
+    }
+}
+
+#[test]
+fn line_target_maps_to_a_single_line_comment_with_no_start_fields() {
+    let annotations = vec![annotation(
+        0,
+        Target::line("src/a.rs", 10, Side::New),
+        Classification::Issue,
+        "fix this",
+    )];
+    let plan = build_review_payload(&annotations, Verdict::Comment, None);
+    assert_eq!(
+        plan.payload.comments,
+        vec![ReviewCommentPayload {
+            path: "src/a.rs".to_string(),
+            body: "[issue] fix this".to_string(),
+            line: 10,
+            side: "RIGHT",
+            start_line: None,
+            start_side: None,
+        }]
+    );
+    assert!(plan.file_comment_follow_ups.is_empty());
+}
+
+#[test]
+fn line_target_old_side_maps_to_left() {
+    let annotations = vec![annotation(
+        0,
+        Target::line("src/a.rs", 9, Side::Old),
+        Classification::Nit,
+        "dead code",
+    )];
+    let plan = build_review_payload(&annotations, Verdict::Comment, None);
+    assert_eq!(plan.payload.comments[0].side, "LEFT");
+    assert_eq!(plan.payload.comments[0].start_line, None);
+}
+
+#[test]
+fn range_target_on_old_side_carries_matching_start_and_end_side() {
+    let annotations = vec![annotation(
+        0,
+        Target::range("src/b.rs", 5, 8, Side::Old).unwrap(),
+        Classification::Question,
+        "why?",
+    )];
+    let plan = build_review_payload(&annotations, Verdict::Comment, None);
+    assert_eq!(
+        plan.payload.comments,
+        vec![ReviewCommentPayload {
+            path: "src/b.rs".to_string(),
+            body: "[question] why?".to_string(),
+            line: 8,
+            side: "LEFT",
+            start_line: Some(5),
+            start_side: Some("LEFT"),
+        }]
+    );
+}
+
+#[test]
+fn range_target_on_new_side_carries_matching_start_and_end_side() {
+    let annotations = vec![annotation(
+        0,
+        Target::range("src/b.rs", 5, 8, Side::New).unwrap(),
+        Classification::Question,
+        "why?",
+    )];
+    let plan = build_review_payload(&annotations, Verdict::Comment, None);
+    assert_eq!(plan.payload.comments[0].side, "RIGHT");
+    assert_eq!(plan.payload.comments[0].start_side, Some("RIGHT"));
+}
+
+#[test]
+fn hunk_target_always_maps_as_a_new_side_range_regardless_of_diff_content() {
+    let annotations = vec![annotation(
+        0,
+        Target::hunk("src/c.rs", 1, 3).unwrap(),
+        Classification::Nit,
+        "tidy",
+    )];
+    let plan = build_review_payload(&annotations, Verdict::Comment, None);
+    assert_eq!(
+        plan.payload.comments,
+        vec![ReviewCommentPayload {
+            path: "src/c.rs".to_string(),
+            body: "[nit] tidy".to_string(),
+            line: 3,
+            side: "RIGHT",
+            start_line: Some(1),
+            start_side: Some("RIGHT"),
+        }]
+    );
+}
+
+#[test]
+fn file_target_is_excluded_from_comments_and_routed_to_follow_ups() {
+    let annotations = vec![annotation(
+        7,
+        Target::file("src/d.rs"),
+        Classification::Praise,
+        "nice module",
+    )];
+    let plan = build_review_payload(&annotations, Verdict::Comment, None);
+    assert!(plan.payload.comments.is_empty());
+    assert_eq!(
+        plan.file_comment_follow_ups,
+        vec![FileCommentFollowUp {
+            annotation_id: 7,
+            path: "src/d.rs".to_string(),
+            body: "[praise] nice module".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn worktree_targets_are_excluded_entirely_as_local_only() {
+    let annotations = vec![
+        annotation(
+            0,
+            Target::worktree_line("docs/notes.md", 2),
+            Classification::Question,
+            "stale?",
+        ),
+        annotation(
+            1,
+            Target::worktree_range("docs/notes.md", 5, 6).unwrap(),
+            Classification::Nit,
+            "stale range",
+        ),
+    ];
+    let plan = build_review_payload(&annotations, Verdict::Comment, None);
+    assert!(
+        plan.payload.comments.is_empty(),
+        "worktree targets must never enter the comments array"
+    );
+    assert!(
+        plan.file_comment_follow_ups.is_empty(),
+        "worktree targets must never enter the follow-up set either"
+    );
+}
+
+#[test]
+fn every_classification_gets_its_bracketed_prefix_on_the_first_line_only() {
+    for (classification, tag) in [
+        (Classification::Issue, "issue"),
+        (Classification::Question, "question"),
+        (Classification::Nit, "nit"),
+        (Classification::Praise, "praise"),
+    ] {
+        let annotations = vec![annotation(
+            0,
+            Target::file("a.rs"),
+            classification,
+            "first line\nsecond line",
+        )];
+        let plan = build_review_payload(&annotations, Verdict::Comment, None);
+        assert_eq!(
+            plan.file_comment_follow_ups[0].body,
+            format!("[{tag}] first line\nsecond line")
+        );
+    }
+}
+
+#[test]
+fn every_verdict_maps_to_its_github_event_string() {
+    for (verdict, event) in [
+        (Verdict::Comment, "COMMENT"),
+        (Verdict::Approve, "APPROVE"),
+        (Verdict::RequestChanges, "REQUEST_CHANGES"),
+    ] {
+        let plan = build_review_payload(&[], verdict, None);
+        assert_eq!(plan.payload.event, event);
+    }
+}
+
+#[test]
+fn summary_becomes_the_review_body_when_present() {
+    let plan = build_review_payload(&[], Verdict::Approve, Some("Looks solid overall"));
+    assert_eq!(plan.payload.body, "Looks solid overall");
+}
+
+#[test]
+fn absent_summary_becomes_an_empty_review_body() {
+    let plan = build_review_payload(&[], Verdict::Comment, None);
+    assert_eq!(plan.payload.body, "");
+}
+
+#[test]
+fn empty_annotation_set_produces_no_comments_or_follow_ups() {
+    let plan = build_review_payload(&[], Verdict::Comment, None);
+    assert!(plan.payload.comments.is_empty());
+    assert!(plan.file_comment_follow_ups.is_empty());
+}
+
+/// The exhaustive mixed batch: line, range on the old side, hunk, file, and
+/// both worktree variants, one of each classification, an approve verdict
+/// and a summary — asserting the exact serialized JSON body the reviews
+/// endpoint receives, byte for byte.
+#[test]
+fn mixed_batch_serializes_to_the_exact_reviews_endpoint_json() {
+    let annotations = vec![
+        annotation(
+            0,
+            Target::line("src/a.rs", 10, Side::New),
+            Classification::Issue,
+            "fix this",
+        ),
+        annotation(
+            1,
+            Target::range("src/b.rs", 5, 8, Side::Old).unwrap(),
+            Classification::Question,
+            "why?",
+        ),
+        annotation(
+            2,
+            Target::hunk("src/c.rs", 1, 3).unwrap(),
+            Classification::Nit,
+            "tidy",
+        ),
+        annotation(
+            3,
+            Target::file("src/d.rs"),
+            Classification::Praise,
+            "nice module",
+        ),
+        annotation(
+            4,
+            Target::worktree_line("docs/notes.md", 2),
+            Classification::Question,
+            "stale?",
+        ),
+        annotation(
+            5,
+            Target::worktree_range("docs/notes.md", 5, 6).unwrap(),
+            Classification::Nit,
+            "stale range",
+        ),
+    ];
+
+    let plan = build_review_payload(&annotations, Verdict::Approve, Some("Looks solid overall"));
+
+    let json = serde_json::to_string_pretty(&plan.payload).unwrap();
+    let expected = r#"{
+  "body": "Looks solid overall",
+  "event": "APPROVE",
+  "comments": [
+    {
+      "path": "src/a.rs",
+      "body": "[issue] fix this",
+      "line": 10,
+      "side": "RIGHT"
+    },
+    {
+      "path": "src/b.rs",
+      "body": "[question] why?",
+      "line": 8,
+      "side": "LEFT",
+      "start_line": 5,
+      "start_side": "LEFT"
+    },
+    {
+      "path": "src/c.rs",
+      "body": "[nit] tidy",
+      "line": 3,
+      "side": "RIGHT",
+      "start_line": 1,
+      "start_side": "RIGHT"
+    }
+  ]
+}"#;
+    assert_eq!(json, expected);
+
+    assert_eq!(
+        plan.file_comment_follow_ups,
+        vec![FileCommentFollowUp {
+            annotation_id: 3,
+            path: "src/d.rs".to_string(),
+            body: "[praise] nice module".to_string(),
+        }],
+        "the file-target annotation must route to the follow-up set, not the comments array"
+    );
+}

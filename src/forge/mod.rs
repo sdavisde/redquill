@@ -33,8 +33,9 @@ pub use detect::{
     ProviderResolution, ResolutionCache, UnresolvedReason, resolve_provider,
 };
 pub use github::{
-    PR_LIST_JSON_FIELDS, fetch_review_threads, list_open_prs, parse_pr_list_json, pr_list_command,
-    review_comments_command, review_threads_resolved_command,
+    FileCommentFollowUp, PR_LIST_JSON_FIELDS, ReviewCommentPayload, ReviewPayload,
+    ReviewSubmissionPlan, build_review_payload, fetch_review_threads, list_open_prs,
+    parse_pr_list_json, pr_list_command, review_comments_command, review_threads_resolved_command,
 };
 pub use remote_url::{Hostname, RemoteUrlError, parse_origin_hostname, parse_origin_repo_slug};
 pub use threads::{

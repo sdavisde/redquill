@@ -8,13 +8,15 @@ use std::collections::HashMap;
 use std::process::Command;
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+use crate::annotate::{Annotation, Classification, Side, Target};
 
 use super::process::{harden, run_captured_with_timeout};
 use super::threads::{
     Thread, apply_resolved_states, parse_resolved_thread_states, parse_review_comments_json,
 };
-use super::{ForgeError, PullRequest};
+use super::{ForgeError, PullRequest, Verdict};
 
 /// The exact `--json` field list `gh pr list` is asked for — fixed at the
 /// listing's field set, never composed from caller input.
@@ -221,6 +223,168 @@ fn fetch_resolved_states(owner: &str, repo: &str, number: u64) -> Option<HashMap
     }
     let json = String::from_utf8_lossy(&output.stdout);
     parse_resolved_thread_states(&json).ok()
+}
+
+// -- Review payload construction (submit flow) -------------------------------
+
+/// GitHub's `side` values for a review comment: `Side::Old` is the diff's
+/// left (removed) column, `Side::New` the right (added/context) column — the
+/// inverse of `threads::parse_side`'s `"LEFT"`/`"RIGHT"` -> `Side` mapping.
+fn side_str(side: Side) -> &'static str {
+    match side {
+        Side::Old => "LEFT",
+        Side::New => "RIGHT",
+    }
+}
+
+/// The verdict's `event` value on the reviews endpoint.
+fn event_str(verdict: Verdict) -> &'static str {
+    match verdict {
+        Verdict::Comment => "COMMENT",
+        Verdict::Approve => "APPROVE",
+        Verdict::RequestChanges => "REQUEST_CHANGES",
+    }
+}
+
+/// Prefixes `body`'s first line with the annotation's classification tag
+/// (`"[issue] "`, etc.), leaving every other line untouched — the same
+/// convention `crate::annotate::markdown::render_one` uses for stdout, kept
+/// in sync deliberately so a comment reads identically whether it lands on
+/// the forge or in the stdout markdown.
+fn classification_prefixed_body(classification: Classification, body: &str) -> String {
+    let mut lines = body.lines();
+    let mut out = String::new();
+    if let Some(first) = lines.next() {
+        out.push_str(&format!("[{}] ", classification.label()));
+        out.push_str(first);
+    }
+    for line in lines {
+        out.push('\n');
+        out.push_str(line);
+    }
+    out
+}
+
+/// One entry in the reviews endpoint's `comments` array. `start_line`/
+/// `start_side` are only present for a multi-line span (`Range`/`Hunk`); a
+/// single-line comment (`Line`) carries only `line`/`side`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReviewCommentPayload {
+    pub path: String,
+    pub body: String,
+    pub line: u32,
+    pub side: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_side: Option<&'static str>,
+}
+
+/// The exact JSON body for one POST to
+/// `/repos/{owner}/{repo}/pulls/{n}/reviews`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReviewPayload {
+    pub body: String,
+    pub event: &'static str,
+    pub comments: Vec<ReviewCommentPayload>,
+}
+
+/// A file-target annotation the reviews endpoint's `comments` array cannot
+/// carry (file-level positions aren't accepted there) and that must post
+/// afterward via the single-comment endpoint with `subject_type: file`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileCommentFollowUp {
+    /// The originating annotation's store id, so the submit-sequence driver
+    /// (a later unit) can mark it published individually on success.
+    pub annotation_id: usize,
+    pub path: String,
+    pub body: String,
+}
+
+/// One review's full submission plan: the single reviews-endpoint payload
+/// plus the file-target annotations that must post separately afterward.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewSubmissionPlan {
+    pub payload: ReviewPayload,
+    pub file_comment_follow_ups: Vec<FileCommentFollowUp>,
+}
+
+/// Builds the exact submission plan for one review: `annotations` (expected
+/// to already be the caller-filtered *unpublished* set — see
+/// `crate::annotate::AnnotationStore::unpublished`) become either an entry in
+/// the reviews-endpoint `comments` array (`Line`/`Range`/`Hunk` targets) or a
+/// follow-up file comment (`Target::File`); `Target::WorktreeLine`/
+/// `Target::WorktreeRange` targets anchor to local worktree content with no
+/// forge-side position and are excluded from both — local-only, never
+/// publishable. Pure — no network, no process — so it's exhaustively
+/// fixture-tested.
+pub fn build_review_payload(
+    annotations: &[Annotation],
+    verdict: Verdict,
+    summary: Option<&str>,
+) -> ReviewSubmissionPlan {
+    let mut comments = Vec::new();
+    let mut file_comment_follow_ups = Vec::new();
+
+    for annotation in annotations {
+        let body = classification_prefixed_body(annotation.classification, &annotation.body);
+        match &annotation.target {
+            Target::Line { path, line, side } => {
+                comments.push(ReviewCommentPayload {
+                    path: path.clone(),
+                    body,
+                    line: *line,
+                    side: side_str(*side),
+                    start_line: None,
+                    start_side: None,
+                });
+            }
+            Target::Range {
+                path,
+                start,
+                end,
+                side,
+            } => {
+                comments.push(ReviewCommentPayload {
+                    path: path.clone(),
+                    body,
+                    line: *end,
+                    side: side_str(*side),
+                    start_line: Some(*start),
+                    start_side: Some(side_str(*side)),
+                });
+            }
+            Target::Hunk { path, start, end } => {
+                comments.push(ReviewCommentPayload {
+                    path: path.clone(),
+                    body,
+                    line: *end,
+                    side: side_str(Side::New),
+                    start_line: Some(*start),
+                    start_side: Some(side_str(Side::New)),
+                });
+            }
+            Target::File { path } => {
+                file_comment_follow_ups.push(FileCommentFollowUp {
+                    annotation_id: annotation.id,
+                    path: path.clone(),
+                    body,
+                });
+            }
+            Target::WorktreeLine { .. } | Target::WorktreeRange { .. } => {
+                // Local-only: no forge-side position exists to anchor to.
+            }
+        }
+    }
+
+    ReviewSubmissionPlan {
+        payload: ReviewPayload {
+            body: summary.unwrap_or_default().to_string(),
+            event: event_str(verdict),
+            comments,
+        },
+        file_comment_follow_ups,
+    }
 }
 
 #[cfg(test)]
