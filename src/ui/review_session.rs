@@ -377,6 +377,7 @@ mod tests {
                     body: "note".to_string(),
                     source: Source::WorkingTree,
                     published: false,
+                    draft_created: false,
                 }],
                 replies: Vec::new(),
                 forge: None,
@@ -409,11 +410,13 @@ mod tests {
             body: body.to_string(),
             source: Source::WorkingTree,
             published: false,
+            draft_created: false,
         };
         let reply = |body: &str, published: bool| store::PersistedReply {
             thread_id: 10,
             body: body.to_string(),
             published,
+            draft_created: false,
         };
 
         // A damaged file: each real entry written twice (exact duplicates),

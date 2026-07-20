@@ -270,9 +270,9 @@ impl App {
                 continue;
             }
             let covered = match &annotation.target {
-                Target::Line { path, line, side } => {
-                    positions.contains(&(path.as_str(), *side, *line))
-                }
+                Target::Line {
+                    path, line, side, ..
+                } => positions.contains(&(path.as_str(), *side, *line)),
                 Target::Range {
                     path, start, side, ..
                 } => positions.contains(&(path.as_str(), *side, *start)),

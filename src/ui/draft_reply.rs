@@ -34,6 +34,10 @@ pub struct DraftReply {
     /// is excluded from future submits — mirrors
     /// [`crate::annotate::Annotation::published`].
     pub published: bool,
+    /// Whether a private GitLab draft note for this reply exists
+    /// server-side but is not yet published — mirrors
+    /// [`crate::annotate::Annotation::draft_created`].
+    pub draft_created: bool,
 }
 
 /// An in-memory, insertion-ordered collection of draft replies.
@@ -66,6 +70,7 @@ impl DraftReplyStore {
             thread_id,
             body: trimmed.to_string(),
             published: false,
+            draft_created: false,
         });
         Some(id)
     }
@@ -118,6 +123,20 @@ impl DraftReplyStore {
         }
     }
 
+    /// Sets the draft-created flag of the reply with `id` — the submit
+    /// flow's record that a private GitLab draft of this reply exists
+    /// server-side, so a resubmit skips re-creating it. Mirrors
+    /// [`DraftReplyStore::set_published`].
+    pub fn set_draft_created(&mut self, id: usize, draft_created: bool) -> bool {
+        match self.replies.iter_mut().find(|r| r.id == id) {
+            Some(reply) => {
+                reply.draft_created = draft_created;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Iterates over replies in insertion order.
     pub fn iter(&self) -> impl Iterator<Item = &DraftReply> {
         self.replies.iter()
@@ -153,6 +172,7 @@ impl DraftReplyStore {
                 thread_id: r.thread_id,
                 body: r.body.clone(),
                 published: r.published,
+                draft_created: r.draft_created,
             })
             .collect()
     }
@@ -168,9 +188,13 @@ impl DraftReplyStore {
         let mut restored = 0;
         for entry in persisted {
             let published = entry.published;
+            let draft_created = entry.draft_created;
             if let Some(id) = self.add(entry.thread_id, entry.body) {
                 if published {
                     self.set_published(id, true);
+                }
+                if draft_created {
+                    self.set_draft_created(id, true);
                 }
                 restored += 1;
             }
@@ -252,11 +276,13 @@ mod tests {
                 thread_id: 1,
                 body: "  ".to_string(),
                 published: false,
+                draft_created: false,
             },
             PersistedReply {
                 thread_id: 2,
                 body: "kept".to_string(),
                 published: false,
+                draft_created: false,
             },
         ]);
         assert_eq!(n, 1);
@@ -291,6 +317,23 @@ mod tests {
 
         let remaining: Vec<usize> = store.unpublished().map(|r| r.id).collect();
         assert_eq!(remaining, vec![id1]);
+    }
+
+    #[test]
+    fn snapshot_and_restore_preserve_the_draft_created_flag() {
+        let mut store = DraftReplyStore::new();
+        let drafted = store.add(1, "draft exists").unwrap();
+        store.set_draft_created(drafted, true);
+        store.add(2, "no draft").unwrap();
+
+        let snap = store.snapshot();
+        assert!(snap[0].draft_created);
+        assert!(!snap[1].draft_created);
+
+        let mut restored = DraftReplyStore::new();
+        restored.restore(snap);
+        let flags: Vec<bool> = restored.iter().map(|r| r.draft_created).collect();
+        assert_eq!(flags, vec![true, false]);
     }
 
     #[test]

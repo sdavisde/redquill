@@ -208,7 +208,9 @@ fn anchor_label(target: &Target) -> String {
         Target::Range {
             path, start, end, ..
         } => format!("{path}:{start}-{end}"),
-        Target::Hunk { path, start, end } => format!("{path}:{start}-{end}"),
+        Target::Hunk {
+            path, start, end, ..
+        } => format!("{path}:{start}-{end}"),
         Target::File { path } => path.clone(),
         Target::WorktreeLine { path, line } => format!("{path}:{line}"),
         Target::WorktreeRange { path, start, end } => format!("{path}:{start}-{end}"),
@@ -388,6 +390,20 @@ impl App {
             plan,
             replies,
             include_review_post: !self.forge_review_submitted,
+            // Drafts a prior stopped GitLab run already created server-side:
+            // the sequence skips re-creating them so a retry can't duplicate.
+            draft_created_annotation_ids: unpublished
+                .iter()
+                .filter(|a| a.draft_created)
+                .map(|a| a.id)
+                .collect(),
+            draft_created_reply_ids: self
+                .replies
+                .unpublished()
+                .filter(|r| r.draft_created)
+                .map(|r| r.id)
+                .collect(),
+            summary_draft_created: self.forge_summary_draft_created,
         }
     }
 
@@ -415,12 +431,21 @@ impl App {
                     .map(|discussion_id| (r.id, discussion_id))
             })
             .collect();
+        // The diff refs pinned when the review was opened (GitLab): submitted
+        // positions must describe the diff snapshot the reviewer read, not
+        // whatever the MR's head is by submit time.
+        let pinned_diff_refs = forge.diff_refs.as_ref().map(|refs| crate::forge::DiffRefs {
+            base_sha: refs.base_sha.clone(),
+            start_sha: refs.start_sha.clone(),
+            head_sha: refs.head_sha.clone(),
+        });
         let submitter = self.stage_ops().and_then(|ops| {
             ops.async_forge_submitter(
                 forge.provider,
                 forge.number,
                 forge.last_head_sha.clone(),
                 reply_discussions,
+                pinned_diff_refs,
             )
         });
         let Some(submitter) = submitter else {
@@ -459,30 +484,67 @@ impl App {
 
     /// Applies a submit report: marks each published annotation/reply, records
     /// whether the review POST has now landed (so a resume skips it), persists
-    /// the new published state (schema v3), and sets a status line — either the
-    /// clean "review submitted" or the published/unpublished split when a write
-    /// failed mid-sequence. Rebuilds rows so a now-published annotation's
-    /// in-diff row can defer to its forge copy.
+    /// the new published state (schema v3), and sets a status line — the clean
+    /// "review submitted", or, when a write failed mid-sequence, an honest
+    /// split of published / pending-draft / not-sent counts (pending drafts
+    /// exist server-side unpublished; a retry publishes them without
+    /// re-creating). Rebuilds rows so a now-published annotation's in-diff
+    /// row can defer to its forge copy.
     pub(super) fn apply_submit_outcome(&mut self, report: SubmitReport) {
+        // Record which drafts a stopped GitLab run left behind server-side,
+        // so the next submit creates only what's missing.
+        for id in &report.draft_annotation_ids {
+            let _ = self.annotations.set_draft_created(*id, true);
+        }
+        for id in &report.draft_reply_ids {
+            self.replies.set_draft_created(*id, true);
+        }
+        if report.summary_draft_created {
+            self.forge_summary_draft_created = true;
+        }
         for id in &report.published_annotation_ids {
             let _ = self.annotations.set_published(*id, true);
+            // A published item's draft no longer exists as a pending draft.
+            let _ = self.annotations.set_draft_created(*id, false);
         }
         for id in &report.published_reply_ids {
             self.replies.set_published(*id, true);
+            self.replies.set_draft_created(*id, false);
         }
         if report.review_submitted {
             self.forge_review_submitted = true;
+            self.forge_summary_draft_created = false;
         }
         self.persist_review_state();
         let published = report.published_annotation_ids.len() + report.published_reply_ids.len();
         let message = match &report.failure {
             None => format!("review submitted \u{2014} {published} item(s) published"),
             Some(diagnostic) => {
-                let remaining =
-                    self.annotations.unpublished().count() + self.replies.unpublished().count();
-                format!(
-                    "submit stopped: {published} published, {remaining} unpublished \u{2014} {diagnostic}"
-                )
+                // Pending drafts exist server-side and only await a publish;
+                // counting them as plain "unpublished" would falsely read as
+                // "everything failed" (and invite manual re-posting).
+                let drafts = self
+                    .annotations
+                    .unpublished()
+                    .filter(|a| a.draft_created)
+                    .count()
+                    + self
+                        .replies
+                        .unpublished()
+                        .filter(|r| r.draft_created)
+                        .count();
+                let remaining = self.annotations.unpublished().count()
+                    + self.replies.unpublished().count()
+                    - drafts;
+                if drafts > 0 {
+                    format!(
+                        "submit stopped: {published} published, {drafts} pending draft(s) \u{2014} submit again to publish \u{2014} {remaining} not sent \u{2014} {diagnostic}"
+                    )
+                } else {
+                    format!(
+                        "submit stopped: {published} published, {remaining} unpublished \u{2014} {diagnostic}"
+                    )
+                }
             }
         };
         self.set_status_message(message);

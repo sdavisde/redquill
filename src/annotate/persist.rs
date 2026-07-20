@@ -45,6 +45,12 @@ pub struct PersistedAnnotation {
     /// `published` key.
     #[serde(default, skip_serializing_if = "is_false")]
     pub published: bool,
+    /// Whether a private GitLab draft note for this annotation exists
+    /// server-side but is not yet published (a stopped submit run). Same
+    /// serde compatibility contract as `published`: absent when `false`,
+    /// defaulted when missing.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub draft_created: bool,
 }
 
 /// `skip_serializing_if` predicate: omit a `bool` field when it is `false`
@@ -65,6 +71,7 @@ impl PersistedAnnotation {
             body: annotation.body.clone(),
             source: annotation.source.clone(),
             published: annotation.published,
+            draft_created: annotation.draft_created,
         }
     }
 }
@@ -93,15 +100,20 @@ pub fn restore_all(store: &mut AnnotationStore, persisted: Vec<PersistedAnnotati
     let mut restored = 0;
     for entry in persisted {
         let published = entry.published;
+        let draft_created = entry.draft_created;
         if let Ok(id) =
             store.add_with_source(entry.target, entry.classification, entry.body, entry.source)
         {
             // `add_with_source` always creates an unpublished annotation, so
             // a restored already-published one is marked back afterward — the
             // dedupe against the forge's own copy depends on this surviving a
-            // reopen.
+            // reopen. The draft-created flag survives the same way so a
+            // resumed session's resubmit still skips existing drafts.
             if published {
                 let _ = store.set_published(id, true);
+            }
+            if draft_created {
+                let _ = store.set_draft_created(id, true);
             }
             restored += 1;
         }
@@ -149,6 +161,7 @@ mod tests {
                 body: "first".to_string(),
                 source: Source::WorkingTree,
                 published: false,
+                draft_created: false,
             },
             PersistedAnnotation {
                 target: Target::line("b.rs", 4, Side::New),
@@ -156,6 +169,7 @@ mod tests {
                 body: "second".to_string(),
                 source: Source::Staged,
                 published: false,
+                draft_created: false,
             },
         ];
         let mut store = AnnotationStore::new();
@@ -226,6 +240,7 @@ mod tests {
                 body: "   ".to_string(),
                 source: Source::WorkingTree,
                 published: false,
+                draft_created: false,
             },
             PersistedAnnotation {
                 target: Target::file("b.rs"),
@@ -233,6 +248,7 @@ mod tests {
                 body: "kept".to_string(),
                 source: Source::WorkingTree,
                 published: false,
+                draft_created: false,
             },
         ];
         let mut store = AnnotationStore::new();
@@ -254,6 +270,7 @@ mod tests {
             body: "fix this".to_string(),
             source: Source::WorkingTree,
             published: false,
+            draft_created: false,
         };
         let json = serde_json::to_string_pretty(&entry).unwrap();
         let expected = r#"{
@@ -307,6 +324,7 @@ mod tests {
             body: "fix this".to_string(),
             source: Source::WorkingTree,
             published: true,
+            draft_created: false,
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(
@@ -315,6 +333,46 @@ mod tests {
         );
         let round_tripped: PersistedAnnotation = serde_json::from_str(&json).unwrap();
         assert_eq!(round_tripped, entry);
+    }
+
+    #[test]
+    fn draft_created_serializes_only_when_set_and_round_trips_through_restore() {
+        let mut store = AnnotationStore::new();
+        let id = store
+            .add(Target::file("a.rs"), Classification::Nit, "pending draft")
+            .unwrap();
+        store.set_draft_created(id, true).unwrap();
+        store
+            .add(Target::file("b.rs"), Classification::Nit, "no draft")
+            .unwrap();
+
+        let snap = snapshot(&store);
+        let json = serde_json::to_string(&snap[0]).unwrap();
+        assert!(
+            json.contains("\"draft_created\":true"),
+            "flag on disk: {json}"
+        );
+        let json = serde_json::to_string(&snap[1]).unwrap();
+        assert!(
+            !json.contains("draft_created"),
+            "unset flag must be omitted: {json}"
+        );
+
+        let mut restored = AnnotationStore::new();
+        restore_all(&mut restored, snap);
+        let flags: Vec<bool> = restored.iter().map(|a| a.draft_created).collect();
+        assert_eq!(flags, vec![true, false]);
+    }
+
+    #[test]
+    fn record_without_a_draft_created_key_defaults_to_false() {
+        let json = r#"{
+            "target": {"kind": "file", "path": "a.rs"},
+            "classification": "nit",
+            "body": "note"
+        }"#;
+        let entry: PersistedAnnotation = serde_json::from_str(json).unwrap();
+        assert!(!entry.draft_created);
     }
 
     #[test]

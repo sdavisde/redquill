@@ -225,6 +225,7 @@ fn cleanup_app_with_store(
                     number: entry.number,
                     title: entry.title.clone(),
                     last_head_sha: "abc".to_string(),
+                    diff_refs: None,
                 }),
             },
         )

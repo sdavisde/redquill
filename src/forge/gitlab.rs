@@ -59,6 +59,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::annotate::Side;
 
+use super::diagnose::submit_error_headline;
 use super::process::{harden_glab, run_captured_with_timeout, run_with_input_and_timeout};
 use super::submit::SubmitReport;
 use super::threads::{Thread, ThreadAnchor, ThreadComment};
@@ -446,11 +447,14 @@ const SUBMIT_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// A GitLab diff-note position, built from an annotation's side/line data and
 /// the MR's [`DiffRefs`] — the reverse of the [`anchor_for`] import mapping.
-/// A `"text"` position carries exactly one of `new_line`/`old_line` (the side
-/// the annotation is on); a `"file"` position carries neither. `new_path` and
-/// `old_path` both hold the annotation's path: annotations don't track a
-/// rename's old path, and GitLab requires both for a text position on a file
-/// that isn't renamed. Serialized straight into a draft-note / discussion body.
+/// A `"text"` position on an added or removed line carries exactly one of
+/// `new_line`/`old_line`; one on a context line carries **both** (GitLab
+/// rejects a context-line position with only one side — see the import
+/// table in the module doc, which shows GitLab itself sending both); a
+/// `"file"` position carries neither. `new_path` and `old_path` both hold
+/// the annotation's path: annotations don't track a rename's old path, and
+/// GitLab requires both for a text position on a file that isn't renamed.
+/// Serialized straight into a draft-note / discussion body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NotePosition {
     pub base_sha: String,
@@ -468,17 +472,28 @@ pub struct NotePosition {
 /// What an annotation anchors to, as a position-hash input: a specific line on
 /// one side of the diff, or a whole file. A multi-line span (`Range`/`Hunk`)
 /// collapses to its end line on the same side before reaching here, mirroring
-/// how the GitHub review payload anchors a span at its `line`.
+/// how the GitHub review payload anchors a span at its `line`. `other_line`
+/// is the anchor line's number on the opposite diff side, present only for a
+/// context line (which exists on both sides).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NoteTarget {
-    Line { path: String, side: Side, line: u32 },
-    File { path: String },
+    Line {
+        path: String,
+        side: Side,
+        line: u32,
+        other_line: Option<u32>,
+    },
+    File {
+        path: String,
+    },
 }
 
 /// Builds the [`NotePosition`] for one annotation against the MR's `diff_refs`:
-/// an added/context (`New`-side) line fills `new_line`, a removed (`Old`-side)
-/// line fills `old_line`, and a file target is a `"file"` position with no
-/// line — the reverse of the discussions-import mapping.
+/// an added (`New`-side) line fills `new_line`, a removed (`Old`-side) line
+/// fills `old_line`, a context line (a counterpart is present) fills **both**
+/// — GitLab requires both sides for a position on an unchanged line — and a
+/// file target is a `"file"` position with no line. The reverse of the
+/// discussions-import mapping.
 pub fn build_note_position(diff_refs: &DiffRefs, target: &NoteTarget) -> NotePosition {
     let base = |position_type, path: &str, new_line, old_line| NotePosition {
         base_sha: diff_refs.base_sha.clone(),
@@ -495,41 +510,52 @@ pub fn build_note_position(diff_refs: &DiffRefs, target: &NoteTarget) -> NotePos
             path,
             side: Side::New,
             line,
-        } => base("text", path, Some(*line), None),
+            other_line,
+        } => base("text", path, Some(*line), *other_line),
         NoteTarget::Line {
             path,
             side: Side::Old,
             line,
-        } => base("text", path, None, Some(*line)),
+            other_line,
+        } => base("text", path, *other_line, Some(*line)),
         NoteTarget::File { path } => base("file", path, None, None),
     }
 }
 
 /// One positioned note to publish: the originating annotation's store id (so a
-/// success marks it published), its body, and its diff position.
+/// success marks it published), its body, its diff position, and whether a
+/// prior stopped run already created its private draft (so this run skips
+/// the create and only publishes).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitlabNote {
     pub annotation_id: usize,
     pub body: String,
     pub position: NotePosition,
+    pub draft_created: bool,
 }
 
 /// One drafted reply to publish: its store id, the discussion string id it
-/// answers (GitLab replies target the *discussion*, not the root note), and
-/// its body.
+/// answers (GitLab replies target the *discussion*, not the root note), its
+/// body, and whether its private draft already exists from a prior stopped
+/// run (same skip contract as [`GitlabNote::draft_created`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitlabReply {
     pub reply_id: usize,
     pub discussion_id: String,
     pub body: String,
+    pub draft_created: bool,
 }
 
 /// The full batch one GitLab submit run publishes: an optional review summary
 /// (posted as a non-positioned note), the positioned annotation notes, the
 /// drafted replies, and whether to approve after publishing.
+/// `summary_draft_created` marks the summary's private draft as already
+/// existing from a prior stopped run, the id-less counterpart to the
+/// per-item `draft_created` flags.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GitlabSubmitBatch {
     pub summary: Option<String>,
+    pub summary_draft_created: bool,
     pub notes: Vec<GitlabNote>,
     pub replies: Vec<GitlabReply>,
     pub approve: bool,
@@ -570,21 +596,6 @@ pub trait GitlabSubmitExecutor {
     fn approve(&self) -> Result<(), ForgeError>;
 }
 
-/// The one-line diagnostic a [`ForgeError`] contributes to a stopped run —
-/// a `Command` error's first non-empty stderr line, else its `Display`.
-/// Mirrors `super::submit::error_headline`.
-fn error_headline(e: &ForgeError) -> String {
-    match e {
-        ForgeError::Command { stderr, .. } if !stderr.trim().is_empty() => stderr
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or(stderr)
-            .trim()
-            .to_string(),
-        other => other.to_string(),
-    }
-}
-
 /// Whether a draft-note create failed because the instance has no draft-notes
 /// API (older GitLab) rather than a genuine error — the signal to fall back to
 /// visible discussions. Recognized from a `404`-shaped `Command` error, the
@@ -600,16 +611,6 @@ fn is_draft_notes_unavailable(e: &ForgeError) -> bool {
     }
 }
 
-/// A stopped run that published nothing — its diagnostic in `failure`. Used
-/// when a draft create or the bulk-publish fails: drafts are author-only, so
-/// no teammate ever saw a partial batch.
-fn nothing_published(e: &ForgeError) -> SubmitReport {
-    SubmitReport {
-        failure: Some(error_headline(e)),
-        ..SubmitReport::default()
-    }
-}
-
 /// Whether the draft path even ran to completion, or bailed on the very first
 /// create because the endpoint is unavailable (→ visible fallback).
 enum DraftAttempt {
@@ -620,10 +621,14 @@ enum DraftAttempt {
 /// Runs one GitLab submit pass over `batch` against `exec`. Prefers the
 /// near-atomic draft-notes path — every note staged privately, then one
 /// bulk-publish makes the whole batch visible at once, then `approve` when
-/// asked — so a failure before bulk-publish leaves nothing on the MR. When the
-/// instance has no draft-notes API (a `404` on the first create), it falls back
-/// to sequential visible discussions with the Unit-4 per-item published
-/// marking. A caller that rebuilds the next batch from only the
+/// asked — so a failure before bulk-publish leaves nothing *visible* on the
+/// MR. A stopped run reports which items' private drafts were created
+/// (`draft_*` fields) so the caller can record them: a resubmit then skips
+/// re-creating those drafts (its bulk publish flips every pending draft,
+/// including previously orphaned ones) and never duplicates a comment. When
+/// the instance has no draft-notes API (a `404` on the first create), it
+/// falls back to sequential visible discussions with the Unit-4 per-item
+/// published marking. A caller that rebuilds the next batch from only the
 /// still-unpublished set re-sends nothing that already landed.
 pub fn run_gitlab_submit_sequence(
     batch: &GitlabSubmitBatch,
@@ -636,57 +641,107 @@ pub fn run_gitlab_submit_sequence(
 }
 
 /// The draft-notes attempt: create the summary note, then each positioned
-/// note, then each reply as private drafts; a `404` on the *first* create means
-/// the endpoint is unavailable (→ [`DraftAttempt::Unavailable`]); any other
-/// create failure, or a bulk-publish failure, stops with nothing published
-/// (drafts are invisible). On bulk-publish success every item is marked
-/// published together; a later `approve` failure leaves the (already published)
-/// comments in place with the diagnostic surfaced.
+/// note, then each reply as private drafts — skipping any item whose draft
+/// already exists from a prior stopped run — then one bulk publish. A `404`
+/// on the *first* create, with no prior drafts anywhere, means the endpoint
+/// is unavailable (→ [`DraftAttempt::Unavailable`]); any other create
+/// failure stops with nothing published and the already-created drafts
+/// reported per-item (drafts are invisible to teammates, but they exist
+/// server-side — re-creating them on retry would duplicate). A bulk-publish
+/// failure likewise reports every item as drafted-but-unpublished. On
+/// bulk-publish success every item — including drafts carried over from a
+/// prior run — is marked published together; a later `approve` failure
+/// leaves the (already published) comments in place with the diagnostic
+/// surfaced.
 fn try_draft_submit(batch: &GitlabSubmitBatch, exec: &dyn GitlabSubmitExecutor) -> DraftAttempt {
-    let mut created = 0usize;
+    // Drafts left behind by a prior stopped run: their existence both
+    // disarms the 404 fallback (the endpoint demonstrably exists) and
+    // forces the bulk publish even if this run creates nothing new.
+    let precreated = batch.summary_draft_created
+        || batch.notes.iter().any(|n| n.draft_created)
+        || batch.replies.iter().any(|r| r.draft_created);
+    let mut summary_drafted = batch.summary_draft_created;
+    let mut drafted_annotations: Vec<usize> = Vec::new();
+    let mut drafted_replies: Vec<usize> = Vec::new();
+    let mut fresh_creates = 0usize;
 
-    if let Some(summary) = &batch.summary {
+    let stopped = |summary_drafted: bool,
+                   drafted_annotations: Vec<usize>,
+                   drafted_replies: Vec<usize>,
+                   e: &ForgeError| {
+        DraftAttempt::Completed(SubmitReport {
+            draft_annotation_ids: drafted_annotations,
+            draft_reply_ids: drafted_replies,
+            summary_draft_created: summary_drafted,
+            failure: Some(submit_error_headline(e)),
+            ..SubmitReport::default()
+        })
+    };
+
+    if let Some(summary) = &batch.summary
+        && !summary_drafted
+    {
         match exec.create_draft_note(summary, None, None) {
-            Ok(()) => created += 1,
-            Err(e) if is_draft_notes_unavailable(&e) => return DraftAttempt::Unavailable,
-            Err(e) => return DraftAttempt::Completed(nothing_published(&e)),
+            Ok(()) => {
+                fresh_creates += 1;
+                summary_drafted = true;
+            }
+            Err(e) if !precreated && is_draft_notes_unavailable(&e) => {
+                return DraftAttempt::Unavailable;
+            }
+            Err(e) => return stopped(summary_drafted, drafted_annotations, drafted_replies, &e),
         }
     }
     for note in &batch.notes {
+        if note.draft_created {
+            drafted_annotations.push(note.annotation_id);
+            continue;
+        }
         match exec.create_draft_note(&note.body, Some(&note.position), None) {
-            Ok(()) => created += 1,
-            Err(e) if created == 0 && is_draft_notes_unavailable(&e) => {
+            Ok(()) => {
+                fresh_creates += 1;
+                drafted_annotations.push(note.annotation_id);
+            }
+            Err(e) if fresh_creates == 0 && !precreated && is_draft_notes_unavailable(&e) => {
                 return DraftAttempt::Unavailable;
             }
-            Err(e) => return DraftAttempt::Completed(nothing_published(&e)),
+            Err(e) => return stopped(summary_drafted, drafted_annotations, drafted_replies, &e),
         }
     }
     for reply in &batch.replies {
+        if reply.draft_created {
+            drafted_replies.push(reply.reply_id);
+            continue;
+        }
         match exec.create_draft_note(&reply.body, None, Some(&reply.discussion_id)) {
-            Ok(()) => created += 1,
-            Err(e) if created == 0 && is_draft_notes_unavailable(&e) => {
+            Ok(()) => {
+                fresh_creates += 1;
+                drafted_replies.push(reply.reply_id);
+            }
+            Err(e) if fresh_creates == 0 && !precreated && is_draft_notes_unavailable(&e) => {
                 return DraftAttempt::Unavailable;
             }
-            Err(e) => return DraftAttempt::Completed(nothing_published(&e)),
+            Err(e) => return stopped(summary_drafted, drafted_annotations, drafted_replies, &e),
         }
     }
 
-    if created > 0
+    if (fresh_creates > 0 || precreated)
         && let Err(e) = exec.bulk_publish_drafts()
     {
-        return DraftAttempt::Completed(nothing_published(&e));
+        // Every draft in the batch now exists server-side; none is visible.
+        return stopped(summary_drafted, drafted_annotations, drafted_replies, &e);
     }
 
     let mut report = SubmitReport {
         published_annotation_ids: batch.notes.iter().map(|n| n.annotation_id).collect(),
         published_reply_ids: batch.replies.iter().map(|r| r.reply_id).collect(),
         review_submitted: true,
-        failure: None,
+        ..SubmitReport::default()
     };
     if batch.approve
         && let Err(e) = exec.approve()
     {
-        report.failure = Some(error_headline(&e));
+        report.failure = Some(submit_error_headline(&e));
     }
     DraftAttempt::Completed(report)
 }
@@ -704,7 +759,7 @@ fn run_visible_fallback(
     if let Some(summary) = &batch.summary
         && let Err(e) = exec.create_discussion(summary, None)
     {
-        report.failure = Some(error_headline(&e));
+        report.failure = Some(submit_error_headline(&e));
         return report;
     }
     // The review-level content (the summary) is now visible; mark it so a
@@ -713,14 +768,14 @@ fn run_visible_fallback(
     report.review_submitted = true;
     for note in &batch.notes {
         if let Err(e) = exec.create_discussion(&note.body, Some(&note.position)) {
-            report.failure = Some(error_headline(&e));
+            report.failure = Some(submit_error_headline(&e));
             return report;
         }
         report.published_annotation_ids.push(note.annotation_id);
     }
     for reply in &batch.replies {
         if let Err(e) = exec.create_discussion_reply(&reply.discussion_id, &reply.body) {
-            report.failure = Some(error_headline(&e));
+            report.failure = Some(submit_error_headline(&e));
             return report;
         }
         report.published_reply_ids.push(reply.reply_id);
@@ -728,7 +783,7 @@ fn run_visible_fallback(
     if batch.approve
         && let Err(e) = exec.approve()
     {
-        report.failure = Some(error_headline(&e));
+        report.failure = Some(submit_error_headline(&e));
     }
     report
 }

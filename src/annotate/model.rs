@@ -148,6 +148,15 @@ pub enum Target {
         line: u32,
         /// Which side of the diff `line` refers to.
         side: Side,
+        /// The same physical line's 1-based number on the *opposite* diff
+        /// side, when it exists there (a context line appears on both
+        /// sides; added/removed lines don't). Captured at annotation time
+        /// because some forge position formats (GitLab) require both
+        /// numbers for a context line. `None` for single-sided lines and
+        /// for annotations persisted before this field existed
+        /// (`#[serde(default)]`), which keep single-sided behavior.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        other_line: Option<u32>,
     },
     /// An inclusive span of lines in a file.
     Range {
@@ -159,6 +168,12 @@ pub enum Target {
         end: u32,
         /// Which side of the diff the span refers to.
         side: Side,
+        /// `end`'s 1-based number on the opposite diff side, when `end` is
+        /// a context line — the only endpoint forge submission anchors on
+        /// (a span collapses to its end line). Same compatibility contract
+        /// as [`Target::Line`]'s `other_line`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        other_end: Option<u32>,
     },
     /// An entire hunk, anchored to its new-side line span.
     Hunk {
@@ -168,6 +183,11 @@ pub enum Target {
         start: u32,
         /// 1-based, inclusive new-side end line. Must be `>= start`.
         end: u32,
+        /// `end`'s 1-based old-side number when the hunk's last line is a
+        /// context line (the common case — hunks end on trailing context).
+        /// Same compatibility contract as [`Target::Line`]'s `other_line`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        other_end: Option<u32>,
     },
     /// An entire file.
     File {
@@ -199,21 +219,46 @@ pub enum Target {
 }
 
 impl Target {
-    /// Builds a [`Target::Line`].
+    /// Builds a [`Target::Line`] with no opposite-side counterpart.
     pub fn line(path: impl Into<String>, line: u32, side: Side) -> Target {
+        Target::line_with_other(path, line, side, None)
+    }
+
+    /// Builds a [`Target::Line`], recording the line's number on the
+    /// opposite diff side when it has one (a context line).
+    pub fn line_with_other(
+        path: impl Into<String>,
+        line: u32,
+        side: Side,
+        other_line: Option<u32>,
+    ) -> Target {
         Target::Line {
             path: path.into(),
             line,
             side,
+            other_line,
         }
     }
 
-    /// Builds a [`Target::Range`], validating `start <= end`.
+    /// Builds a [`Target::Range`] with no opposite-side counterpart,
+    /// validating `start <= end`.
     pub fn range(
         path: impl Into<String>,
         start: u32,
         end: u32,
         side: Side,
+    ) -> Result<Target, AnnotateError> {
+        Target::range_with_other_end(path, start, end, side, None)
+    }
+
+    /// Builds a [`Target::Range`], validating `start <= end` and recording
+    /// `end`'s opposite-side number when it has one (a context line).
+    pub fn range_with_other_end(
+        path: impl Into<String>,
+        start: u32,
+        end: u32,
+        side: Side,
+        other_end: Option<u32>,
     ) -> Result<Target, AnnotateError> {
         if start > end {
             return Err(AnnotateError::InvalidRange { start, end });
@@ -223,11 +268,24 @@ impl Target {
             start,
             end,
             side,
+            other_end,
         })
     }
 
-    /// Builds a [`Target::Hunk`], validating `start <= end`.
+    /// Builds a [`Target::Hunk`] with no opposite-side counterpart,
+    /// validating `start <= end`.
     pub fn hunk(path: impl Into<String>, start: u32, end: u32) -> Result<Target, AnnotateError> {
+        Target::hunk_with_other_end(path, start, end, None)
+    }
+
+    /// Builds a [`Target::Hunk`], validating `start <= end` and recording
+    /// `end`'s old-side number when the hunk's last line is a context line.
+    pub fn hunk_with_other_end(
+        path: impl Into<String>,
+        start: u32,
+        end: u32,
+        other_end: Option<u32>,
+    ) -> Result<Target, AnnotateError> {
         if start > end {
             return Err(AnnotateError::InvalidRange { start, end });
         }
@@ -235,6 +293,7 @@ impl Target {
             path: path.into(),
             start,
             end,
+            other_end,
         })
     }
 
@@ -318,6 +377,12 @@ pub struct Annotation {
     /// is authoritative on screen). Never affects the stdout markdown, which
     /// includes every annotation regardless of published state.
     pub published: bool,
+    /// Whether a private GitLab draft note for this annotation already
+    /// exists server-side from a stopped submit run — created but not yet
+    /// bulk-published. A resubmit skips re-creating such drafts and lets
+    /// its bulk publish flip them; cleared once published. Always `false`
+    /// on the GitHub path, which stages no drafts.
+    pub draft_created: bool,
 }
 
 /// Validates and normalizes an annotation body: trims surrounding
@@ -385,6 +450,7 @@ mod tests {
                 start: 5,
                 end: 5,
                 side: Side::New,
+                other_end: None,
             }
         );
     }
@@ -494,6 +560,88 @@ mod tests {
             Target::hunk("a.rs", 1, 2).unwrap().worktree_anchor_line(),
             None
         );
+    }
+
+    // -- opposite-side counterpart capture (context lines) -------------------
+
+    #[test]
+    fn line_with_other_records_the_counterpart_and_plain_line_leaves_it_absent() {
+        assert_eq!(
+            Target::line_with_other("a.rs", 8, Side::New, Some(6)),
+            Target::Line {
+                path: "a.rs".to_string(),
+                line: 8,
+                side: Side::New,
+                other_line: Some(6),
+            }
+        );
+        assert_eq!(
+            Target::line("a.rs", 8, Side::New),
+            Target::line_with_other("a.rs", 8, Side::New, None)
+        );
+    }
+
+    #[test]
+    fn range_and_hunk_with_other_end_record_the_counterpart_and_still_validate() {
+        assert_eq!(
+            Target::range_with_other_end("a.rs", 1, 3, Side::New, Some(2)).unwrap(),
+            Target::Range {
+                path: "a.rs".to_string(),
+                start: 1,
+                end: 3,
+                side: Side::New,
+                other_end: Some(2),
+            }
+        );
+        assert_eq!(
+            Target::hunk_with_other_end("a.rs", 1, 3, Some(2)).unwrap(),
+            Target::Hunk {
+                path: "a.rs".to_string(),
+                start: 1,
+                end: 3,
+                other_end: Some(2),
+            }
+        );
+        assert!(Target::range_with_other_end("a.rs", 5, 2, Side::New, Some(1)).is_err());
+        assert!(Target::hunk_with_other_end("a.rs", 5, 2, Some(1)).is_err());
+    }
+
+    #[test]
+    fn targets_persisted_before_the_counterpart_field_still_deserialize() {
+        // The exact JSON shapes written before `other_line`/`other_end`
+        // existed must keep loading, with the counterpart absent.
+        let line: Target =
+            serde_json::from_str(r#"{"kind":"line","path":"a.rs","line":3,"side":"new"}"#).unwrap();
+        assert_eq!(line, Target::line("a.rs", 3, Side::New));
+        let range: Target = serde_json::from_str(
+            r#"{"kind":"range","path":"a.rs","start":1,"end":4,"side":"old"}"#,
+        )
+        .unwrap();
+        assert_eq!(range, Target::range("a.rs", 1, 4, Side::Old).unwrap());
+        let hunk: Target =
+            serde_json::from_str(r#"{"kind":"hunk","path":"a.rs","start":1,"end":4}"#).unwrap();
+        assert_eq!(hunk, Target::hunk("a.rs", 1, 4).unwrap());
+    }
+
+    #[test]
+    fn counterpart_free_targets_serialize_without_the_new_keys() {
+        let json = serde_json::to_string(&Target::line("a.rs", 3, Side::New)).unwrap();
+        assert!(!json.contains("other_line"), "unexpected key: {json}");
+        let json = serde_json::to_string(&Target::range("a.rs", 1, 4, Side::New).unwrap()).unwrap();
+        assert!(!json.contains("other_end"), "unexpected key: {json}");
+    }
+
+    #[test]
+    fn counterpart_carrying_targets_round_trip_through_serde() {
+        for target in [
+            Target::line_with_other("a.rs", 8, Side::New, Some(6)),
+            Target::range_with_other_end("a.rs", 1, 8, Side::New, Some(6)).unwrap(),
+            Target::hunk_with_other_end("a.rs", 1, 8, Some(6)).unwrap(),
+        ] {
+            let json = serde_json::to_string(&target).unwrap();
+            let back: Target = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, target, "round trip changed the target: {json}");
+        }
     }
 
     #[test]

@@ -27,6 +27,7 @@
 //! - [`ForgeError`] — the shared error type for every provider operation.
 
 mod detect;
+pub(crate) mod diagnose;
 mod github;
 mod gitlab;
 mod process;

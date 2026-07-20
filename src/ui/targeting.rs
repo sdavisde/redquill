@@ -34,12 +34,20 @@ pub(super) fn target_for_cursor(file: &FileDiff, rows: &[Row], cursor: usize) ->
 }
 
 /// The `Hunk` target for the `hunk_index`-th hunk of `file`, spanning the
-/// same range [`Row::HunkHeader`] anchors on. `None` if the index is out of
-/// range or the span is not a valid target.
+/// same range [`Row::HunkHeader`] anchors on. When the span's end line is a
+/// context line, its old-side number is recorded as the counterpart —
+/// forge submission anchors the hunk on that end line, and a context anchor
+/// needs both sides. `None` if the index is out of range or the span is not
+/// a valid target.
 fn hunk_target(file: &FileDiff, hunk_index: usize) -> Option<Target> {
     let hunk = file.hunks.get(hunk_index)?;
     let (start, end) = hunk_span(hunk);
-    Target::hunk(&file.path, start, end).ok()
+    let other_end = hunk
+        .lines
+        .iter()
+        .find(|l| l.origin == LineOrigin::Context && l.new_line == Some(end))
+        .and_then(|l| l.old_line);
+    Target::hunk_with_other_end(&file.path, start, end, other_end).ok()
 }
 
 /// The annotation target for a [`super::Mode::Visual`] selection between
@@ -86,20 +94,30 @@ pub(super) fn target_for_visual(
             .collect();
         let start = *nums.iter().min()?;
         let end = *nums.iter().max()?;
-        Target::range(&file.path, start, end, Side::New).ok()
+        // Forge submission anchors the span on its end line; when that line
+        // is context, record its old-side number so a both-sided position
+        // can be built.
+        let other_end = lines
+            .iter()
+            .find(|l| l.origin == LineOrigin::Context && l.new_line == Some(end))
+            .and_then(|l| l.old_line);
+        Target::range_with_other_end(&file.path, start, end, Side::New, other_end).ok()
     }
 }
 
 /// The `Line` target for a diff line row: `Removed` lines anchor to the old
-/// side/number, `Added`/`Context` lines to the new side/number. `None` only
-/// if the row's own invariant (removed lines always carry `old_line`,
-/// non-removed lines always carry `new_line`) is somehow violated.
+/// side/number, `Added`/`Context` lines to the new side/number. A `Context`
+/// line exists on both sides, so its old-side number rides along as the
+/// counterpart (some forge position formats need both). `None` only if the
+/// row's own invariant (removed lines always carry `old_line`, non-removed
+/// lines always carry `new_line`) is somehow violated.
 fn line_target(path: &str, line: &LineRow) -> Option<Target> {
     match line.origin {
         LineOrigin::Removed => line.old_line.map(|n| Target::line(path, n, Side::Old)),
-        LineOrigin::Added | LineOrigin::Context => {
-            line.new_line.map(|n| Target::line(path, n, Side::New))
-        }
+        LineOrigin::Added => line.new_line.map(|n| Target::line(path, n, Side::New)),
+        LineOrigin::Context => line
+            .new_line
+            .map(|n| Target::line_with_other(path, n, Side::New, line.old_line)),
     }
 }
 
@@ -169,11 +187,17 @@ pub(super) fn as_worktree_target(target: Target) -> Target {
                 start,
                 end,
                 side: Side::New,
+                other_end: None,
             })
         }
-        Target::Hunk { path, start, end } => {
-            Target::worktree_range(&path, start, end).unwrap_or(Target::Hunk { path, start, end })
-        }
+        Target::Hunk {
+            path, start, end, ..
+        } => Target::worktree_range(&path, start, end).unwrap_or(Target::Hunk {
+            path,
+            start,
+            end,
+            other_end: None,
+        }),
         file @ Target::File { .. } => file,
         // Already a worktree target (should not happen -- callers only
         // route diff-view-shaped targets through this function -- but a
@@ -237,9 +261,33 @@ index 1..2 100644
         let rows = rows_for(&file);
         assert!(matches!(rows[1], Row::HunkHeader { .. }));
         let (start, end) = hunk_span(&file.hunks[0]);
+        // The span ends on ctx3 (new 3 / old 3), so the old-side counterpart
+        // rides along.
         assert_eq!(
             target_for_cursor(&file, &rows, 1),
-            Target::hunk("f.rs", start, end).ok()
+            Target::hunk_with_other_end("f.rs", start, end, Some(3)).ok()
+        );
+    }
+
+    #[test]
+    fn hunk_ending_on_an_added_line_carries_no_counterpart() {
+        let raw = "\
+diff --git a/f.rs b/f.rs
+index 1..2 100644
+--- a/f.rs
++++ b/f.rs
+@@ -1,1 +1,3 @@
+ a
++b
++c
+";
+        let file = file_diff(raw, "f.rs");
+        let rows = rows_for(&file);
+        assert!(matches!(rows[1], Row::HunkHeader { .. }));
+        let (start, end) = hunk_span(&file.hunks[0]);
+        assert_eq!(
+            target_for_cursor(&file, &rows, 1),
+            Target::hunk_with_other_end("f.rs", start, end, None).ok()
         );
     }
 
@@ -252,9 +300,34 @@ index 1..2 100644
             panic!("expected line row");
         };
         assert_eq!(ctx1.new_line, Some(1));
+        // A context line exists on both sides; its old-side number rides
+        // along as the counterpart.
         assert_eq!(
             target_for_cursor(&file, &rows, 2),
-            Some(Target::line("f.rs", 1, Side::New))
+            Some(Target::line_with_other("f.rs", 1, Side::New, Some(1)))
+        );
+    }
+
+    #[test]
+    fn cursor_on_context_line_after_edits_records_the_shifted_old_counterpart() {
+        // ctx3 sits at new 3 / old 3 here, but an insertion above would shift
+        // them apart — the counterpart must come from the row, not the anchor.
+        let raw = "\
+diff --git a/f.rs b/f.rs
+index 1..2 100644
+--- a/f.rs
++++ b/f.rs
+@@ -1,2 +1,3 @@
+ a
++b
+ c
+";
+        let file = file_diff(raw, "f.rs");
+        let rows = rows_for(&file);
+        // rows: FileHeader(0) HunkHeader(1) a(2) b(3) c(4); c is new 3, old 2.
+        assert_eq!(
+            target_for_cursor(&file, &rows, 4),
+            Some(Target::line_with_other("f.rs", 3, Side::New, Some(2)))
         );
     }
 
@@ -340,6 +413,18 @@ index 1..2 100644
         assert_eq!(
             target_for_visual(&file, &rows, 3, 2),
             Target::range("f.rs", 1, 2, Side::Old).ok()
+        );
+    }
+
+    #[test]
+    fn visual_range_ending_on_a_context_line_records_the_counterpart() {
+        let file = file_diff(sample(), "f.rs");
+        let rows = rows_for(&file);
+        // Select ctx1 (new 1) through ctx3 (new 3, old 3): the end line is
+        // context, so its old-side number rides along.
+        assert_eq!(
+            target_for_visual(&file, &rows, 5, 2),
+            Target::range_with_other_end("f.rs", 1, 3, Side::New, Some(3)).ok()
         );
     }
 

@@ -764,7 +764,15 @@ impl App {
                 head_sha,
                 moved,
                 worktree_path,
-            } => self.enter_pr_review(ctx, worktree_path, Some(head_sha), moved, false),
+                diff_refs,
+            } => self.enter_pr_review(
+                ctx,
+                worktree_path,
+                Some(head_sha),
+                diff_refs.map(persisted_diff_refs),
+                moved,
+                false,
+            ),
             PrCheckoutOutcome::Failed {
                 message,
                 stale_worktree,
@@ -783,7 +791,7 @@ impl App {
                             .state_path
                             .as_ref()
                             .and_then(|p| stored_pr_head_sha(p, &ctx.managed_branch));
-                        self.enter_pr_review(ctx, path, stored, false, true);
+                        self.enter_pr_review(ctx, path, stored, None, false, true);
                         // The stale entry succeeded (or degraded); layer the
                         // fetch diagnostic on top so the reason is visible.
                         if self.review_stale {
@@ -806,12 +814,16 @@ impl App {
     /// The shared "re-root onto a PR worktree and wire up the review session"
     /// tail of [`App::finish_pr_checkout`], used by both the ready path and
     /// the stale-fallback path. `head_sha` seeds the persisted forge block's
-    /// last-fetched SHA; `stale` marks the banner.
+    /// last-fetched SHA; `diff_refs` is the GitLab diff snapshot captured by
+    /// the checkout fetch (`None` degrades to whatever was last persisted, so
+    /// a failed refetch keeps an older pin rather than losing it); `stale`
+    /// marks the banner.
     fn enter_pr_review(
         &mut self,
         ctx: PrCheckoutContext,
         worktree_path: PathBuf,
         head_sha: Option<String>,
+        diff_refs: Option<crate::review::store::PersistedDiffRefs>,
         moved: bool,
         stale: bool,
     ) {
@@ -876,6 +888,11 @@ impl App {
                     number: ctx.number,
                     title: ctx.title.clone(),
                     last_head_sha: head_sha.unwrap_or_default(),
+                    diff_refs: diff_refs.or_else(|| {
+                        ctx.state_path
+                            .as_deref()
+                            .and_then(|p| stored_pr_diff_refs(p, &ctx.managed_branch))
+                    }),
                 });
                 self.review_stale = stale;
                 // Fetch this PR's existing comment threads asynchronously —
@@ -1343,6 +1360,31 @@ fn stored_pr_head_sha(state_path: &std::path::Path, managed_branch: &str) -> Opt
         .get(managed_branch)
         .and_then(|review| review.forge.as_ref())
         .map(|forge| forge.last_head_sha.clone())
+}
+
+/// Reads the diff refs a PR review under `managed_branch` last pinned, from
+/// its persisted forge block — the fallback keeping an earlier pin alive when
+/// a reopen's own refetch didn't produce one. `None` when nothing is
+/// persisted, or the entry carries no forge block or pin.
+fn stored_pr_diff_refs(
+    state_path: &std::path::Path,
+    managed_branch: &str,
+) -> Option<crate::review::store::PersistedDiffRefs> {
+    crate::review::store::load(state_path)
+        .reviews
+        .get(managed_branch)
+        .and_then(|review| review.forge.as_ref())
+        .and_then(|forge| forge.diff_refs.clone())
+}
+
+/// Converts the checkout fetch's forge-typed diff refs into the persisted
+/// mirror shape `review::store` keeps (the store layer stays forge-free).
+fn persisted_diff_refs(refs: crate::forge::DiffRefs) -> crate::review::store::PersistedDiffRefs {
+    crate::review::store::PersistedDiffRefs {
+        base_sha: refs.base_sha,
+        start_sha: refs.start_sha,
+        head_sha: refs.head_sha,
+    }
 }
 
 #[cfg(test)]

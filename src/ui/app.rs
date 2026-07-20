@@ -598,6 +598,12 @@ pub struct App {
     /// than re-posting (and double-delivering) the verdict. Session-scoped;
     /// resets on a fresh session.
     pub(super) forge_review_submitted: bool,
+    /// Whether the summary/verdict body already exists as an unpublished
+    /// private GitLab draft from a stopped submit run — a resubmit then
+    /// skips re-creating it (the batch's other items carry the same record
+    /// per-annotation/per-reply on their stores). Session-scoped in-memory
+    /// state, mirroring [`App::forge_review_submitted`]'s scope.
+    pub(super) forge_summary_draft_created: bool,
     /// The reviewer's locally drafted replies to imported PR threads, held
     /// separate from `annotations` so they never reach the stdout markdown
     /// stream, and separate from `thread_overlay` (teammates' read-only
@@ -855,6 +861,7 @@ impl App {
             forge_submit_in_flight: None,
             forge_submit_generation: 0,
             forge_review_submitted: false,
+            forge_summary_draft_created: false,
             replies: super::draft_reply::DraftReplyStore::new(),
             panel_collapsed_dirs: HashSet::new(),
             active_commit: None,

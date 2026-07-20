@@ -56,6 +56,7 @@ impl AnnotationStore {
             body,
             source,
             published: false,
+            draft_created: false,
         });
         Ok(id)
     }
@@ -115,6 +116,26 @@ impl AnnotationStore {
             .find(|a| a.id == id)
             .ok_or(AnnotateError::NotFound(id))?;
         annotation.published = published;
+        Ok(())
+    }
+
+    /// Sets the draft-created flag of the annotation with the given id —
+    /// the submit flow's record that a private GitLab draft note for it
+    /// already exists server-side (created, but not yet bulk-published), so
+    /// a resubmit skips re-creating it and only publishes. Cleared when the
+    /// annotation is marked published. Mirrors
+    /// [`AnnotationStore::set_published`]'s additive shape.
+    pub fn set_draft_created(
+        &mut self,
+        id: usize,
+        draft_created: bool,
+    ) -> Result<(), AnnotateError> {
+        let annotation = self
+            .annotations
+            .iter_mut()
+            .find(|a| a.id == id)
+            .ok_or(AnnotateError::NotFound(id))?;
+        annotation.draft_created = draft_created;
         Ok(())
     }
 

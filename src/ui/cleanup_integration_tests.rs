@@ -331,6 +331,7 @@ fn an_unpublished_annotation_is_surfaced_in_the_finished_review() {
                 body: "not yet submitted".to_string(),
                 source: Source::WorkingTree,
                 published: false,
+                draft_created: false,
             }],
             files: BTreeMap::new(),
             ..existing

@@ -14,6 +14,7 @@
 //! (draft notes + bulk-publish) is a later unit; this driver stays
 //! GitHub-specific.
 
+use super::diagnose::submit_error_headline;
 use super::{ForgeError, ReviewPayload, ReviewSubmissionPlan};
 
 /// One drafted reply queued for the post-review follow-up phase: the reply's
@@ -40,6 +41,18 @@ pub struct SubmitBatch {
     pub plan: ReviewSubmissionPlan,
     pub replies: Vec<SubmitReplyItem>,
     pub include_review_post: bool,
+    /// Annotations whose private GitLab draft note already exists
+    /// server-side from a prior stopped run — the GitLab sequence skips
+    /// re-creating those drafts and lets its bulk publish flip them, so a
+    /// retry never duplicates a comment. Always empty on the GitHub path,
+    /// which stages no drafts.
+    pub draft_created_annotation_ids: Vec<usize>,
+    /// Replies whose GitLab draft already exists — same contract as
+    /// [`SubmitBatch::draft_created_annotation_ids`].
+    pub draft_created_reply_ids: Vec<usize>,
+    /// Whether the summary/verdict body's GitLab draft already exists —
+    /// same contract, for the one batch item that carries no store id.
+    pub summary_draft_created: bool,
 }
 
 /// What one submit run accomplished: which annotations and replies are now
@@ -61,6 +74,18 @@ pub struct SubmitReport {
     /// The one-line diagnostic that stopped the run, or `None` when the whole
     /// batch published.
     pub failure: Option<String>,
+    /// Store ids of annotations whose private GitLab draft note now exists
+    /// server-side but was **not** published (the run stopped before its
+    /// bulk publish). The caller records these so a resubmit creates only
+    /// the still-missing drafts; a successful bulk publish moves every
+    /// drafted id into `published_annotation_ids` instead. Always empty on
+    /// the GitHub path.
+    pub draft_annotation_ids: Vec<usize>,
+    /// Reply counterpart to [`SubmitReport::draft_annotation_ids`].
+    pub draft_reply_ids: Vec<usize>,
+    /// Whether the summary/verdict body now exists as an unpublished GitLab
+    /// draft — the id-less counterpart to the two draft lists.
+    pub summary_draft_created: bool,
 }
 
 /// The three positioned GitHub write operations the driver sequences, behind
@@ -68,7 +93,9 @@ pub struct SubmitReport {
 /// builds its own `gh api` argv from typed values and streams a
 /// machine-serialized JSON body on stdin (see `super::github`); none takes a
 /// string-assembled command line. Errors are the shared [`ForgeError`], whose
-/// first stderr line the caller surfaces.
+/// first stderr line the caller surfaces (plus a next-step hint when the
+/// failure is HTTP-401/403-shaped — see
+/// [`super::diagnose::submit_error_headline`]).
 pub trait ForgeSubmitExecutor {
     /// Publishes the whole review (line comments + verdict + summary) in one
     /// atomic reviews-endpoint POST.
@@ -79,23 +106,6 @@ pub trait ForgeSubmitExecutor {
 
     /// Posts one reply against a thread root (`thread_id`).
     fn post_reply(&self, thread_id: u64, body: &str) -> Result<(), ForgeError>;
-}
-
-/// The one-line diagnostic a [`ForgeError`] contributes to a stopped run: a
-/// `Command` error's first non-empty stderr line (CLI stderr is often
-/// multi-line; one actionable line is what the status line shows), or the
-/// error's own `Display` otherwise. Mirrors `super::stage_ops`'
-/// `forge_error_headline`.
-fn error_headline(e: &ForgeError) -> String {
-    match e {
-        ForgeError::Command { stderr, .. } if !stderr.trim().is_empty() => stderr
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or(stderr)
-            .trim()
-            .to_string(),
-        other => other.to_string(),
-    }
 }
 
 /// Runs one submit pass over `batch` against `exec`, returning what published
@@ -120,7 +130,7 @@ pub fn run_submit_sequence(batch: &SubmitBatch, exec: &dyn ForgeSubmitExecutor) 
     // does carry a verdict or comment still posts the review.
     if batch.include_review_post && batch.plan.payload.carries_content() {
         if let Err(e) = exec.submit_review(&batch.plan.payload) {
-            report.failure = Some(error_headline(&e));
+            report.failure = Some(submit_error_headline(&e));
             return report;
         }
         report.review_submitted = true;
@@ -133,7 +143,7 @@ pub fn run_submit_sequence(batch: &SubmitBatch, exec: &dyn ForgeSubmitExecutor) 
 
     for follow_up in &batch.plan.file_comment_follow_ups {
         if let Err(e) = exec.post_file_comment(&follow_up.path, &follow_up.body) {
-            report.failure = Some(error_headline(&e));
+            report.failure = Some(submit_error_headline(&e));
             return report;
         }
         report
@@ -143,7 +153,7 @@ pub fn run_submit_sequence(batch: &SubmitBatch, exec: &dyn ForgeSubmitExecutor) 
 
     for reply in &batch.replies {
         if let Err(e) = exec.post_reply(reply.thread_id, &reply.body) {
-            report.failure = Some(error_headline(&e));
+            report.failure = Some(submit_error_headline(&e));
             return report;
         }
         report.published_reply_ids.push(reply.reply_id);

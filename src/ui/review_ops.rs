@@ -782,6 +782,7 @@ mod tests {
             body: "restored?".to_string(),
             source: Source::WorkingTree,
             published: false,
+            draft_created: false,
         }];
 
         app.restore_review_annotations(persisted);
@@ -840,11 +841,13 @@ mod tests {
                 thread_id: 10,
                 body: "first".to_string(),
                 published: false,
+                draft_created: false,
             },
             PersistedReply {
                 thread_id: 20,
                 body: "second".to_string(),
                 published: false,
+                draft_created: false,
             },
         ]);
 

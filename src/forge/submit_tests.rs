@@ -86,6 +86,7 @@ fn annotation(id: usize, target: Target, body: &str) -> Annotation {
         body: body.to_string(),
         source: Source::WorkingTree,
         published: false,
+        draft_created: false,
     }
 }
 
@@ -112,6 +113,9 @@ fn mixed_batch() -> SubmitBatch {
             },
         ],
         include_review_post: true,
+        draft_created_annotation_ids: Vec::new(),
+        draft_created_reply_ids: Vec::new(),
+        summary_draft_created: false,
     }
 }
 
@@ -221,6 +225,9 @@ fn resume_skips_the_review_post_and_sends_only_the_remainder() {
             body: "thanks".to_string(),
         }],
         include_review_post: false,
+        draft_created_annotation_ids: Vec::new(),
+        draft_created_reply_ids: Vec::new(),
+        summary_draft_created: false,
     };
     let exec = FakeExecutor::new();
     let report = run_submit_sequence(&batch, &exec);
@@ -251,6 +258,9 @@ fn a_verdict_only_batch_still_posts_the_review_once() {
         plan,
         replies: Vec::new(),
         include_review_post: true,
+        draft_created_annotation_ids: Vec::new(),
+        draft_created_reply_ids: Vec::new(),
+        summary_draft_created: false,
     };
     let exec = FakeExecutor::new();
     let report = run_submit_sequence(&batch, &exec);
@@ -273,6 +283,9 @@ fn reply_only_batch_skips_the_empty_comment_review_post() {
             body: "resolved, thanks".to_string(),
         }],
         include_review_post: true,
+        draft_created_annotation_ids: Vec::new(),
+        draft_created_reply_ids: Vec::new(),
+        summary_draft_created: false,
     };
     let exec = FakeExecutor::new();
     let report = run_submit_sequence(&batch, &exec);
@@ -300,6 +313,9 @@ fn verdict_only_comment_batch_with_summary_still_posts_the_review() {
         plan,
         replies: Vec::new(),
         include_review_post: true,
+        draft_created_annotation_ids: Vec::new(),
+        draft_created_reply_ids: Vec::new(),
+        summary_draft_created: false,
     };
     let exec = FakeExecutor::new();
     let report = run_submit_sequence(&batch, &exec);
@@ -316,6 +332,9 @@ fn approve_with_no_comments_or_summary_still_posts_the_review() {
         plan,
         replies: Vec::new(),
         include_review_post: true,
+        draft_created_annotation_ids: Vec::new(),
+        draft_created_reply_ids: Vec::new(),
+        summary_draft_created: false,
     };
     let exec = FakeExecutor::new();
     let report = run_submit_sequence(&batch, &exec);
@@ -338,6 +357,9 @@ fn reply_only_resume_after_a_failed_reply_re_sends_only_the_remainder() {
             body: "thanks".to_string(),
         }],
         include_review_post: true,
+        draft_created_annotation_ids: Vec::new(),
+        draft_created_reply_ids: Vec::new(),
+        summary_draft_created: false,
     };
     let exec = FakeExecutor::new();
     let report = run_submit_sequence(&batch, &exec);
