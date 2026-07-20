@@ -114,7 +114,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 - [x] 3.5 Published-copy dedupe (FR-15): annotations marked published are not rendered as local annotations at their anchor once the forge copy is present in fetched threads.
 - [x] 3.6 Fetch-failure notice ("comments unavailable") without blocking review entry; scripted fake-provider journey transcript; all four gates.
 
-### [~] 4.0 Publish the whole review — comments, replies, verdict — from one previewed confirm screen (GitHub)
+### [x] 4.0 Publish the whole review — comments, replies, verdict — from one previewed confirm screen (GitHub)
 
 **User verification:** A "submit review" key opens a preview listing every unpublished comment and reply, a verdict choice (comment / approve / request changes), and an optional summary. Nothing is sent until you confirm; after confirming, the review appears on GitHub exactly as previewed (dogfood target: PR #25), and the published items are marked locally so re-submitting sends nothing twice. Quitting still prints your annotations to stdout exactly as today. CLAUDE.md's guardrails visibly document the new, narrow write ceiling.
 
@@ -135,7 +135,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 - [x] 4.3 Submit modal (`src/ui/forge_submit.rs`): grouped-by-file batch preview (annotations with anchors + classifications, draft replies, local-only and posts-as-file-comment labels), capability-driven verdict picker, summary input, target line (`#N on host/org/repo`); `submit-forge-review` keymap action (non-shadowing default `U`) live only in forge-PR review sessions; drift tests.
 - [x] 4.4 Submit sequence driver: one reviews-endpoint POST (comments array + event + body) → sequential follow-ups (file comments via `subject_type: file`, replies via the replies endpoint), each marked published on success; mid-sequence failure stops, reports published/unpublished split, resume sends only remainder; fake-provider tests for ordering, marking, resume.
 - [x] 4.5 Amend CLAUDE.md guardrails in the same change: product ceiling gains exactly the confirmed submit flow + `redquill/pr/*` namespace writes; forbidden list extended (merge/close, comment edit/delete, resolve); agent ceiling restated (no forge writes, fakes + scratch repos only). Add a docs-drift test asserting the guardrail section names the forge-submit ceiling and the `redquill/pr/` namespace (same pattern as the FR-6 docs check).
-- [ ] 4.6 Run all four gates; hand live dogfood to the user: submit a mixed-batch review to PR #25, capture transcript + screenshot, then a second submit proving nothing re-sends.
+- [x] 4.6 Run all four gates; hand live dogfood to the user: submit a mixed-batch review to PR #25, capture transcript + screenshot, then a second submit proving nothing re-sends. (Agent-side complete: all four gates green, fakes-only proofs in `13-proofs/13-task-04-proofs.md`. Live dogfood is **user-performed, pending** per the hard agent ceiling — steps recorded in the proof file.)
 
 ### [ ] 5.0 Clean up finished PR reviews safely from the launcher
 
