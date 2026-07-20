@@ -9,9 +9,14 @@
 //!   review, and report capability flags. UI code talks only to this trait,
 //!   never to `gh`/`glab` directly, so it's testable with fakes.
 //! - [`PullRequest`] — one row of a PR/MR listing.
-//! - [`PrDetail`], [`Thread`], [`ReviewSubmission`] — minimal stand-ins for
-//!   richer shapes that later work fleshes out; present now only so the
-//!   trait surface compiles.
+//! - [`PrDetail`] — a minimal stand-in for a richer shape later work
+//!   fleshes out; present now only so the trait surface compiles.
+//! - [`Thread`] — an imported PR review-comment thread (root + ordered
+//!   replies, resolved/outdated state, diff anchor); see [`threads`] for
+//!   construction from GitHub's JSON shape.
+//! - [`ReviewSubmission`] — a minimal stand-in for the submit-flow payload
+//!   later work fleshes out; present now only so the trait surface
+//!   compiles.
 //! - [`Verdict`]/[`Capabilities`] — the review verdict a submission carries,
 //!   and which verdicts/submit shapes a given provider actually supports.
 //! - [`ForgeError`] — the shared error type for every provider operation.
@@ -20,6 +25,7 @@ mod detect;
 mod github;
 mod process;
 mod remote_url;
+mod threads;
 
 pub use detect::{
     CredentialChecker, GhCredentialChecker, GlabCredentialChecker, ProviderKind,
@@ -27,6 +33,7 @@ pub use detect::{
 };
 pub use github::{PR_LIST_JSON_FIELDS, list_open_prs, parse_pr_list_json, pr_list_command};
 pub use remote_url::{Hostname, RemoteUrlError, parse_origin_hostname, parse_origin_repo_slug};
+pub use threads::{Thread, ThreadAnchor, ThreadComment, parse_review_comments_json};
 
 use thiserror::Error;
 
@@ -56,13 +63,6 @@ pub struct PullRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PrDetail {
     pub number: u64,
-}
-
-/// One imported comment thread. A minimal stand-in until thread import
-/// lands — carries only enough to identify the thread.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Thread {
-    pub id: String,
 }
 
 /// A batch of comments/replies/verdict ready to publish as one review. A

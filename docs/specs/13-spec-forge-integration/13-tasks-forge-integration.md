@@ -92,7 +92,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 - [x] 2.6 Tempdir integration tests: scratch bare origin advertising `refs/pull/1/head`-style refs — happy path, fork-style head (no matching origin branch), head-move demotion, fetch failure; canonicalized paths.
 - [x] 2.7 Capture the journey transcript (checkout → author push → reopen shows demotions); run all four gates.
 
-### [ ] 3.0 See the PR's existing conversations inside the diff and draft replies to them
+### [~] 3.0 See the PR's existing conversations inside the diff and draft replies to them
 
 **User verification:** Reviewing a PR that already has comments, you see markers at the commented lines; opening one shows the whole conversation in order (a 5-reply back-and-forth reads top-to-bottom, replies under the comment they answer), with resolved/outdated threads collapsed and labeled. You can draft a reply in the terminal; it appears in your annotation panel marked as a reply and survives quitting and reopening. If comments can't be fetched, review continues with a one-line notice.
 
@@ -107,7 +107,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 
 #### 3.0 Tasks
 
-- [ ] 3.1 TDD `src/forge/threads.rs`: thread model (root + ordered replies via `in_reply_to` linkage, author, timestamp, resolved/outdated state) and anchor mapping (path + side + line → diff anchor; unmappable → file-level), built from GitHub review-comment fixture JSON.
+- [x] 3.1 TDD `src/forge/threads.rs`: thread model (root + ordered replies via `in_reply_to` linkage, author, timestamp, resolved/outdated state) and anchor mapping (path + side + line → diff anchor; unmappable → file-level), built from GitHub review-comment fixture JSON.
 - [ ] 3.2 GitHub thread fetch: fixed argv `gh api` call for PR review comments, async through a fetcher seam; overlay store separate from annotations — never persisted, never serialized to stdout (regression-guard test on `markdown.rs` output).
 - [ ] 3.3 UI overlay: single-cell gutter markers on annotated lines, expandable thread view (conversation order, nested replies, collapsed resolved/outdated with labels), next/prev-thread navigation; keys chosen against the shared tables (no shadowing), footer hints + `?` sections, drift tests green.
 - [ ] 3.4 Reply drafting: compose flow consistent with annotation compose; drafts target the thread root, are editable/deletable, appear in the annotation list with a reply marker, persist in schema v3 (thread id + body) and restore on reopen.
