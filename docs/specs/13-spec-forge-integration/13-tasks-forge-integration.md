@@ -69,7 +69,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 - [x] 1.8 Write `docs/forge-setup.md` (providers, detection ladder, hosted-instance walkthrough, per-state troubleshooting), link from README, add the docs-drift existence/link test.
 - [x] 1.9 Capture the scratch-repo journey transcripts; run all four gates; hand the live-listing dogfood step to the user (PRs tab showing PR #25).
 
-### [~] 2.0 Select a PR and land in a full review session, with author pushes detected on reopen
+### [x] 2.0 Select a PR and land in a full review session, with author pushes detected on reopen
 
 **User verification:** Press `Enter` on a PR and arrive in the familiar review screen (worktree-backed, per-file accept/defer, annotations) without touching git yourself — including PRs from forks. If the author pushes new commits, reopening the PR shows "PR updated — N accepted file(s) changed" and those files drop back to needing re-review. Going offline doesn't destroy anything: the tab says why, and an existing checkout reopens clearly labeled stale.
 
@@ -90,7 +90,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 - [x] 2.4 Head-move handling: compare fetched head SHA to stored `last head SHA`; on move, remove managed worktree → forced namespace ref update → re-add worktree → reconcile; emit "PR updated — N accepted file(s) changed"; wire the existing manual refresh action to re-run the same check mid-session.
 - [x] 2.5 Fetch-failure path: existing local state untouched, one-line diagnostic, stale-labeled session entry when a prior worktree exists.
 - [x] 2.6 Tempdir integration tests: scratch bare origin advertising `refs/pull/1/head`-style refs — happy path, fork-style head (no matching origin branch), head-move demotion, fetch failure; canonicalized paths.
-- [ ] 2.7 Capture the journey transcript (checkout → author push → reopen shows demotions); run all four gates.
+- [x] 2.7 Capture the journey transcript (checkout → author push → reopen shows demotions); run all four gates.
 
 ### [ ] 3.0 See the PR's existing conversations inside the diff and draft replies to them
 

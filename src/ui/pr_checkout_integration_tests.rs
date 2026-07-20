@@ -19,9 +19,11 @@ use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 
-use super::app::App;
+use super::app::{App, Mode, ModeOrigin};
 use super::keymap::Action;
-use super::stage_ops::build_review;
+use super::review_launcher::LauncherTab;
+use super::stage_ops::{PrFetchOutcome, build_review};
+use crate::forge::PullRequest;
 use crate::git::{DiffTarget, GitRunner};
 use crate::review::store::ForgeProviderKind;
 use crate::review::{ReviewStatus, store};
@@ -430,6 +432,132 @@ fn reopen_from_the_launcher_after_a_fetch_failure_enters_a_stale_session() {
             branch: "redquill/pr/3".to_string(),
         }
     );
+}
+
+// -- Journey transcript (spec 13 task 2.0 proof) ----------------------------
+
+/// Journey generator for spec 13 task 2.0: on a real scratch repo whose
+/// `origin` advertises a GitHub-style `refs/pull/1/head` ref, opens the
+/// launcher on the Pull Requests tab (the list itself is seeded, since no
+/// real `gh` runs in-crate), presses `Enter` on the PR to land in a full
+/// review session via the real checkout, accepts a file, then simulates the
+/// author pushing a new commit and refreshes — showing the "PR updated — N
+/// accepted file(s) changed" line and the demoted file. Captured with
+/// `RQ_JOURNEY_DUMP=1 cargo test --lib pr_checkout_journey_transcript --
+/// --nocapture`.
+#[test]
+fn pr_checkout_journey_transcript() {
+    let mut log = String::new();
+    let mut step = |title: &str, body: &str| {
+        log.push_str(&format!("\n=== {title} ===\n{body}\n"));
+    };
+
+    let bare = setup_bare_origin();
+    let contributor = clone_of(bare.path());
+    let first_sha = push_pr_special_ref(contributor.path(), "feature", 1, "first version");
+    step(
+        "journey: a scratch origin advertising a GitHub-style PR head ref",
+        &format!(
+            "origin holds refs/pull/1/head at {first_sha} (no origin/feature branch — fork-style)"
+        ),
+    );
+
+    let reviewer = clone_of(bare.path());
+    let mut app = app_rooted_at(reviewer.path());
+
+    // Open the launcher on the Pull Requests tab with the PR listed (the
+    // listing is seeded — no real `gh` runs in-crate; the checkout below is
+    // fully real).
+    app.mode = Mode::ReviewLauncher {
+        tab: LauncherTab::PullRequests,
+        cursor: 0,
+        origin: ModeOrigin::Normal,
+    };
+    app.launcher_prs = Some(PrFetchOutcome::Loaded {
+        repo_label: "sdavisde/redquill".to_string(),
+        prs: vec![PullRequest {
+            number: 1,
+            title: "Add a feature".to_string(),
+            author: "octocat".to_string(),
+            head_ref: "feature".to_string(),
+            base_ref: "main".to_string(),
+            is_draft: false,
+            updated_at: "2026-07-19T00:00:00Z".to_string(),
+        }],
+    });
+    step(
+        "R -> Pull Requests tab: #1 Add a feature is listed",
+        "launcher open on the Pull Requests tab, cursor on PR #1",
+    );
+
+    // Enter on the PR row: real fetch + worktree + reroot into a session.
+    app.review_launcher_confirm();
+    drain_pr_checkout(&mut app);
+    assert!(app.in_review_session());
+    step(
+        "Enter on #1: landed in a worktree-backed review session",
+        &format!(
+            "target: {:?}\nforge: #{} on {} @ {}",
+            app.target,
+            app.review_forge.as_ref().unwrap().number,
+            app.review_forge.as_ref().unwrap().host,
+            &app.review_forge.as_ref().unwrap().last_head_sha[..12],
+        ),
+    );
+
+    // Accept the changed file.
+    app.select_file_by_path("base.txt");
+    app.apply(Action::ToggleAccept);
+    wait_for_review_save(&mut app);
+    step(
+        "accept base.txt",
+        &format!("base.txt status: {:?}", app.review_status("base.txt")),
+    );
+
+    // The author pushes a new commit onto the PR head.
+    git(contributor.path(), &["checkout", "-q", "feature"]);
+    write(
+        contributor.path(),
+        "base.txt",
+        "line one\nfirst version\nsecond version\n",
+    );
+    git(contributor.path(), &["commit", "-aqm", "author push"]);
+    let second_sha = git_out(contributor.path(), &["rev-parse", "HEAD"]);
+    git(
+        contributor.path(),
+        &["push", "-qf", "origin", "feature:refs/pull/1/head"],
+    );
+    step(
+        "author pushes a new commit to the PR",
+        &format!("refs/pull/1/head advanced {first_sha} -> {second_sha}"),
+    );
+
+    // Refresh mid-session: fetch-on-open detects the move and demotes.
+    app.manual_refresh();
+    drain_pr_checkout(&mut app);
+    step(
+        "refresh: fetch-on-open detects the author push",
+        &format!(
+            "status: {:?}\nbase.txt status: {:?}",
+            app.status_message,
+            app.review_status("base.txt"),
+        ),
+    );
+
+    assert_eq!(
+        app.review_status("base.txt"),
+        ReviewStatus::ChangedSinceAccepted
+    );
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_some_and(|m| m.contains("PR updated"))
+    );
+
+    if std::env::var("RQ_JOURNEY_DUMP").is_ok() {
+        eprintln!("{log}");
+    }
+    drop(bare);
 }
 
 #[test]
