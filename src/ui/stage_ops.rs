@@ -750,7 +750,7 @@ impl StageOps for GitRunner {
                     Ok(detail) => detail.diff_refs,
                     Err(e) => {
                         return forge::SubmitReport {
-                            failure: Some(forge_error_headline(&e)),
+                            failure: Some(forge::diagnose::error_headline(&e)),
                             ..forge::SubmitReport::default()
                         };
                     }
@@ -767,7 +767,8 @@ impl StageOps for GitRunner {
 /// [`PrCheckoutOutcome::Failed`]: a `Command` error's first stderr line
 /// (git's stderr is often multi-line; the session shows one actionable
 /// line), or the error's own `Display` otherwise. Mirrors
-/// [`forge_error_headline`].
+/// [`crate::forge::diagnose::error_headline`], forge's equivalent for
+/// [`ForgeError`].
 fn git_error_headline(e: &GitError) -> String {
     match e {
         GitError::Command { stderr, .. } if !stderr.trim().is_empty() => stderr
@@ -945,7 +946,7 @@ fn list_outcome(
         Err(e) => {
             if checker.has_credentials(hostname) {
                 PrFetchOutcome::ListFailed {
-                    message: forge_error_headline(&e),
+                    message: forge::diagnose::error_headline(&e),
                 }
             } else {
                 PrFetchOutcome::Unauthenticated {
@@ -954,19 +955,6 @@ fn list_outcome(
                 }
             }
         }
-    }
-}
-
-/// The one-line summary a [`ForgeError`] contributes to a
-/// [`PrFetchOutcome::ListFailed`] body: a `Command` error's first stderr
-/// line (stderr is often multi-line; the tab shows one actionable line, not
-/// a dump), or the error's own `Display` for every other variant.
-fn forge_error_headline(e: &ForgeError) -> String {
-    match e {
-        ForgeError::Command { stderr, .. } if !stderr.is_empty() => {
-            stderr.lines().next().unwrap_or(stderr).to_string()
-        }
-        other => other.to_string(),
     }
 }
 
@@ -1513,35 +1501,5 @@ mod tests {
         // synthesis path.
         let count = review.files.iter().filter(|f| f.path == "y.rs").count();
         assert_eq!(count, 1);
-    }
-
-    // -- forge_error_headline -------------------------------------------
-
-    #[test]
-    fn command_error_headline_is_the_first_stderr_line() {
-        let e = crate::forge::ForgeError::Command {
-            cli: "gh",
-            command: "pr list".to_string(),
-            code: "1".to_string(),
-            stderr: "not logged in\nrun `gh auth login`".to_string(),
-        };
-        assert_eq!(forge_error_headline(&e), "not logged in");
-    }
-
-    #[test]
-    fn command_error_with_empty_stderr_falls_back_to_display() {
-        let e = crate::forge::ForgeError::Command {
-            cli: "gh",
-            command: "pr list".to_string(),
-            code: "1".to_string(),
-            stderr: String::new(),
-        };
-        assert_eq!(forge_error_headline(&e), e.to_string());
-    }
-
-    #[test]
-    fn non_command_error_headline_is_the_display_string() {
-        let e = crate::forge::ForgeError::CliNotFound { cli: "gh" };
-        assert_eq!(forge_error_headline(&e), e.to_string());
     }
 }

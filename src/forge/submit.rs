@@ -14,6 +14,7 @@
 //! (draft notes + bulk-publish) is a later unit; this driver stays
 //! GitHub-specific.
 
+use super::diagnose::error_headline;
 use super::{ForgeError, ReviewPayload, ReviewSubmissionPlan};
 
 /// One drafted reply queued for the post-review follow-up phase: the reply's
@@ -79,23 +80,6 @@ pub trait ForgeSubmitExecutor {
 
     /// Posts one reply against a thread root (`thread_id`).
     fn post_reply(&self, thread_id: u64, body: &str) -> Result<(), ForgeError>;
-}
-
-/// The one-line diagnostic a [`ForgeError`] contributes to a stopped run: a
-/// `Command` error's first non-empty stderr line (CLI stderr is often
-/// multi-line; one actionable line is what the status line shows), or the
-/// error's own `Display` otherwise. Mirrors `super::stage_ops`'
-/// `forge_error_headline`.
-fn error_headline(e: &ForgeError) -> String {
-    match e {
-        ForgeError::Command { stderr, .. } if !stderr.trim().is_empty() => stderr
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or(stderr)
-            .trim()
-            .to_string(),
-        other => other.to_string(),
-    }
 }
 
 /// Runs one submit pass over `batch` against `exec`, returning what published

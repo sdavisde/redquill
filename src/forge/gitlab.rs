@@ -59,6 +59,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::annotate::Side;
 
+use super::diagnose::error_headline;
 use super::process::{harden_glab, run_captured_with_timeout, run_with_input_and_timeout};
 use super::submit::SubmitReport;
 use super::threads::{Thread, ThreadAnchor, ThreadComment};
@@ -568,21 +569,6 @@ pub trait GitlabSubmitExecutor {
 
     /// Approves the MR (only ever called when the verdict is approve).
     fn approve(&self) -> Result<(), ForgeError>;
-}
-
-/// The one-line diagnostic a [`ForgeError`] contributes to a stopped run —
-/// a `Command` error's first non-empty stderr line, else its `Display`.
-/// Mirrors `super::submit::error_headline`.
-fn error_headline(e: &ForgeError) -> String {
-    match e {
-        ForgeError::Command { stderr, .. } if !stderr.trim().is_empty() => stderr
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or(stderr)
-            .trim()
-            .to_string(),
-        other => other.to_string(),
-    }
 }
 
 /// Whether a draft-note create failed because the instance has no draft-notes
