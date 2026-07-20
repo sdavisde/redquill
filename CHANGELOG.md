@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.17.2](https://github.com/sdavisde/redquill/compare/v0.17.1...v0.17.2) (2026-07-20)
+
+
+### Bug Fixes
+
+* **annotate,forge:** carry a context line's opposite-side number into GitLab positions ([e47bd0c](https://github.com/sdavisde/redquill/commit/e47bd0c525841fdd5fa9fb219304a4da06226eda))
+* **forge:** explain 401/403 submit failures with a next step ([9e595be](https://github.com/sdavisde/redquill/commit/9e595bee14b9c9e51b44d94c7e1999aa2c0f26d6))
+* **forge:** explain 401/403 submit failures with a next step ([e07856d](https://github.com/sdavisde/redquill/commit/e07856d5a7a4832452ef76ae6a692b6fba8e0aff))
+* **forge:** pin GitLab diff_refs at review open instead of fetching at submit ([ae3e46b](https://github.com/sdavisde/redquill/commit/ae3e46b1d44a47cc5dab88ad7204dc4514531c12))
+* **gitlab:** account for created drafts per item and skip them on resubmit ([3ce3a8e](https://github.com/sdavisde/redquill/commit/3ce3a8e4283b98b2ae3686a3133e950932770a45))
+* **ui:** report pending drafts honestly in the submit outcome message ([2e691cd](https://github.com/sdavisde/redquill/commit/2e691cd312fdac9efd3cdc3ab8d93bd621dbd9bf))
+
 ## [0.17.1](https://github.com/sdavisde/redquill/compare/v0.17.0...v0.17.1) (2026-07-20)
 
 
