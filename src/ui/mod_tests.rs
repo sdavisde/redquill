@@ -2910,9 +2910,11 @@ fn running_indicator_renders_while_a_remote_op_is_in_flight() {
 
 /// With no search input, remote-op indicator, or transient status message
 /// active, the footer falls back to the context-sensitive hint strip (see
-/// `footer.rs`) — the git panel's only discoverability surface now that it's
-/// hidden by default (besides the `?` help overlay), plus the rest of the
-/// curated Normal-mode strip.
+/// `footer.rs`) — trimmed to the less-common Normal-mode actions
+/// (`?` help stays as the overlay's only discoverability surface for
+/// everything the trim removed). `j`/`k` movement, hunk nav, fold, search,
+/// and the `` ` `` git panel binding are muscle-memory basics: still bound,
+/// still documented in `?` help, but no longer rendered in this strip.
 #[test]
 fn context_footer_strip_renders_when_nothing_else_occupies_the_footer() {
     let keymap = Keymap::default_map();
@@ -2930,20 +2932,20 @@ fn context_footer_strip_renders_when_nothing_else_occupies_the_footer() {
         .map(|c| c.symbol())
         .collect();
     assert!(
-        content.contains("git panel"),
-        "footer strip should hint at the backtick binding"
-    );
-    assert!(
         content.contains("help"),
         "footer strip should hint at the help overlay"
     );
     assert!(
-        content.contains("move"),
-        "footer strip should hint at j/k movement"
-    );
-    assert!(
         content.contains("stage hunk"),
         "footer strip should hint at Space staging a hunk"
+    );
+    assert!(
+        !content.contains("git panel"),
+        "trimmed: the backtick binding no longer occupies footer space"
+    );
+    assert!(
+        !content.contains("move"),
+        "trimmed: j/k movement no longer occupies footer space"
     );
 }
 

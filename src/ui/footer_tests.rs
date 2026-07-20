@@ -51,27 +51,22 @@ fn keys(entries: &[FooterEntry]) -> Vec<String> {
 
 // -- Per-mode hint lists ------------------------------------------------
 
+/// `j/k` movement, hunk nav, fold, search, and `` ` `` git panel are
+/// muscle-memory basics — they stay bound and documented in `?` help, but
+/// carry no `FooterHint` tag, so they don't consume space in the idle strip.
 #[test]
 fn normal_mode_hints_match_the_curated_list_in_order() {
     let km = Keymap::default_map();
     let entries = normal_hints(&km, true, true, false, false);
-    assert_eq!(
-        keys(&entries),
-        vec!["j/k", "]", "za", "Space", "S", "c", "e", "x", "/", "`", "?"]
-    );
+    assert_eq!(keys(&entries), vec!["Space", "S", "c", "e", "x", "?"]);
     assert_eq!(
         labels(&entries),
         vec![
-            "move",
-            "hunk",
-            "fold",
             "stage hunk",
             "stage file",
             "comment",
             "edit",
             "delete",
-            "search",
-            "git panel",
             "help",
         ]
     );
@@ -100,7 +95,7 @@ fn normal_mode_hints_exclude_staging_when_not_allowed() {
     assert!(!labels(&entries).contains(&"stage hunk"));
     assert!(!labels(&entries).contains(&"stage file"));
     // Everything else survives (edit/delete are staging-independent).
-    assert_eq!(entries.len(), 9);
+    assert_eq!(entries.len(), 4);
     assert_eq!(labels(&entries).last(), Some(&"help"), "help stays last");
 }
 
@@ -121,26 +116,26 @@ fn normal_mode_hints_gain_q_end_review_during_a_review_session() {
     assert!(!labels(&without).contains(&"end review"));
 }
 
-/// During a review session, `Space`/`S`/`d`'s footer hints
-/// swap from staging's to review's: `staging_allowed` is always `false` for
-/// a review target (read-only), so "stage hunk"/"stage file" are gone, and
-/// "accept"/"accept file"/"defer" take their place — the footer-strip half
-/// of the "inapplicable keys are omitted, not inert-but-listed" contract
-/// `help_overlay_shows_review_rows_and_hides_staging_rows_during_a_review_session`
-/// (`mod_tests.rs`) pins for the `?` overlay.
+/// During a review session, `staging_allowed` is always `false` for a review
+/// target (read-only), so "stage hunk"/"stage file" are gone. `accept`/
+/// `accept file` (`Space`/`S`) are muscle-memory-adjacent like the other
+/// trimmed basics — untagged, so they no longer occupy strip space even
+/// though the keys still work and stay documented in `?` help; `defer`
+/// keeps its tag and still promotes, since it's a less-common, deliberate
+/// review action.
 #[test]
-fn normal_mode_hints_show_accept_defer_and_hide_staging_during_a_review_session() {
+fn normal_mode_hints_hide_accept_and_stage_but_keep_defer_during_a_review_session() {
     let km = Keymap::default_map();
     // A review target is always `staging_allowed = false` (read-only) — see
     // `App::target.staging_mode()` for `DiffTarget::Review`.
     let entries = normal_hints(&km, false, true, false, true);
     assert!(!labels(&entries).contains(&"stage hunk"));
     assert!(!labels(&entries).contains(&"stage file"));
-    assert!(labels(&entries).contains(&"accept"));
-    assert!(labels(&entries).contains(&"accept file"));
+    assert!(!labels(&entries).contains(&"accept"));
+    assert!(!labels(&entries).contains(&"accept file"));
     assert!(labels(&entries).contains(&"defer"));
-    assert!(keys(&entries).contains(&"Space".to_string()));
-    assert!(keys(&entries).contains(&"S".to_string()));
+    assert!(!keys(&entries).contains(&"Space".to_string()));
+    assert!(!keys(&entries).contains(&"S".to_string()));
     assert!(keys(&entries).contains(&"d".to_string()));
 
     // Absent outside a review session, even with staging allowed.

@@ -601,8 +601,8 @@ impl Keymap {
         };
         Keymap {
             bindings: vec![
-                d(KeySeq::one(Char('j'), none), CursorDown, "Move cursor down").footer(1, "move"),
-                d(KeySeq::one(Char('k'), none), CursorUp, "Move cursor up").footer(1, "move"),
+                d(KeySeq::one(Char('j'), none), CursorDown, "Move cursor down"),
+                d(KeySeq::one(Char('k'), none), CursorUp, "Move cursor up"),
                 d(
                     KeySeq::one(Char('h'), none),
                     CursorLeft,
@@ -663,7 +663,7 @@ impl Keymap {
                     JumpToBottom,
                     "Jump to bottom of diff",
                 ),
-                d(KeySeq::one(Char(']'), none), NextHunk, "Next hunk").footer(2, "hunk"),
+                d(KeySeq::one(Char(']'), none), NextHunk, "Next hunk"),
                 d(KeySeq::one(Char('['), none), PrevHunk, "Previous hunk"),
                 d(KeySeq::one(Tab, none), NextFile, "Next file section"),
                 d(
@@ -675,8 +675,7 @@ impl Keymap {
                     KeySeq::two(Char('z'), none, Char('a'), none),
                     ToggleCollapse,
                     "Collapse/expand file section",
-                )
-                .footer(3, "fold"),
+                ),
                 d(
                     KeySeq::two(Char('z'), none, Char('z'), none),
                     RecenterCursor,
@@ -789,14 +788,12 @@ impl Keymap {
                     KeySeq::one(Char(' '), none),
                     ToggleAccept,
                     "Accept/un-accept file under cursor",
-                )
-                .footer(4, "accept"),
+                ),
                 d(
                     KeySeq::one(Char('S'), none),
                     AcceptFile,
                     "Accept file under cursor",
-                )
-                .footer(5, "accept file"),
+                ),
                 d(
                     KeySeq::one(Char('d'), none),
                     ToggleDefer,
@@ -807,8 +804,7 @@ impl Keymap {
                     KeySeq::one(Char('`'), none),
                     FocusGitPanel,
                     "Open git panel",
-                )
-                .footer(10, "git panel"),
+                ),
                 // `@` and `!` are bound in `Scope::Global` (see the block at
                 // the end of this table) — both are "works everywhere" keys,
                 // not diff-specific. `R` (uppercase) is Global too now — the
@@ -819,7 +815,7 @@ impl Keymap {
                     Refresh,
                     "Refresh diff from working tree",
                 ),
-                d(KeySeq::one(Char('/'), none), Search, "Search").footer(9, "search"),
+                d(KeySeq::one(Char('/'), none), Search, "Search"),
                 d(
                     KeySeq::one(Char('n'), none),
                     SearchNext,
@@ -2269,8 +2265,14 @@ mod tests {
         );
     }
 
+    /// `j`/`k` movement is muscle memory — trimmed from the global
+    /// (diff-view) idle footer strip, but still bound and still documented
+    /// in `?` help via `description`. The merge-same-hint mechanism itself
+    /// stays covered by `Scope::Panel`'s own `j`/`k` rows below, which keep
+    /// their `FooterHint` tag (the panel strip is out of scope for the
+    /// trim).
     #[test]
-    fn cursor_down_and_up_are_promoted_with_the_same_footer_hint() {
+    fn diff_scope_cursor_down_and_up_are_no_longer_promoted_into_the_footer() {
         let km = Keymap::default_map();
         let down = km
             .bindings()
@@ -2281,6 +2283,27 @@ mod tests {
             .bindings()
             .iter()
             .find(|b| b.scope == Scope::Diff && b.action == Action::CursorUp)
+            .unwrap();
+        assert_eq!(down.footer, None);
+        assert_eq!(up.footer, None);
+    }
+
+    /// `Scope::Panel`'s own `j`/`k` rows (`PanelCursorDown`/`PanelCursorUp`)
+    /// are untouched by the global-strip trim (the git panel's footer is a
+    /// separate, mode-specific strip) and still merge into one `j/k move`
+    /// hint via the shared-hint mechanism.
+    #[test]
+    fn panel_scope_cursor_down_and_up_are_still_promoted_with_the_same_footer_hint() {
+        let km = Keymap::default_map();
+        let down = km
+            .bindings()
+            .iter()
+            .find(|b| b.scope == Scope::Panel && b.action == Action::PanelCursorDown)
+            .unwrap();
+        let up = km
+            .bindings()
+            .iter()
+            .find(|b| b.scope == Scope::Panel && b.action == Action::PanelCursorUp)
             .unwrap();
         assert_eq!(
             down.footer,

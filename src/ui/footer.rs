@@ -309,14 +309,17 @@ fn visual_hints(km: &Keymap, staging_allowed: bool) -> Vec<FooterEntry> {
 
 /// Short label for a two-key completion whose row carries no [`FooterHint`]
 /// (so it isn't promoted into any mode's idle strip) but still needs a label
-/// while its prefix is pending — currently `gd`/`gr`/`gg`. A completion that
-/// *is* tagged (`za`, tagged for the Normal strip) uses that tag's label
-/// instead, via [`pending_hints`] — this is purely the fallback for rows the
-/// idle strips don't otherwise promote. A test
-/// (`every_two_key_binding_has_a_pending_label`, in `footer` tests) fails if
-/// a new two-key binding ships without a case here.
+/// while its prefix is pending — currently `gd`/`gr`/`gg`/`za`. A completion
+/// that *is* tagged uses that tag's label instead, via [`pending_hints`] —
+/// this is purely the fallback for rows the idle strips don't otherwise
+/// promote. A test (`every_two_key_binding_has_a_pending_label`, in `footer`
+/// tests) fails if a new two-key binding ships without a case here.
 fn fallback_pending_label(action: Action) -> &'static str {
     match action {
+        // `za` carried its own `FooterHint` (promoted into the idle strip)
+        // until the footer trim untagged it; it's still a two-key
+        // completion, so it needs a fallback label like any other.
+        Action::ToggleCollapse => "fold",
         Action::GotoDefinition => "definition",
         Action::GotoReferences => "references",
         Action::JumpToTop => "top",
