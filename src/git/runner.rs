@@ -9,6 +9,10 @@ use super::diff::{DiffTarget, RawFilePatch, split_patches};
 use super::error::{GitError, command_error, map_spawn_err};
 use super::log::{COMMIT_LOG_FORMAT, CommitLogEntry, CommitLogRange, parse_commit_log};
 use super::ls_files::parse_ls_files_z;
+use super::remote::{
+    MANAGED_PR_BRANCH_PREFIX, PrRef, base_fetch_command, delete_managed_pr_branch_command,
+    pr_fetch_command,
+};
 use super::stash::{STASH_LIST_FORMAT, StashEntry, parse_stash_list};
 use super::status::{FileStatus, StatusSnapshot, parse_porcelain_v2, parse_porcelain_v2_full};
 use super::worktree::{WorktreeEntry, parse_worktree_list};
@@ -434,4 +438,61 @@ impl GitRunner {
         let out = String::from_utf8(output.stdout).map_err(GitError::Utf8)?;
         Ok(Some(out.trim().to_string()))
     }
+
+    /// Fetches `pr_ref`'s head commit from `origin` into its managed local
+    /// branch (`redquill/pr/<n>`), via [`PrRef`]'s forced refspec — see
+    /// [`pr_fetch_command`] for why forcing is safe here (structurally
+    /// confined to that one managed branch). Fails with [`GitError::Command`]
+    /// (git's own stderr — offline, ref not advertised, auth expired) rather
+    /// than touching any existing local state; the caller decides how to
+    /// surface a failure and whether a prior worktree may still be reviewed
+    /// stale.
+    pub fn fetch_pr_head(&self, pr_ref: &PrRef) -> Result<(), GitError> {
+        run_prebuilt(&mut pr_fetch_command(pr_ref, &self.root))
+    }
+
+    /// Plain (never forced) fetch of `base` from `origin`, so `origin/<base>`
+    /// resolves for a PR review's diff base. See [`base_fetch_command`] for
+    /// the exact argv shape.
+    pub fn fetch_base_ref(&self, base: &str) -> Result<(), GitError> {
+        run_prebuilt(&mut base_fetch_command(base, &self.root))
+    }
+
+    /// Returns the local branches currently under the managed PR/MR review
+    /// namespace (`refs/heads/redquill/pr/*`), in `for-each-ref`'s default
+    /// order. The listing query itself is scoped to that one prefix, the
+    /// same structural confinement [`GitRunner::delete_managed_pr_branch`]
+    /// relies on for deletion.
+    pub fn managed_pr_branches(&self) -> Result<Vec<LocalBranch>, GitError> {
+        let format_arg = format!("--format={BRANCH_LIST_FORMAT}");
+        let pattern = format!("refs/heads/{MANAGED_PR_BRANCH_PREFIX}");
+        let out = self.run_utf8(&["for-each-ref", pattern.as_str(), &format_arg])?;
+        parse_branch_list(&out)
+    }
+
+    /// Deletes a managed PR/MR review branch (`git branch -D
+    /// redquill/pr/<n>`; see [`delete_managed_pr_branch_command`] for why
+    /// `-D`, not `-d`, is safe here). Fails with [`GitError::Command`]
+    /// (git's own stderr) when the branch doesn't exist or is checked out
+    /// in a worktree; nothing else is touched.
+    pub fn delete_managed_pr_branch(&self, number: u64) -> Result<(), GitError> {
+        run_prebuilt(&mut delete_managed_pr_branch_command(number, &self.root))
+    }
+}
+
+/// Runs an already-built `cmd` to completion, mapping a non-zero exit into a
+/// [`GitError::Command`] built from `cmd`'s own argv (as constructed by the
+/// caller) rather than re-deriving it, so the reported command can never
+/// drift from what actually ran.
+fn run_prebuilt(cmd: &mut Command) -> Result<(), GitError> {
+    let args: Vec<String> = cmd
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let output = cmd.output().map_err(map_spawn_err)?;
+    if !output.status.success() {
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        return Err(command_error(&arg_refs, &output.status, &output.stderr));
+    }
+    Ok(())
 }

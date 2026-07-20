@@ -29,7 +29,10 @@
 //!   is a parameter of [`GitRunner::commit_log`], not of the parser.
 //! - [`remote`] builds the three sanctioned remote operations (fetch / pull /
 //!   push) as fixed argument vectors with `GIT_TERMINAL_PROMPT=0`, never
-//!   `--force` — the write/network ceiling.
+//!   `--force` — the write/network ceiling. Also owns [`PrRef`]: the closed
+//!   type behind PR/MR head-ref fetch, whose one permitted forced refspec
+//!   (and managed-branch delete) is structurally confined to the
+//!   `redquill/pr/` namespace.
 //! - [`stage`] adds index staging: file-level (`stage_file`/`unstage_file`)
 //!   and hunk/line-level via synthetic patches applied with `--cached`.
 //! - [`ls_files`] parses `git ls-files -z` (tracked) and `git ls-files -z
@@ -60,7 +63,10 @@ pub use diff::{DiffTarget, RawFilePatch, StagingMode, split_patches};
 pub use error::GitError;
 pub use log::{COMMIT_LOG_FORMAT, CommitLogEntry, CommitLogRange, parse_commit_log};
 pub use ls_files::parse_ls_files_z;
-pub use remote::{RemoteOp, remote_command};
+pub use remote::{
+    MANAGED_PR_BRANCH_PREFIX, PrRef, PrRefKind, RemoteOp, base_fetch_command,
+    delete_managed_pr_branch_command, pr_fetch_command, remote_command,
+};
 pub use runner::GitRunner;
 pub use stage::{build_hunk_patch, build_line_patch};
 pub use stash::{STASH_LIST_FORMAT, StashEntry, parse_stash_list};

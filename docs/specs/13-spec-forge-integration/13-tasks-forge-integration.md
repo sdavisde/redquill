@@ -69,7 +69,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 - [x] 1.8 Write `docs/forge-setup.md` (providers, detection ladder, hosted-instance walkthrough, per-state troubleshooting), link from README, add the docs-drift existence/link test.
 - [x] 1.9 Capture the scratch-repo journey transcripts; run all four gates; hand the live-listing dogfood step to the user (PRs tab showing PR #25).
 
-### [ ] 2.0 Select a PR and land in a full review session, with author pushes detected on reopen
+### [~] 2.0 Select a PR and land in a full review session, with author pushes detected on reopen
 
 **User verification:** Press `Enter` on a PR and arrive in the familiar review screen (worktree-backed, per-file accept/defer, annotations) without touching git yourself — including PRs from forks. If the author pushes new commits, reopening the PR shows "PR updated — N accepted file(s) changed" and those files drop back to needing re-review. Going offline doesn't destroy anything: the tab says why, and an existing checkout reopens clearly labeled stale.
 
@@ -84,7 +84,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 
 #### 2.0 Tasks
 
-- [ ] 2.1 TDD git-layer PR fetch: a closed `PrRef` type (provider ref pattern + integer PR number) producing fixed-shape argv for `git fetch origin <special-ref>:refs/heads/redquill/pr/<n>` (forced form only for that namespace — structurally unable to name any other ref), plus plain base-ref fetch; `GIT_TERMINAL_PROMPT=0`; managed-branch list/delete helpers restricted to the `redquill/pr/` prefix.
+- [x] 2.1 TDD git-layer PR fetch: a closed `PrRef` type (provider ref pattern + integer PR number) producing fixed-shape argv for `git fetch origin <special-ref>:refs/heads/redquill/pr/<n>` (forced form only for that namespace — structurally unable to name any other ref), plus plain base-ref fetch; `GIT_TERMINAL_PROMPT=0`; managed-branch list/delete helpers restricted to the `redquill/pr/` prefix.
 - [ ] 2.2 TDD `src/review/store.rs` schema v3: optional forge block on `PersistedReview` (provider, host, number, last head SHA); v2 files load silently with absent fields; deterministic serialization; byte-stable round-trip for non-forge reviews; bump `SCHEMA_VERSION`, keep corrupt-file salvage behavior.
 - [ ] 2.3 Wire `Enter` on a PR row: guards (in-session, single-in-flight) → head fetch → base fetch → `ensure_review_worktree(redquill/pr/<n>)` → reconciled state load → reroot onto `DiffTarget::Review` with the PR's base; store forge metadata in v3.
 - [ ] 2.4 Head-move handling: compare fetched head SHA to stored `last head SHA`; on move, remove managed worktree → forced namespace ref update → re-add worktree → reconcile; emit "PR updated — N accepted file(s) changed"; wire the existing manual refresh action to re-run the same check mid-session.
