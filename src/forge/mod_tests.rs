@@ -86,3 +86,35 @@ fn forge_setup_docs_cover_every_fr5_degraded_state() {
         "docs/forge-setup.md is missing coverage for: {missing:?}"
     );
 }
+
+// -- FR-21 docs contract: CLAUDE.md guardrails name the new write ceiling ----
+
+/// The repo's own guardrails must track the shipped forge-write surface (the
+/// "docs as contract" rule): a stale "never do X" misleads every future
+/// reader/agent. `include_str!` pins CLAUDE.md so the guardrail amendment
+/// can't silently drift away from what spec 13 actually ships.
+const CLAUDE_MD: &str = include_str!("../../CLAUDE.md");
+
+#[test]
+fn claude_md_guardrails_name_the_forge_submit_ceiling_and_namespace() {
+    let must_contain = [
+        // The submit-flow write ceiling, behind the confirm modal.
+        "submit confirm modal",
+        // The forced-ref / branch-deletion namespace, structurally confined.
+        "refs/heads/redquill/pr/*",
+        // The forbidden forge writes.
+        "PR/MR merge",
+        "editing or deleting any forge comment",
+        "thread resolve/unresolve",
+        // The restated agent ceiling.
+        "agents never invoke a forge write",
+    ];
+    let missing: Vec<&str> = must_contain
+        .into_iter()
+        .filter(|s| !CLAUDE_MD.contains(s))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "CLAUDE.md guardrails are missing the forge-submit ceiling text: {missing:?}"
+    );
+}
