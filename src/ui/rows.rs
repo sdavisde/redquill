@@ -58,6 +58,12 @@ pub struct LineRow {
     /// Whether this line is covered by at least one annotation (a `Line`
     /// target on this exact line, or a `Range` target spanning it).
     pub annotated: bool,
+    /// Whether an imported forge comment thread anchors on this exact line
+    /// (same side). Set by a post-build decoration pass over the overlay
+    /// store (see `App::decorate_thread_markers`), not by the row builder
+    /// itself, so `build_rows`/`build_multibuffer` stay overlay-free. Drives
+    /// the single-cell gutter thread marker.
+    pub thread: bool,
     /// Syntax-highlight spans for this line's source line (`new_line` for
     /// Added/Context, `old_line` for Removed), clipped to `content`'s
     /// length. `None` when no highlighting is available (unsupported
@@ -551,6 +557,7 @@ fn append_file_rows(
                 word_spans: spans.remove(&line_index),
                 no_newline: line.no_newline,
                 annotated: dotted.contains(&line_index),
+                thread: false,
                 syntax_spans,
             }));
             if let Some(list) = splice_after.get(&line_index) {

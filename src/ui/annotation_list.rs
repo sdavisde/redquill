@@ -39,7 +39,8 @@ impl App {
             | Mode::Finder
             | Mode::ProjectSearch
             | Mode::EndReview { .. }
-            | Mode::ConfirmRemoteOp { .. } => {}
+            | Mode::ConfirmRemoteOp { .. }
+            | Mode::ThreadView => {}
             Mode::Normal | Mode::Visual { .. } => {
                 if !self.annotations.is_empty() {
                     self.list_cursor = self.list_cursor.min(self.annotations.len() - 1);

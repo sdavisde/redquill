@@ -14,7 +14,7 @@ use thiserror::Error;
 use crate::diff::{DiffParseError, FileChangeKind, FileDiff};
 use crate::forge::{
     self, CredentialChecker, ForgeError, GhCredentialChecker, GlabCredentialChecker, ProviderKind,
-    ProviderResolution, PullRequest, ResolutionCache, UnresolvedReason,
+    ProviderResolution, PullRequest, ResolutionCache, Thread, UnresolvedReason,
 };
 use crate::git::{
     BranchStatus, ChangeKind, CommitLogEntry, CommitLogRange, CommitSummary, DiffTarget,
@@ -165,6 +165,13 @@ pub enum PrCheckoutOutcome {
 /// session. Like [`AsyncPrListFetcher`] it returns a value that already
 /// encodes every failure mode, so there is no outer `Result`.
 pub type AsyncPrCheckoutFetcher = Box<dyn Fn(PrCheckoutRequest) -> PrCheckoutOutcome + Send>;
+
+/// A `Send` closure fetching one PR's existing comment threads off the render
+/// thread, for the review session's thread overlay. Takes the PR number and
+/// returns the imported threads or a one-line diagnostic (the tab/banner
+/// surfaces "comments unavailable" on `Err`). Same cloned-`GitRunner`-handle
+/// indirection as the other `Async*` aliases.
+pub type AsyncThreadFetcher = Box<dyn Fn(u64) -> Result<Vec<Thread>, String> + Send>;
 
 /// The git operations the TUI needs for staging and refresh, kept behind a
 /// trait so [`super::App`]'s staging logic is unit-testable without a real
@@ -371,6 +378,14 @@ pub trait StageOps {
     fn origin_hostname(&self) -> Option<String> {
         None
     }
+    /// A `Send` closure fetching one PR's comment threads off the render
+    /// thread (see [`AsyncThreadFetcher`]). The default returns `None`,
+    /// keeping non-`Send` fakes (and git-less contexts) thread-overlay-free;
+    /// [`GitRunner`] overrides it by cloning itself into the closure and
+    /// resolving `origin`'s `owner/repo` slug for the resolution overlay.
+    fn async_thread_fetcher(&self) -> Option<AsyncThreadFetcher> {
+        None
+    }
 }
 
 impl StageOps for GitRunner {
@@ -529,6 +544,21 @@ impl StageOps for GitRunner {
         forge::parse_origin_hostname(&url)
             .ok()
             .map(|h| h.as_str().to_string())
+    }
+
+    fn async_thread_fetcher(&self) -> Option<AsyncThreadFetcher> {
+        // Same cloned-handle trick as `async_review_builder`. The `owner/repo`
+        // slug feeds the (best-effort) resolution overlay; a missing slug just
+        // leaves threads unresolved.
+        let runner = self.clone();
+        Some(Box::new(move |number| {
+            let slug = runner
+                .origin_url()
+                .ok()
+                .flatten()
+                .and_then(|url| forge::parse_origin_repo_slug(&url));
+            forge::fetch_review_threads(slug.as_deref(), number).map_err(|e| e.to_string())
+        }))
     }
 }
 

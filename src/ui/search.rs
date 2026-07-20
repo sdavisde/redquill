@@ -115,6 +115,7 @@ mod tests {
                 word_spans: None,
                 no_newline: false,
                 annotated: false,
+                thread: false,
                 syntax_spans: None,
             }),
             Row::AnnotationBorder { top: true },

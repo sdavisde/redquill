@@ -326,6 +326,8 @@ fn fallback_pending_label(action: Action) -> &'static str {
         Action::OpenFileFinder => "find file",
         Action::OpenProjectSearch => "search",
         Action::OpenEditor => "open editor",
+        Action::NextThread => "next thread",
+        Action::PrevThread => "prev thread",
         _ => "",
     }
 }
@@ -467,6 +469,7 @@ pub(super) fn build_hints(
         Mode::Search => Vec::new(),
         Mode::EndReview { .. } => modal_hints(&modal_keys.end_review),
         Mode::ConfirmRemoteOp { .. } => modal_hints(&modal_keys.confirm_remote_op),
+        Mode::ThreadView => modal_hints(&modal_keys.thread_view),
         Mode::ReviewLauncher { .. } => modal_hints(&modal_keys.review_launcher),
     }
 }

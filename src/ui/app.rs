@@ -153,6 +153,11 @@ pub enum Mode {
         cursor: usize,
         tab: PanelTab,
     },
+    /// The expandable forge comment-thread overlay is open, showing one
+    /// thread's full conversation (see [`super::forge_threads`]). Opened with
+    /// `T` on a line/file that has a thread; the focused thread and scroll
+    /// live in [`App::thread_view`].
+    ThreadView,
 }
 
 /// Where a modal-launching gesture was pressed from, so closing that modal
@@ -524,6 +529,26 @@ pub struct App {
     /// lag the PR's real head. Always false for a fresh checkout or a local
     /// branch review.
     pub(super) review_stale: bool,
+    /// The imported forge comment threads for the PR under review, fetched
+    /// live on session entry and manual refresh — never persisted, never
+    /// serialized to stdout (see [`crate::forge::ThreadOverlayStore`]). Empty
+    /// outside a PR review or before the first fetch lands.
+    pub(super) thread_overlay: crate::forge::ThreadOverlayStore,
+    /// The background poller thread fetches run through, separate from the PR
+    /// checkout poller so results drain independently.
+    pub(super) thread_fetch_tasks: BackgroundTasks<Result<Vec<crate::forge::Thread>, String>>,
+    /// The single in-flight thread fetch, if any (single-flight, mirroring
+    /// [`super::review_launcher::InFlightPrCheckout`]).
+    pub(super) thread_fetch_in_flight: Option<super::forge_threads::InFlightThreadFetch>,
+    /// Bumped on every session entry/refresh so a straggling fetch spawned
+    /// before the bump is dropped on arrival (mirrors `finder_generation`).
+    pub(super) thread_fetch_generation: u64,
+    /// Whether the last thread fetch failed: drives the one-line "comments
+    /// unavailable" banner notice. Cleared by a successful fetch.
+    pub(super) threads_unavailable: bool,
+    /// The expandable thread-view overlay's state, `Some` only while
+    /// [`Mode::ThreadView`] is active (see [`super::forge_threads`]).
+    pub(super) thread_view: Option<super::forge_threads::ThreadViewState>,
     /// The set of collapsed directory keys in the git panel's file tree (see
     /// [`super::file_tree`]). An `App` field rather than [`Mode::Panel`]
     /// state because a folded directory must stay folded across the panel
@@ -761,6 +786,12 @@ impl App {
             pr_checkout_tasks: BackgroundTasks::new(),
             review_forge: None,
             review_stale: false,
+            thread_overlay: crate::forge::ThreadOverlayStore::new(),
+            thread_fetch_tasks: BackgroundTasks::new(),
+            thread_fetch_in_flight: None,
+            thread_fetch_generation: 0,
+            threads_unavailable: false,
+            thread_view: None,
             panel_collapsed_dirs: HashSet::new(),
             active_commit: None,
             suspended_view: None,
@@ -1171,6 +1202,9 @@ impl App {
             Action::ToggleDefer => self.toggle_defer_file(),
             Action::EditAnnotation => self.edit_annotation_under_cursor(),
             Action::DeleteAnnotation => self.delete_annotation_under_cursor(),
+            Action::OpenThread => self.open_thread_view(),
+            Action::NextThread => self.next_thread(),
+            Action::PrevThread => self.prev_thread(),
             // `Quit`/`QuitDiscard` end the session; `OpenEditor` suspends the
             // TUI to spawn the configured editor. Both are intercepted by
             // `super::dispatch_key` before reaching here (see `Action::Quit`'s

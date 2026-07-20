@@ -853,6 +853,15 @@ impl App {
                     last_head_sha: head_sha.unwrap_or_default(),
                 });
                 self.review_stale = stale;
+                // Fetch this PR's existing comment threads asynchronously —
+                // never blocking session entry. A prior PR's overlay is
+                // cleared first so its markers don't linger before the fresh
+                // fetch lands (or fails into the "comments unavailable"
+                // notice).
+                self.thread_overlay.replace(Vec::new());
+                self.threads_unavailable = false;
+                self.rebuild_rows();
+                self.spawn_thread_fetch(ctx.number);
                 // Persist immediately so the forge block (and the head SHA a
                 // reopen compares against) lands even before any accept.
                 self.persist_review_state();

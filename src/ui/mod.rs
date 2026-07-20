@@ -38,6 +38,7 @@ mod file_finder_modal;
 mod file_tree;
 mod file_view;
 mod footer;
+mod forge_threads;
 mod git_panel;
 mod help;
 mod history;
@@ -384,6 +385,7 @@ fn dispatch_key(
         Mode::ProjectSearch => modes::handle_project_search_key(app, key),
         Mode::EndReview { .. } => return modes::handle_end_review_key(app, key),
         Mode::ConfirmRemoteOp { .. } => modes::handle_confirm_remote_op_key(app, key),
+        Mode::ThreadView => modes::handle_thread_view_key(app, key),
         Mode::Normal | Mode::Visual { .. } => {
             // While an overlay is open it captures keys — here that overlay
             // can only be the help overlay, since Compose and Peek have their
@@ -870,6 +872,9 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     if matches!(app.mode, Mode::EndReview { .. }) {
         end_review_modal::render(frame, area, app);
     }
+    if matches!(app.mode, Mode::ThreadView) {
+        forge_threads::render(frame, area, app);
+    }
     if matches!(app.mode, Mode::ConfirmRemoteOp { .. }) {
         confirm_remote_op_modal::render(frame, area, app);
     }
@@ -1069,6 +1074,9 @@ fn event_loop(
         // Drain a completed background PR checkout (Enter on a PR row, or a
         // mid-session refresh) into a review session, same cadence.
         app.poll_pr_checkout();
+        // Drain a completed background comment-thread fetch into the overlay
+        // (or the "comments unavailable" notice), same cadence.
+        app.poll_thread_fetch();
         // Drain any completed fuzzy-finder candidate-list load, same
         // cadence as the other pollers.
         app.poll_finder();

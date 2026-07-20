@@ -673,7 +673,8 @@ impl App {
             | Mode::Finder
             | Mode::ProjectSearch
             | Mode::EndReview { .. }
-            | Mode::ConfirmRemoteOp { .. } => {}
+            | Mode::ConfirmRemoteOp { .. }
+            | Mode::ThreadView => {}
             Mode::Normal | Mode::Visual { .. } => {
                 self.mode = Mode::Panel {
                     cursor: 0,

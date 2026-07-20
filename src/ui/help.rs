@@ -104,7 +104,7 @@ fn group_of(action: Action) -> &'static str {
         | RecenterCursor | ScrollCursorTop | ScrollCursorBottom => "Navigation",
         EnterVisual | Compose | EditAnnotation | DeleteAnnotation => "Annotate",
         ToggleStage | StageFile | ToggleStagingPanel => "Stage",
-        ToggleAccept | AcceptFile | ToggleDefer => "Review",
+        ToggleAccept | AcceptFile | ToggleDefer | OpenThread | NextThread | PrevThread => "Review",
         Search | SearchNext | SearchPrev | SearchWordForward | SearchWordBackward => "Search",
         ToggleList | ToggleHelp | FocusGitPanel | ToggleCommandLog | Refresh | OpenFileFinder
         | OpenProjectSearch | OpenEditor | DismissConfigWarning | OpenReviewLauncher => "Panels",
@@ -222,7 +222,7 @@ fn modal_hints<A: Clone>(table: &[ModalBinding<A>]) -> Vec<(String, &'static str
 /// applies), so only one of the two ever documents itself here at a time,
 /// exactly like `Action::ToggleStage`/`Action::ToggleAccept`'s mutual
 /// exclusion in [`binding_hidden`].
-fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 14] {
+fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 15] {
     let staging_section = if review_session {
         (
             "Accepted files panel (s, review sessions)",
@@ -266,6 +266,10 @@ fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 
         (
             "Pull/push confirm (p/P, review session)",
             modal_hints(&modal_keys.confirm_remote_op),
+        ),
+        (
+            "Thread overlay (T, PR review session)",
+            modal_hints(&modal_keys.thread_view),
         ),
     ]
 }

@@ -1169,6 +1169,65 @@ pub(super) static END_REVIEW_KEYS: LazyLock<Vec<ModalBinding<EndReviewAction>>> 
         ]
     });
 
+// -- Thread view overlay ------------------------------------------------------
+
+/// What a key does in the imported-thread overlay
+/// ([`super::app::Mode::ThreadView`]): a read-only conversation viewer, so
+/// just scroll and close. Not config-remappable yet — see
+/// [`THREAD_VIEW_KEYS`] and the module doc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ThreadViewAction {
+    /// Scroll the conversation down one line (see
+    /// [`super::app::App::thread_view_scroll_down`]).
+    ScrollDown,
+    /// Scroll the conversation up one line.
+    ScrollUp,
+    /// Close the overlay, returning to the diff.
+    Close,
+}
+
+/// The thread-overlay control keys (`j`/`k`/arrow scroll plus `Esc`/`q`
+/// close), for the help overlay, footer strip, and
+/// [`super::modes::handle_thread_view_key`]'s dispatch.
+pub(super) static THREAD_VIEW_KEYS: LazyLock<Vec<ModalBinding<ThreadViewAction>>> =
+    LazyLock::new(|| {
+        vec![
+            ModalBinding {
+                description: "Scroll conversation down",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('j')),
+                    ModalKey::plain(KeyCode::Down),
+                ],
+                action: ThreadViewAction::ScrollDown,
+                footer: Some(FooterHint {
+                    rank: 1,
+                    label: "scroll",
+                }),
+            },
+            ModalBinding {
+                description: "Scroll conversation up",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('k')),
+                    ModalKey::plain(KeyCode::Up),
+                ],
+                action: ThreadViewAction::ScrollUp,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Close the thread overlay",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('q')),
+                    ModalKey::plain(KeyCode::Esc),
+                ],
+                action: ThreadViewAction::Close,
+                footer: Some(FooterHint {
+                    rank: 2,
+                    label: "close",
+                }),
+            },
+        ]
+    });
+
 // -- Pull/push confirm modal --------------------------------------------------
 
 /// What a key does in the pull/push confirm modal (`p`/`P` in a review
@@ -2610,6 +2669,9 @@ pub struct ModalKeymaps {
     /// The pull/push confirm modal. Not config-remappable yet — see
     /// [`CONFIRM_REMOTE_OP_KEYS`].
     pub(super) confirm_remote_op: Vec<ModalBinding<ConfirmRemoteOpAction>>,
+    /// The imported-thread overlay. Not config-remappable yet — see
+    /// [`THREAD_VIEW_KEYS`].
+    pub(super) thread_view: Vec<ModalBinding<ThreadViewAction>>,
     /// The shared `/` list-filter editing sub-state (see
     /// [`FILTER_EDIT_KEYS`]) — one table reused by every filter-gaining
     /// context (list, staging, accepted panel, switcher).
@@ -2635,6 +2697,7 @@ impl Default for ModalKeymaps {
             end_review: END_REVIEW_KEYS.clone(),
             accepted_panel: ACCEPTED_PANEL_KEYS.clone(),
             confirm_remote_op: CONFIRM_REMOTE_OP_KEYS.clone(),
+            thread_view: THREAD_VIEW_KEYS.clone(),
             filter_edit: FILTER_EDIT_KEYS.clone(),
         }
     }
@@ -3646,6 +3709,62 @@ index 111..222 100644
                             matches!(flow, Flow::Quit(QuitOutcome::Discard)),
                             "End review {label}: confirm on the highlighted Pause option must quit emitting nothing"
                         );
+                    }
+                }
+            }
+        }
+    }
+
+    /// An `App` with the thread overlay open, so every thread-view action has
+    /// an observable effect.
+    fn thread_view_app() -> App {
+        let mut app = app();
+        app.thread_view = Some(super::super::forge_threads::ThreadViewState {
+            root_id: 1,
+            scroll: 0,
+        });
+        app.mode = Mode::ThreadView;
+        app
+    }
+
+    #[test]
+    fn every_thread_view_table_entry_drives_its_documented_action() {
+        use crate::ui::modes::handle_thread_view_key;
+
+        for binding in THREAD_VIEW_KEYS.iter() {
+            for key in &binding.keys {
+                let mut app = thread_view_app();
+                let label = binding.key_label();
+                match binding.action {
+                    ThreadViewAction::ScrollDown => {
+                        handle_thread_view_key(&mut app, key.event());
+                        assert_eq!(
+                            app.thread_view.as_ref().map(|tv| tv.scroll),
+                            Some(1),
+                            "Thread view {label}: scroll-down advances the scroll offset"
+                        );
+                    }
+                    ThreadViewAction::ScrollUp => {
+                        // Start one line down so scroll-up has an observable
+                        // effect (the fixture opens at scroll 0).
+                        if let Some(tv) = app.thread_view.as_mut() {
+                            tv.scroll = 1;
+                        }
+                        handle_thread_view_key(&mut app, key.event());
+                        assert_eq!(
+                            app.thread_view.as_ref().map(|tv| tv.scroll),
+                            Some(0),
+                            "Thread view {label}: scroll-up retreats the scroll offset"
+                        );
+                    }
+                    ThreadViewAction::Close => {
+                        handle_thread_view_key(&mut app, key.event());
+                        assert_eq!(
+                            app.mode,
+                            Mode::Normal,
+                            "Thread view {label}: close returns to the diff"
+                        );
+                        assert!(app.thread_view.is_none());
                     }
                 }
             }

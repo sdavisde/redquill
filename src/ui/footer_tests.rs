@@ -473,16 +473,21 @@ fn pending_z_shows_za_zb_zt_and_zz_sorted_by_key() {
 fn pending_g_shows_every_g_completion_sorted_by_key() {
     let km = Keymap::default_map();
     let entries = pending_hints(&km, key(KeyCode::Char('g')), true);
-    assert_eq!(keys(&entries), vec!["g/", "gSpace", "gd", "gg", "gp", "gr"]);
+    assert_eq!(
+        keys(&entries),
+        vec!["g/", "gSpace", "gT", "gd", "gg", "gp", "gr", "gt"]
+    );
     assert_eq!(
         labels(&entries),
         vec![
             "search",
             "open editor",
+            "prev thread",
             "definition",
             "top",
             "find file",
-            "references"
+            "references",
+            "next thread"
         ]
     );
 }
@@ -492,12 +497,19 @@ fn pending_g_drops_gd_and_gr_when_code_intel_is_disallowed() {
     let km = Keymap::default_map();
     let entries = pending_hints(&km, key(KeyCode::Char('g')), false);
     // `g/` (OpenProjectSearch), `g<Space>` (OpenEditor), `gg` (JumpToTop),
-    // and `gp` (OpenFileFinder) aren't code-intel actions, so they survive;
-    // `gd`/`gr` don't.
-    assert_eq!(keys(&entries), vec!["g/", "gSpace", "gg", "gp"]);
+    // `gp` (OpenFileFinder), and `gt`/`gT` (thread nav) aren't code-intel
+    // actions, so they survive; `gd`/`gr` don't.
+    assert_eq!(keys(&entries), vec!["g/", "gSpace", "gT", "gg", "gp", "gt"]);
     assert_eq!(
         labels(&entries),
-        vec!["search", "open editor", "top", "find file"]
+        vec![
+            "search",
+            "open editor",
+            "prev thread",
+            "top",
+            "find file",
+            "next thread"
+        ]
     );
 }
 
@@ -520,7 +532,10 @@ fn pending_prefix_replaces_the_mode_strip_in_normal_and_visual() {
         &km,
         &ModalKeymaps::default(),
     );
-    assert_eq!(keys(&normal), vec!["g/", "gSpace", "gd", "gg", "gp", "gr"]);
+    assert_eq!(
+        keys(&normal),
+        vec!["g/", "gSpace", "gT", "gd", "gg", "gp", "gr", "gt"]
+    );
     let visual = build_hints(
         Mode::Visual { anchor: 0 },
         FooterFlags {
@@ -536,7 +551,10 @@ fn pending_prefix_replaces_the_mode_strip_in_normal_and_visual() {
         &km,
         &ModalKeymaps::default(),
     );
-    assert_eq!(keys(&visual), vec!["g/", "gSpace", "gd", "gg", "gp", "gr"]);
+    assert_eq!(
+        keys(&visual),
+        vec!["g/", "gSpace", "gT", "gd", "gg", "gp", "gr", "gt"]
+    );
 }
 
 #[test]
@@ -558,7 +576,7 @@ fn build_hints_drops_gd_and_gr_from_the_pending_strip_when_code_intel_is_disallo
         &km,
         &ModalKeymaps::default(),
     );
-    assert_eq!(keys(&normal), vec!["g/", "gSpace", "gg", "gp"]);
+    assert_eq!(keys(&normal), vec!["g/", "gSpace", "gT", "gg", "gp", "gt"]);
 }
 
 /// A pending prefix is meaningless outside Normal/Visual (the event loop

@@ -201,6 +201,16 @@ pub enum Action {
     /// same no-confirmation semantics as the annotation list's delete. A
     /// no-op with a status hint when no annotation overlaps.
     DeleteAnnotation,
+    /// `T` in the diff view: opens the imported forge comment thread on the
+    /// cursor line/file in the [`super::app::Mode::ThreadView`] overlay. A
+    /// no-op with a status hint when the cursor isn't on a threaded line.
+    OpenThread,
+    /// `gt` in the diff view: moves the cursor to the next imported thread's
+    /// anchor (wrapping). A no-op with a status hint when no threads exist.
+    NextThread,
+    /// `gT` in the diff view: moves the cursor to the previous imported
+    /// thread's anchor (wrapping).
+    PrevThread,
 }
 
 /// The kebab-case config action-name for every [`Action`] variant (the
@@ -279,6 +289,9 @@ pub(crate) fn action_name(action: Action) -> &'static str {
         ToggleDefer => "toggle-defer",
         EditAnnotation => "edit-annotation",
         DeleteAnnotation => "delete-annotation",
+        OpenThread => "open-thread",
+        NextThread => "next-thread",
+        PrevThread => "prev-thread",
     }
 }
 
@@ -356,6 +369,9 @@ pub(crate) fn action_from_name(name: &str) -> Option<Action> {
         "toggle-defer" => ToggleDefer,
         "edit-annotation" => EditAnnotation,
         "delete-annotation" => DeleteAnnotation,
+        "open-thread" => OpenThread,
+        "next-thread" => NextThread,
+        "prev-thread" => PrevThread,
         _ => return None,
     })
 }
@@ -708,6 +724,24 @@ impl Keymap {
                     "Delete the annotation under the cursor",
                 )
                 .footer(8, "delete"),
+                // Imported forge comment threads (PR review sessions): open
+                // the thread on the cursor line/file, and jump between
+                // threads. `T` and `gt`/`gT` were all free in this scope.
+                d(
+                    KeySeq::one(Char('T'), none),
+                    OpenThread,
+                    "Open the comment thread on this line",
+                ),
+                d(
+                    KeySeq::two(Char('g'), none, Char('t'), none),
+                    NextThread,
+                    "Jump to next comment thread",
+                ),
+                d(
+                    KeySeq::two(Char('g'), none, Char('T'), none),
+                    PrevThread,
+                    "Jump to previous comment thread",
+                ),
                 d(
                     KeySeq::one(Char('a'), none),
                     ToggleList,
@@ -2317,7 +2351,7 @@ mod tests {
     }
 
     #[test]
-    fn completions_for_g_is_gg_gd_gr_gp_and_g_slash() {
+    fn completions_for_g_is_gg_gd_gr_gp_g_slash_and_thread_nav() {
         let km = Keymap::default_map();
         let g = key(KeyCode::Char('g'), KeyModifiers::NONE);
         let mut actions: Vec<Action> = km
@@ -2332,9 +2366,11 @@ mod tests {
                 Action::GotoDefinition,
                 Action::GotoReferences,
                 Action::JumpToTop,
+                Action::NextThread,
                 Action::OpenEditor,
                 Action::OpenFileFinder,
                 Action::OpenProjectSearch,
+                Action::PrevThread,
             ]
         );
     }

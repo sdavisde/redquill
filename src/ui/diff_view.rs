@@ -47,7 +47,16 @@ fn annotation_indent(gutter_width: usize) -> usize {
     content_col_offset(gutter_width)
 }
 
-pub(super) fn dot_span(annotated: bool, theme: &Theme) -> Span<'static> {
+pub(super) fn dot_span(annotated: bool, thread: bool, theme: &Theme) -> Span<'static> {
+    // One cell, never two: a thread marker (`\u{2261}`) takes the slot when a
+    // forge thread anchors here — its conversation isn't otherwise visible in
+    // the diff, unlike a local annotation, whose body already splices in
+    // below — otherwise the annotated dot (`\u{25cf}`), otherwise blank. The
+    // fixed two-column width is unchanged, so the marker never reflows the
+    // diff.
+    if thread {
+        return Span::styled("\u{2261} ", Style::default().fg(theme.hunk_header));
+    }
     let text = if annotated { "\u{25cf} " } else { "  " };
     Span::styled(text, Style::default().fg(theme.dot_marker))
 }
@@ -323,7 +332,7 @@ fn line_row_visual_line(
     );
     let mut spans = if is_first {
         vec![
-            dot_span(row.annotated, theme),
+            dot_span(row.annotated, row.thread, theme),
             Span::styled(gutter_number(row.old_line, gutter_width), gutter_style),
             Span::raw(" "),
             Span::styled(gutter_number(row.new_line, gutter_width), gutter_style),
@@ -435,7 +444,7 @@ fn file_header_line(
     // Collapse indicator: ▾ expanded, ▸ collapsed.
     let indicator = if collapsed { "\u{25b8} " } else { "\u{25be} " };
     let mut spans = vec![
-        dot_span(annotated, theme),
+        dot_span(annotated, false, theme),
         Span::styled(
             indicator.to_string(),
             Style::default()
@@ -488,7 +497,7 @@ fn hunk_header_line(
     theme: &Theme,
 ) -> Line<'static> {
     let spans = vec![
-        dot_span(annotated, theme),
+        dot_span(annotated, false, theme),
         Span::styled(
             text.to_string(),
             Style::default()
@@ -870,6 +879,7 @@ mod tests {
             word_spans: None,
             no_newline: false,
             annotated: false,
+            thread: false,
             syntax_spans: None,
         }
     }

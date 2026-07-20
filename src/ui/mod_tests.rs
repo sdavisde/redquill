@@ -676,7 +676,7 @@ fn help_overlay_scrolls_to_reveal_lower_sections() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(bottom.contains("Toggle regex / literal matching"));
+    assert!(bottom.contains("Close the thread overlay"));
     assert!(!bottom.contains("Move cursor down"));
 }
 

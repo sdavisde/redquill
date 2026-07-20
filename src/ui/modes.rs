@@ -19,7 +19,7 @@ use super::modal_keys::{
     self, AcceptedPanelAction, CommitMessageAction, ComposeAction, ConfirmRemoteOpAction,
     EndReviewAction, FilterEditAction, FinderAction, LauncherAction, ListAction, PeekAction,
     ProjectSearchInputAction, ProjectSearchResultsAction, SearchAction, StagingAction,
-    SwitcherAction,
+    SwitcherAction, ThreadViewAction,
 };
 use super::motion;
 
@@ -526,6 +526,27 @@ pub(super) fn handle_peek_key(app: &mut App, key: KeyEvent) {
         PeekAction::JumpToBottom => code_intel::peek_jump_to_bottom(app),
         PeekAction::Enter => code_intel::peek_enter(app),
         PeekAction::Close => code_intel::close_peek(app),
+    }
+}
+
+/// Handles one key event while [`super::Mode::ThreadView`] is active (the
+/// imported comment-thread overlay): a read-only viewer, so only scroll and
+/// close, resolved against `app.modal_keys.thread_view`. See
+/// [`modal_keys::THREAD_VIEW_KEYS`].
+pub(super) fn handle_thread_view_key(app: &mut App, key: KeyEvent) {
+    let count = match intercept_motion_count(app, key) {
+        MotionIntercept::Handled => return,
+        MotionIntercept::Resolve(count) => count,
+    };
+    let Some(action) = modal_keys::resolve(&app.modal_keys.thread_view, key) else {
+        return;
+    };
+    match action {
+        ThreadViewAction::ScrollDown => {
+            apply_motion_n_times(count, || app.thread_view_scroll_down())
+        }
+        ThreadViewAction::ScrollUp => apply_motion_n_times(count, || app.thread_view_scroll_up()),
+        ThreadViewAction::Close => app.close_thread_view(),
     }
 }
 
