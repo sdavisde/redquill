@@ -390,3 +390,122 @@ fn parse_resolves_a_reply_that_points_at_another_reply_up_to_its_root() {
     assert_eq!(threads[0].id, 1);
     assert_eq!(threads[0].replies.len(), 2);
 }
+
+// -- ThreadOverlayStore -------------------------------------------------------
+
+#[test]
+fn overlay_store_starts_empty() {
+    let store = ThreadOverlayStore::new();
+    assert!(store.is_empty());
+    assert_eq!(store.len(), 0);
+}
+
+#[test]
+fn overlay_store_replace_swaps_contents_wholesale() {
+    let json = wrap(&[raw_comment_json(RawCommentFixture {
+        id: 1,
+        in_reply_to: None,
+        path: "src/a.rs",
+        side: "RIGHT",
+        line: Some(1),
+        login: "author",
+        created_at: "2026-07-01T10:00:00Z",
+        body: "body",
+    })]);
+    let mut store = ThreadOverlayStore::new();
+    store.replace(parse_review_comments_json(&json).unwrap());
+    assert_eq!(store.len(), 1);
+
+    store.replace(Vec::new());
+    assert!(store.is_empty());
+}
+
+#[test]
+fn overlay_store_for_path_filters_by_anchor_path() {
+    let json = wrap(&[
+        raw_comment_json(RawCommentFixture {
+            id: 1,
+            in_reply_to: None,
+            path: "src/a.rs",
+            side: "RIGHT",
+            line: Some(1),
+            login: "author",
+            created_at: "2026-07-01T10:00:00Z",
+            body: "a",
+        }),
+        raw_comment_json(RawCommentFixture {
+            id: 2,
+            in_reply_to: None,
+            path: "src/b.rs",
+            side: "RIGHT",
+            line: Some(1),
+            login: "author",
+            created_at: "2026-07-01T10:00:00Z",
+            body: "b",
+        }),
+    ]);
+    let mut store = ThreadOverlayStore::new();
+    store.replace(parse_review_comments_json(&json).unwrap());
+    let a_threads: Vec<&Thread> = store.for_path("src/a.rs").collect();
+    assert_eq!(a_threads.len(), 1);
+    assert_eq!(a_threads[0].id, 1);
+}
+
+#[test]
+fn overlay_store_find_looks_up_by_root_id() {
+    let json = wrap(&[raw_comment_json(RawCommentFixture {
+        id: 7,
+        in_reply_to: None,
+        path: "src/a.rs",
+        side: "RIGHT",
+        line: Some(1),
+        login: "author",
+        created_at: "2026-07-01T10:00:00Z",
+        body: "body",
+    })]);
+    let mut store = ThreadOverlayStore::new();
+    store.replace(parse_review_comments_json(&json).unwrap());
+    assert!(store.find(7).is_some());
+    assert!(store.find(999).is_none());
+}
+
+// -- markdown regression guard: fetched threads never affect stdout ---------
+
+#[test]
+fn fetched_threads_never_change_annotation_markdown_output() {
+    use crate::annotate::{AnnotationStore, Classification, Target, render_markdown};
+
+    let mut annotations = AnnotationStore::new();
+    annotations
+        .add(
+            Target::line("src/a.rs", 10, Side::New),
+            Classification::Issue,
+            "please fix this",
+        )
+        .unwrap();
+    annotations
+        .add(Target::file("src/b.rs"), Classification::Praise, "nice")
+        .unwrap();
+
+    let without_threads = render_markdown(&annotations);
+
+    // Populate an overlay store with fetched threads alongside the
+    // unchanged annotation store — `render_markdown` takes only the
+    // annotation store, so this has no path by which to reach the output.
+    let json = wrap(&[raw_comment_json(RawCommentFixture {
+        id: 1,
+        in_reply_to: None,
+        path: "src/a.rs",
+        side: "RIGHT",
+        line: Some(10),
+        login: "teammate",
+        created_at: "2026-07-01T10:00:00Z",
+        body: "existing forge comment",
+    })]);
+    let mut overlay = ThreadOverlayStore::new();
+    overlay.replace(parse_review_comments_json(&json).unwrap());
+    assert!(!overlay.is_empty());
+
+    let with_threads = render_markdown(&annotations);
+    assert_eq!(without_threads, with_threads);
+}

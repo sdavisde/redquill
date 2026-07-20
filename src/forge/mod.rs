@@ -13,7 +13,8 @@
 //!   fleshes out; present now only so the trait surface compiles.
 //! - [`Thread`] — an imported PR review-comment thread (root + ordered
 //!   replies, resolved/outdated state, diff anchor); see [`threads`] for
-//!   construction from GitHub's JSON shape.
+//!   construction from GitHub's JSON shape and the read-only
+//!   `ThreadOverlayStore` fetched threads live in.
 //! - [`ReviewSubmission`] — a minimal stand-in for the submit-flow payload
 //!   later work fleshes out; present now only so the trait surface
 //!   compiles.
@@ -31,9 +32,14 @@ pub use detect::{
     CredentialChecker, GhCredentialChecker, GlabCredentialChecker, ProviderKind,
     ProviderResolution, ResolutionCache, UnresolvedReason, resolve_provider,
 };
-pub use github::{PR_LIST_JSON_FIELDS, list_open_prs, parse_pr_list_json, pr_list_command};
+pub use github::{
+    PR_LIST_JSON_FIELDS, fetch_review_threads, list_open_prs, parse_pr_list_json, pr_list_command,
+    review_comments_command,
+};
 pub use remote_url::{Hostname, RemoteUrlError, parse_origin_hostname, parse_origin_repo_slug};
-pub use threads::{Thread, ThreadAnchor, ThreadComment, parse_review_comments_json};
+pub use threads::{
+    Thread, ThreadAnchor, ThreadComment, ThreadOverlayStore, parse_review_comments_json,
+};
 
 use thiserror::Error;
 

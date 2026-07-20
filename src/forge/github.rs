@@ -10,6 +10,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use super::process::{harden, run_captured_with_timeout};
+use super::threads::{Thread, parse_review_comments_json};
 use super::{ForgeError, PullRequest};
 
 /// The exact `--json` field list `gh pr list` is asked for — fixed at the
@@ -103,6 +104,58 @@ pub fn parse_pr_list_json(json: &str) -> Result<Vec<PullRequest>, ForgeError> {
             updated_at: r.updated_at,
         })
         .collect())
+}
+
+/// How long a `gh api` review-comments invocation may run before it's
+/// treated as failed and killed. Same budget as the PR list: a real network
+/// round trip, not a local read.
+const REVIEW_COMMENTS_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Builds the fixed argv for `gh api repos/{owner}/{repo}/pulls/<n>/comments`.
+/// The `{owner}`/`{repo}` placeholders are substituted by `gh` itself from
+/// the repository of the current working directory — the same "no repo
+/// argument built from caller input" contract [`pr_list_command`] follows —
+/// so the PR number, typed as `u64` end-to-end, is the only variable part
+/// of the endpoint path.
+pub fn review_comments_command(number: u64) -> Command {
+    let mut cmd = Command::new("gh");
+    cmd.args([
+        "api",
+        &format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments"),
+    ]);
+    harden(&mut cmd);
+    cmd
+}
+
+/// Runs the review-comments fetch and returns ordered threads. Like
+/// [`list_open_prs`], the only function here that actually spawns a
+/// process — [`parse_review_comments_json`] carries the fixture coverage.
+pub fn fetch_review_threads(number: u64) -> Result<Vec<Thread>, ForgeError> {
+    let mut cmd = review_comments_command(number);
+    let output =
+        run_captured_with_timeout(&mut cmd, REVIEW_COMMENTS_TIMEOUT).map_err(|source| {
+            if source.kind() == std::io::ErrorKind::NotFound {
+                ForgeError::CliNotFound { cli: "gh" }
+            } else {
+                ForgeError::Spawn { cli: "gh", source }
+            }
+        })?;
+
+    if !output.status.success() {
+        return Err(ForgeError::Command {
+            cli: "gh",
+            command: format!("api repos/{{owner}}/{{repo}}/pulls/{number}/comments"),
+            code: output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_string()),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
+    }
+
+    let json = String::from_utf8_lossy(&output.stdout);
+    parse_review_comments_json(&json)
 }
 
 #[cfg(test)]

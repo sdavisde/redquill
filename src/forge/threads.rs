@@ -221,6 +221,54 @@ fn parse_side(side: Option<&str>) -> Side {
     }
 }
 
+/// A read-only container for one PR's fetched comment threads, held
+/// entirely separate from `crate::annotate::AnnotationStore`: teammates'
+/// existing comments are shown for context, not treated as this reviewer's
+/// own annotations. Enforced structurally, not just by convention — neither
+/// `Thread` nor this store derives `Serialize`, and the only mutator is
+/// [`ThreadOverlayStore::replace`], a wholesale live-fetch snapshot, never
+/// an edit.
+#[derive(Debug, Clone, Default)]
+pub struct ThreadOverlayStore {
+    threads: Vec<Thread>,
+}
+
+impl ThreadOverlayStore {
+    pub fn new() -> ThreadOverlayStore {
+        ThreadOverlayStore::default()
+    }
+
+    /// Replaces the store's contents wholesale with a fresh fetch. A PR
+    /// review's threads are always shown as a full live snapshot, never
+    /// patched incrementally.
+    pub fn replace(&mut self, threads: Vec<Thread>) {
+        self.threads = threads;
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Thread> {
+        self.threads.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.threads.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.threads.is_empty()
+    }
+
+    /// Threads anchored at `path`, in fetch order — e.g. for a gutter
+    /// marker pass over one file's rendered lines.
+    pub fn for_path<'a>(&'a self, path: &'a str) -> impl Iterator<Item = &'a Thread> {
+        self.threads.iter().filter(move |t| t.anchor.path() == path)
+    }
+
+    /// Looks up a thread by its root id (the id a drafted reply targets).
+    pub fn find(&self, id: u64) -> Option<&Thread> {
+        self.threads.iter().find(|t| t.id == id)
+    }
+}
+
 #[cfg(test)]
 #[path = "threads_tests.rs"]
 mod tests;

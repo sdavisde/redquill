@@ -101,3 +101,41 @@ fn parse_pr_list_json_rejects_a_row_missing_a_required_field() {
     let err = parse_pr_list_json(missing_number).unwrap_err();
     assert!(matches!(err, ForgeError::Parse { cli: "gh", .. }));
 }
+
+// -- review_comments_command -------------------------------------------------
+
+#[test]
+fn review_comments_command_has_the_fixed_argv_and_hardened_env() {
+    let cmd = review_comments_command(42);
+    assert_eq!(cmd.get_program(), OsStr::new("gh"));
+    let args: Vec<&OsStr> = cmd.get_args().collect();
+    assert_eq!(
+        args,
+        vec![
+            OsStr::new("api"),
+            OsStr::new("repos/{owner}/{repo}/pulls/42/comments"),
+        ]
+    );
+    let envs: Vec<_> = cmd.get_envs().collect();
+    assert!(envs.contains(&(OsStr::new("GH_PROMPT_DISABLED"), Some(OsStr::new("1")))));
+    assert!(envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))));
+}
+
+#[test]
+fn review_comments_command_interpolates_only_the_typed_pr_number() {
+    // The `{owner}`/`{repo}` placeholders are literal text `gh` itself
+    // substitutes — never assembled from any caller-provided string — so
+    // the only thing that varies with input is the number.
+    let cmd_one = review_comments_command(1);
+    let cmd_two = review_comments_command(2);
+    let args_one: Vec<&OsStr> = cmd_one.get_args().collect();
+    let args_two: Vec<&OsStr> = cmd_two.get_args().collect();
+    assert_eq!(args_one[0], args_two[0]);
+    assert_ne!(args_one[1], args_two[1]);
+    assert!(
+        args_one[1]
+            .to_str()
+            .unwrap()
+            .starts_with("repos/{owner}/{repo}/pulls/1/comments")
+    );
+}
