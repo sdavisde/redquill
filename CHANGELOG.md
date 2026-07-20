@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.17.0](https://github.com/sdavisde/redquill/compare/v0.16.0...v0.17.0) (2026-07-20)
+
+
+### Features
+
+* add closed-type PR/MR head-ref fetch to the git layer ([fc549c3](https://github.com/sdavisde/redquill/commit/fc549c38a0782dd87a9b018112ea179997a512ce))
+* add forge module scaffolding with ForgeProvider trait ([1c4b69d](https://github.com/sdavisde/redquill/commit/1c4b69d2c02ec778c1f686060cc7aa5aad46b777))
+* add GitLab MR listing and detail reads ([ef13dd2](https://github.com/sdavisde/redquill/commit/ef13dd2c2decf3601ba6e4d5526883a04f089908))
+* add the Pull Requests tab to the Review launcher ([ad0ee58](https://github.com/sdavisde/redquill/commit/ad0ee581cf172a9fbd639d8cd12c60c9471a52e6))
+* bump review-state schema to v3 with optional forge metadata ([5386847](https://github.com/sdavisde/redquill/commit/53868477f25c8dfeb3990f7dc4a2e9f6fdd9472f))
+* cover every Pull Requests tab render state with UI tests ([db481ea](https://github.com/sdavisde/redquill/commit/db481ea1188844535ffe5a8e6e5cd6839a18bffc))
+* draft replies to imported PR threads (persisted, in the notes panel) ([cb62a8b](https://github.com/sdavisde/redquill/commit/cb62a8b565c3a5004aec2a9761026ee97554a35d))
+* finished-review detection + persisted PR title ([e85262d](https://github.com/sdavisde/redquill/commit/e85262dfae4d89c34bb7d400e86feadd052699b5))
+* **forge:** GitHub review payload builder ([34df4f0](https://github.com/sdavisde/redquill/commit/34df4f05647102ab022aa75fe496e71e199b8cb3))
+* **forge:** GitHub thread fetch and read-only overlay store ([5181fc4](https://github.com/sdavisde/redquill/commit/5181fc402b70823c515b4f60152ab151ca2f5c72))
+* **forge:** overlay thread resolution state and paginate review comments ([b859664](https://github.com/sdavisde/redquill/commit/b8596645befcc4b4cb45a0e043aa57c9dad2e5d4))
+* **forge:** pure PR review-thread model with root/reply ordering ([9d67408](https://github.com/sdavisde/redquill/commit/9d6740818b9de69531c0ba559f8947f671edbadc))
+* GitLab review submit via draft notes with a visible fallback ([9f6ef5d](https://github.com/sdavisde/redquill/commit/9f6ef5d845fea2df2e82ec23c795e05277caa14a))
+* hide a published annotation whose forge copy is already on screen ([f8b2006](https://github.com/sdavisde/redquill/commit/f8b2006eb7a6a153bc29945d0927e84e74f727b0))
+* implement the glab credential-lookup checker ([4e4ccbb](https://github.com/sdavisde/redquill/commit/4e4ccbbd02ee2ea5b697dbddecbd6fae8c677bee))
+* import GitLab discussion threads into the shared thread model ([aa1861c](https://github.com/sdavisde/redquill/commit/aa1861cff2b566285d91659b7e334ee3d30709be))
+* PR checkout into a worktree-backed review session ([802fc90](https://github.com/sdavisde/redquill/commit/802fc908187199086316b23a11bd25b8b090036d))
+* PRs-tab cleanup modal for finished reviews ([7817a57](https://github.com/sdavisde/redquill/commit/7817a57765b6a287b08a24fbc903b56777bfb268))
+* published-state completion for annotations and draft replies ([2365649](https://github.com/sdavisde/redquill/commit/2365649662c7d9636a17979e3148b98c77f1e3e7))
+* re-surface the "comments unavailable" notice + Unit 3 journey proof ([dcadb7f](https://github.com/sdavisde/redquill/commit/dcadb7f10ea936baf36bba7ee6c410c73f815b03))
+* render imported PR threads and drafted replies inline in the diff ([79feee5](https://github.com/sdavisde/redquill/commit/79feee52acb9c9a8b1d5569e6ede36cbaa02b5d5))
+* submit-review modal and publish driver (GitHub) ([b54c67d](https://github.com/sdavisde/redquill/commit/b54c67d2cd2f0aab14828f2c377d5437c43e75a1))
+* **ui:** imported comment-thread overlay for PR review sessions ([58f2941](https://github.com/sdavisde/redquill/commit/58f2941750ba2e38510cd6c47139ea93f34e67a3))
+* wire GitLab through the PR-list and checkout flows ([6748895](https://github.com/sdavisde/redquill/commit/6748895e40c02a213e1933467727e6155c2236df))
+
+
+### Bug Fixes
+
+* prevent forge review-submit 422s (empty COMMENT review, one-line span, request-changes) ([d234018](https://github.com/sdavisde/redquill/commit/d234018da7a680161c00d311f31791366a1bfa2f))
+* stop PR-review refresh from duplicating draft annotations and replies ([8d38d99](https://github.com/sdavisde/redquill/commit/8d38d99632135d7634be608639b944f09631cc65))
+
 ## [0.16.0](https://github.com/sdavisde/redquill/compare/v0.15.0...v0.16.0) (2026-07-19)
 
 
