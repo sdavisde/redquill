@@ -479,6 +479,7 @@ mod tests {
                     classification: Classification::Issue,
                     body: "fix this".to_string(),
                     source: Source::WorkingTree,
+                    published: false,
                 }],
                 replies: Vec::new(),
                 forge: None,
@@ -708,6 +709,7 @@ mod tests {
                 classification: Classification::Issue,
                 body: "fix this".to_string(),
                 source: Source::WorkingTree,
+                published: false,
             }]
         );
 

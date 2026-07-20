@@ -359,6 +359,7 @@ mod tests {
                     classification: Classification::Nit,
                     body: "note".to_string(),
                     source: Source::WorkingTree,
+                    published: false,
                 }],
                 replies: Vec::new(),
                 forge: None,

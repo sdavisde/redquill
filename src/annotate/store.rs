@@ -55,6 +55,7 @@ impl AnnotationStore {
             classification,
             body,
             source,
+            published: false,
         });
         Ok(id)
     }
@@ -101,9 +102,45 @@ impl AnnotationStore {
         Ok(())
     }
 
+    /// Sets the published flag of the annotation with the given id — used
+    /// both by the submit flow (marking an annotation published on a
+    /// successful post) and by the session-start restore path (replaying a
+    /// persisted published state). Additive alongside [`AnnotationStore::edit`]
+    /// so neither the body-edit nor the classification-edit contract is
+    /// touched.
+    pub fn set_published(&mut self, id: usize, published: bool) -> Result<(), AnnotateError> {
+        let annotation = self
+            .annotations
+            .iter_mut()
+            .find(|a| a.id == id)
+            .ok_or(AnnotateError::NotFound(id))?;
+        annotation.published = published;
+        Ok(())
+    }
+
     /// Iterates over annotations in insertion order.
     pub fn iter(&self) -> impl Iterator<Item = &Annotation> {
         self.annotations.iter()
+    }
+
+    /// A clone of this store with every annotation whose id is in
+    /// `suppressed` dropped, preserving all surviving annotations' ids (and
+    /// the store's `next_id`) verbatim. The presentation layer uses this to
+    /// hand the row builder a view that omits published annotations already
+    /// shown by the forge's own copy, without disturbing the real store the
+    /// list panel, editing, and stdout serialization all read from. Cheap
+    /// and allocation-light; the common (empty-`suppressed`) case is a plain
+    /// clone.
+    pub fn without_ids(&self, suppressed: &std::collections::HashSet<usize>) -> AnnotationStore {
+        AnnotationStore {
+            annotations: self
+                .annotations
+                .iter()
+                .filter(|a| !suppressed.contains(&a.id))
+                .cloned()
+                .collect(),
+            next_id: self.next_id,
+        }
     }
 
     /// The number of annotations currently in the store.

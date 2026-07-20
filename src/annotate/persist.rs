@@ -37,6 +37,22 @@ pub struct PersistedAnnotation {
     /// [`AnnotationStore::add`]'s own default.
     #[serde(default)]
     pub source: Source,
+    /// Whether this annotation was already published to the forge. Defaults
+    /// to `false` and is omitted from the JSON entirely when `false`
+    /// (`skip_serializing_if`), so an unpublished annotation — the only kind
+    /// a non-forge review ever has — is on-disk-identical to one from before
+    /// this field existed. The `default` half absorbs a record with no
+    /// `published` key.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub published: bool,
+}
+
+/// `skip_serializing_if` predicate: omit a `bool` field when it is `false`
+/// (serde hands the closure a `&bool`). Keeps an unpublished annotation's
+/// JSON free of a `"published": false` key, preserving the byte-exact shape
+/// the stdout/persistence contracts lock.
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl PersistedAnnotation {
@@ -48,6 +64,7 @@ impl PersistedAnnotation {
             classification: annotation.classification,
             body: annotation.body.clone(),
             source: annotation.source.clone(),
+            published: annotation.published,
         }
     }
 }
@@ -75,10 +92,17 @@ pub fn snapshot(store: &AnnotationStore) -> Vec<PersistedAnnotation> {
 pub fn restore_all(store: &mut AnnotationStore, persisted: Vec<PersistedAnnotation>) -> usize {
     let mut restored = 0;
     for entry in persisted {
-        if store
-            .add_with_source(entry.target, entry.classification, entry.body, entry.source)
-            .is_ok()
+        let published = entry.published;
+        if let Ok(id) =
+            store.add_with_source(entry.target, entry.classification, entry.body, entry.source)
         {
+            // `add_with_source` always creates an unpublished annotation, so
+            // a restored already-published one is marked back afterward — the
+            // dedupe against the forge's own copy depends on this surviving a
+            // reopen.
+            if published {
+                let _ = store.set_published(id, true);
+            }
             restored += 1;
         }
     }
@@ -124,12 +148,14 @@ mod tests {
                 classification: Classification::Nit,
                 body: "first".to_string(),
                 source: Source::WorkingTree,
+                published: false,
             },
             PersistedAnnotation {
                 target: Target::line("b.rs", 4, Side::New),
                 classification: Classification::Issue,
                 body: "second".to_string(),
                 source: Source::Staged,
+                published: false,
             },
         ];
         let mut store = AnnotationStore::new();
@@ -199,12 +225,14 @@ mod tests {
                 classification: Classification::Nit,
                 body: "   ".to_string(),
                 source: Source::WorkingTree,
+                published: false,
             },
             PersistedAnnotation {
                 target: Target::file("b.rs"),
                 classification: Classification::Nit,
                 body: "kept".to_string(),
                 source: Source::WorkingTree,
+                published: false,
             },
         ];
         let mut store = AnnotationStore::new();
@@ -225,6 +253,7 @@ mod tests {
             classification: Classification::Issue,
             body: "fix this".to_string(),
             source: Source::WorkingTree,
+            published: false,
         };
         let json = serde_json::to_string_pretty(&entry).unwrap();
         let expected = r#"{
@@ -252,5 +281,67 @@ mod tests {
         }"#;
         let entry: PersistedAnnotation = serde_json::from_str(json).unwrap();
         assert_eq!(entry.source, Source::WorkingTree);
+    }
+
+    // -- published flag ------------------------------------------------------
+
+    #[test]
+    fn persisted_annotation_missing_published_defaults_to_false() {
+        let json = r#"{
+            "target": {"kind": "file", "path": "a.rs"},
+            "classification": "nit",
+            "body": "note"
+        }"#;
+        let entry: PersistedAnnotation = serde_json::from_str(json).unwrap();
+        assert!(
+            !entry.published,
+            "an annotation with no published key must default to unpublished"
+        );
+    }
+
+    #[test]
+    fn published_true_serializes_the_key_and_round_trips() {
+        let entry = PersistedAnnotation {
+            target: Target::line("src/lib.rs", 10, Side::New),
+            classification: Classification::Issue,
+            body: "fix this".to_string(),
+            source: Source::WorkingTree,
+            published: true,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(
+            json.contains("\"published\":true"),
+            "a published annotation must carry the flag on disk: {json}"
+        );
+        let round_tripped: PersistedAnnotation = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, entry);
+    }
+
+    #[test]
+    fn snapshot_and_restore_preserve_the_published_flag() {
+        let mut store = AnnotationStore::new();
+        let id = store
+            .add(Target::file("a.rs"), Classification::Nit, "posted")
+            .unwrap();
+        store.set_published(id, true).unwrap();
+        store
+            .add(Target::file("b.rs"), Classification::Nit, "draft")
+            .unwrap();
+
+        let snap = snapshot(&store);
+        assert!(
+            snap[0].published,
+            "the published annotation snapshots as such"
+        );
+        assert!(!snap[1].published);
+
+        let mut restored = AnnotationStore::new();
+        restore_all(&mut restored, snap);
+        let flags: Vec<bool> = restored.iter().map(|a| a.published).collect();
+        assert_eq!(
+            flags,
+            vec![true, false],
+            "restore must replay the published flag verbatim"
+        );
     }
 }

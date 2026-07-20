@@ -781,6 +781,7 @@ mod tests {
             classification: C::Question,
             body: "restored?".to_string(),
             source: Source::WorkingTree,
+            published: false,
         }];
 
         app.restore_review_annotations(persisted);

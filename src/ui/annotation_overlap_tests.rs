@@ -10,6 +10,7 @@ fn ann(id: usize, target: Target) -> Annotation {
         classification: Classification::Nit,
         body: "note".to_string(),
         source: Source::default(),
+        published: false,
     }
 }
 

@@ -283,6 +283,106 @@ fn next_thread_hints_when_no_threads_exist() {
     assert!(app.status_message.is_some());
 }
 
+// -- published-copy dedupe (FR-15) -------------------------------------------
+
+/// Helper: the ids of annotations whose body rows are actually rendered in
+/// the diff buffer (a `Row::Annotation` carries its annotation's id).
+fn rendered_annotation_ids(app: &App) -> std::collections::HashSet<usize> {
+    app.view
+        .rows
+        .iter()
+        .filter_map(|r| match r {
+            Row::Annotation { id, .. } => Some(*id),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_published_annotation_covered_by_a_fetched_thread_is_not_drawn_as_a_local_row() {
+    use crate::annotate::{Classification, Target};
+
+    let mut app = review_app(&["a.rs"]);
+    // A published annotation on new-side line 1, and a fetched thread anchored
+    // at the very same position — the forge copy is authoritative on screen.
+    let id = app
+        .annotations
+        .add(
+            Target::line("a.rs", 1, Side::New),
+            Classification::Issue,
+            "already posted this",
+        )
+        .unwrap();
+    app.annotations.set_published(id, true).unwrap();
+    app.thread_overlay
+        .replace(vec![positioned_thread(1, "a.rs", Side::New, 1, 0)]);
+    app.rebuild_rows();
+
+    assert!(
+        !rendered_annotation_ids(&app).contains(&id),
+        "a published annotation whose forge copy is shown must not be re-drawn locally"
+    );
+    // It still lives in the store: editable, listed, and — crucially — still
+    // serialized to stdout (the stdout contract includes every annotation
+    // regardless of published state).
+    assert_eq!(app.annotations.len(), 1);
+    assert!(
+        crate::annotate::render_markdown(&app.annotations).contains("already posted this"),
+        "the published annotation must still reach stdout"
+    );
+}
+
+#[test]
+fn an_unpublished_annotation_at_a_thread_anchor_is_still_drawn() {
+    use crate::annotate::{Classification, Target};
+
+    let mut app = review_app(&["a.rs"]);
+    let id = app
+        .annotations
+        .add(
+            Target::line("a.rs", 1, Side::New),
+            Classification::Issue,
+            "not yet posted",
+        )
+        .unwrap();
+    // Left unpublished: even with a thread at the same anchor, a local draft
+    // the reviewer hasn't published is theirs to see.
+    app.thread_overlay
+        .replace(vec![positioned_thread(1, "a.rs", Side::New, 1, 0)]);
+    app.rebuild_rows();
+
+    assert!(
+        rendered_annotation_ids(&app).contains(&id),
+        "an unpublished annotation must render even at a threaded anchor"
+    );
+}
+
+#[test]
+fn a_published_annotation_with_no_matching_thread_is_still_drawn() {
+    use crate::annotate::{Classification, Target};
+
+    let mut app = review_app(&["a.rs"]);
+    let id = app
+        .annotations
+        .add(
+            Target::line("a.rs", 1, Side::New),
+            Classification::Issue,
+            "posted, but no thread here",
+        )
+        .unwrap();
+    app.annotations.set_published(id, true).unwrap();
+    // A thread exists, but on the *old* side — a different anchor — so the
+    // published annotation has no forge copy on screen and must still render.
+    app.thread_overlay
+        .replace(vec![positioned_thread(1, "a.rs", Side::Old, 1, 0)]);
+    app.rebuild_rows();
+
+    assert!(
+        rendered_annotation_ids(&app).contains(&id),
+        "dedupe must require an actual anchor match, not just any published flag"
+    );
+}
+
 // -- fetch application + poll guard ------------------------------------------
 
 #[test]

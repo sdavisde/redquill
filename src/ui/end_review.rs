@@ -376,6 +376,7 @@ index 111..222 100644
                     classification: Classification::Nit,
                     body: "note".to_string(),
                     source: Source::WorkingTree,
+                    published: false,
                 }],
                 replies: Vec::new(),
                 forge: None,

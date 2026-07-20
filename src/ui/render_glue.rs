@@ -132,12 +132,26 @@ impl App {
             })
             .collect();
 
+        // Published annotations whose forge copy is already shown in the
+        // thread overlay are dropped from the row build (the forge copy is
+        // authoritative on screen); the real store is untouched, so the list
+        // panel and stdout serialization still see every annotation. The
+        // common case (no suppression) reuses the store directly with no
+        // clone.
+        let suppressed = self.suppressed_published_annotation_ids();
+        let filtered;
+        let annotations_for_rows = if suppressed.is_empty() {
+            &self.annotations
+        } else {
+            filtered = self.annotations.without_ids(&suppressed);
+            &filtered
+        };
         let mb = build_multibuffer(
             &self.view.files,
             &collapsed,
             &markers,
             &review_markers,
-            &self.annotations,
+            annotations_for_rows,
             &syntax,
         );
         self.view.rows = mb.rows;

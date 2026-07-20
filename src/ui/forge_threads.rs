@@ -148,6 +148,60 @@ impl App {
         }
     }
 
+    /// The ids of annotations that must NOT be drawn as local annotation rows
+    /// because they have already been published to the forge *and* the forge's
+    /// own copy is present in the fetched thread overlay at the same anchor —
+    /// so the reviewer sees one authoritative comment, not a duplicate. An
+    /// empty set (the common case: no overlay, or nothing published yet), so
+    /// [`App::rebuild_rows`] pays nothing outside a PR review with published
+    /// annotations. The annotations still exist in the store — editable,
+    /// listed, and serialized to stdout — only their in-diff rows are hidden.
+    pub(super) fn suppressed_published_annotation_ids(&self) -> std::collections::HashSet<usize> {
+        let mut suppressed = std::collections::HashSet::new();
+        if self.thread_overlay.is_empty() {
+            return suppressed;
+        }
+        // The anchors the overlay's threads cover, split into line positions
+        // and file-level fallbacks.
+        let mut positions: std::collections::HashSet<(&str, Side, u32)> =
+            std::collections::HashSet::new();
+        let mut file_paths: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for thread in self.thread_overlay.iter() {
+            match &thread.anchor {
+                ThreadAnchor::Position { path, side, line } => {
+                    positions.insert((path.as_str(), *side, *line));
+                }
+                ThreadAnchor::File { path } => {
+                    file_paths.insert(path.as_str());
+                }
+            }
+        }
+        for annotation in self.annotations.iter() {
+            if !annotation.published {
+                continue;
+            }
+            let covered = match &annotation.target {
+                Target::Line { path, line, side } => {
+                    positions.contains(&(path.as_str(), *side, *line))
+                }
+                Target::Range {
+                    path, start, side, ..
+                } => positions.contains(&(path.as_str(), *side, *start)),
+                Target::Hunk { path, start, .. } => {
+                    positions.contains(&(path.as_str(), Side::New, *start))
+                }
+                Target::File { path } => file_paths.contains(path.as_str()),
+                // Worktree-anchored annotations are local-only — they have no
+                // forge line-comment equivalent to be deduped against.
+                Target::WorktreeLine { .. } | Target::WorktreeRange { .. } => false,
+            };
+            if covered {
+                suppressed.insert(annotation.id);
+            }
+        }
+        suppressed
+    }
+
     /// The buffer row a thread's anchor resolves to: its exact line for a
     /// resolvable [`ThreadAnchor::Position`] (falling back to the file's
     /// header row when the line isn't in the current buffer — e.g. a

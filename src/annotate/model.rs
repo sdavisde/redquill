@@ -310,6 +310,14 @@ pub struct Annotation {
     /// The diff source this annotation was authored against. Defaults to
     /// [`Source::WorkingTree`]; see [`AnnotationStore::add_with_source`].
     pub source: Source,
+    /// Whether this annotation has already been published to the forge as a
+    /// review comment. `false` for a freshly authored annotation; set once
+    /// the review is submitted so it is excluded from future submits and —
+    /// when the forge's own copy is present in the fetched thread overlay —
+    /// not re-drawn as a local annotation at the same anchor (the forge copy
+    /// is authoritative on screen). Never affects the stdout markdown, which
+    /// includes every annotation regardless of published state.
+    pub published: bool,
 }
 
 /// Validates and normalizes an annotation body: trims surrounding
