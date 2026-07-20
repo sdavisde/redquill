@@ -252,15 +252,33 @@ impl App {
         self.thread_overlay.for_path(&path).map(|t| t.id).next()
     }
 
+    /// The message shown when the reviewer reaches for threads but finds
+    /// none: the persistent "comments unavailable" notice when the last fetch
+    /// failed (so a reviewer is never silently blind to feedback that exists
+    /// on the PR — the FR-13 intent, re-surfaced on demand rather than only
+    /// once at fetch time), or the plain `absent` hint when threads genuinely
+    /// aren't there.
+    fn no_threads_message(&self, absent: &'static str) -> &'static str {
+        if self.threads_unavailable {
+            "comments unavailable \u{2014} reviewing without them"
+        } else {
+            absent
+        }
+    }
+
     /// Opens the thread overlay (`T`) on the thread at the cursor, or leaves a
-    /// status hint when the cursor isn't on a threaded line/file.
+    /// status hint when the cursor isn't on a threaded line/file (naming the
+    /// fetch failure when that's why nothing is here).
     pub(super) fn open_thread_view(&mut self) {
         match self.thread_at_cursor() {
             Some(root_id) => {
                 self.thread_view = Some(ThreadViewState { root_id, scroll: 0 });
                 self.mode = Mode::ThreadView;
             }
-            None => self.set_status_message("no comment thread here"),
+            None => {
+                let msg = self.no_threads_message("no comment thread here");
+                self.set_status_message(msg);
+            }
         }
     }
 
@@ -311,7 +329,8 @@ impl App {
 
     fn jump_thread(&mut self, forward: bool) {
         if self.thread_overlay.is_empty() {
-            self.set_status_message("no comment threads");
+            let msg = self.no_threads_message("no comment threads");
+            self.set_status_message(msg);
             return;
         }
         let mut rows: Vec<usize> = self
@@ -479,7 +498,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!("thread{state}"))
-        .title_bottom(Line::from(" j/k scroll  Esc/q close "));
+        .title_bottom(Line::from(" j/k scroll  r reply  Esc/q close "));
     let paragraph = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false })

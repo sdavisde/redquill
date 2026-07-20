@@ -92,7 +92,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 - [x] 2.6 Tempdir integration tests: scratch bare origin advertising `refs/pull/1/head`-style refs — happy path, fork-style head (no matching origin branch), head-move demotion, fetch failure; canonicalized paths.
 - [x] 2.7 Capture the journey transcript (checkout → author push → reopen shows demotions); run all four gates.
 
-### [~] 3.0 See the PR's existing conversations inside the diff and draft replies to them
+### [x] 3.0 See the PR's existing conversations inside the diff and draft replies to them
 
 **User verification:** Reviewing a PR that already has comments, you see markers at the commented lines; opening one shows the whole conversation in order (a 5-reply back-and-forth reads top-to-bottom, replies under the comment they answer), with resolved/outdated threads collapsed and labeled. You can draft a reply in the terminal; it appears in your annotation panel marked as a reply and survives quitting and reopening. If comments can't be fetched, review continues with a one-line notice.
 
@@ -112,7 +112,7 @@ Task list for `13-spec-forge-integration.md`. Parent tasks are vertical slices m
 - [x] 3.3 UI overlay: single-cell gutter markers on annotated lines, expandable thread view (conversation order, nested replies, collapsed resolved/outdated with labels), next/prev-thread navigation; keys chosen against the shared tables (no shadowing), footer hints + `?` sections, drift tests green.
 - [x] 3.4 Reply drafting: compose flow consistent with annotation compose; drafts target the thread root, are editable/deletable, appear in the annotation list with a reply marker, persist in schema v3 (thread id + body) and restore on reopen.
 - [x] 3.5 Published-copy dedupe (FR-15): annotations marked published are not rendered as local annotations at their anchor once the forge copy is present in fetched threads.
-- [ ] 3.6 Fetch-failure notice ("comments unavailable") without blocking review entry; scripted fake-provider journey transcript; all four gates.
+- [x] 3.6 Fetch-failure notice ("comments unavailable") without blocking review entry; scripted fake-provider journey transcript; all four gates.
 
 ### [ ] 4.0 Publish the whole review — comments, replies, verdict — from one previewed confirm screen (GitHub)
 

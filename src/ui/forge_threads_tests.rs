@@ -283,6 +283,39 @@ fn next_thread_hints_when_no_threads_exist() {
     assert!(app.status_message.is_some());
 }
 
+#[test]
+fn reaching_for_threads_after_a_failed_fetch_re_surfaces_the_unavailable_notice() {
+    // A failed fetch leaves `threads_unavailable` set and no overlay. Any
+    // later reach for threads (jump or open) re-explains why nothing is
+    // there, so the reviewer is never silently blind to feedback that may
+    // exist on the PR — the persistent-on-demand half of FR-13's notice.
+    let mut app = review_app(&["a.rs"]);
+    app.apply_thread_fetch(Err("boom".to_string()));
+    assert!(app.threads_unavailable);
+
+    app.status_message = None;
+    app.next_thread();
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("comments unavailable \u{2014} reviewing without them")
+    );
+
+    app.status_message = None;
+    app.open_thread_view();
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("comments unavailable \u{2014} reviewing without them")
+    );
+}
+
+#[test]
+fn reaching_for_threads_with_none_and_no_failure_gives_the_plain_hint() {
+    let mut app = review_app(&["a.rs"]);
+    app.rebuild_rows();
+    app.next_thread();
+    assert_eq!(app.status_message.as_deref(), Some("no comment threads"));
+}
+
 // -- published-copy dedupe (FR-15) -------------------------------------------
 
 /// Helper: the ids of annotations whose body rows are actually rendered in
@@ -461,4 +494,205 @@ fn poll_drops_a_stale_generation_result() {
         app.thread_overlay.is_empty(),
         "a stale-generation result must be dropped, not applied"
     );
+}
+
+// -- Journey transcript: 5-and-5 conversation + drafted reply (FR-12/FR-14) --
+
+/// Flattens a full-screen render of `render_fn` into newline-joined rows,
+/// trailing spaces trimmed, for the human-readable transcript below.
+fn flatten<F: FnOnce(&mut ratatui::Frame)>(width: u16, height: u16, render_fn: F) -> String {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render_fn(frame)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+    let mut out = String::new();
+    for y in 0..height {
+        let mut row = String::new();
+        for x in 0..width {
+            row.push_str(buf[(x, y)].symbol());
+        }
+        out.push_str(row.trim_end());
+        out.push('\n');
+    }
+    out
+}
+
+/// The index at which `needle` first appears in `haystack`, or a large
+/// sentinel when absent (so an out-of-order or missing line fails the
+/// monotonic-order assertion loudly).
+fn order_of(haystack: &str, needle: &str) -> usize {
+    haystack.find(needle).unwrap_or(usize::MAX)
+}
+
+/// Journey driver for spec 13's Unit 3 success metric (conversation
+/// fidelity): a PR thread with a five-and-five back-and-forth renders
+/// top-to-bottom in conversation order, and a reply drafted in the terminal
+/// appears in the annotation panel with its reply marker. Every logged step
+/// is asserted, so this is both a regression test and the transcript
+/// generator (`RQ_JOURNEY_DUMP=1 cargo test --lib
+/// thread_conversation_and_reply_journey_transcript -- --nocapture` captures
+/// the persisted `13-proofs/` transcript).
+#[test]
+fn thread_conversation_and_reply_journey_transcript() {
+    use super::super::keymap::Keymap;
+
+    let mut log = String::new();
+    let mut step = |title: &str, body: &str| {
+        log.push_str(&format!("\n=== {title} ===\n{body}\n"));
+    };
+
+    let mut app = review_app(&["a.rs"]);
+
+    // A single thread anchored on new-side line 1, five messages from each of
+    // two participants (alice authored the root + four replies, bob five
+    // replies), interleaved as a real back-and-forth.
+    let conversation = Thread {
+        id: 1,
+        anchor: ThreadAnchor::Position {
+            path: "a.rs".to_string(),
+            side: Side::New,
+            line: 1,
+        },
+        root: comment(
+            1,
+            "alice",
+            "2026-07-19T10:00:00Z",
+            "Should this handle the empty input?",
+        ),
+        replies: vec![
+            comment(
+                2,
+                "bob",
+                "2026-07-19T10:05:00Z",
+                "Good catch — it panics today.",
+            ),
+            comment(3, "alice", "2026-07-19T10:10:00Z", "Right, let's guard it."),
+            comment(
+                4,
+                "bob",
+                "2026-07-19T10:15:00Z",
+                "Guard added in the latest push.",
+            ),
+            comment(
+                5,
+                "alice",
+                "2026-07-19T10:20:00Z",
+                "Does a test cover it now?",
+            ),
+            comment(
+                6,
+                "bob",
+                "2026-07-19T10:25:00Z",
+                "Added a unit test for empty input.",
+            ),
+            comment(
+                7,
+                "alice",
+                "2026-07-19T10:30:00Z",
+                "One nit: name it explicitly.",
+            ),
+            comment(
+                8,
+                "bob",
+                "2026-07-19T10:35:00Z",
+                "Renamed to empty_input_is_rejected.",
+            ),
+            comment(9, "alice", "2026-07-19T10:40:00Z", "LGTM once CI is green."),
+            comment(10, "bob", "2026-07-19T10:45:00Z", "CI passed — thanks!"),
+        ],
+        resolved: false,
+        outdated: false,
+    };
+
+    // The fetch lands (as the background poller would apply it).
+    app.apply_thread_fetch(Ok(vec![conversation]));
+    assert_eq!(app.thread_overlay.len(), 1);
+    let marked = app
+        .view
+        .rows
+        .iter()
+        .filter(|r| matches!(r, Row::Line(l) if l.thread))
+        .count();
+    step(
+        "fetch lands: one thread, its anchored line gets a gutter marker",
+        &format!(
+            "threads: {}  marked lines: {marked}",
+            app.thread_overlay.len()
+        ),
+    );
+
+    // Open the thread overlay (T) on the anchored file and render it. A tall
+    // frame so the whole ten-message conversation fits without scrolling.
+    app.open_thread_view();
+    assert_eq!(app.mode, Mode::ThreadView);
+    let overlay = flatten(100, 60, |frame| super::render(frame, frame.area(), &app));
+
+    // Conversation order: every message body appears, and each strictly after
+    // the one before it — top-to-bottom, replies under the root.
+    let ordered_bodies = [
+        "Should this handle the empty input?",
+        "Good catch",
+        "let's guard it",
+        "Guard added",
+        "Does a test cover it",
+        "Added a unit test",
+        "One nit",
+        "Renamed to empty_input_is_rejected",
+        "LGTM once CI is green",
+        "CI passed",
+    ];
+    let mut last = 0usize;
+    for body in ordered_bodies {
+        let at = order_of(&overlay, body);
+        assert!(
+            at != usize::MAX && at >= last,
+            "conversation must render in order; {body:?} was out of place"
+        );
+        last = at;
+    }
+    step(
+        "press T: the whole 5-and-5 conversation renders top-to-bottom",
+        overlay.trim_end(),
+    );
+
+    // Draft a reply to the thread (r), type it, submit.
+    app.open_reply_compose();
+    assert_eq!(app.mode, Mode::Compose);
+    assert_eq!(app.compose.as_ref().and_then(|c| c.thread_id), Some(1));
+    if let Some(compose) = app.compose.as_mut() {
+        for ch in "I'll take the empty-input guard.".chars() {
+            compose.buffer.insert_char(ch);
+        }
+    }
+    app.submit_compose();
+    assert_eq!(app.replies.len(), 1);
+    step(
+        "press r, type, submit: the draft reply joins the local review",
+        &format!(
+            "drafted replies: {}  (targets thread {})",
+            app.replies.len(),
+            app.replies.iter().next().unwrap().thread_id
+        ),
+    );
+
+    // Open the annotation panel; the reply shows with its ↳ marker.
+    app.mode = Mode::List;
+    let km = Keymap::default_map();
+    let panel = flatten(80, 12, |frame| {
+        super::super::list_panel::render(frame, frame.area(), &app, &km)
+    });
+    assert!(
+        panel.contains('\u{21b3}') && panel.contains("I'll take the empty-input guard."),
+        "the drafted reply must appear in the notes panel with its reply marker:\n{panel}"
+    );
+    step(
+        "open the notes panel: the drafted reply is listed with its ↳ marker",
+        panel.trim_end(),
+    );
+
+    if std::env::var("RQ_JOURNEY_DUMP").is_ok() {
+        eprintln!("{log}");
+    }
 }
