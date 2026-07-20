@@ -20,7 +20,7 @@ use crate::highlight::TokenKind;
 
 use super::app::App;
 use super::keymap::Keymap;
-use super::rows::{LineRow, ReviewMarker, Row, StagedMarker};
+use super::rows::{LineRow, ReviewMarker, Row, StagedMarker, ThreadLine};
 use super::theme::{Theme, blend};
 use super::time_format::absolute_date;
 use super::welcome;
@@ -603,6 +603,105 @@ fn annotation_border_line(top: bool, width: usize, theme: &Theme) -> Line<'stati
     line
 }
 
+/// Renders one [`Row::Thread`] display line: an inline line of an imported
+/// forge conversation — a comment's `author · when` header, a body line, a
+/// drafted-reply line, or a collapsed one-line summary. Mirrors
+/// [`annotation_row_line`]'s fixed gutter indent and left accent bar, but in
+/// the thread accent colour ([`Theme::hunk_header`], the same the `≡` gutter
+/// marker uses) so an imported conversation reads as forge context rather than
+/// the reviewer's own note. Never drawn "selected" — these rows are not
+/// addressable.
+fn thread_row_line(
+    line: &ThreadLine,
+    gutter_width: usize,
+    width: usize,
+    theme: &Theme,
+) -> Line<'static> {
+    let indent = annotation_indent(gutter_width);
+    let accent = theme.hunk_header;
+    // A collapsed thread is a single italic summary line (no bar/border/tint)
+    // standing in for a whole resolved/outdated/file-level conversation.
+    if let ThreadLine::Collapsed { label } = line {
+        let text = format!("{}\u{2261} {label}", " ".repeat(indent));
+        return Line::from(Span::styled(
+            text,
+            Style::default().fg(accent).add_modifier(Modifier::ITALIC),
+        ));
+    }
+    let mut spans = vec![Span::styled("\u{2502}", Style::default().fg(accent))];
+    match line {
+        ThreadLine::Header {
+            author,
+            when,
+            reply,
+        } => {
+            let lead = if *reply {
+                format!("{}\u{21b3} ", " ".repeat(indent + 1))
+            } else {
+                " ".repeat(indent - 1)
+            };
+            spans.push(Span::raw(lead));
+            spans.push(Span::styled(
+                author.clone(),
+                Style::default().fg(accent).add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(
+                format!(" \u{00b7} {when}"),
+                Style::default().fg(theme.gutter),
+            ));
+        }
+        ThreadLine::Body { text, reply } => {
+            let pad = if *reply { indent + 3 } else { indent + 1 };
+            spans.push(Span::styled(
+                format!("{}{text}", " ".repeat(pad)),
+                Style::default().fg(theme.annotation_text),
+            ));
+        }
+        ThreadLine::Draft { text, first } => {
+            if *first {
+                spans.push(Span::raw(" ".repeat(indent + 1)));
+                spans.push(Span::styled(
+                    "\u{21b3} [draft] ",
+                    Style::default()
+                        .fg(theme.dot_marker)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                spans.push(Span::styled(
+                    text.clone(),
+                    Style::default().fg(theme.annotation_text),
+                ));
+            } else {
+                spans.push(Span::styled(
+                    format!("{}{text}", " ".repeat(indent + 3)),
+                    Style::default().fg(theme.annotation_text),
+                ));
+            }
+        }
+        // Handled by the early return above; a bare bar is a harmless fallback.
+        ThreadLine::Collapsed { .. } => {}
+    }
+    let mut out = Line::from(spans);
+    let pad = width.saturating_sub(out.width());
+    if pad > 0 {
+        out.spans.push(Span::raw(" ".repeat(pad)));
+    }
+    out.style = Style::default().bg(theme.annotation_bg);
+    out
+}
+
+/// Renders one [`Row::ThreadBorder`] row: the thread counterpart to
+/// [`annotation_border_line`], in the thread accent colour so an expanded
+/// inline conversation reads as one outlined forge-context unit.
+fn thread_border_line(top: bool, width: usize, theme: &Theme) -> Line<'static> {
+    let corner = if top { '\u{256d}' } else { '\u{2570}' };
+    let text: String = std::iter::once(corner)
+        .chain(std::iter::repeat_n('\u{2500}', width.saturating_sub(1)))
+        .collect();
+    let mut line = Line::from(Span::styled(text, Style::default().fg(theme.hunk_header)));
+    line.style = Style::default().bg(theme.annotation_bg);
+    line
+}
+
 /// Renders one row (any [`Row`] variant) as a full-width [`Line`]: the
 /// diff pane's own per-frame renderer. `gutter_width` is the whole
 /// multibuffer's dynamic gutter digit width (see
@@ -668,6 +767,8 @@ pub(super) fn row_line(
             ..
         } => annotation_row_line(text, *classification, gutter_width, width, theme),
         Row::AnnotationBorder { top } => annotation_border_line(*top, width, theme),
+        Row::Thread(line) => thread_row_line(line, gutter_width, width, theme),
+        Row::ThreadBorder { top } => thread_border_line(*top, width, theme),
     }
 }
 

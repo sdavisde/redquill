@@ -161,6 +161,10 @@ impl App {
         // Overlay the imported-thread gutter markers after the build, so the
         // row builder stays overlay-free. A no-op when no threads are loaded.
         self.decorate_thread_markers();
+        // Splice each thread's inline conversation (and any drafted replies)
+        // in after its anchor row. Also a no-op with no threads loaded, so a
+        // non-PR diff pays nothing.
+        self.splice_inline_threads();
         self.view.rebuild_layout();
         self.view.selected_file = self.view.file_of_cursor();
         self.search.recompute(&self.view.rows);

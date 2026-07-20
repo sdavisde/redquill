@@ -497,6 +497,221 @@ fn poll_drops_a_stale_generation_result() {
     );
 }
 
+// -- inline thread rendering -------------------------------------------------
+
+/// The [`ThreadLine`]s spliced into the current buffer, in row order.
+fn inline_thread_lines(app: &App) -> Vec<&ThreadLine> {
+    app.view
+        .rows
+        .iter()
+        .filter_map(|r| match r {
+            Row::Thread(line) => Some(line),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn inline_open_thread_renders_root_then_replies_bracketed_after_the_anchor() {
+    let mut app = review_app(&["a.rs"]);
+    app.thread_overlay
+        .replace(vec![positioned_thread(1, "a.rs", Side::New, 1, 2)]);
+    app.rebuild_rows();
+
+    // The block opens with a top border immediately after the anchored line.
+    let anchor = app
+        .view
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Line(l) if l.new_line == Some(1)))
+        .unwrap();
+    assert!(matches!(
+        app.view.rows[anchor + 1],
+        Row::ThreadBorder { top: true }
+    ));
+
+    let lines = inline_thread_lines(&app);
+    // Root header first (not a reply), then its body, then two reply headers.
+    assert!(matches!(lines[0], ThreadLine::Header { reply: false, .. }));
+    assert!(
+        lines.iter().any(
+            |t| matches!(t, ThreadLine::Body { text, reply: false } if text == "root comment")
+        )
+    );
+    let reply_headers = lines
+        .iter()
+        .filter(|t| matches!(t, ThreadLine::Header { reply: true, .. }))
+        .count();
+    assert_eq!(
+        reply_headers, 2,
+        "both replies render nested under the root"
+    );
+    // Closed by a bottom border.
+    assert!(
+        app.view
+            .rows
+            .iter()
+            .any(|r| matches!(r, Row::ThreadBorder { top: false }))
+    );
+}
+
+#[test]
+fn inline_draft_reply_attaches_under_its_thread_after_the_replies() {
+    let mut app = review_app(&["a.rs"]);
+    app.thread_overlay
+        .replace(vec![positioned_thread(5, "a.rs", Side::New, 1, 1)]);
+    app.replies.add(5, "I'll take the guard");
+    app.rebuild_rows();
+
+    // The draft renders as a first-line draft row carrying its body.
+    assert!(inline_thread_lines(&app).iter().any(|t| matches!(
+        t,
+        ThreadLine::Draft { text, first: true } if text == "I'll take the guard"
+    )));
+
+    // It sits after the (only) reply header and before the closing border.
+    let draft = app
+        .view
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Thread(ThreadLine::Draft { .. })))
+        .unwrap();
+    let reply_header = app
+        .view
+        .rows
+        .iter()
+        .rposition(|r| matches!(r, Row::Thread(ThreadLine::Header { reply: true, .. })))
+        .unwrap();
+    let bottom = app
+        .view
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::ThreadBorder { top: false }))
+        .unwrap();
+    assert!(reply_header < draft && draft < bottom);
+}
+
+#[test]
+fn inline_published_draft_reply_is_not_shown_again_inline() {
+    let mut app = review_app(&["a.rs"]);
+    app.thread_overlay
+        .replace(vec![positioned_thread(5, "a.rs", Side::New, 1, 0)]);
+    // A reply that already reached the forge (its copy arrives via fetch, so
+    // it must not double as a local draft row).
+    let id = app.replies.add(5, "already posted").unwrap();
+    app.replies.set_published(id, true);
+    app.rebuild_rows();
+
+    assert!(
+        !inline_thread_lines(&app)
+            .iter()
+            .any(|t| matches!(t, ThreadLine::Draft { .. })),
+        "a published reply is not re-drawn as an inline draft"
+    );
+}
+
+#[test]
+fn inline_resolved_thread_collapses_to_one_summary_line() {
+    let mut app = review_app(&["a.rs"]);
+    let mut thread = positioned_thread(1, "a.rs", Side::New, 1, 3);
+    thread.resolved = true;
+    app.thread_overlay.replace(vec![thread]);
+    app.rebuild_rows();
+
+    let collapsed: Vec<&String> = app
+        .view
+        .rows
+        .iter()
+        .filter_map(|r| match r {
+            Row::Thread(ThreadLine::Collapsed { label }) => Some(label),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(collapsed.len(), 1, "exactly one summary line");
+    assert!(collapsed[0].contains("resolved thread"));
+    assert!(collapsed[0].contains("4 comments"), "root + 3 replies");
+    // No expanded rows: neither a border nor any comment header/body.
+    assert!(
+        !app.view
+            .rows
+            .iter()
+            .any(|r| matches!(r, Row::ThreadBorder { .. }))
+    );
+    assert!(
+        !app.view
+            .rows
+            .iter()
+            .any(|r| matches!(r, Row::Thread(ThreadLine::Header { .. })))
+    );
+}
+
+#[test]
+fn inline_outdated_file_level_thread_renders_collapsed_at_the_file_header() {
+    let mut app = review_app(&["a.rs"]);
+    let thread = Thread {
+        id: 1,
+        anchor: ThreadAnchor::File {
+            path: "a.rs".to_string(),
+        },
+        root: comment(
+            1,
+            "author",
+            "2026-07-01T10:00:00Z",
+            "was on a since-changed line",
+        ),
+        replies: Vec::new(),
+        resolved: false,
+        outdated: true,
+        discussion_id: None,
+    };
+    app.thread_overlay.replace(vec![thread]);
+    app.rebuild_rows();
+
+    let header = app.view.header_row_of_file[0];
+    assert!(matches!(app.view.rows[header], Row::FileHeader { .. }));
+    let Row::Thread(ThreadLine::Collapsed { label }) = &app.view.rows[header + 1] else {
+        panic!("collapsed summary sits right after the file header");
+    };
+    assert!(label.contains("outdated thread"));
+    assert!(label.contains("1 comment"), "singular for a lone comment");
+}
+
+#[test]
+fn inline_threads_are_a_no_op_without_an_overlay() {
+    let mut app = review_app(&["a.rs"]);
+    app.rebuild_rows();
+    assert!(
+        !app.view
+            .rows
+            .iter()
+            .any(|r| matches!(r, Row::Thread(_) | Row::ThreadBorder { .. })),
+        "a zero-thread diff carries no inline-thread rows"
+    );
+}
+
+#[test]
+fn splicing_threads_above_the_cursor_preserves_its_logical_row() {
+    let mut app = review_app(&["a.rs", "b.rs"]);
+    app.rebuild_rows();
+    // Park the cursor on b.rs's file header, before any thread exists.
+    app.view.cursor = app.view.header_row_of_file[1];
+
+    // A thread on a.rs splices rows in above b.rs, shifting its header down.
+    app.thread_overlay
+        .replace(vec![positioned_thread(1, "a.rs", Side::New, 1, 2)]);
+    app.rebuild_rows();
+
+    // The cursor still names b.rs's header despite the index shift.
+    assert!(matches!(
+        app.view.rows[app.view.cursor],
+        Row::FileHeader { file_index: 1, .. }
+    ));
+    assert_eq!(
+        app.view.files[app.view.file_of_row[app.view.cursor]].path,
+        "b.rs"
+    );
+}
+
 // -- Journey transcript: 5-and-5 conversation + drafted reply (FR-12/FR-14) --
 
 /// Flattens a full-screen render of `render_fn` into newline-joined rows,
@@ -679,9 +894,38 @@ fn thread_conversation_and_reply_journey_transcript() {
         ),
     );
 
+    // Back in the diff itself, the whole conversation now renders inline at the
+    // anchored line, and the drafted reply is attached beneath it — so the
+    // reviewer can see their reply is on the thread without opening any overlay
+    // (the fix for "is my reply being set on the thread or not?").
+    app.mode = Mode::Normal;
+    app.view.cursor = app
+        .view
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Line(l) if l.new_line == Some(1)))
+        .unwrap();
+    let km = Keymap::default_map();
+    let inline = flatten(120, 48, |frame| {
+        super::super::diff_view::render(frame, frame.area(), &app, &km)
+    });
+    for body in ["Should this handle the empty input?", "CI passed"] {
+        assert!(
+            inline.contains(body),
+            "the fetched conversation must render inline in the diff:\n{inline}"
+        );
+    }
+    assert!(
+        inline.contains("[draft]") && inline.contains("I'll take the empty-input guard."),
+        "the drafted reply must render inline under the thread:\n{inline}"
+    );
+    step(
+        "back in the diff: the conversation and the [draft] reply render inline",
+        inline.trim_end(),
+    );
+
     // Open the annotation panel; the reply shows with its ↳ marker.
     app.mode = Mode::List;
-    let km = Keymap::default_map();
     let panel = flatten(80, 12, |frame| {
         super::super::list_panel::render(frame, frame.area(), &app, &km)
     });

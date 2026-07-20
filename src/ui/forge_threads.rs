@@ -19,9 +19,11 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use crate::annotate::{Side, Target};
 use crate::forge::{Thread, ThreadAnchor, ThreadComment};
 
+use std::collections::HashMap;
+
 use super::app::{App, Mode};
 use super::background::TaskId;
-use super::rows::Row;
+use super::rows::{Row, ThreadLine};
 use super::theme::Theme;
 use super::time_format::{now_unix, relative_time};
 
@@ -154,6 +156,85 @@ impl App {
                 .is_some_and(|o| positions.contains(&(path.clone(), Side::Old, o)));
             line.thread = new_hit || old_hit;
         }
+    }
+
+    /// Splices each imported thread's inline block into the freshly built row
+    /// buffer, right after the row it anchors on — an open positioned thread
+    /// as a bordered author/reply block (visually a forge-flavoured
+    /// annotation), a resolved/outdated/file-level thread as a single
+    /// collapsed summary line, and the reviewer's own unpublished draft
+    /// replies beneath either. Called once per rebuild from
+    /// [`App::rebuild_rows`] after [`App::decorate_thread_markers`], so the
+    /// row builder stays overlay-free and a zero-thread diff pays nothing (the
+    /// empty-overlay early return). Re-derives `file_of_row` and
+    /// `header_row_of_file` for the inserted rows and remaps the cursor so it
+    /// stays on the same logical row despite the shift.
+    pub(super) fn splice_inline_threads(&mut self) {
+        if self.thread_overlay.is_empty() {
+            return;
+        }
+        // Resolve each thread's anchor row against the pre-splice buffer and
+        // build its block; group by anchor so several threads on one line
+        // splice in fetch order.
+        let mut blocks: HashMap<usize, Vec<Row>> = HashMap::new();
+        for thread in self.thread_overlay.iter() {
+            let Some(anchor) = self.thread_anchor_row(thread) else {
+                continue;
+            };
+            // Expanded only when the thread is open and its exact line row is
+            // in view; a resolved thread, or one that fell back to the file
+            // header (outdated/file-level, or a collapsed section), collapses.
+            let expanded =
+                !thread.resolved && matches!(self.view.rows.get(anchor), Some(Row::Line(_)));
+            let drafts: Vec<&str> = self
+                .replies
+                .iter()
+                .filter(|r| r.thread_id == thread.id && !r.published)
+                .map(|r| r.body.as_str())
+                .collect();
+            let block = thread_block(thread, &drafts, expanded);
+            blocks.entry(anchor).or_default().extend(block);
+        }
+        if blocks.is_empty() {
+            return;
+        }
+
+        let old_rows = std::mem::take(&mut self.view.rows);
+        let file_of_row = std::mem::take(&mut self.view.file_of_row);
+        let old_cursor = self.view.cursor;
+        let mut new_rows: Vec<Row> = Vec::with_capacity(old_rows.len());
+        let mut new_file_of_row: Vec<usize> = Vec::with_capacity(old_rows.len());
+        let mut new_cursor = old_cursor;
+        for (i, row) in old_rows.into_iter().enumerate() {
+            if i == old_cursor {
+                new_cursor = new_rows.len();
+            }
+            let file = file_of_row.get(i).copied().unwrap_or(0);
+            new_rows.push(row);
+            new_file_of_row.push(file);
+            if let Some(block) = blocks.remove(&i) {
+                for trow in block {
+                    new_rows.push(trow);
+                    new_file_of_row.push(file);
+                }
+            }
+        }
+
+        // Section-header rows shifted with the insertions; recompute them from
+        // the rebuilt buffer (every file contributes exactly one FileHeader).
+        let mut header_row_of_file = vec![0usize; self.view.header_row_of_file.len()];
+        for (i, row) in new_rows.iter().enumerate() {
+            if let Row::FileHeader { file_index, .. } = row
+                && let Some(slot) = header_row_of_file.get_mut(*file_index)
+            {
+                *slot = i;
+            }
+        }
+
+        self.view.rows = new_rows;
+        self.view.file_of_row = new_file_of_row;
+        self.view.header_row_of_file = header_row_of_file;
+        self.view.cursor = new_cursor;
     }
 
     /// The ids of annotations that must NOT be drawn as local annotation rows
@@ -462,6 +543,83 @@ fn push_comment(
         lines.push(Line::from(String::new()));
     }
     lines.push(Line::from(String::new()));
+}
+
+/// Builds the inline diff rows for one thread: an `expanded` open thread as a
+/// bordered author/reply block, otherwise a single collapsed summary line —
+/// with the reviewer's own unpublished `drafts` appended under either, so a
+/// queued reply is visibly attached to the thread it answers.
+fn thread_block(thread: &Thread, drafts: &[&str], expanded: bool) -> Vec<Row> {
+    let mut rows = Vec::new();
+    if expanded {
+        rows.push(Row::ThreadBorder { top: true });
+        push_thread_comment(&mut rows, &thread.root, false);
+        for reply in &thread.replies {
+            push_thread_comment(&mut rows, reply, true);
+        }
+        push_thread_drafts(&mut rows, drafts);
+        rows.push(Row::ThreadBorder { top: false });
+    } else {
+        let count = 1 + thread.replies.len();
+        let state = if thread.resolved {
+            "resolved"
+        } else if thread.outdated {
+            "outdated"
+        } else {
+            "file"
+        };
+        let noun = if count == 1 { "comment" } else { "comments" };
+        let label = format!("{state} thread \u{2014} {count} {noun} (T to expand)");
+        rows.push(Row::Thread(ThreadLine::Collapsed { label }));
+        push_thread_drafts(&mut rows, drafts);
+    }
+    rows
+}
+
+/// Appends one comment's inline rows: an author/time header, then one body
+/// row per line (an empty body still gets one blank row so the header isn't
+/// left dangling). `reply` nests the block under the root.
+fn push_thread_comment(rows: &mut Vec<Row>, comment: &ThreadComment, reply: bool) {
+    rows.push(Row::Thread(ThreadLine::Header {
+        author: comment.author.clone(),
+        when: comment_time(&comment.created_at),
+        reply,
+    }));
+    let mut any = false;
+    for body_line in comment.body.lines() {
+        any = true;
+        rows.push(Row::Thread(ThreadLine::Body {
+            text: body_line.to_string(),
+            reply,
+        }));
+    }
+    if !any {
+        rows.push(Row::Thread(ThreadLine::Body {
+            text: String::new(),
+            reply,
+        }));
+    }
+}
+
+/// Appends the reviewer's unpublished draft replies as inline rows, each
+/// marked `↳ [draft]` on its first line. Draft bodies are non-empty (the
+/// store trims and rejects blanks), so the first-line marker always lands.
+fn push_thread_drafts(rows: &mut Vec<Row>, drafts: &[&str]) {
+    for draft in drafts {
+        let mut lines = draft.lines();
+        if let Some(first) = lines.next() {
+            rows.push(Row::Thread(ThreadLine::Draft {
+                text: first.to_string(),
+                first: true,
+            }));
+            for cont in lines {
+                rows.push(Row::Thread(ThreadLine::Draft {
+                    text: cont.to_string(),
+                    first: false,
+                }));
+            }
+        }
+    }
 }
 
 /// Renders the expandable thread overlay, centered over `area`. A no-op when

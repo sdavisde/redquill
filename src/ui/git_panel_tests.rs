@@ -1377,6 +1377,7 @@ fn diff_rows_text(app: &App) -> String {
                 },
                 Row::AnnotationBorder { .. } => format!("{cur}   ┃"),
                 Row::Binary => format!("{cur}   <binary>"),
+                Row::Thread(_) | Row::ThreadBorder { .. } => format!("{cur}   ≡"),
             }
         })
         .collect::<Vec<_>>()

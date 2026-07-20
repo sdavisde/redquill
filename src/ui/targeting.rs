@@ -26,7 +26,10 @@ pub(super) fn target_for_cursor(file: &FileDiff, rows: &[Row], cursor: usize) ->
         Row::Line(line) => line_target(&file.path, line),
         Row::HunkHeader { hunk_index, .. } => hunk_target(file, *hunk_index),
         Row::FileHeader { .. } | Row::Binary => Some(Target::file(&file.path)),
-        Row::Annotation { .. } | Row::AnnotationBorder { .. } => None,
+        Row::Annotation { .. }
+        | Row::AnnotationBorder { .. }
+        | Row::Thread(_)
+        | Row::ThreadBorder { .. } => None,
     }
 }
 
@@ -127,7 +130,11 @@ pub(super) fn editor_target_for_cursor(
             Some((file.path.clone(), ln))
         }
         Row::FileHeader { .. } | Row::HunkHeader { .. } => Some((file.path.clone(), 1)),
-        Row::Binary | Row::Annotation { .. } | Row::AnnotationBorder { .. } => None,
+        Row::Binary
+        | Row::Annotation { .. }
+        | Row::AnnotationBorder { .. }
+        | Row::Thread(_)
+        | Row::ThreadBorder { .. } => None,
     }
 }
 

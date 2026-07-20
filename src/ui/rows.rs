@@ -225,13 +225,58 @@ pub enum Row {
         /// below it.
         top: bool,
     },
+    /// A display-only line of an imported forge comment thread, spliced in
+    /// after its anchor row (a diff line, or the file header for a
+    /// file-level/outdated thread) so the conversation reads inline like a
+    /// local annotation does. Built at rebuild time from the read-only
+    /// overlay (see `App::splice_inline_threads`), never per frame. Never
+    /// addressable, never search-matched.
+    Thread(ThreadLine),
+    /// A horizontal border bracketing an inline thread block, the thread
+    /// counterpart to [`Row::AnnotationBorder`] (distinct accent so imported
+    /// conversations read as forge context, not the reviewer's own notes).
+    /// Only expanded (open) threads are bracketed; a collapsed one is a
+    /// single [`ThreadLine::Collapsed`] row with no borders.
+    ThreadBorder {
+        /// `true` above the block, `false` below it.
+        top: bool,
+    },
+}
+
+/// One display line of an inline imported-thread block. Plain data (no forge
+/// types) so the row model stays decoupled from the overlay store; the block
+/// is assembled from a [`crate::forge::Thread`] in `App::splice_inline_threads`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ThreadLine {
+    /// A comment's `author · when` attribution header; `reply` nests it under
+    /// the root with the `↳` prefix.
+    Header {
+        author: String,
+        when: String,
+        reply: bool,
+    },
+    /// One body line of a comment; `reply` indents it under a reply.
+    Body { text: String, reply: bool },
+    /// One line of a locally drafted, unpublished reply; `first` carries the
+    /// `↳ [draft]` marker, continuation lines indent under it.
+    Draft { text: String, first: bool },
+    /// A resolved / outdated / file-level thread collapsed to a single
+    /// summary line (its full conversation is read via the `T` overlay).
+    Collapsed { label: String },
 }
 
 impl Row {
-    /// Whether the cursor can land on this row. [`Row::Annotation`] and
-    /// [`Row::AnnotationBorder`] rows are display-only.
+    /// Whether the cursor can land on this row. [`Row::Annotation`],
+    /// [`Row::AnnotationBorder`], and the inline-thread rows
+    /// ([`Row::Thread`]/[`Row::ThreadBorder`]) are display-only.
     pub fn is_addressable(&self) -> bool {
-        !matches!(self, Row::Annotation { .. } | Row::AnnotationBorder { .. })
+        !matches!(
+            self,
+            Row::Annotation { .. }
+                | Row::AnnotationBorder { .. }
+                | Row::Thread(_)
+                | Row::ThreadBorder { .. }
+        )
     }
 }
 
