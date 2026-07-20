@@ -86,6 +86,7 @@ mod tests {
             worktree_path: PathBuf::from("/tmp/wt"),
             files,
             annotations: Vec::new(),
+            forge: None,
         }
     }
 

@@ -582,6 +582,7 @@ fn launching_after_the_reviewed_branch_is_deleted_gcs_its_entry() {
             worktree_path: repo.path().join("wt"),
             files: Default::default(),
             annotations: Default::default(),
+            forge: None,
         },
     )
     .unwrap();
@@ -593,6 +594,7 @@ fn launching_after_the_reviewed_branch_is_deleted_gcs_its_entry() {
             worktree_path: repo.path().join("wt2"),
             files: Default::default(),
             annotations: Default::default(),
+            forge: None,
         },
     )
     .unwrap();

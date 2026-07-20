@@ -23,7 +23,16 @@ use thiserror::Error;
 /// The schema version written to every state file. An unreadable or
 /// version-mismatched file degrades to empty per this module's
 /// silent-degradation contract, the same as any other corrupt file.
-pub const SCHEMA_VERSION: u32 = 2;
+///
+/// v2 -> v3 added [`PersistedReview::forge`] (optional; absent for a plain
+/// local-branch review). The migration is silent and additive: a v2 file
+/// has no `forge` key anywhere, which `#[serde(default)]` reads as `None`
+/// exactly like any other missing-field default in this schema, so no
+/// explicit version-branching parse logic exists or is needed. A v2-era
+/// review's JSON round-trips byte-identically through this schema version
+/// except for the top-level `version` bump — see
+/// `v2_era_review_serializes_byte_identically_except_the_version_bump`.
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// A file's persisted review status. Only the two statuses a user gesture
 /// can *durably* choose are represented here — `Unreviewed` (the default;
@@ -78,6 +87,44 @@ pub struct PersistedReview {
     /// [`PersistedFile::blob_sha`]'s "omit rather than write empty" convention.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub annotations: Vec<crate::annotate::PersistedAnnotation>,
+    /// Which forge PR/MR this review targets, when it is one — `None` for a
+    /// plain local-branch review (spec 08's original flow). Omitted from
+    /// the JSON entirely when absent, mirroring
+    /// [`PersistedFile::blob_sha`]'s "omit rather than write null"
+    /// convention, so a non-forge review's on-disk shape is completely
+    /// unaffected by this field's existence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forge: Option<ForgeMetadata>,
+}
+
+/// A PR/MR review's forge identity and fetch bookkeeping: which provider
+/// and host it lives on, its number, and the head commit SHA last fetched
+/// (compared against a fresh fetch to detect the author pushing new
+/// commits — see spec 13's head-move reconciliation). Carried on
+/// [`PersistedReview::forge`]; entirely absent for a local-branch review.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForgeMetadata {
+    pub provider: ForgeProviderKind,
+    /// The forge's hostname (e.g. `github.com`, or a self-managed GitLab
+    /// host), verbatim from provider resolution.
+    pub host: String,
+    /// The PR (GitHub) or MR (GitLab) number.
+    pub number: u64,
+    /// The head commit SHA as of the last successful fetch, for detecting
+    /// the author pushing new commits on the next open/refresh.
+    pub last_head_sha: String,
+}
+
+/// Which forge a [`ForgeMetadata`] block targets. Renamed explicitly
+/// (rather than `rename_all = "snake_case"`, which would split `GitHub`
+/// into the odd `git_hub`) so the on-disk value reads as the provider's own
+/// name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ForgeProviderKind {
+    #[serde(rename = "github")]
+    GitHub,
+    #[serde(rename = "gitlab")]
+    GitLab,
 }
 
 /// The whole `review-state.json` file: one entry per review, keyed by
@@ -239,6 +286,7 @@ mod tests {
                 worktree_path: PathBuf::from("/tmp/redquill/worktrees/feature-1234"),
                 files,
                 annotations: Vec::new(),
+                forge: None,
             },
         );
         ReviewStateFile {
@@ -254,7 +302,7 @@ mod tests {
         let state = sample_state();
         let json = serde_json::to_string_pretty(&state).unwrap();
         let expected = r#"{
-  "version": 2,
+  "version": 3,
   "reviews": {
     "feature": {
       "base": "main",
@@ -373,6 +421,7 @@ mod tests {
                 worktree_path: PathBuf::from("/tmp/wt"),
                 files: BTreeMap::new(),
                 annotations: Vec::new(),
+                forge: None,
             },
         )
         .unwrap();
@@ -405,12 +454,13 @@ mod tests {
                     body: "fix this".to_string(),
                     source: Source::WorkingTree,
                 }],
+                forge: None,
             },
         );
 
         let json = serde_json::to_string_pretty(&state).unwrap();
         let expected = r#"{
-  "version": 2,
+  "version": 3,
   "reviews": {
     "feature": {
       "base": "main",
@@ -451,10 +501,183 @@ mod tests {
             worktree_path: PathBuf::from("/tmp/wt"),
             files: BTreeMap::new(),
             annotations: Vec::new(),
+            forge: None,
         };
         let json = serde_json::to_string(&review).unwrap();
         assert!(json.contains("\"files\":{}"));
         assert!(!json.contains("annotations"));
+        assert!(!json.contains("forge"));
+    }
+
+    // -- Schema v3: forge field -------------------------------------------------
+
+    #[test]
+    fn schema_version_is_3() {
+        assert_eq!(SCHEMA_VERSION, 3);
+    }
+
+    /// Byte-exact round-trip for the `forge` field on a PR/MR review,
+    /// locking its exact shape: a `provider`/`host`/`number`/`last_head_sha`
+    /// object nested directly under the review entry, alongside (not
+    /// replacing) `base`/`worktree_path`/`files`/`annotations`.
+    #[test]
+    fn forge_block_round_trips_byte_exact() {
+        let mut state = ReviewStateFile {
+            version: SCHEMA_VERSION,
+            reviews: BTreeMap::new(),
+        };
+        state.reviews.insert(
+            "redquill/pr/42".to_string(),
+            PersistedReview {
+                base: "main".to_string(),
+                worktree_path: PathBuf::from("/tmp/wt"),
+                files: BTreeMap::new(),
+                annotations: Vec::new(),
+                forge: Some(ForgeMetadata {
+                    provider: ForgeProviderKind::GitHub,
+                    host: "github.com".to_string(),
+                    number: 42,
+                    last_head_sha: "abc123def456".to_string(),
+                }),
+            },
+        );
+
+        let json = serde_json::to_string_pretty(&state).unwrap();
+        let expected = r#"{
+  "version": 3,
+  "reviews": {
+    "redquill/pr/42": {
+      "base": "main",
+      "worktree_path": "/tmp/wt",
+      "files": {},
+      "forge": {
+        "provider": "github",
+        "host": "github.com",
+        "number": 42,
+        "last_head_sha": "abc123def456"
+      }
+    }
+  }
+}"#;
+        assert_eq!(json, expected);
+
+        let round_tripped: ReviewStateFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, state);
+    }
+
+    /// A v2 file (`"version": 2`, no `forge` key anywhere) must load as a
+    /// normal, non-corrupt review with an absent `forge` field, going
+    /// through the real [`load`] entry point (not just a bare
+    /// `serde_json::from_str`) so the corrupt-file side path is proven
+    /// *not* taken — the v2 -> v3 counterpart of
+    /// `v1_file_without_annotations_loads_as_empty_not_corrupt`.
+    #[test]
+    fn v2_file_without_forge_loads_silently_as_v3_with_absent_forge_field() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("review-state.json");
+        let v2_json = r#"{
+  "version": 2,
+  "reviews": {
+    "feature": {
+      "base": "main",
+      "worktree_path": "/tmp/redquill/worktrees/feature-1234",
+      "files": {
+        "a.rs": {
+          "status": "accepted",
+          "blob_sha": "abc123def456"
+        }
+      }
+    }
+  }
+}"#;
+        std::fs::write(&path, v2_json).unwrap();
+
+        let state = load(&path);
+
+        assert!(
+            !tmp.path().join("review-state.json.corrupt").exists(),
+            "a v2 file must never be moved aside as corrupt"
+        );
+        let review = state.reviews.get("feature").expect("v2 entry must load");
+        assert_eq!(review.files.len(), 1);
+        assert_eq!(
+            review.forge, None,
+            "a v2 file has no forge key; it must default to absent, not fail to parse"
+        );
+    }
+
+    /// A v2 file's own `version: 2` survives the read verbatim (`load`
+    /// never rewrites it in place) — the *next* save is what upgrades it on
+    /// disk, mirroring `v1_file_upgrades_to_v2_on_the_next_save`.
+    #[test]
+    fn v2_file_upgrades_to_v3_on_the_next_save() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("review-state.json");
+        std::fs::write(
+            &path,
+            r#"{"version":2,"reviews":{"feature":{"base":"main","worktree_path":"/tmp/wt","files":{}}}}"#,
+        )
+        .unwrap();
+
+        save_review(
+            &path,
+            "feature",
+            PersistedReview {
+                base: "main".to_string(),
+                worktree_path: PathBuf::from("/tmp/wt"),
+                files: BTreeMap::new(),
+                annotations: Vec::new(),
+                forge: None,
+            },
+        )
+        .unwrap();
+
+        let state = load(&path);
+        assert_eq!(state.version, SCHEMA_VERSION);
+    }
+
+    /// The byte-stability proof the spec calls for: a v2-era review's exact
+    /// on-disk JSON, read through the real [`load`] entry point and
+    /// re-serialized, must come back byte-identical except for the
+    /// top-level `version` field bumping from 2 to 3. Nothing about a
+    /// non-forge review's shape changes — no `forge` key appears, no field
+    /// reorders, no whitespace shifts.
+    ///
+    /// [`load`] itself never rewrites the version in place (see
+    /// `v2_file_upgrades_to_v3_on_the_next_save` and its v1 precedent) — the
+    /// version bump only happens on the next write, exactly like
+    /// [`save_review`]'s `state.version = SCHEMA_VERSION` assignment, which
+    /// this test reproduces directly rather than going through a save.
+    #[test]
+    fn v2_era_review_serializes_byte_identically_except_the_version_bump() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("review-state.json");
+        let v2_json = r#"{
+  "version": 2,
+  "reviews": {
+    "feature": {
+      "base": "main",
+      "worktree_path": "/tmp/redquill/worktrees/feature-1234",
+      "files": {
+        "a.rs": {
+          "status": "accepted",
+          "blob_sha": "abc123def456"
+        },
+        "b.rs": {
+          "status": "deferred"
+        }
+      }
+    }
+  }
+}"#;
+        std::fs::write(&path, v2_json).unwrap();
+
+        let mut state = load(&path);
+        state.version = SCHEMA_VERSION;
+        let reserialized = serde_json::to_string_pretty(&state).unwrap();
+
+        let expected = v2_json.replacen("\"version\": 2", "\"version\": 3", 1);
+        assert_eq!(reserialized, expected);
     }
 
     // -- Atomic write -------------------------------------------------------
@@ -552,6 +775,7 @@ mod tests {
                 worktree_path: PathBuf::from("/tmp/wt"),
                 files: BTreeMap::new(),
                 annotations: Vec::new(),
+                forge: None,
             },
         )
         .unwrap();
@@ -577,6 +801,7 @@ mod tests {
                 worktree_path: PathBuf::from("/tmp/wt2"),
                 files: BTreeMap::new(),
                 annotations: Vec::new(),
+                forge: None,
             },
         )
         .unwrap();
@@ -601,6 +826,7 @@ mod tests {
                 worktree_path: PathBuf::from("/tmp/wt"),
                 files: BTreeMap::new(),
                 annotations: Vec::new(),
+                forge: None,
             },
         )
         .unwrap();
@@ -621,6 +847,7 @@ mod tests {
                 worktree_path: PathBuf::from("/tmp/wt2"),
                 files: BTreeMap::new(),
                 annotations: Vec::new(),
+                forge: None,
             },
         );
         save(&path, &state).unwrap();
@@ -663,6 +890,7 @@ mod tests {
                 worktree_path: PathBuf::from("/tmp/wt-deleted"),
                 files: BTreeMap::new(),
                 annotations: Vec::new(),
+                forge: None,
             },
         );
         let existing: HashSet<String> = ["feature".to_string()].into_iter().collect();

@@ -129,6 +129,10 @@ impl App {
             worktree_path,
             files,
             annotations,
+            // No forge-backed session exists yet on this branch: `App`
+            // carries no PR/MR identity to attach here until the PR
+            // checkout flow (spec 13 unit 2) wires one in.
+            forge: None,
         };
         self.review_save_in_flight = true;
         self.review_save_tasks.spawn(move || {

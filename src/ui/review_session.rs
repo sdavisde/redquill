@@ -268,6 +268,7 @@ mod tests {
                 worktree_path: repo.path().to_path_buf(),
                 files,
                 annotations: Vec::new(),
+                forge: None,
             },
         )
         .unwrap();
@@ -337,6 +338,7 @@ mod tests {
                     body: "note".to_string(),
                     source: Source::WorkingTree,
                 }],
+                forge: None,
             },
         )
         .unwrap();

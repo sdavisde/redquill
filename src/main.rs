@@ -642,6 +642,7 @@ mod tests {
                     worktree_path: repo.path().join("wt").join(branch),
                     files: Default::default(),
                     annotations: Default::default(),
+                    forge: None,
                 },
             )
             .unwrap();
@@ -677,6 +678,7 @@ mod tests {
                 worktree_path: repo.path().join("wt"),
                 files: Default::default(),
                 annotations: Default::default(),
+                forge: None,
             },
         )
         .unwrap();

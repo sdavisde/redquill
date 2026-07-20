@@ -315,6 +315,7 @@ index 111..222 100644
                 worktree_path: PathBuf::from("/tmp/review-worktree"),
                 files: std::collections::BTreeMap::new(),
                 annotations: Vec::new(),
+                forge: None,
             },
         )
         .unwrap();
@@ -327,6 +328,7 @@ index 111..222 100644
                 worktree_path: PathBuf::from("/tmp/other-worktree"),
                 files: std::collections::BTreeMap::new(),
                 annotations: Vec::new(),
+                forge: None,
             },
         )
         .unwrap();
@@ -373,6 +375,7 @@ index 111..222 100644
                     body: "note".to_string(),
                     source: Source::WorkingTree,
                 }],
+                forge: None,
             },
         )
         .unwrap();
@@ -411,6 +414,7 @@ index 111..222 100644
                 worktree_path: PathBuf::from("/tmp/review-worktree"),
                 files: std::collections::BTreeMap::new(),
                 annotations: Vec::new(),
+                forge: None,
             },
         )
         .unwrap();
