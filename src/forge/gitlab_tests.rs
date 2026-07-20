@@ -983,6 +983,8 @@ fn draft_note_command_is_a_fixed_post_with_stdin_body() {
             OsStr::new("api"),
             OsStr::new("--method"),
             OsStr::new("POST"),
+            OsStr::new("-H"),
+            OsStr::new("Content-Type: application/json"),
             OsStr::new("projects/:id/merge_requests/42/draft_notes"),
             OsStr::new("--input"),
             OsStr::new("-"),
@@ -1002,6 +1004,8 @@ fn bulk_publish_command_is_a_fixed_post_with_no_body() {
             OsStr::new("api"),
             OsStr::new("--method"),
             OsStr::new("POST"),
+            OsStr::new("-H"),
+            OsStr::new("Content-Type: application/json"),
             OsStr::new("projects/:id/merge_requests/7/draft_notes/bulk_publish"),
         ]
     );
@@ -1014,7 +1018,7 @@ fn discussion_and_reply_and_approve_commands_have_fixed_shapes() {
         .get_args()
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
-    assert_eq!(disc_args[3], "projects/:id/merge_requests/3/discussions");
+    assert_eq!(disc_args[5], "projects/:id/merge_requests/3/discussions");
 
     let reply = discussion_reply_command(3, "abc123");
     let reply_args: Vec<String> = reply
@@ -1022,7 +1026,7 @@ fn discussion_and_reply_and_approve_commands_have_fixed_shapes() {
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
     assert_eq!(
-        reply_args[3],
+        reply_args[5],
         "projects/:id/merge_requests/3/discussions/abc123/notes"
     );
 
@@ -1040,9 +1044,39 @@ fn draft_and_reply_argv_interpolate_only_the_typed_iid_and_discussion_id() {
     let two = draft_note_command(2);
     let a: Vec<&OsStr> = one.get_args().collect();
     let b: Vec<&OsStr> = two.get_args().collect();
-    assert_ne!(a[3], b[3]);
+    assert_ne!(a[5], b[5]);
     assert_eq!(
-        a[3],
+        a[5],
         OsStr::new("projects/:id/merge_requests/1/draft_notes")
     );
+}
+
+/// Regression guard for the GitLab 415 (`glab api --input -` sends no
+/// Content-Type on its own): every POST argv builder used by the submit flow
+/// must carry an explicit `-H "Content-Type: application/json"`, immediately
+/// before the endpoint path, so `glab` always sends a header GitLab accepts —
+/// including `bulk_publish`, which has no body but still 415s without it.
+#[test]
+fn all_post_command_builders_send_an_explicit_json_content_type_header() {
+    let commands: Vec<Command> = vec![
+        draft_note_command(1),
+        bulk_publish_command(1),
+        discussion_create_command(1),
+        discussion_reply_command(1, "abc123"),
+    ];
+    for cmd in commands {
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let h_pos = args
+            .iter()
+            .position(|a| a == "-H")
+            .unwrap_or_else(|| panic!("missing -H flag in argv: {args:?}"));
+        assert_eq!(
+            args.get(h_pos + 1).map(String::as_str),
+            Some("Content-Type: application/json"),
+            "unexpected header value in argv: {args:?}"
+        );
+    }
 }

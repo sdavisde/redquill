@@ -735,15 +735,19 @@ fn run_visible_fallback(
 
 // -- Submit argv builders (the draft-notes / discussions / approve endpoints) --
 
-/// `glab api --method POST projects/:id/merge_requests/<iid>/draft_notes --input -`.
+/// `glab api --method POST -H "Content-Type: application/json" projects/:id/merge_requests/<iid>/draft_notes --input -`.
 /// The JSON body (note text + optional position/reply target) streams on stdin,
-/// so the argv is fixed but for the `u64` iid.
+/// so the argv is fixed but for the `u64` iid. The explicit header is required
+/// because `--input` streams raw bytes without `glab` inferring a content type
+/// (unlike its `-f`/`-F` field style) — GitLab returns 415 without it.
 pub fn draft_note_command(iid: u64) -> Command {
     let mut cmd = Command::new("glab");
     cmd.args([
         "api",
         "--method",
         "POST",
+        "-H",
+        "Content-Type: application/json",
         &format!("projects/:id/merge_requests/{iid}/draft_notes"),
         "--input",
         "-",
@@ -752,20 +756,25 @@ pub fn draft_note_command(iid: u64) -> Command {
     cmd
 }
 
-/// `glab api --method POST projects/:id/merge_requests/<iid>/draft_notes/bulk_publish`.
+/// `glab api --method POST -H "Content-Type: application/json" projects/:id/merge_requests/<iid>/draft_notes/bulk_publish`.
+/// Sends no body, but still needs the header: without it `glab` sends no
+/// Content-Type and GitLab 415s; with it, `glab` sends an empty `{}` body,
+/// which GitLab accepts.
 pub fn bulk_publish_command(iid: u64) -> Command {
     let mut cmd = Command::new("glab");
     cmd.args([
         "api",
         "--method",
         "POST",
+        "-H",
+        "Content-Type: application/json",
         &format!("projects/:id/merge_requests/{iid}/draft_notes/bulk_publish"),
     ]);
     harden_glab(&mut cmd);
     cmd
 }
 
-/// `glab api --method POST projects/:id/merge_requests/<iid>/discussions --input -`
+/// `glab api --method POST -H "Content-Type: application/json" projects/:id/merge_requests/<iid>/discussions --input -`
 /// (the visible-fallback create). Body (`body` + optional `position`) on stdin.
 pub fn discussion_create_command(iid: u64) -> Command {
     let mut cmd = Command::new("glab");
@@ -773,6 +782,8 @@ pub fn discussion_create_command(iid: u64) -> Command {
         "api",
         "--method",
         "POST",
+        "-H",
+        "Content-Type: application/json",
         &format!("projects/:id/merge_requests/{iid}/discussions"),
         "--input",
         "-",
@@ -781,7 +792,7 @@ pub fn discussion_create_command(iid: u64) -> Command {
     cmd
 }
 
-/// `glab api --method POST projects/:id/merge_requests/<iid>/discussions/<did>/notes --input -`
+/// `glab api --method POST -H "Content-Type: application/json" projects/:id/merge_requests/<iid>/discussions/<did>/notes --input -`
 /// (the visible-fallback reply). `did` is the discussion's own string id, from
 /// the discussions read — a hex hash, placed as a single path segment; the body
 /// (`body`) streams on stdin.
@@ -791,6 +802,8 @@ pub fn discussion_reply_command(iid: u64, discussion_id: &str) -> Command {
         "api",
         "--method",
         "POST",
+        "-H",
+        "Content-Type: application/json",
         &format!("projects/:id/merge_requests/{iid}/discussions/{discussion_id}/notes"),
         "--input",
         "-",
