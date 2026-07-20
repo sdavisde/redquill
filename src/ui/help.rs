@@ -226,7 +226,7 @@ fn modal_hints<A: Clone>(table: &[ModalBinding<A>]) -> Vec<(String, &'static str
 /// applies), so only one of the two ever documents itself here at a time,
 /// exactly like `Action::ToggleStage`/`Action::ToggleAccept`'s mutual
 /// exclusion in [`binding_hidden`].
-fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 16] {
+fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 17] {
     let staging_section = if review_session {
         (
             "Accepted files panel (s, review sessions)",
@@ -278,6 +278,10 @@ fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 
         (
             "Submit review (U, PR review session)",
             modal_hints(&modal_keys.submit_forge),
+        ),
+        (
+            "Cleanup finished reviews (X, Pull Requests tab)",
+            modal_hints(&modal_keys.cleanup_reviews),
         ),
     ]
 }

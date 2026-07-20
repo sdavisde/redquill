@@ -27,6 +27,7 @@
 //! to a real index before dispatch, never bypasses the guard that dispatch
 //! itself performs first.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::forge::PullRequest;
@@ -1221,7 +1222,7 @@ impl App {
             return;
         }
         let Some(ops) = self.stage_ops.as_deref() else {
-            self.launcher_prs = Some(PrFetchOutcome::NoForgeRemote);
+            self.set_launcher_prs(PrFetchOutcome::NoForgeRemote);
             return;
         };
         if let Some(fetcher) = ops.async_pr_list_fetcher() {
@@ -1229,7 +1230,8 @@ impl App {
             let id = self.launcher_prs_tasks.spawn(fetcher);
             self.launcher_prs_in_flight = Some(InFlightLauncherPrs { id, generation });
         } else {
-            self.launcher_prs = Some(ops.list_open_prs());
+            let outcome = ops.list_open_prs();
+            self.set_launcher_prs(outcome);
         }
     }
 
@@ -1252,14 +1254,60 @@ impl App {
                 continue;
             }
             match result {
-                Ok(outcome) => self.launcher_prs = Some(outcome),
+                Ok(outcome) => self.set_launcher_prs(outcome),
                 Err(_) => {
-                    self.launcher_prs = Some(PrFetchOutcome::ListFailed {
+                    self.set_launcher_prs(PrFetchOutcome::ListFailed {
                         message: "background PR fetch task panicked".to_string(),
                     });
                 }
             }
         }
+    }
+
+    /// Stores a resolved [`PrFetchOutcome`] as the tab's current state and
+    /// recomputes the finished-review set from it — the single point every
+    /// PR-list resolution routes through, so the footer count and the cleanup
+    /// candidates can never lag the listing they were derived from.
+    fn set_launcher_prs(&mut self, outcome: PrFetchOutcome) {
+        self.launcher_prs = Some(outcome);
+        self.recompute_launcher_finished_reviews();
+    }
+
+    /// Recomputes [`App::launcher_finished_reviews`] from the just-resolved
+    /// listing: the managed `redquill/pr/*` branches (via `stage_ops`) crossed
+    /// against the persisted reviews and the open-PR numbers the listing
+    /// carries — no extra network call (spec 13 FR-22). Runs only when the
+    /// list resolves (never per frame), so its one `for-each-ref` + one
+    /// state-file read cost is amortized across a whole tab dwell. Any
+    /// degraded outcome, a missing backend, or an unresolvable state path
+    /// clears the set rather than guessing: without a reliable open-PR set,
+    /// nothing can be called finished.
+    pub(super) fn recompute_launcher_finished_reviews(&mut self) {
+        let open: HashSet<u64> = match &self.launcher_prs {
+            Some(PrFetchOutcome::Loaded { prs, .. }) => prs.iter().map(|pr| pr.number).collect(),
+            _ => {
+                self.launcher_finished_reviews.clear();
+                return;
+            }
+        };
+        let Some(ops) = self.stage_ops.as_deref() else {
+            self.launcher_finished_reviews.clear();
+            return;
+        };
+        let managed: Vec<String> = ops
+            .managed_pr_branches()
+            .map(|branches| branches.into_iter().map(|b| b.name).collect())
+            .unwrap_or_default();
+        if managed.is_empty() {
+            self.launcher_finished_reviews.clear();
+            return;
+        }
+        let Ok(state_path) = resolve_review_state_path(ops) else {
+            self.launcher_finished_reviews.clear();
+            return;
+        };
+        let reviews = crate::review::store::load(&state_path).reviews;
+        self.launcher_finished_reviews = crate::review::finished_reviews(&managed, &reviews, &open);
     }
 }
 

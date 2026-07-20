@@ -19,6 +19,8 @@ mod annotation_list;
 mod annotation_overlap;
 mod app;
 mod background;
+mod cleanup_reviews;
+mod cleanup_reviews_modal;
 mod code_intel;
 mod command_log;
 mod commit_message;
@@ -389,6 +391,7 @@ fn dispatch_key(
         Mode::ConfirmRemoteOp { .. } => modes::handle_confirm_remote_op_key(app, key),
         Mode::ThreadView => modes::handle_thread_view_key(app, key),
         Mode::SubmitForge => modes::handle_submit_forge_key(app, key),
+        Mode::CleanupReviews { .. } => modes::handle_cleanup_reviews_key(app, key),
         Mode::Normal | Mode::Visual { .. } => {
             // While an overlay is open it captures keys — here that overlay
             // can only be the help overlay, since Compose and Peek have their
@@ -883,6 +886,9 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     }
     if matches!(app.mode, Mode::ConfirmRemoteOp { .. }) {
         confirm_remote_op_modal::render(frame, area, app);
+    }
+    if matches!(app.mode, Mode::CleanupReviews { .. }) {
+        cleanup_reviews_modal::render(frame, area, app);
     }
 }
 

@@ -281,13 +281,50 @@ fn prs_degraded_body_lines(outcome: &PrFetchOutcome, theme: &Theme) -> Vec<Line<
     }
 }
 
+/// The key label the finished-reviews footer names, read from the *effective*
+/// launcher table so a `[keys.review-launcher]` remap of
+/// `cleanup-finished-reviews` is reflected here automatically (FR-5/FR-22).
+fn cleanup_key_label(table: &[ModalBinding<LauncherAction>]) -> String {
+    table
+        .iter()
+        .find(|b| b.action == LauncherAction::Cleanup)
+        .and_then(|b| b.keys.first())
+        .map(|k| k.label())
+        .unwrap_or_else(|| "X".to_string())
+}
+
+/// The "N finished review(s)" footer line: rendered whenever cleanup
+/// candidates exist (managed reviews whose PR is no longer open), alongside
+/// both a real listing and the zero-open-PRs empty state (FR-22). Names the
+/// cleanup key so there is always a next step. Styled in the secondary
+/// `footer_text` tone so it reads as chrome, not as a selectable PR row.
+fn finished_reviews_footer_line(
+    count: usize,
+    table: &[ModalBinding<LauncherAction>],
+    theme: &Theme,
+) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{count} finished review(s) \u{2014} press "),
+            Style::default().fg(theme.footer_text),
+        ),
+        Span::styled(
+            cleanup_key_label(table),
+            Style::default().fg(theme.help_key),
+        ),
+        Span::styled(" to clean up", Style::default().fg(theme.footer_text)),
+    ])
+}
+
 /// The Pull Requests tab's rows: a loading placeholder while the first
 /// fetch is in flight, real [`PullRequest`] rows via [`pr_row`] on a
 /// successful non-empty listing, the zero-results empty state naming the
 /// repo, or a degraded-state prescription — never a blank body. `order`
 /// restricts which PRs render and in what sequence (see [`commits_rows`]'s
 /// identical convention, spec 12 FR-12); loading/empty/degraded states take
-/// priority over `order`, same precedence as every other tab.
+/// priority over `order`, same precedence as every other tab. When cleanup
+/// candidates exist, a non-selectable "N finished review(s)" footer line is
+/// appended below the listing or empty state (FR-22).
 fn prs_rows(
     app: &App,
     order: &[usize],
@@ -306,7 +343,7 @@ fn prs_rows(
             Style::default().fg(theme.footer_text),
         )))];
     };
-    match outcome {
+    let mut items = match outcome {
         PrFetchOutcome::Loaded { repo_label, prs } if prs.is_empty() => {
             vec![ListItem::new(prs_empty_state_line(repo_label, theme))]
         }
@@ -315,8 +352,17 @@ fn prs_rows(
             .filter_map(|&i| prs.get(i))
             .map(|pr| pr_row(pr, theme, content_width))
             .collect(),
-        degraded => vec![ListItem::new(prs_degraded_body_lines(degraded, theme))],
+        degraded => return vec![ListItem::new(prs_degraded_body_lines(degraded, theme))],
+    };
+    let finished = app.launcher_finished_reviews.len();
+    if finished > 0 {
+        items.push(ListItem::new(finished_reviews_footer_line(
+            finished,
+            &app.modal_keys.review_launcher,
+            theme,
+        )));
     }
+    items
 }
 
 /// Builds the bottom-border hint line from the *effective* launcher table:
@@ -919,6 +965,54 @@ index 111..222 100644
         let content = render_launcher(&app);
         assert!(content.contains("GitLab"));
         assert!(content.contains("gitlab.com"));
+    }
+
+    fn finished(number: u64) -> crate::review::FinishedReview {
+        crate::review::FinishedReview {
+            branch: format!("redquill/pr/{number}"),
+            number,
+            title: format!("PR {number}"),
+            provider: crate::review::store::ForgeProviderKind::GitHub,
+            host: "github.com".to_string(),
+            worktree_path: std::path::PathBuf::from(format!("/tmp/wt/{number}")),
+            unpublished_count: 0,
+        }
+    }
+
+    #[test]
+    fn prs_tab_finished_reviews_footer_renders_alongside_a_listing() {
+        let mut app = prs_app(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(1, "one", "dev", "feature", false)],
+        });
+        app.launcher_finished_reviews = vec![finished(9), finished(10)];
+        let content = render_launcher(&app);
+        assert!(content.contains("2 finished review(s)"));
+        assert!(content.contains("clean up"));
+        // The listed PR still renders too.
+        assert!(content.contains("#1"));
+    }
+
+    #[test]
+    fn prs_tab_finished_reviews_footer_renders_alongside_the_zero_open_empty_state() {
+        let mut app = prs_app(PrFetchOutcome::Loaded {
+            repo_label: "sdavisde/redquill".to_string(),
+            prs: Vec::new(),
+        });
+        app.launcher_finished_reviews = vec![finished(9)];
+        let content = render_launcher(&app);
+        assert!(content.contains("No open pull requests on sdavisde/redquill"));
+        assert!(content.contains("1 finished review(s)"));
+    }
+
+    #[test]
+    fn prs_tab_no_finished_footer_when_none_are_finished() {
+        let app = prs_app(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(1, "one", "dev", "feature", false)],
+        });
+        let content = render_launcher(&app);
+        assert!(!content.contains("finished review"));
     }
 
     #[test]

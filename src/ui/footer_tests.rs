@@ -375,7 +375,8 @@ fn review_launcher_mode_hints() {
             "confirm",
             "filter",
             "close",
-            "all commits"
+            "all commits",
+            "clean up"
         ]
     );
 }

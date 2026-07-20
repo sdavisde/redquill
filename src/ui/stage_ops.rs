@@ -242,6 +242,14 @@ pub trait StageOps {
     fn worktree_list(&self) -> Result<Vec<WorktreeEntry>, GitError> {
         Err(GitError::Parse("worktree list unavailable".into()))
     }
+    /// Lists the managed PR/MR review branches (`refs/heads/redquill/pr/*`,
+    /// see [`GitRunner::managed_pr_branches`]) — the driver for the Pull
+    /// Requests tab's finished-review detection and cleanup. The default
+    /// returns an empty list, keeping navigation-only fakes and git-less
+    /// contexts free of finished-review candidates rather than erroring.
+    fn managed_pr_branches(&self) -> Result<Vec<LocalBranch>, GitError> {
+        Ok(Vec::new())
+    }
     /// Removes a managed review worktree (see [`GitRunner::worktree_remove`]).
     /// Must be called through a backend rooted *outside* the worktree being
     /// removed (see [`super::app::App::review_origin_ops`]'s doc).
@@ -253,6 +261,14 @@ pub trait StageOps {
     /// [`GitRunner::worktree_prune`]).
     fn worktree_prune(&self) -> Result<(), GitError> {
         Err(GitError::Parse("worktree prune unavailable".into()))
+    }
+    /// Deletes a managed PR/MR review branch (`redquill/pr/<number>`, see
+    /// [`GitRunner::delete_managed_pr_branch`]) — structurally confined to the
+    /// managed namespace. The default errors, keeping git-less contexts and
+    /// navigation-only fakes off the deletion path.
+    fn delete_managed_pr_branch(&self, number: u64) -> Result<(), GitError> {
+        let _ = number;
+        Err(GitError::Parse("managed branch delete unavailable".into()))
     }
     /// Switches the working tree to branch `name` (see
     /// [`GitRunner::switch_branch`]).
@@ -472,12 +488,20 @@ impl StageOps for GitRunner {
         GitRunner::worktree_list(self)
     }
 
+    fn managed_pr_branches(&self) -> Result<Vec<LocalBranch>, GitError> {
+        GitRunner::managed_pr_branches(self)
+    }
+
     fn worktree_remove(&self, path: &std::path::Path) -> Result<(), GitError> {
         GitRunner::worktree_remove(self, path)
     }
 
     fn worktree_prune(&self) -> Result<(), GitError> {
         GitRunner::worktree_prune(self)
+    }
+
+    fn delete_managed_pr_branch(&self, number: u64) -> Result<(), GitError> {
+        GitRunner::delete_managed_pr_branch(self, number)
     }
 
     fn switch_branch(&self, name: &str) -> Result<(), GitError> {

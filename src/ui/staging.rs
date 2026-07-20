@@ -267,7 +267,8 @@ impl App {
             | Mode::EndReview { .. }
             | Mode::ConfirmRemoteOp { .. }
             | Mode::ThreadView
-            | Mode::SubmitForge => {}
+            | Mode::SubmitForge
+            | Mode::CleanupReviews { .. } => {}
             Mode::Normal | Mode::Visual { .. } => {
                 if self.in_review_session() {
                     self.refresh_accepted_list();

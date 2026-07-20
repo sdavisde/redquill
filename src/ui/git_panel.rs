@@ -675,7 +675,8 @@ impl App {
             | Mode::EndReview { .. }
             | Mode::ConfirmRemoteOp { .. }
             | Mode::ThreadView
-            | Mode::SubmitForge => {}
+            | Mode::SubmitForge
+            | Mode::CleanupReviews { .. } => {}
             Mode::Normal | Mode::Visual { .. } => {
                 self.mode = Mode::Panel {
                     cursor: 0,

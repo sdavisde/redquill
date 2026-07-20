@@ -471,6 +471,7 @@ pub(super) fn build_hints(
         Mode::ConfirmRemoteOp { .. } => modal_hints(&modal_keys.confirm_remote_op),
         Mode::ThreadView => modal_hints(&modal_keys.thread_view),
         Mode::SubmitForge => modal_hints(&modal_keys.submit_forge),
+        Mode::CleanupReviews { .. } => modal_hints(&modal_keys.cleanup_reviews),
         Mode::ReviewLauncher { .. } => modal_hints(&modal_keys.review_launcher),
     }
 }

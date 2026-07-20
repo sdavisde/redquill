@@ -1361,6 +1361,57 @@ pub(super) static CONFIRM_REMOTE_OP_KEYS: LazyLock<Vec<ModalBinding<ConfirmRemot
         ]
     });
 
+// -- Finished-review cleanup confirm modal -----------------------------------
+
+/// What a key does in the finished-review cleanup confirm modal
+/// ([`super::app::Mode::CleanupReviews`], opened by `cleanup-finished-reviews`
+/// on the Pull Requests tab): a plain confirm/cancel gate over the enumerated
+/// finished reviews. Confirm deletes every listed review's worktree, branch,
+/// and state entry; cancel mutates nothing. Not config-remappable yet — see
+/// module doc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CleanupReviewsAction {
+    /// Deletes the enumerated finished reviews (see
+    /// [`super::app::App::confirm_cleanup_reviews`]).
+    Confirm,
+    /// Closes the modal, deleting nothing (see
+    /// [`super::app::App::cancel_cleanup_reviews`]).
+    Cancel,
+}
+
+/// The cleanup confirm modal's key table, for the help overlay, footer strip,
+/// and [`super::modes::handle_cleanup_reviews_key`]'s dispatch. Mirrors
+/// [`CONFIRM_REMOTE_OP_KEYS`]' binary-gate shape.
+pub(super) static CLEANUP_REVIEWS_KEYS: LazyLock<Vec<ModalBinding<CleanupReviewsAction>>> =
+    LazyLock::new(|| {
+        vec![
+            ModalBinding {
+                description: "Delete the finished reviews (worktree, branch, saved state)",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Enter),
+                    ModalKey::plain(KeyCode::Char('y')),
+                ],
+                action: CleanupReviewsAction::Confirm,
+                footer: Some(FooterHint {
+                    rank: 1,
+                    label: "delete",
+                }),
+            },
+            ModalBinding {
+                description: "Cancel — close this modal, delete nothing",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Esc),
+                    ModalKey::plain(KeyCode::Char('n')),
+                ],
+                action: CleanupReviewsAction::Cancel,
+                footer: Some(FooterHint {
+                    rank: 2,
+                    label: "cancel",
+                }),
+            },
+        ]
+    });
+
 // -- Review launcher modal ---------------------------------------------------
 
 /// What a key does in the Review launcher modal (`R`, `Scope::Global` —
@@ -1400,6 +1451,10 @@ pub(super) enum LauncherAction {
     /// between ahead-of-base and the full recent-HEAD log (see
     /// [`super::app::App::review_launcher_toggle_all_commits`]).
     ToggleAllCommits,
+    /// The Pull Requests tab's finished-review cleanup — opens the confirm
+    /// modal for reviews whose PR is no longer open (see
+    /// [`super::app::App::open_cleanup_reviews`]).
+    Cleanup,
 }
 
 pub(super) fn launcher_action_name(action: LauncherAction) -> &'static str {
@@ -1417,6 +1472,7 @@ pub(super) fn launcher_action_name(action: LauncherAction) -> &'static str {
         LauncherAction::EnterFilter => "enter-filter",
         LauncherAction::Close => "close",
         LauncherAction::ToggleAllCommits => "toggle-all-commits",
+        LauncherAction::Cleanup => "cleanup-finished-reviews",
     }
 }
 
@@ -1435,6 +1491,7 @@ pub(super) fn launcher_action_from_name(name: &str) -> Option<LauncherAction> {
         "enter-filter" => LauncherAction::EnterFilter,
         "close" => LauncherAction::Close,
         "toggle-all-commits" => LauncherAction::ToggleAllCommits,
+        "cleanup-finished-reviews" => LauncherAction::Cleanup,
         _ => return None,
     })
 }
@@ -1559,6 +1616,15 @@ pub(super) static REVIEW_LAUNCHER_KEYS: LazyLock<Vec<ModalBinding<LauncherAction
                 footer: Some(FooterHint {
                     rank: 6,
                     label: "all commits",
+                }),
+            },
+            ModalBinding {
+                description: "Pull Requests tab: clean up finished reviews",
+                keys: vec![ModalKey::plain(KeyCode::Char('X'))],
+                action: LauncherAction::Cleanup,
+                footer: Some(FooterHint {
+                    rank: 7,
+                    label: "clean up",
                 }),
             },
         ]
@@ -2759,6 +2825,9 @@ pub struct ModalKeymaps {
     /// The submit-review modal. Not config-remappable yet — see
     /// [`SUBMIT_FORGE_KEYS`].
     pub(super) submit_forge: Vec<ModalBinding<SubmitForgeAction>>,
+    /// The finished-review cleanup confirm modal. Not config-remappable yet —
+    /// see [`CLEANUP_REVIEWS_KEYS`].
+    pub(super) cleanup_reviews: Vec<ModalBinding<CleanupReviewsAction>>,
     /// The shared `/` list-filter editing sub-state (see
     /// [`FILTER_EDIT_KEYS`]) — one table reused by every filter-gaining
     /// context (list, staging, accepted panel, switcher).
@@ -2786,6 +2855,7 @@ impl Default for ModalKeymaps {
             confirm_remote_op: CONFIRM_REMOTE_OP_KEYS.clone(),
             thread_view: THREAD_VIEW_KEYS.clone(),
             submit_forge: SUBMIT_FORGE_KEYS.clone(),
+            cleanup_reviews: CLEANUP_REVIEWS_KEYS.clone(),
             filter_edit: FILTER_EDIT_KEYS.clone(),
         }
     }
@@ -3712,6 +3782,29 @@ index 111..222 100644
                         assert!(
                             app.launcher_all_commits,
                             "Launcher {label}: must toggle all-commits on"
+                        );
+                    }
+                    LauncherAction::Cleanup => {
+                        // Only observable on the Pull Requests tab with a
+                        // finished review present — set both up first.
+                        app.mode = Mode::ReviewLauncher {
+                            tab: LauncherTab::PullRequests,
+                            cursor: 0,
+                            origin: crate::ui::app::ModeOrigin::Normal,
+                        };
+                        app.launcher_finished_reviews = vec![crate::review::FinishedReview {
+                            branch: "redquill/pr/1".to_string(),
+                            number: 1,
+                            title: "t".to_string(),
+                            provider: crate::review::store::ForgeProviderKind::GitHub,
+                            host: "github.com".to_string(),
+                            worktree_path: std::path::PathBuf::from("/tmp/wt"),
+                            unpublished_count: 0,
+                        }];
+                        handle_review_launcher_key(&mut app, key.event());
+                        assert!(
+                            matches!(app.mode, Mode::CleanupReviews { .. }),
+                            "Launcher {label}: must open the cleanup modal"
                         );
                     }
                 }

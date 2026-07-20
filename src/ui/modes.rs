@@ -16,10 +16,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::App;
 use super::modal_keys::{
-    self, AcceptedPanelAction, CommitMessageAction, ComposeAction, ConfirmRemoteOpAction,
-    EndReviewAction, FilterEditAction, FinderAction, LauncherAction, ListAction, PeekAction,
-    ProjectSearchInputAction, ProjectSearchResultsAction, SearchAction, StagingAction,
-    SubmitForgeAction, SwitcherAction, ThreadViewAction,
+    self, AcceptedPanelAction, CleanupReviewsAction, CommitMessageAction, ComposeAction,
+    ConfirmRemoteOpAction, EndReviewAction, FilterEditAction, FinderAction, LauncherAction,
+    ListAction, PeekAction, ProjectSearchInputAction, ProjectSearchResultsAction, SearchAction,
+    StagingAction, SubmitForgeAction, SwitcherAction, ThreadViewAction,
 };
 use super::motion;
 
@@ -492,6 +492,21 @@ pub(super) fn handle_confirm_remote_op_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// Handles one key event while [`super::Mode::CleanupReviews`] is active: a
+/// binary confirm/cancel gate over the enumerated finished reviews. Confirm
+/// deletes each review's worktree, branch, and state entry; cancel closes back
+/// into the launcher, deleting nothing. Resolved against
+/// `app.modal_keys.cleanup_reviews` (see [`modal_keys::CLEANUP_REVIEWS_KEYS`]).
+pub(super) fn handle_cleanup_reviews_key(app: &mut App, key: KeyEvent) {
+    let Some(action) = modal_keys::resolve(&app.modal_keys.cleanup_reviews, key) else {
+        return;
+    };
+    match action {
+        CleanupReviewsAction::Confirm => app.confirm_cleanup_reviews(),
+        CleanupReviewsAction::Cancel => app.cancel_cleanup_reviews(),
+    }
+}
+
 /// Handles one key event while [`super::Mode::Peek`] is active: `j`/`k` move
 /// through results (or scroll hover text), `Enter` jumps the diff cursor to
 /// a Definition/References result that's one of the diff's files (closing
@@ -742,6 +757,7 @@ pub(super) fn handle_review_launcher_key(app: &mut App, key: KeyEvent) {
         LauncherAction::EnterFilter => app.review_launcher_enter_filter(),
         LauncherAction::Close => app.close_review_launcher(),
         LauncherAction::ToggleAllCommits => app.review_launcher_toggle_all_commits(),
+        LauncherAction::Cleanup => app.open_cleanup_reviews(),
     }
 }
 

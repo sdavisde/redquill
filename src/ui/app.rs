@@ -165,6 +165,16 @@ pub enum Mode {
     /// confirms from here. Its selection/edit state lives in
     /// [`App::submit_forge`] (see [`super::forge_submit`]).
     SubmitForge,
+    /// The finished-review cleanup confirm modal (`cleanup-finished-reviews`,
+    /// Pull Requests tab, opened by [`App::open_cleanup_reviews`]): enumerates
+    /// every managed review whose PR is no longer open — number, title,
+    /// worktree path, and an unpublished-work warning — and gates their
+    /// deletion (worktree + branch + state entry) behind an explicit confirm.
+    /// Nothing is deleted until the reviewer confirms from here; `origin` is
+    /// the launcher's own origin, threaded back through the reopened launcher
+    /// on cancel/confirm. The enumerated snapshot lives in
+    /// [`App::cleanup_reviews`] (see [`super::cleanup_reviews`]).
+    CleanupReviews { origin: ModeOrigin },
 }
 
 /// Where a modal-launching gesture was pressed from, so closing that modal
@@ -515,6 +525,19 @@ pub struct App {
     /// separate from `launcher_commits_tasks` so their results are drained
     /// independently (see [`App::poll_launcher_prs`]).
     pub(super) launcher_prs_tasks: BackgroundTasks<PrFetchOutcome>,
+    /// Managed PR/MR reviews whose PR is no longer open — recomputed (never
+    /// per frame) each time the Pull Requests list resolves, from the managed
+    /// `redquill/pr/*` branches, the persisted reviews, and the just-fetched
+    /// open-PR set (no extra network — see spec 13 FR-22). Drives the tab's
+    /// "N finished review(s)" footer and seeds the cleanup modal's snapshot.
+    /// Empty on any degraded list outcome (no reliable open set to diff
+    /// against).
+    pub(super) launcher_finished_reviews: Vec<crate::review::FinishedReview>,
+    /// The finished-review snapshot the cleanup confirm modal
+    /// ([`Mode::CleanupReviews`]) enumerates and, on confirm, deletes — frozen
+    /// at open time so a background list refresh can't shift the rows out from
+    /// under the confirmation. Empty while the modal is closed.
+    pub(super) cleanup_reviews: Vec<crate::review::FinishedReview>,
     /// The single background PR checkout (`Enter` on a PR row, or a mid-
     /// session refresh) in flight, if any — single-flight, so a second
     /// `Enter` or refresh can't stack a concurrent fetch/worktree op (see
@@ -814,6 +837,8 @@ impl App {
             launcher_prs_in_flight: None,
             launcher_prs_generation: 0,
             launcher_prs_tasks: BackgroundTasks::new(),
+            launcher_finished_reviews: Vec::new(),
+            cleanup_reviews: Vec::new(),
             pr_checkout_in_flight: None,
             pr_checkout_generation: 0,
             pr_checkout_tasks: BackgroundTasks::new(),
