@@ -9,7 +9,8 @@
 //!   review, and report capability flags. UI code talks only to this trait,
 //!   never to `gh`/`glab` directly, so it's testable with fakes. The
 //!   `gitlab` module supplies GitLab's reads (MR listing, detail with
-//!   `diff_refs`) into the same typed rows `github` produces; it isn't
+//!   `diff_refs`, discussion-thread import into the same [`Thread`] model
+//!   `github` uses) into the same typed rows `github` produces; it isn't
 //!   wired behind the trait itself yet.
 //! - [`PullRequest`] — one row of a PR/MR listing.
 //! - [`PrDetail`] — a minimal stand-in for a richer shape later work
@@ -44,8 +45,9 @@ pub use github::{
     review_comments_command, review_threads_resolved_command, submit_review_command,
 };
 pub use gitlab::{
-    DiffRefs, MrDetail, list_open_mrs, mr_detail, mr_detail_command, mr_list_command,
-    parse_mr_detail_json, parse_mr_list_json,
+    DiffRefs, MrDetail, discussions_command, fetch_discussions, list_open_mrs, mr_detail,
+    mr_detail_command, mr_list_command, parse_discussions_json, parse_mr_detail_json,
+    parse_mr_list_json,
 };
 pub use remote_url::{Hostname, RemoteUrlError, parse_origin_hostname, parse_origin_repo_slug};
 pub use submit::{
