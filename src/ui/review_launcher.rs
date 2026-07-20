@@ -858,8 +858,17 @@ impl App {
                     .unwrap_or(0);
                 if let Some((states, blob_shas, annotations, replies)) = reconciled {
                     self.set_review_states(states, blob_shas);
-                    self.restore_review_annotations(annotations);
-                    self.restore_review_replies(replies);
+                    // On a mid-session refresh the live annotation and reply
+                    // stores already hold this session's edits, so replaying
+                    // the persisted copies on top would append a second copy
+                    // of each and durably double them on the next save. Only
+                    // replay on a fresh entry, where the stores start empty;
+                    // file statuses (keyed by path) are safe to re-apply
+                    // either way, and must be for a head move to demote.
+                    if !ctx.from_session {
+                        self.restore_review_annotations(annotations);
+                        self.restore_review_replies(replies);
+                    }
                 }
                 self.review_forge = Some(ForgeMetadata {
                     provider: ctx.provider,

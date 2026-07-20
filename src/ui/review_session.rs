@@ -157,9 +157,26 @@ pub fn load_reconciled_review_state(
     (
         statuses,
         blob_shas,
-        review.annotations.clone(),
-        review.replies.clone(),
+        dedupe_exact(review.annotations.clone()),
+        dedupe_exact(review.replies.clone()),
     )
+}
+
+/// Drops exact-duplicate entries — keeping the first occurrence and
+/// preserving order — from a persisted list. Two entries collapse only when
+/// they are structurally identical in every field; anything differing in
+/// even one field is kept. This silently heals a review-state file whose
+/// annotations or replies were doubled by a re-entry bug: the deduped list
+/// flows into the live stores on load, and the next save writes the healed
+/// (single-copy) set back to disk.
+fn dedupe_exact<T: PartialEq>(items: Vec<T>) -> Vec<T> {
+    let mut out: Vec<T> = Vec::with_capacity(items.len());
+    for item in items {
+        if !out.contains(&item) {
+            out.push(item);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -372,5 +389,76 @@ mod tests {
         assert_eq!(annotations.len(), 1);
         assert_eq!(annotations[0].body, "note");
         assert_eq!(annotations[0].target, Target::line("a.rs", 3, Side::New));
+    }
+
+    // -- Load-time salvage: heal a file doubled by the re-entry bug -----------
+
+    #[test]
+    fn load_dedupes_exact_duplicate_annotations_and_replies_but_keeps_near_dups() {
+        use crate::annotate::{Classification, Side, Source, Target};
+
+        let repo = repo_with_branch("main");
+        let runner = GitRunner::discover_in(repo.path()).unwrap();
+        let common_dir = runner.git_common_dir().unwrap();
+        let state_path = common_dir.join("redquill").join("review-state.json");
+        assert_inside_tempdir(&state_path, &repo);
+
+        let annotation = |body: &str| PersistedAnnotation {
+            target: Target::line("a.rs", 3, Side::New),
+            classification: Classification::Nit,
+            body: body.to_string(),
+            source: Source::WorkingTree,
+            published: false,
+        };
+        let reply = |body: &str, published: bool| store::PersistedReply {
+            thread_id: 10,
+            body: body.to_string(),
+            published,
+        };
+
+        // A damaged file: each real entry written twice (exact duplicates),
+        // plus one near-duplicate of each that must survive (an annotation
+        // differing only in body; a reply differing only in `published`).
+        store::save_review(
+            &state_path,
+            "main",
+            store::PersistedReview {
+                base: "main".to_string(),
+                worktree_path: repo.path().to_path_buf(),
+                files: Default::default(),
+                annotations: vec![
+                    annotation("note"),
+                    annotation("note"),
+                    annotation("different"),
+                ],
+                replies: vec![
+                    reply("agreed", false),
+                    reply("agreed", false),
+                    reply("agreed", true),
+                ],
+                forge: None,
+            },
+        )
+        .unwrap();
+
+        let (_, _, annotations, replies) =
+            load_reconciled_review_state(&runner, &state_path, "main");
+
+        // Exact duplicates collapse to one copy each, order preserved; the
+        // near-duplicates survive untouched.
+        assert_eq!(
+            annotations
+                .iter()
+                .map(|a| a.body.as_str())
+                .collect::<Vec<_>>(),
+            vec!["note", "different"],
+        );
+        assert_eq!(
+            replies
+                .iter()
+                .map(|r| (r.body.as_str(), r.published))
+                .collect::<Vec<_>>(),
+            vec![("agreed", false), ("agreed", true)],
+        );
     }
 }

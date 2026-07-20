@@ -409,6 +409,212 @@ fn reopen_with_no_author_push_keeps_accepts_and_reports_no_change() {
     assert!(!app.review_stale);
 }
 
+// -- Re-entry idempotency (draft duplication regression) --------------------
+
+use crate::annotate::{Classification, Target};
+
+/// Seeds one line annotation and one draft reply into the live session and
+/// persists them, so a subsequent re-entry has a disk copy to (wrongly)
+/// re-append.
+fn seed_one_annotation_and_reply(app: &mut App) {
+    app.annotations
+        .add(
+            Target::file("base.txt"),
+            Classification::Issue,
+            "please fix",
+        )
+        .unwrap();
+    app.replies.add(42, "agreed, will fix");
+    app.persist_review_state();
+    wait_for_review_save(app);
+}
+
+/// A manual refresh with no author push must not duplicate the session's
+/// draft annotations or replies — the live stores already hold them, so the
+/// re-entry must leave counts and ids untouched (regression for the
+/// state-duplication bug found dogfooding PR review).
+#[test]
+fn manual_refresh_without_a_head_move_does_not_duplicate_drafts() {
+    let bare = setup_bare_origin();
+    let contributor = clone_of(bare.path());
+    push_pr_special_ref(contributor.path(), "feature", 1, "only version");
+
+    let reviewer = clone_of(bare.path());
+    let mut app = app_rooted_at(reviewer.path());
+    app.spawn_pr_checkout(
+        1,
+        "main".to_string(),
+        "github.com".to_string(),
+        "feature".to_string(),
+        ForgeProviderKind::GitHub,
+        false,
+    );
+    drain_pr_checkout(&mut app);
+
+    seed_one_annotation_and_reply(&mut app);
+    let annotation_ids: Vec<usize> = app.annotations.iter().map(|a| a.id).collect();
+    let reply_ids: Vec<usize> = app.replies.iter().map(|r| r.id).collect();
+    assert_eq!(annotation_ids.len(), 1);
+    assert_eq!(reply_ids.len(), 1);
+
+    // Refresh with no upstream change: fetch-on-open re-enters the session.
+    app.manual_refresh();
+    drain_pr_checkout(&mut app);
+    wait_for_review_save(&mut app);
+
+    assert_eq!(
+        app.annotations.iter().map(|a| a.id).collect::<Vec<_>>(),
+        annotation_ids,
+        "a no-op refresh must not duplicate annotations"
+    );
+    assert_eq!(
+        app.replies.iter().map(|r| r.id).collect::<Vec<_>>(),
+        reply_ids,
+        "a no-op refresh must not duplicate replies"
+    );
+
+    // And the durable copy stays single, not doubled.
+    let state_path = app.review_state_path.clone().unwrap();
+    let review = store::load(&state_path)
+        .reviews
+        .remove("redquill/pr/1")
+        .unwrap();
+    assert_eq!(review.annotations.len(), 1, "disk must hold one annotation");
+    assert_eq!(review.replies.len(), 1, "disk must hold one reply");
+}
+
+/// A refresh that recreates the worktree on an author push must demote the
+/// changed file (head-move path still works) *and* leave the session's
+/// drafts single, not doubled.
+#[test]
+fn head_move_refresh_demotes_but_does_not_duplicate_drafts() {
+    let bare = setup_bare_origin();
+    let contributor = clone_of(bare.path());
+    push_pr_special_ref(contributor.path(), "feature", 1, "first version");
+
+    let reviewer = clone_of(bare.path());
+    let mut app = app_rooted_at(reviewer.path());
+    app.spawn_pr_checkout(
+        1,
+        "main".to_string(),
+        "github.com".to_string(),
+        "feature".to_string(),
+        ForgeProviderKind::GitHub,
+        false,
+    );
+    drain_pr_checkout(&mut app);
+
+    app.select_file_by_path("base.txt");
+    app.apply(Action::ToggleAccept);
+    seed_one_annotation_and_reply(&mut app);
+
+    // The author pushes a new commit onto the PR head.
+    git(contributor.path(), &["checkout", "-q", "feature"]);
+    write(
+        contributor.path(),
+        "base.txt",
+        "line one\nfirst version\nsecond version\n",
+    );
+    git(contributor.path(), &["commit", "-aqm", "author push"]);
+    git(
+        contributor.path(),
+        &["push", "-qf", "origin", "feature:refs/pull/1/head"],
+    );
+
+    app.manual_refresh();
+    drain_pr_checkout(&mut app);
+    wait_for_review_save(&mut app);
+
+    assert_eq!(
+        app.review_status("base.txt"),
+        ReviewStatus::ChangedSinceAccepted,
+        "the head-move demotion must still fire"
+    );
+    assert_eq!(
+        app.annotations.len(),
+        1,
+        "a worktree-recreate refresh must not duplicate annotations"
+    );
+    assert_eq!(
+        app.replies.len(),
+        1,
+        "a worktree-recreate refresh must not duplicate replies"
+    );
+    let state_path = app.review_state_path.clone().unwrap();
+    let review = store::load(&state_path)
+        .reviews
+        .remove("redquill/pr/1")
+        .unwrap();
+    assert_eq!(review.annotations.len(), 1);
+    assert_eq!(review.replies.len(), 1);
+}
+
+/// Quit-and-relaunch idempotency: a fresh app reopening the same PR restores
+/// exactly one copy of each persisted draft, and re-persisting leaves the
+/// on-disk annotation/reply lists identical — no growth across the cycle.
+#[test]
+fn relaunch_and_reenter_is_idempotent_across_a_persist_cycle() {
+    let bare = setup_bare_origin();
+    let contributor = clone_of(bare.path());
+    push_pr_special_ref(contributor.path(), "feature", 5, "only version");
+    let reviewer = clone_of(bare.path());
+
+    // First app: check out, draft, persist, then drop as if quitting.
+    let state_path;
+    let annotations_before;
+    let replies_before;
+    {
+        let mut app = app_rooted_at(reviewer.path());
+        app.spawn_pr_checkout(
+            5,
+            "main".to_string(),
+            "github.com".to_string(),
+            "feature".to_string(),
+            ForgeProviderKind::GitHub,
+            false,
+        );
+        drain_pr_checkout(&mut app);
+        seed_one_annotation_and_reply(&mut app);
+        state_path = app.review_state_path.clone().unwrap();
+        let review = store::load(&state_path)
+            .reviews
+            .remove("redquill/pr/5")
+            .unwrap();
+        annotations_before = review.annotations;
+        replies_before = review.replies;
+        assert_eq!(annotations_before.len(), 1);
+        assert_eq!(replies_before.len(), 1);
+    }
+
+    // Second app: relaunch and reopen the same PR from scratch.
+    let mut app2 = app_rooted_at(reviewer.path());
+    app2.spawn_pr_checkout(
+        5,
+        "main".to_string(),
+        "github.com".to_string(),
+        "feature".to_string(),
+        ForgeProviderKind::GitHub,
+        false,
+    );
+    drain_pr_checkout(&mut app2);
+    assert_eq!(app2.annotations.len(), 1, "reopen restores one annotation");
+    assert_eq!(app2.replies.len(), 1, "reopen restores one reply");
+    wait_for_review_save(&mut app2);
+
+    let review_after = store::load(&state_path)
+        .reviews
+        .remove("redquill/pr/5")
+        .unwrap();
+    assert_eq!(
+        review_after.annotations, annotations_before,
+        "the persisted annotations must be identical across a relaunch+persist cycle"
+    );
+    assert_eq!(
+        review_after.replies, replies_before,
+        "the persisted replies must be identical across a relaunch+persist cycle"
+    );
+}
+
 // -- Fetch failure (FR-10) --------------------------------------------------
 
 #[test]
