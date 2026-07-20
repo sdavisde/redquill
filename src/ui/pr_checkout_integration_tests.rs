@@ -234,6 +234,83 @@ fn checkout_lands_in_a_pr_review_session_against_a_fork_style_head() {
     assert_eq!(pf.provider, ForgeProviderKind::GitHub);
 }
 
+/// The GitLab analog of [`push_pr_special_ref`]: pushes a branch off `main`
+/// to `refs/merge-requests/<iid>/head` — a GitLab-style magic ref with no
+/// matching `refs/heads/<branch>` on origin. Returns the head SHA.
+fn push_mr_special_ref(contributor: &Path, branch: &str, iid: u64, line: &str) -> String {
+    git(contributor, &["checkout", "-qb", branch, "main"]);
+    write(contributor, "base.txt", &format!("line one\n{line}\n"));
+    git(contributor, &["commit", "-aqm", branch]);
+    let sha = git_out(contributor, &["rev-parse", "HEAD"]);
+    git(
+        contributor,
+        &[
+            "push",
+            "-q",
+            "origin",
+            &format!("{branch}:refs/merge-requests/{iid}/head"),
+        ],
+    );
+    git(contributor, &["checkout", "-q", "main"]);
+    sha
+}
+
+// -- GitLab provider path (FR-25, Units 1-2 unchanged) ----------------------
+
+#[test]
+fn gitlab_mr_checkout_lands_in_a_review_session_via_the_merge_requests_ref() {
+    // The exact Unit-2 flow, but the provider is GitLab: the head fetch must
+    // resolve `refs/merge-requests/<iid>/head` and land the same
+    // worktree-backed session on `redquill/pr/<iid>`, proving the provider is
+    // the only variable.
+    let bare = setup_bare_origin();
+    let contributor = clone_of(bare.path());
+    let mr_sha = push_mr_special_ref(contributor.path(), "feature", 7, "from the mr");
+
+    let reviewer = clone_of(bare.path());
+    let runner = GitRunner::discover_in(reviewer.path()).unwrap();
+    assert_repo_root_inside_tempdir(&runner, &reviewer);
+
+    let mut app = app_rooted_at(reviewer.path());
+    app.spawn_pr_checkout(
+        7,
+        "main".to_string(),
+        "gitlab.com".to_string(),
+        "add a feature".to_string(),
+        ForgeProviderKind::GitLab,
+        false,
+    );
+    drain_pr_checkout(&mut app);
+
+    assert_eq!(
+        app.target,
+        DiffTarget::Review {
+            base: "origin/main".to_string(),
+            branch: "redquill/pr/7".to_string(),
+        }
+    );
+    assert!(app.in_review_session());
+    let managed_sha = git_out(reviewer.path(), &["rev-parse", "redquill/pr/7"]);
+    assert_eq!(managed_sha, mr_sha);
+
+    let forge = app.review_forge.as_ref().expect("forge metadata stamped");
+    assert_eq!(forge.provider, ForgeProviderKind::GitLab);
+    assert_eq!(forge.number, 7);
+    assert_eq!(forge.host, "gitlab.com");
+    assert_eq!(forge.last_head_sha, mr_sha);
+
+    wait_for_review_save(&mut app);
+    let state_path = app.review_state_path.clone().unwrap();
+    let persisted = store::load(&state_path);
+    let pf = persisted
+        .reviews
+        .get("redquill/pr/7")
+        .and_then(|r| r.forge.as_ref())
+        .expect("persisted GitLab forge block");
+    assert_eq!(pf.provider, ForgeProviderKind::GitLab);
+    assert_eq!(pf.last_head_sha, mr_sha);
+}
+
 // -- Head-move on reopen (FR-9) ---------------------------------------------
 
 #[test]

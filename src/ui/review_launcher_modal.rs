@@ -245,9 +245,6 @@ fn prs_degraded_body_lines(outcome: &PrFetchOutcome, theme: &Theme) -> Vec<Line<
         PrFetchOutcome::NoForgeRemote => vec![prose(
             "no forge remote — add a GitHub/GitLab `origin` remote to use this tab".to_string(),
         )],
-        PrFetchOutcome::ProviderNotSupported { hostname, provider } => vec![prose(format!(
-            "{provider} isn't supported yet ({hostname})"
-        ))],
         PrFetchOutcome::Unresolved { hostname, reason } => {
             let why = match reason {
                 UnresolvedReason::NoCredentials => {
@@ -954,17 +951,6 @@ index 111..222 100644
         let app = prs_app(PrFetchOutcome::NoForgeRemote);
         let content = render_launcher(&app);
         assert!(content.contains("no forge remote"));
-    }
-
-    #[test]
-    fn prs_tab_provider_not_supported_names_the_provider_and_hostname() {
-        let app = prs_app(PrFetchOutcome::ProviderNotSupported {
-            hostname: "gitlab.com".to_string(),
-            provider: "GitLab",
-        });
-        let content = render_launcher(&app);
-        assert!(content.contains("GitLab"));
-        assert!(content.contains("gitlab.com"));
     }
 
     fn finished(number: u64) -> crate::review::FinishedReview {

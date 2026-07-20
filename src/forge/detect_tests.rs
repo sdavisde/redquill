@@ -130,6 +130,24 @@ fn resolution_cache_runs_the_ladder_at_most_once() {
 }
 
 #[test]
+fn peek_is_none_until_resolved_then_returns_the_cached_value_without_re_running() {
+    let host = host("git.example.com");
+    let gh = FakeChecker::new(true);
+    let glab = FakeChecker::new(false);
+    let cache = ResolutionCache::new();
+
+    // Before any resolve, peek must never run the ladder.
+    assert_eq!(cache.peek(), None);
+    assert_eq!(gh.call_count(), 0);
+
+    let resolved = cache.get_or_resolve(&host, &gh, &glab);
+    // Peek now returns the cached value and still hasn't re-run the checkers.
+    assert_eq!(cache.peek(), Some(resolved));
+    assert_eq!(gh.call_count(), 1);
+    assert_eq!(glab.call_count(), 1);
+}
+
+#[test]
 fn a_fresh_cache_instance_starts_uncached() {
     let host = host("github.com");
     let gh = FakeChecker::new(false);

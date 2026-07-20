@@ -76,20 +76,13 @@ pub type AsyncPrListFetcher = Box<dyn Fn() -> PrFetchOutcome + Send>;
 /// Everything the Review launcher's Pull Requests tab's load can resolve
 /// to: a listing, or one of the degraded states that gives the user a
 /// specific, actionable next step rather than a blank tab. `origin` having
-/// no forge remote at all, and a resolved-but-not-yet-implemented provider
-/// (GitLab, until Unit 6), degrade the same way as the four CLI-specific
+/// no forge remote at all degrades the same way as the four CLI-specific
 /// states below — never a bare error, since the tab always has *something*
 /// concrete to say.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrFetchOutcome {
     /// No `origin` remote, or its URL doesn't parse to a hostname at all.
     NoForgeRemote,
-    /// The origin's host resolved to a provider with no listing support
-    /// yet.
-    ProviderNotSupported {
-        hostname: String,
-        provider: &'static str,
-    },
     /// Neither/both CLIs hold credentials for the host.
     Unresolved {
         hostname: String,
@@ -410,11 +403,24 @@ pub trait StageOps {
         None
     }
     /// A `Send` closure fetching one PR's comment threads off the render
-    /// thread (see [`AsyncThreadFetcher`]). The default returns `None`,
-    /// keeping non-`Send` fakes (and git-less contexts) thread-overlay-free;
-    /// [`GitRunner`] overrides it by cloning itself into the closure and
-    /// resolving `origin`'s `owner/repo` slug for the resolution overlay.
-    fn async_thread_fetcher(&self) -> Option<AsyncThreadFetcher> {
+    /// thread (see [`AsyncThreadFetcher`]), dispatched by `provider` to the
+    /// GitHub review-comments read or the GitLab discussions read. The default
+    /// returns `None`, keeping non-`Send` fakes (and git-less contexts)
+    /// thread-overlay-free; [`GitRunner`] overrides it by cloning itself into
+    /// the closure and resolving `origin`'s `owner/repo` slug for the
+    /// resolution overlay.
+    fn async_thread_fetcher(
+        &self,
+        _provider: crate::review::store::ForgeProviderKind,
+    ) -> Option<AsyncThreadFetcher> {
+        None
+    }
+    /// The forge provider a prior background PR list already resolved for
+    /// `origin`'s host, peeked (never re-resolved) so the render-thread
+    /// checkout dispatch can pick the right special-ref kind without spawning
+    /// a credential check. The default returns `None`; [`GitRunner`] overrides
+    /// it by reading the process-lifetime resolution cache.
+    fn resolved_pr_provider(&self) -> Option<ProviderKind> {
         None
     }
     /// A `Send` closure that publishes one previewed batch to PR `number`,
@@ -602,19 +608,37 @@ impl StageOps for GitRunner {
         forge::parse_origin_repo_slug(&url)
     }
 
-    fn async_thread_fetcher(&self) -> Option<AsyncThreadFetcher> {
-        // Same cloned-handle trick as `async_review_builder`. The `owner/repo`
-        // slug feeds the (best-effort) resolution overlay; a missing slug just
-        // leaves threads unresolved.
+    fn async_thread_fetcher(
+        &self,
+        provider: crate::review::store::ForgeProviderKind,
+    ) -> Option<AsyncThreadFetcher> {
+        use crate::review::store::ForgeProviderKind;
+        // Same cloned-handle trick as `async_review_builder`. GitHub's
+        // review-comments read needs the `owner/repo` slug for its (best-effort)
+        // resolution overlay — a missing slug just leaves threads unresolved;
+        // GitLab's discussions read infers the project from the working
+        // directory, so it needs no slug.
         let runner = self.clone();
-        Some(Box::new(move |number| {
-            let slug = runner
-                .origin_url()
-                .ok()
-                .flatten()
-                .and_then(|url| forge::parse_origin_repo_slug(&url));
-            forge::fetch_review_threads(slug.as_deref(), number).map_err(|e| e.to_string())
+        Some(Box::new(move |number| match provider {
+            ForgeProviderKind::GitLab => {
+                forge::fetch_discussions(number).map_err(|e| e.to_string())
+            }
+            ForgeProviderKind::GitHub => {
+                let slug = runner
+                    .origin_url()
+                    .ok()
+                    .flatten()
+                    .and_then(|url| forge::parse_origin_repo_slug(&url));
+                forge::fetch_review_threads(slug.as_deref(), number).map_err(|e| e.to_string())
+            }
         }))
+    }
+
+    fn resolved_pr_provider(&self) -> Option<ProviderKind> {
+        match PR_PROVIDER_RESOLUTION.peek()? {
+            ProviderResolution::Resolved(kind) => Some(kind),
+            ProviderResolution::Unresolved { .. } => None,
+        }
     }
 
     fn async_forge_submitter(&self, number: u64, head_sha: String) -> Option<AsyncForgeSubmitter> {
@@ -767,41 +791,59 @@ fn pr_fetch_outcome(runner: &GitRunner) -> PrFetchOutcome {
         ProviderResolution::Unresolved { hostname, reason } => {
             PrFetchOutcome::Unresolved { hostname, reason }
         }
-        ProviderResolution::Resolved(ProviderKind::GitLab) => {
-            PrFetchOutcome::ProviderNotSupported {
-                hostname: hostname.as_str().to_string(),
-                provider: "GitLab",
-            }
+        ProviderResolution::Resolved(ProviderKind::GitLab) => list_outcome(
+            &url,
+            &hostname,
+            "glab",
+            forge::list_open_mrs(),
+            &GlabCredentialChecker,
+        ),
+        ProviderResolution::Resolved(ProviderKind::GitHub) => list_outcome(
+            &url,
+            &hostname,
+            "gh",
+            forge::list_open_prs(),
+            &GhCredentialChecker,
+        ),
+    }
+}
+
+/// Collapses one provider's list call into a [`PrFetchOutcome`], shared by the
+/// GitHub and GitLab arms since the failure-mode ladder is identical: a listing
+/// on success, a missing binary, and otherwise a fresh local credential check
+/// disambiguating "not logged in" (the common case with an exact fix) from
+/// every other failure. The CLI is already known to be on `PATH` at this point
+/// (it just ran), so `has_credentials` returning `false` here means "no
+/// credential", not "missing binary".
+fn list_outcome(
+    url: &str,
+    hostname: &forge::Hostname,
+    cli: &'static str,
+    result: Result<Vec<PullRequest>, ForgeError>,
+    checker: &dyn CredentialChecker,
+) -> PrFetchOutcome {
+    match result {
+        Ok(prs) => {
+            let repo_label =
+                forge::parse_origin_repo_slug(url).unwrap_or_else(|| hostname.as_str().to_string());
+            PrFetchOutcome::Loaded { repo_label, prs }
         }
-        ProviderResolution::Resolved(ProviderKind::GitHub) => match forge::list_open_prs() {
-            Ok(prs) => {
-                let repo_label = forge::parse_origin_repo_slug(&url)
-                    .unwrap_or_else(|| hostname.as_str().to_string());
-                PrFetchOutcome::Loaded { repo_label, prs }
-            }
-            Err(ForgeError::CliNotFound { cli }) => PrFetchOutcome::CliMissing {
-                cli,
-                hostname: hostname.as_str().to_string(),
-            },
-            // The listing itself failed for some other reason; a fresh,
-            // cheap local credential check disambiguates "not logged in"
-            // (the common case, and the one with an exact fix) from every
-            // other failure — `gh` is already known to be on `PATH` at
-            // this point (it just ran), so `has_credentials` returning
-            // `false` here means "no credential", not "missing binary".
-            Err(e) => {
-                if GhCredentialChecker.has_credentials(&hostname) {
-                    PrFetchOutcome::ListFailed {
-                        message: forge_error_headline(&e),
-                    }
-                } else {
-                    PrFetchOutcome::Unauthenticated {
-                        cli: "gh",
-                        hostname: hostname.as_str().to_string(),
-                    }
+        Err(ForgeError::CliNotFound { cli }) => PrFetchOutcome::CliMissing {
+            cli,
+            hostname: hostname.as_str().to_string(),
+        },
+        Err(e) => {
+            if checker.has_credentials(hostname) {
+                PrFetchOutcome::ListFailed {
+                    message: forge_error_headline(&e),
+                }
+            } else {
+                PrFetchOutcome::Unauthenticated {
+                    cli,
+                    hostname: hostname.as_str().to_string(),
                 }
             }
-        },
+        }
     }
 }
 

@@ -135,6 +135,20 @@ impl ResolutionCache {
         *slot = Some(resolution.clone());
         resolution
     }
+
+    /// Returns the already-cached resolution without ever running the ladder,
+    /// so a render-thread caller (the checkout dispatch) can read the provider
+    /// a prior background list already resolved without risking a
+    /// credential-check subprocess. `None` until a `get_or_resolve` has
+    /// populated the cache.
+    pub fn peek(&self) -> Option<ProviderResolution> {
+        let lock = self.0.get()?;
+        let slot = match lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        slot.clone()
+    }
 }
 
 impl Default for ResolutionCache {

@@ -53,10 +53,18 @@ impl App {
     pub(super) fn spawn_thread_fetch(&mut self, number: u64) {
         self.thread_fetch_generation = self.thread_fetch_generation.wrapping_add(1);
         self.thread_fetch_in_flight = None;
+        // The overlay read shape follows the session's forge (GitHub review
+        // comments vs. GitLab discussions); a non-PR session never reaches
+        // here, so the GitHub default is inert.
+        let provider = self
+            .review_forge
+            .as_ref()
+            .map(|f| f.provider)
+            .unwrap_or(crate::review::store::ForgeProviderKind::GitHub);
         let Some(ops) = self.stage_ops() else {
             return;
         };
-        if let Some(fetcher) = ops.async_thread_fetcher() {
+        if let Some(fetcher) = ops.async_thread_fetcher(provider) {
             let generation = self.thread_fetch_generation;
             let id = self.thread_fetch_tasks.spawn(move || fetcher(number));
             self.thread_fetch_in_flight = Some(InFlightThreadFetch { id, generation });

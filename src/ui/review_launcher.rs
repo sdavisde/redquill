@@ -30,7 +30,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use crate::forge::PullRequest;
+use crate::forge::{ProviderKind, PullRequest};
 use crate::git::{CommitLogEntry, CommitLogRange, DiffTarget, GitRunner, PrRef, PrRefKind};
 use crate::review::ReviewStatus;
 use crate::review::store::{ForgeMetadata, ForgeProviderKind};
@@ -43,6 +43,16 @@ use super::review_session::{
     resolve_review_state_path, review_worktree_path, worktree_registered,
 };
 use super::stage_ops::{PrCheckoutOutcome, PrCheckoutRequest, PrFetchOutcome, StageOps};
+
+/// Maps a freshly-resolved [`ProviderKind`] onto the persisted
+/// [`ForgeProviderKind`] a review session carries — the two are the same
+/// two-forge distinction named in different layers (detection vs. persistence).
+fn store_provider(kind: ProviderKind) -> ForgeProviderKind {
+    match kind {
+        ProviderKind::GitHub => ForgeProviderKind::GitHub,
+        ProviderKind::GitLab => ForgeProviderKind::GitLab,
+    }
+}
 
 /// A background ahead-of-base commit-log fetch awaiting completion. Mirrors
 /// [`super::history::InFlightHistory`]'s shape exactly — the Commits tab's
@@ -571,22 +581,25 @@ impl App {
         let number = pr.number;
         let title = pr.title.clone();
         let base_ref = pr.base_ref.clone();
-        // GitHub is the only provider with PR checkout wired in this unit;
-        // GitLab arrives in a later unit and will pass its own kind here.
+        // The checkout follows whichever provider the tab's background list
+        // already resolved for this host (peeked, never re-resolved), so a
+        // GitLab MR fetches its `refs/merge-requests/<iid>/head` and a GitHub
+        // PR its `refs/pull/<n>/head`. A missing resolution (the list never
+        // ran) falls back to GitHub — the checkout then surfaces a fetch
+        // diagnostic rather than a wrong-provider guess taking hold.
         let host = self
             .stage_ops
             .as_deref()
             .and_then(|ops| ops.origin_hostname())
             .unwrap_or_default();
+        let provider = self
+            .stage_ops
+            .as_deref()
+            .and_then(|ops| ops.resolved_pr_provider())
+            .map(store_provider)
+            .unwrap_or(ForgeProviderKind::GitHub);
         self.set_status_message(format!("checking out #{number} \u{2026}"));
-        self.spawn_pr_checkout(
-            number,
-            base_ref,
-            host,
-            title,
-            ForgeProviderKind::GitHub,
-            false,
-        );
+        self.spawn_pr_checkout(number, base_ref, host, title, provider, false);
     }
 
     /// Maps a persisted forge provider to the special-ref kind naming its
@@ -2341,6 +2354,92 @@ index 111..222 100644
         fn list_open_prs(&self) -> PrFetchOutcome {
             self.outcome.clone()
         }
+    }
+
+    /// A fake that records the [`PrCheckoutRequest`] the confirm path builds
+    /// (so a test can inspect which provider special-ref it targeted) and
+    /// reports a resolved provider, driving the synchronous checkout fallback.
+    struct RecordingCheckoutOps {
+        provider: ProviderKind,
+        common_dir: std::path::PathBuf,
+        recorded: std::rc::Rc<std::cell::RefCell<Option<PrCheckoutRequest>>>,
+    }
+
+    impl super::super::stage_ops::StageOps for RecordingCheckoutOps {
+        fn diff(
+            &self,
+            _target: &crate::git::DiffTarget,
+        ) -> Result<Vec<crate::git::RawFilePatch>, crate::git::GitError> {
+            Ok(Vec::new())
+        }
+        fn status(&self) -> Result<Vec<crate::git::FileStatus>, crate::git::GitError> {
+            Ok(Vec::new())
+        }
+        fn stage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn unstage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn apply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn unapply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn read_worktree_file(&self, _path: &str) -> Option<Vec<u8>> {
+            None
+        }
+        fn show_file(&self, _spec: &str) -> Option<String> {
+            None
+        }
+        fn git_common_dir(&self) -> Result<std::path::PathBuf, crate::git::GitError> {
+            Ok(self.common_dir.clone())
+        }
+        fn worktree_list(&self) -> Result<Vec<crate::git::WorktreeEntry>, crate::git::GitError> {
+            Ok(Vec::new())
+        }
+        fn origin_hostname(&self) -> Option<String> {
+            Some("gitlab.example.com".to_string())
+        }
+        fn resolved_pr_provider(&self) -> Option<ProviderKind> {
+            Some(self.provider)
+        }
+        fn pr_checkout(&self, request: PrCheckoutRequest) -> PrCheckoutOutcome {
+            *self.recorded.borrow_mut() = Some(request);
+            // Fail (nothing to enter) — the test only inspects the request.
+            PrCheckoutOutcome::Failed {
+                message: "recorded".to_string(),
+                stale_worktree: None,
+            }
+        }
+    }
+
+    #[test]
+    fn confirm_pr_targets_the_resolved_provider_special_ref() {
+        // With the tab's resolved provider = GitLab, pressing Enter on an MR
+        // row must build a checkout against `refs/merge-requests/<iid>/head`,
+        // not GitHub's `refs/pull` — the provider is data-driven off resolution.
+        let common = tempfile::TempDir::new().unwrap();
+        let recorded = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let mut app = app();
+        app.stage_ops = Some(Box::new(RecordingCheckoutOps {
+            provider: ProviderKind::GitLab,
+            common_dir: common.path().to_path_buf(),
+            recorded: recorded.clone(),
+        }));
+        app.set_launcher_prs(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(42, "add widget")],
+        });
+        app.confirm_launcher_pr(0);
+
+        let request = recorded
+            .borrow()
+            .clone()
+            .expect("a checkout request must have been recorded");
+        assert_eq!(request.pr_ref.source_ref(), "refs/merge-requests/42/head");
+        assert_eq!(request.managed_branch, "redquill/pr/42");
     }
 
     fn pr(number: u64, title: &str) -> PullRequest {
