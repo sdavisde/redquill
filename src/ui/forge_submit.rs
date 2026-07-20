@@ -484,10 +484,12 @@ impl App {
 
     /// Applies a submit report: marks each published annotation/reply, records
     /// whether the review POST has now landed (so a resume skips it), persists
-    /// the new published state (schema v3), and sets a status line — either the
-    /// clean "review submitted" or the published/unpublished split when a write
-    /// failed mid-sequence. Rebuilds rows so a now-published annotation's
-    /// in-diff row can defer to its forge copy.
+    /// the new published state (schema v3), and sets a status line — the clean
+    /// "review submitted", or, when a write failed mid-sequence, an honest
+    /// split of published / pending-draft / not-sent counts (pending drafts
+    /// exist server-side unpublished; a retry publishes them without
+    /// re-creating). Rebuilds rows so a now-published annotation's in-diff
+    /// row can defer to its forge copy.
     pub(super) fn apply_submit_outcome(&mut self, report: SubmitReport) {
         // Record which drafts a stopped GitLab run left behind server-side,
         // so the next submit creates only what's missing.
@@ -518,11 +520,31 @@ impl App {
         let message = match &report.failure {
             None => format!("review submitted \u{2014} {published} item(s) published"),
             Some(diagnostic) => {
-                let remaining =
-                    self.annotations.unpublished().count() + self.replies.unpublished().count();
-                format!(
-                    "submit stopped: {published} published, {remaining} unpublished \u{2014} {diagnostic}"
-                )
+                // Pending drafts exist server-side and only await a publish;
+                // counting them as plain "unpublished" would falsely read as
+                // "everything failed" (and invite manual re-posting).
+                let drafts = self
+                    .annotations
+                    .unpublished()
+                    .filter(|a| a.draft_created)
+                    .count()
+                    + self
+                        .replies
+                        .unpublished()
+                        .filter(|r| r.draft_created)
+                        .count();
+                let remaining = self.annotations.unpublished().count()
+                    + self.replies.unpublished().count()
+                    - drafts;
+                if drafts > 0 {
+                    format!(
+                        "submit stopped: {published} published, {drafts} pending draft(s) \u{2014} submit again to publish \u{2014} {remaining} not sent \u{2014} {diagnostic}"
+                    )
+                } else {
+                    format!(
+                        "submit stopped: {published} published, {remaining} unpublished \u{2014} {diagnostic}"
+                    )
+                }
             }
         };
         self.set_status_message(message);

@@ -409,6 +409,68 @@ fn apply_outcome_on_mid_failure_reports_the_published_unpublished_split() {
 }
 
 #[test]
+fn apply_outcome_with_pending_drafts_reports_them_instead_of_calling_them_failed() {
+    let mut app = gitlab_review_app(&["src/a.rs"]);
+    let a0 = app
+        .annotations
+        .add(
+            Target::line("src/a.rs", 2, Side::New),
+            Classification::Issue,
+            "fix",
+        )
+        .unwrap();
+    let a1 = app
+        .annotations
+        .add(Target::file("src/a.rs"), Classification::Praise, "nice")
+        .unwrap();
+    let _ = a1;
+
+    // a0's draft was created before the stop; a1 was never attempted.
+    app.apply_submit_outcome(SubmitReport {
+        published_annotation_ids: vec![],
+        published_reply_ids: vec![],
+        review_submitted: false,
+        failure: Some("boom".to_string()),
+        draft_annotation_ids: vec![a0],
+        draft_reply_ids: vec![],
+        summary_draft_created: false,
+    });
+
+    let msg = app.status_message.as_deref().unwrap();
+    assert!(msg.contains("0 published"), "status: {msg}");
+    assert!(msg.contains("1 pending draft"), "status: {msg}");
+    assert!(msg.contains("submit again to publish"), "status: {msg}");
+    assert!(msg.contains("1 not sent"), "status: {msg}");
+    assert!(msg.contains("boom"), "status: {msg}");
+}
+
+#[test]
+fn apply_outcome_without_drafts_keeps_the_plain_published_unpublished_split() {
+    // The GitHub path never stages drafts; its stopped-run message is
+    // unchanged.
+    let mut app = github_review_app(&["src/a.rs"]);
+    app.annotations
+        .add(
+            Target::line("src/a.rs", 2, Side::New),
+            Classification::Issue,
+            "fix",
+        )
+        .unwrap();
+    app.apply_submit_outcome(SubmitReport {
+        published_annotation_ids: vec![],
+        published_reply_ids: vec![],
+        review_submitted: false,
+        failure: Some("boom".to_string()),
+        draft_annotation_ids: vec![],
+        draft_reply_ids: vec![],
+        summary_draft_created: false,
+    });
+    let msg = app.status_message.as_deref().unwrap();
+    assert!(msg.contains("0 published, 1 unpublished"), "status: {msg}");
+    assert!(!msg.contains("pending draft"), "status: {msg}");
+}
+
+#[test]
 fn apply_outcome_records_pending_drafts_and_the_resubmit_batch_skips_them() {
     let mut app = gitlab_review_app(&["src/a.rs"]);
     let a0 = app
