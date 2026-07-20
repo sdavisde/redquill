@@ -290,6 +290,20 @@ pub struct ReviewPayload {
     pub comments: Vec<ReviewCommentPayload>,
 }
 
+impl ReviewPayload {
+    /// Whether posting this review to the reviews endpoint would carry
+    /// anything GitHub accepts. A plain `COMMENT` review with no comments and
+    /// an empty body is rejected (HTTP 422): it delivers no verdict, no
+    /// summary, and no positioned comments — nothing to publish. Approve and
+    /// request-changes are themselves the payload, so they always carry
+    /// content. The submit driver skips the reviews POST entirely when this is
+    /// `false`, going straight to the follow-ups (a reply-only batch is the
+    /// common case).
+    pub fn carries_content(&self) -> bool {
+        self.event != "COMMENT" || !self.comments.is_empty() || !self.body.is_empty()
+    }
+}
+
 /// A file-target annotation the reviews endpoint's `comments` array cannot
 /// carry (file-level positions aren't accepted there) and that must post
 /// afterward via the single-comment endpoint with `subject_type: file`.
@@ -315,6 +329,40 @@ pub struct ReviewSubmissionPlan {
     /// annotations.
     pub comment_annotation_ids: Vec<usize>,
     pub file_comment_follow_ups: Vec<FileCommentFollowUp>,
+}
+
+/// Builds one positioned entry for the reviews-endpoint `comments` array,
+/// collapsing a single-line span to the line-only shape GitHub requires. A
+/// multi-line comment's `start_line` must be strictly less than `line`; when a
+/// `Range`/`Hunk` covers one line (`start >= end`) a `start_line` equal to
+/// `line` is rejected (HTTP 422), so the span is emitted as a plain single-line
+/// comment with no `start_line`/`start_side`.
+fn positioned_comment(
+    path: String,
+    body: String,
+    start: u32,
+    end: u32,
+    side: &'static str,
+) -> ReviewCommentPayload {
+    if start < end {
+        ReviewCommentPayload {
+            path,
+            body,
+            line: end,
+            side,
+            start_line: Some(start),
+            start_side: Some(side),
+        }
+    } else {
+        ReviewCommentPayload {
+            path,
+            body,
+            line: end,
+            side,
+            start_line: None,
+            start_side: None,
+        }
+    }
 }
 
 /// Builds the exact submission plan for one review: `annotations` (expected
@@ -356,25 +404,23 @@ pub fn build_review_payload(
                 side,
             } => {
                 comment_annotation_ids.push(annotation.id);
-                comments.push(ReviewCommentPayload {
-                    path: path.clone(),
+                comments.push(positioned_comment(
+                    path.clone(),
                     body,
-                    line: *end,
-                    side: side_str(*side),
-                    start_line: Some(*start),
-                    start_side: Some(side_str(*side)),
-                });
+                    *start,
+                    *end,
+                    side_str(*side),
+                ));
             }
             Target::Hunk { path, start, end } => {
                 comment_annotation_ids.push(annotation.id);
-                comments.push(ReviewCommentPayload {
-                    path: path.clone(),
+                comments.push(positioned_comment(
+                    path.clone(),
                     body,
-                    line: *end,
-                    side: side_str(Side::New),
-                    start_line: Some(*start),
-                    start_side: Some(side_str(Side::New)),
-                });
+                    *start,
+                    *end,
+                    side_str(Side::New),
+                ));
             }
             Target::File { path } => {
                 file_comment_follow_ups.push(FileCommentFollowUp {

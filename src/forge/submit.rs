@@ -113,7 +113,12 @@ pub fn run_submit_sequence(batch: &SubmitBatch, exec: &dyn ForgeSubmitExecutor) 
         ..SubmitReport::default()
     };
 
-    if batch.include_review_post {
+    // Skip the reviews POST when it would carry nothing GitHub accepts — an
+    // empty-body `COMMENT` review with no comments 422s. A reply-only batch
+    // (verdict Comment, no summary, no unpublished comments) goes straight to
+    // the follow-ups, leaving `review_submitted` false so a later batch that
+    // does carry a verdict or comment still posts the review.
+    if batch.include_review_post && batch.plan.payload.carries_content() {
         if let Err(e) = exec.submit_review(&batch.plan.payload) {
             report.failure = Some(error_headline(&e));
             return report;

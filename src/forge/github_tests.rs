@@ -308,6 +308,89 @@ fn hunk_target_always_maps_as_a_new_side_range_regardless_of_diff_content() {
 }
 
 #[test]
+fn one_line_range_collapses_to_a_single_line_comment_without_start_fields() {
+    // A Range spanning one line (start == end) must not carry start_line ==
+    // line: GitHub 422s a multi-line comment whose start_line is not strictly
+    // below line, so a one-line span emits the plain single-line shape.
+    let annotations = vec![annotation(
+        0,
+        Target::range("src/b.rs", 8, 8, Side::New).unwrap(),
+        Classification::Question,
+        "why?",
+    )];
+    let plan = build_review_payload(&annotations, Verdict::Comment, None);
+    assert_eq!(
+        plan.payload.comments,
+        vec![ReviewCommentPayload {
+            path: "src/b.rs".to_string(),
+            body: "[question] why?".to_string(),
+            line: 8,
+            side: "RIGHT",
+            start_line: None,
+            start_side: None,
+        }]
+    );
+}
+
+#[test]
+fn one_line_hunk_collapses_to_a_single_line_comment_without_start_fields() {
+    let annotations = vec![annotation(
+        0,
+        Target::hunk("src/c.rs", 3, 3).unwrap(),
+        Classification::Nit,
+        "tidy",
+    )];
+    let plan = build_review_payload(&annotations, Verdict::Comment, None);
+    assert_eq!(
+        plan.payload.comments,
+        vec![ReviewCommentPayload {
+            path: "src/c.rs".to_string(),
+            body: "[nit] tidy".to_string(),
+            line: 3,
+            side: "RIGHT",
+            start_line: None,
+            start_side: None,
+        }]
+    );
+}
+
+#[test]
+fn carries_content_is_false_only_for_an_empty_comment_review() {
+    // Empty-body COMMENT with no comments: nothing to publish, would 422.
+    let empty = build_review_payload(&[], Verdict::Comment, None);
+    assert!(!empty.payload.carries_content());
+
+    // A summary body makes a COMMENT review worth posting.
+    let with_body = build_review_payload(&[], Verdict::Comment, Some("looks good"));
+    assert!(with_body.payload.carries_content());
+
+    // A comment makes a COMMENT review worth posting.
+    let with_comment = build_review_payload(
+        &[annotation(
+            0,
+            Target::line("src/a.rs", 3, Side::New),
+            Classification::Issue,
+            "fix",
+        )],
+        Verdict::Comment,
+        None,
+    );
+    assert!(with_comment.payload.carries_content());
+
+    // Approve and request-changes are themselves the payload.
+    assert!(
+        build_review_payload(&[], Verdict::Approve, None)
+            .payload
+            .carries_content()
+    );
+    assert!(
+        build_review_payload(&[], Verdict::RequestChanges, Some("please fix"))
+            .payload
+            .carries_content()
+    );
+}
+
+#[test]
 fn file_target_is_excluded_from_comments_and_routed_to_follow_ups() {
     let annotations = vec![annotation(
         7,

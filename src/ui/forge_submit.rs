@@ -54,6 +54,10 @@ pub(super) struct SubmitForgeState {
     /// (GitLab) — `None` for GitHub, whose one visible review POST needs no
     /// caveat.
     pub(super) disclosure: Option<String>,
+    /// A transient validation message shown in the modal when a confirm is
+    /// blocked (e.g. request-changes with no summary). Cleared the moment the
+    /// reviewer edits the verdict or summary.
+    pub(super) hint: Option<String>,
 }
 
 impl SubmitForgeState {
@@ -279,6 +283,7 @@ impl App {
             summary: String::new(),
             target_line,
             disclosure,
+            hint: None,
         });
         self.mode = Mode::SubmitForge;
     }
@@ -296,6 +301,7 @@ impl App {
             && !state.verdicts.is_empty()
         {
             state.verdict_index = (state.verdict_index + 1) % state.verdicts.len();
+            state.hint = None;
         }
     }
 
@@ -306,6 +312,7 @@ impl App {
         {
             let n = state.verdicts.len();
             state.verdict_index = (state.verdict_index + n - 1) % n;
+            state.hint = None;
         }
     }
 
@@ -313,6 +320,7 @@ impl App {
     pub(super) fn submit_forge_insert_char(&mut self, c: char) {
         if let Some(state) = self.submit_forge.as_mut() {
             state.summary.push(c);
+            state.hint = None;
         }
     }
 
@@ -320,6 +328,7 @@ impl App {
     pub(super) fn submit_forge_delete_char(&mut self) {
         if let Some(state) = self.submit_forge.as_mut() {
             state.summary.pop();
+            state.hint = None;
         }
     }
 
@@ -327,11 +336,20 @@ impl App {
     /// modal, and spawns the background submit. The only path that ever begins
     /// a forge write.
     pub(super) fn submit_forge_confirm(&mut self) {
-        let Some(state) = self.submit_forge.take() else {
+        let Some(state) = self.submit_forge.as_mut() else {
             return;
         };
         let verdict = state.verdict();
         let summary = state.summary.trim().to_string();
+        // GitHub rejects a request-changes review with no body; block the
+        // confirm and keep the modal open with a hint rather than sending a
+        // request the forge will 422.
+        if verdict == Verdict::RequestChanges && summary.is_empty() {
+            state.hint =
+                Some("Request changes needs a summary explaining what to change.".to_string());
+            return;
+        }
+        self.submit_forge = None;
         self.mode = Mode::Normal;
         let batch = self.build_submit_batch(
             verdict,
@@ -621,6 +639,17 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled("Summary: ", Style::default().fg(theme.gutter)),
         summary_display,
     ]));
+
+    // A blocked-confirm validation hint (e.g. request-changes with no summary).
+    if let Some(hint) = &state.hint {
+        lines.push(Line::from(String::new()));
+        lines.push(Line::from(Span::styled(
+            hint.clone(),
+            Style::default()
+                .fg(theme.status_message)
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
 
     let block = Block::default()
         .borders(Borders::ALL)

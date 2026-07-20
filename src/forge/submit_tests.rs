@@ -258,3 +258,96 @@ fn a_verdict_only_batch_still_posts_the_review_once() {
     assert!(report.review_submitted);
     assert!(report.failure.is_none());
 }
+
+#[test]
+fn reply_only_batch_skips_the_empty_comment_review_post() {
+    // No annotations, verdict Comment, no summary: the reviews POST would be
+    // an empty-body COMMENT review that GitHub 422s. The driver must skip it
+    // and go straight to the reply.
+    let plan = build_review_payload(&[], Verdict::Comment, None);
+    let batch = SubmitBatch {
+        plan,
+        replies: vec![SubmitReplyItem {
+            reply_id: 9,
+            thread_id: 555,
+            body: "resolved, thanks".to_string(),
+        }],
+        include_review_post: true,
+    };
+    let exec = FakeExecutor::new();
+    let report = run_submit_sequence(&batch, &exec);
+
+    assert_eq!(
+        exec.calls.into_inner(),
+        vec![Call::Reply { thread_id: 555 }],
+        "an empty COMMENT review must not be POSTed; only the reply is sent"
+    );
+    assert!(
+        !report.review_submitted,
+        "no review was posted, so a later verdict-carrying batch can still post one"
+    );
+    assert_eq!(report.published_reply_ids, vec![9]);
+    assert!(report.published_annotation_ids.is_empty());
+    assert_eq!(report.failure, None);
+}
+
+#[test]
+fn verdict_only_comment_batch_with_summary_still_posts_the_review() {
+    // Verdict Comment with a summary body carries content, so the review POST
+    // must still happen even with no comments.
+    let plan = build_review_payload(&[], Verdict::Comment, Some("overall looks good"));
+    let batch = SubmitBatch {
+        plan,
+        replies: Vec::new(),
+        include_review_post: true,
+    };
+    let exec = FakeExecutor::new();
+    let report = run_submit_sequence(&batch, &exec);
+    assert_eq!(exec.calls.into_inner(), vec![Call::Review]);
+    assert!(report.review_submitted);
+    assert!(report.failure.is_none());
+}
+
+#[test]
+fn approve_with_no_comments_or_summary_still_posts_the_review() {
+    // An empty-bodied Approve is the verdict itself — it must post.
+    let plan = build_review_payload(&[], Verdict::Approve, None);
+    let batch = SubmitBatch {
+        plan,
+        replies: Vec::new(),
+        include_review_post: true,
+    };
+    let exec = FakeExecutor::new();
+    let report = run_submit_sequence(&batch, &exec);
+    assert_eq!(exec.calls.into_inner(), vec![Call::Review]);
+    assert!(report.review_submitted);
+    assert!(report.failure.is_none());
+}
+
+#[test]
+fn reply_only_resume_after_a_failed_reply_re_sends_only_the_remainder() {
+    // A reply-only batch whose first reply landed but second failed: the resume
+    // rebuilds from the still-unpublished reply, skips the empty review POST
+    // again, and sends only the remaining reply — no duplicate, no 422.
+    let plan = build_review_payload(&[], Verdict::Comment, None);
+    let batch = SubmitBatch {
+        plan,
+        replies: vec![SubmitReplyItem {
+            reply_id: 4,
+            thread_id: 200,
+            body: "thanks".to_string(),
+        }],
+        include_review_post: true,
+    };
+    let exec = FakeExecutor::new();
+    let report = run_submit_sequence(&batch, &exec);
+
+    assert_eq!(
+        exec.calls.into_inner(),
+        vec![Call::Reply { thread_id: 200 }],
+        "the resume must not post an empty review; it sends only the remaining reply"
+    );
+    assert_eq!(report.published_reply_ids, vec![4]);
+    assert!(!report.review_submitted);
+    assert_eq!(report.failure, None);
+}

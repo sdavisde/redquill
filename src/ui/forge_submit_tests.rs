@@ -400,6 +400,60 @@ fn apply_outcome_on_mid_failure_reports_the_published_unpublished_split() {
     assert!(msg.contains("file boom"), "status: {msg}");
 }
 
+// -- request-changes requires a summary (blocked confirm) --------------------
+
+#[test]
+fn confirm_request_changes_with_no_summary_is_blocked_with_a_hint() {
+    let mut app = github_review_app(&["src/a.rs"]);
+    app.open_submit_forge();
+    // Select request-changes (Comment -> Approve -> RequestChanges).
+    app.submit_forge_verdict_next();
+    app.submit_forge_verdict_next();
+    assert_eq!(
+        app.submit_forge.as_ref().unwrap().verdict(),
+        Verdict::RequestChanges
+    );
+    app.submit_forge_confirm();
+    // Modal stays open, nothing spawned, and a hint is set.
+    assert_eq!(app.mode, Mode::SubmitForge);
+    let state = app.submit_forge.as_ref().expect("modal still open");
+    assert!(
+        state.hint.as_deref().is_some_and(|h| h.contains("summary")),
+        "a request-changes-needs-summary hint must be shown"
+    );
+    assert!(app.forge_submit_in_flight.is_none());
+}
+
+#[test]
+fn typing_a_summary_clears_the_hint_and_lets_request_changes_confirm() {
+    let mut app = github_review_app(&["src/a.rs"]);
+    app.open_submit_forge();
+    app.submit_forge_verdict_next();
+    app.submit_forge_verdict_next();
+    app.submit_forge_confirm();
+    assert!(app.submit_forge.as_ref().unwrap().hint.is_some());
+    // Typing clears the hint.
+    app.submit_forge_insert_char('x');
+    assert!(app.submit_forge.as_ref().unwrap().hint.is_none());
+    // Now the confirm proceeds (closes the modal; no live backend so nothing
+    // is actually sent).
+    app.submit_forge_confirm();
+    assert_eq!(app.mode, Mode::Normal);
+    assert!(app.submit_forge.is_none());
+}
+
+#[test]
+fn cycling_the_verdict_clears_a_prior_hint() {
+    let mut app = github_review_app(&["src/a.rs"]);
+    app.open_submit_forge();
+    app.submit_forge_verdict_next();
+    app.submit_forge_verdict_next();
+    app.submit_forge_confirm();
+    assert!(app.submit_forge.as_ref().unwrap().hint.is_some());
+    app.submit_forge_verdict_prev();
+    assert!(app.submit_forge.as_ref().unwrap().hint.is_none());
+}
+
 // -- confirm on the fake path sends nothing (no live backend) ----------------
 
 #[test]
