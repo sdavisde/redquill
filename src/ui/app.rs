@@ -1130,12 +1130,13 @@ impl App {
     }
 
     /// Selects the file whose path is `path`: expands its section if
-    /// collapsed, moves the cursor to its section-header row, and scrolls it
-    /// into view. Returns `false` (changing nothing) for a path not in the
-    /// current diff. This is the narrow select-by-path seam the git panel
-    /// drives file selection through; the sidebar highlight follows the
-    /// cursor's owning file, so moving the cursor here is what "selects" the
-    /// file everywhere.
+    /// collapsed, then lands on its section header exactly as `Tab` does
+    /// (see [`DiffViewState::focus_file`]) — the file's first line at the top
+    /// of the viewport, not scrolled up from the bottom. Returns `false`
+    /// (changing nothing) for a path not in the current diff. This is the
+    /// narrow select-by-path seam the git panel drives file selection
+    /// through; the sidebar highlight follows the cursor's owning file, so
+    /// moving the cursor here is what "selects" the file everywhere.
     pub fn select_file_by_path(&mut self, path: &str) -> bool {
         let Some(index) = self.view.files.iter().position(|f| f.path == path) else {
             return false;
@@ -1144,9 +1145,7 @@ impl App {
             self.view.set_collapsed(path, false);
             self.rebuild_rows();
         }
-        self.view.cursor = self.view.header_row_of_file[index];
-        self.view.scroll = 0;
-        self.view.ensure_visible();
+        self.view.focus_file(index);
         true
     }
 

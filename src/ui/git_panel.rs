@@ -79,6 +79,35 @@ pub(super) fn navigable_rows(app: &App) -> Vec<PanelRow> {
         .collect()
 }
 
+/// The Changes-tab row the diff view's selected file occupies — the panel
+/// cursor's resting place. `app.view.selected_file` is the single source of
+/// truth for "which file is being reviewed": the renderer highlights it while
+/// the panel is unfocused, focusing the panel seeds the cursor from it here,
+/// and moving the cursor writes back to it through [`App::panel_follow`], so
+/// the two cursors cannot drift apart.
+///
+/// When the file is hidden inside a collapsed directory it has no row of its
+/// own, so the cursor rests on the deepest visible ancestor directory instead
+/// — the nearest thing to the file that the user's own collapse state allows,
+/// and no reason to re-expand a folder they closed. `None` only when neither
+/// exists (an empty panel, or a diff with no files).
+pub(super) fn row_of_selected_file(app: &App) -> Option<usize> {
+    let selected = app.view.selected_file;
+    let path = app.view.files.get(selected)?.path.as_str();
+    // Reverse order: ancestors precede their file in the flattened preorder,
+    // so a visible file row wins over its directories, and the last matching
+    // directory is the deepest one.
+    navigable_rows(app)
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(row, entry)| match entry {
+            PanelRow::File(i) if *i == selected => Some(row),
+            PanelRow::Dir(key) if path.starts_with(&format!("{key}/")) => Some(row),
+            _ => None,
+        })
+}
+
 /// Steps a panel cursor by one row within a `len`-row navigable list,
 /// clamping at both ends. An empty list pins the cursor at 0. Delegates to
 /// the shared motion layer's linear-cursor helper (see `super::motion`) so
@@ -653,11 +682,22 @@ impl App {
         }
     }
 
+    /// The cursor a freshly focused `tab` starts on: on Changes, the row of
+    /// the diff's currently selected file (see [`row_of_selected_file`]) so
+    /// the panel opens where the review already is; on History, the top.
+    fn initial_panel_cursor(&self, tab: PanelTab) -> usize {
+        match tab {
+            PanelTab::Changes => row_of_selected_file(self).unwrap_or(0),
+            PanelTab::History => 0,
+        }
+    }
+
     /// Toggles git-panel focus: from Normal/Visual it focuses the panel, on
-    /// whichever tab it was last showing (`self.last_panel_tab`), cursor
-    /// reset to the top; from the focused panel it returns to Normal. A
-    /// no-op while another modal (Compose/List/Staging/Search/Peek) owns the
-    /// keyboard, mirroring the other panel toggles.
+    /// whichever tab it was last showing (`self.last_panel_tab`), cursor on
+    /// the file the diff view is already showing; from the focused panel it
+    /// returns to Normal. A no-op while another modal
+    /// (Compose/List/Staging/Search/Peek) owns the keyboard, mirroring the
+    /// other panel toggles.
     pub(super) fn toggle_git_panel(&mut self) {
         match self.mode {
             Mode::Panel { .. } => self.mode = Mode::Normal,
@@ -677,35 +717,41 @@ impl App {
             | Mode::SubmitForge
             | Mode::CleanupReviews { .. } => {}
             Mode::Normal | Mode::Visual { .. } => {
+                let tab = self.last_panel_tab;
                 self.mode = Mode::Panel {
-                    cursor: 0,
-                    tab: self.last_panel_tab,
+                    cursor: self.initial_panel_cursor(tab),
+                    tab,
                 };
                 self.motion_count = None;
-                if self.last_panel_tab == PanelTab::History {
+                if tab == PanelTab::History {
                     self.ensure_history_loaded();
                 }
-                self.panel_follow();
+                // No `panel_follow` here: the cursor was just derived from
+                // the diff's own selection, so following it back in is a
+                // no-op by construction.
             }
         }
     }
 
     /// Switches the git panel between its Changes and History tabs (`Tab`,
-    /// panel scope): resets the cursor to the top (mirrors
-    /// focusing the panel), remembers the new tab in `last_panel_tab` so
-    /// re-focusing the panel later lands back here, and kicks off the
-    /// History tab's first page fetch the first time it's opened. A no-op
-    /// unless the panel is focused.
+    /// panel scope): reseats the cursor exactly as focusing the panel would
+    /// (see [`App::initial_panel_cursor`]), remembers the new tab in
+    /// `last_panel_tab` so re-focusing the panel later lands back here, and
+    /// kicks off the History tab's first page fetch the first time it's
+    /// opened. A no-op unless the panel is focused.
     pub(super) fn toggle_panel_tab(&mut self) {
-        let Mode::Panel { cursor, tab } = &mut self.mode else {
+        let Mode::Panel { tab, .. } = &mut self.mode else {
             return;
         };
         *tab = match *tab {
             PanelTab::Changes => PanelTab::History,
             PanelTab::History => PanelTab::Changes,
         };
-        *cursor = 0;
         let new_tab = *tab;
+        let seat = self.initial_panel_cursor(new_tab);
+        if let Mode::Panel { cursor, .. } = &mut self.mode {
+            *cursor = seat;
+        }
         self.last_panel_tab = new_tab;
         if new_tab == PanelTab::History {
             self.ensure_history_loaded();

@@ -468,18 +468,70 @@ fn panel_follow_on_empty_panel_is_noop() {
     assert_eq!(app.view.selected_file, 0);
 }
 
-/// Focusing the panel (`` ` ``) resets the cursor to the top row and
-/// follows it, so the diff snaps back to the first file even if it had
-/// scrolled elsewhere while the panel was unfocused.
+/// Focusing the panel (`` ` ``) seats the cursor on the file the diff view
+/// is already showing, and leaves that selection alone — the two cursors
+/// read the same source of truth rather than one yanking the other.
 #[test]
-fn focusing_panel_follows_to_first_file() {
+fn focusing_panel_seats_the_cursor_on_the_selected_file() {
     let mut app = flat_app();
     assert!(app.select_file_by_path("b.rs"));
     assert_eq!(app.view.selected_file, 1);
     app.toggle_git_panel();
     assert!(matches!(app.mode, Mode::Panel { .. }));
+    assert_eq!(app.panel_cursor(), 1);
+    assert_eq!(app.view.selected_file, 1); // the diff did not move
+}
+
+/// The diff view's own navigation is the source of truth too: scrolling the
+/// cursor into another file with `Tab` and then opening the panel lands on
+/// that file, with no panel-side bookkeeping in between.
+#[test]
+fn focusing_panel_after_a_diff_side_jump_follows_the_diff() {
+    let mut app = flat_app();
+    app.apply(Action::NextFile);
+    app.apply(Action::NextFile);
+    assert_eq!(app.view.selected_file, 2);
+    app.toggle_git_panel();
+    assert_eq!(app.panel_cursor(), 2);
+    assert_eq!(app.view.selected_file, 2);
+}
+
+/// Inside a tree, the seated cursor is the file's own row (index 2 here,
+/// past the `src` directory row), not the file's index.
+#[test]
+fn focusing_panel_seats_on_the_tree_row_not_the_file_index() {
+    let mut app = tree_app();
+    assert!(app.select_file_by_path("src/b.rs"));
+    app.toggle_git_panel();
+    assert_eq!(navigable_rows(&app)[2], PanelRow::File(1));
+    assert_eq!(app.panel_cursor(), 2);
+}
+
+/// A selected file hidden inside a collapsed directory has no row of its
+/// own, so the cursor rests on the directory containing it rather than
+/// snapping to the top of the panel.
+#[test]
+fn focusing_panel_seats_on_the_collapsing_ancestor_of_a_hidden_file() {
+    let mut app = tree_app();
+    assert!(app.select_file_by_path("src/b.rs"));
+    app.panel_collapsed_dirs.insert("src".to_string());
+    app.toggle_git_panel();
+    assert_eq!(navigable_rows(&app)[0], PanelRow::Dir("src".to_string()));
     assert_eq!(app.panel_cursor(), 0);
-    assert_eq!(app.view.selected_file, 0); // followed back to a.rs
+    assert_eq!(app.view.selected_file, 1, "the diff still shows src/b.rs");
+}
+
+/// Toggling away to History and back reseats on the selected file, exactly
+/// as a fresh focus would.
+#[test]
+fn returning_to_the_changes_tab_reseats_on_the_selected_file() {
+    let mut app = flat_app();
+    assert!(app.select_file_by_path("notes.md"));
+    app.toggle_git_panel();
+    app.toggle_panel_tab(); // -> History
+    assert_eq!(app.panel_cursor(), 0);
+    app.toggle_panel_tab(); // -> Changes
+    assert_eq!(app.panel_cursor(), 2);
 }
 
 /// Following onto a collapsed file's row expands its diff section — a
@@ -626,7 +678,7 @@ fn moving_the_cursor_down_the_history_tab_stops_at_the_last_loaded_row() {
 /// `Tab` switches tabs, resets the cursor, and remembers the tab for the
 /// next time the panel is focused.
 #[test]
-fn toggle_panel_tab_switches_and_resets_cursor() {
+fn toggle_panel_tab_switches_and_reseats_cursor() {
     let mut app = tree_app();
     app.mode = Mode::Panel {
         cursor: 2,
@@ -634,12 +686,13 @@ fn toggle_panel_tab_switches_and_resets_cursor() {
     };
     app.toggle_panel_tab();
     assert_eq!(app.panel_tab(), PanelTab::History);
-    assert_eq!(app.panel_cursor(), 0);
+    assert_eq!(app.panel_cursor(), 0, "History has no file to seat on");
     assert_eq!(app.last_panel_tab, PanelTab::History);
 
     app.toggle_panel_tab();
     assert_eq!(app.panel_tab(), PanelTab::Changes);
-    assert_eq!(app.panel_cursor(), 0);
+    // src/a.rs is still the selected file, and its row is 1 (past `src`).
+    assert_eq!(app.panel_cursor(), 1);
 }
 
 /// Re-focusing the panel lands on whichever tab was last active, not
@@ -790,8 +843,7 @@ fn press(app: &mut App, code: KeyCode) {
 #[test]
 fn panel_space_stages_the_highlighted_file_as_a_whole_file_gesture() {
     let (mut app, calls) = panel_actions_app();
-    app.apply(Action::FocusGitPanel);
-    press(&mut app, KeyCode::Char('j')); // Dir("src") -> File(src/a.rs)
+    app.apply(Action::FocusGitPanel); // seats on File(src/a.rs), the selection
     // Park the diff cursor on a body line of the followed file: a
     // cursor-derived gesture would stage a hunk here, so the assertion
     // below proves the panel forces the whole-file gesture.
@@ -821,7 +873,6 @@ fn panel_space_stages_the_highlighted_file_as_a_whole_file_gesture() {
 fn panel_shift_s_stages_and_a_second_press_unstages() {
     let (mut app, calls) = panel_actions_app();
     app.apply(Action::FocusGitPanel);
-    press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('S'));
     assert_eq!(calls.borrow().as_slice(), ["stage-file src/a.rs"]);
     assert_eq!(app.staged_states.get("src/a.rs"), Some(&StagedState::Full));
@@ -841,7 +892,8 @@ fn panel_shift_s_stages_and_a_second_press_unstages() {
 #[test]
 fn panel_space_on_a_directory_row_is_a_no_op_with_a_hint() {
     let (mut app, calls) = panel_actions_app();
-    app.apply(Action::FocusGitPanel); // cursor 0 = Dir("src")
+    app.apply(Action::FocusGitPanel); // seats on File(src/a.rs)
+    press(&mut app, KeyCode::Char('k')); // up onto Dir("src")
     press(&mut app, KeyCode::Char(' '));
     assert!(calls.borrow().is_empty(), "no staging call on a directory");
     assert!(
@@ -871,7 +923,6 @@ fn panel_file_keys_are_inert_with_a_message_on_a_read_only_target() {
     let (mut app, calls) = panel_actions_app();
     app.target = crate::git::DiffTarget::Range("main..feature".to_string());
     app.apply(Action::FocusGitPanel);
-    press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char(' '));
     assert!(calls.borrow().is_empty());
     assert_eq!(
@@ -895,8 +946,7 @@ fn review_panel_app() -> App {
 #[test]
 fn panel_space_toggle_accepts_the_highlighted_file_in_a_review_session() {
     let mut app = review_panel_app();
-    app.apply(Action::FocusGitPanel);
-    press(&mut app, KeyCode::Char('j')); // Dir("src") -> File(src/a.rs)
+    app.apply(Action::FocusGitPanel); // seats on File(src/a.rs), the selection
     press(&mut app, KeyCode::Char(' '));
     assert_eq!(
         app.review_status("src/a.rs"),
@@ -919,7 +969,6 @@ fn panel_space_toggle_accepts_the_highlighted_file_in_a_review_session() {
 fn panel_shift_s_accepts_in_a_review_session() {
     let mut app = review_panel_app();
     app.apply(Action::FocusGitPanel);
-    press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('S'));
     assert_eq!(app.review_status("src/a.rs"), ReviewStatus::Accepted);
 }
@@ -928,7 +977,6 @@ fn panel_shift_s_accepts_in_a_review_session() {
 fn panel_d_toggle_defers_in_a_review_session() {
     let mut app = review_panel_app();
     app.apply(Action::FocusGitPanel);
-    press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('d'));
     assert_eq!(app.review_status("src/a.rs"), ReviewStatus::Deferred);
     assert!(
@@ -943,7 +991,6 @@ fn panel_d_toggle_defers_in_a_review_session() {
 fn panel_d_outside_a_review_session_is_a_total_no_op() {
     let (mut app, calls) = panel_actions_app();
     app.apply(Action::FocusGitPanel);
-    press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('d'));
     assert!(calls.borrow().is_empty());
     assert!(app.status_message.is_none());
@@ -972,7 +1019,6 @@ fn panel_esc_closes_the_panel_without_touching_staging_state() {
 fn panel_s_reaches_the_staging_panel_with_the_index_it_would_show_from_normal() {
     let (mut app, _calls) = panel_actions_app();
     app.apply(Action::FocusGitPanel);
-    press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('S')); // stage src/a.rs first, so the staging panel isn't empty
     press(&mut app, KeyCode::Char('s'));
     assert_eq!(app.mode, Mode::Staging, "s must open the staging panel");
@@ -1071,9 +1117,8 @@ fn panel_actions_journey_transcript() {
 
     press(&mut app, KeyCode::Char('`'));
     assert!(matches!(app.mode, Mode::Panel { .. }));
-    press(&mut app, KeyCode::Char('j')); // Dir("src") -> File(src/a.rs)
     step(
-        "press ` then j: panel focused, src/a.rs highlighted",
+        "press `: panel focused, cursor seated on the file the diff shows",
         &panel_frame(&app),
     );
 
@@ -1167,7 +1212,7 @@ fn panel_actions_journey_transcript() {
     );
 
     press(&mut review, KeyCode::Char('`'));
-    press(&mut review, KeyCode::Char('j')); // notes.md (root file sorts after src/? follow the tree)
+    press(&mut review, KeyCode::Home); // start from the top of the tree
     // Walk the panel until src/one.rs is highlighted, logging nothing —
     // tree order is directories first, so land explicitly.
     let rows = navigable_rows(&review);

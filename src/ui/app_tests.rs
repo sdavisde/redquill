@@ -3701,17 +3701,20 @@ fn focus_git_panel_toggles_mode_both_ways() {
 }
 
 #[test]
-fn focusing_the_panel_resets_its_cursor_to_top() {
+fn focusing_the_panel_rederives_its_cursor_from_the_selected_file() {
     let mut app = panel_app();
-    // The cursor lives in `Mode::Panel`, so entering panel mode always starts
-    // it at the top: focus, move it off the top, unfocus, then refocus.
+    // The cursor lives in `Mode::Panel` — it is re-derived from the diff's
+    // selected file on every entry, never remembered across an unfocus.
     app.apply(Action::FocusGitPanel);
     app.apply(Action::PanelCursorDown);
     app.apply(Action::PanelCursorDown);
     assert_eq!(app.panel_cursor(), 2);
+    assert_eq!(app.view.selected_file, 2);
     app.apply(Action::FocusGitPanel); // unfocus
+    // Move the diff itself while the panel has no cursor of its own.
+    assert!(app.select_file_by_path("b.rs"));
     app.apply(Action::FocusGitPanel); // refocus
-    assert_eq!(app.panel_cursor(), 0);
+    assert_eq!(app.panel_cursor(), 1);
 }
 
 #[test]

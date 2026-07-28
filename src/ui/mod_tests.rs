@@ -1898,14 +1898,17 @@ fn panel_focus_key_dispatch_smoke() {
         );
     };
 
-    // Focus the panel: cursor resets to the top, which is the `src`
-    // directory row. Following a directory row does nothing, so the diff
-    // stays on src/a.rs (`selected_file` starts at 0).
+    // Focus the panel: the cursor seats on the file the diff already shows
+    // (`selected_file` starts at 0 — src/a.rs, row 1, past the `src`
+    // directory row). Step back up onto the directory row to walk the whole
+    // tree from the top.
     assert_eq!(app.mode, Mode::Normal);
     press(&mut app, &mut pending, KeyCode::Char('`'));
     assert!(matches!(app.mode, Mode::Panel { .. }));
-    assert_eq!(app.panel_cursor(), 0); // the src/ directory row
+    assert_eq!(app.panel_cursor(), 1); // src/a.rs, the selected file
     assert_eq!(app.view.selected_file, 0); // src/a.rs
+    press(&mut app, &mut pending, KeyCode::Char('k'));
+    assert_eq!(app.panel_cursor(), 0); // the src/ directory row
 
     // Walk the tree with `j`: src/ -> src/a.rs -> src/b.rs -> notes.md,
     // clamping at the last file. The diff follows each file row; the
@@ -2720,10 +2723,10 @@ fn esc_restores_panel_cursor_row() {
     let mut pending: Option<KeyEvent> = None;
     let mut pending_count: Option<usize> = None;
     let mut app = panel_smoke_app();
-    app.apply(Action::FocusGitPanel);
+    app.apply(Action::FocusGitPanel); // seats on src/a.rs (row 1)
     app.apply(Action::PanelCursorDown);
     app.apply(Action::PanelCursorDown);
-    assert_eq!(app.panel_cursor(), 2);
+    assert_eq!(app.panel_cursor(), 3);
     app.switcher = Some(super::switcher::SwitcherState::new(
         vec![],
         vec![],
@@ -2741,7 +2744,7 @@ fn esc_restores_panel_cursor_row() {
     assert!(matches!(app.mode, Mode::Panel { .. }));
     assert_eq!(
         app.panel_cursor(),
-        2,
+        3,
         "Esc must restore the pre-open panel cursor row"
     );
 }

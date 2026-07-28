@@ -542,16 +542,33 @@ impl DiffViewState {
         }
     }
 
+    /// Lands the cursor on `header` — a file section's header row — with the
+    /// structural-jump reveal policy. The one landing every "go to this
+    /// file" gesture shares, so a file reached from the git panel sits
+    /// exactly where `Tab` would have put it.
+    fn land_on_section(&mut self, header: usize) {
+        self.cursor = header;
+        self.cursor_col = 0;
+        let (_, end) = self.section_span(self.file_of_cursor());
+        self.reveal_at_top(end);
+    }
+
+    /// Jumps the cursor to file `index`'s section header. A no-op for an
+    /// out-of-range index (or before the first row rebuild populates
+    /// `header_row_of_file`).
+    pub fn focus_file(&mut self, index: usize) {
+        if let Some(&header) = self.header_row_of_file.get(index) {
+            self.land_on_section(header);
+        }
+    }
+
     /// Jumps the cursor to the next file's section header after the cursor.
     /// A no-op at the last section. Repurposes `Tab`'s old next-file
     /// meaning. Reveals the target section near the top of the viewport
     /// (see [`DiffViewState::reveal_at_top`]).
     pub fn next_section(&mut self) {
         if let Some(&next) = self.header_row_of_file.iter().find(|&&h| h > self.cursor) {
-            self.cursor = next;
-            self.cursor_col = 0;
-            let (_, end) = self.section_span(self.file_of_cursor());
-            self.reveal_at_top(end);
+            self.land_on_section(next);
         }
     }
 
@@ -566,10 +583,7 @@ impl DiffViewState {
             .rev()
             .find(|&&h| h < self.cursor)
         {
-            self.cursor = prev;
-            self.cursor_col = 0;
-            let (_, end) = self.section_span(self.file_of_cursor());
-            self.reveal_at_top(end);
+            self.land_on_section(prev);
         }
     }
 
@@ -1017,6 +1031,53 @@ index 1..2 100644
         assert_eq!(view.cursor, 4);
         assert_eq!(view.file_of_cursor(), 1);
         assert_eq!(view.selected_file, 1);
+    }
+
+    #[test]
+    fn focus_file_lands_on_the_section_header_of_a_far_off_file() {
+        let files: Vec<FileDiff> = ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs", "f.rs", "g.rs"]
+            .iter()
+            .map(|p| file_with_raw(p, &one_hunk_raw(p)))
+            .collect();
+        let mut view = multibuffer_view(files, &[false; 7]);
+        view.set_viewport_height(12);
+        let header = view.header_row_of_file[4];
+        view.focus_file(4);
+        assert_eq!(view.cursor, header);
+        assert_eq!(view.selected_file, 4);
+        // The section opens at the top of the viewport (SCROLLOFF rows of
+        // lead-in), not scrolled up from the bottom edge.
+        assert_eq!(view.scroll, header - SCROLLOFF);
+    }
+
+    #[test]
+    fn focus_file_matches_where_tab_would_land() {
+        let files: Vec<FileDiff> = ["a.rs", "b.rs", "c.rs", "d.rs"]
+            .iter()
+            .map(|p| file_with_raw(p, &one_hunk_raw(p)))
+            .collect();
+        let mut tabbed = multibuffer_view(files.clone(), &[false; 4]);
+        tabbed.set_viewport_height(6);
+        for _ in 0..3 {
+            tabbed.next_section();
+        }
+
+        let mut focused = multibuffer_view(files, &[false; 4]);
+        focused.set_viewport_height(6);
+        focused.focus_file(3);
+
+        assert_eq!(focused.cursor, tabbed.cursor);
+        assert_eq!(focused.scroll, tabbed.scroll);
+        assert_eq!(focused.selected_file, tabbed.selected_file);
+    }
+
+    #[test]
+    fn focus_file_out_of_range_changes_nothing() {
+        let mut view = view_with_raw("f.rs", sample_raw());
+        view.cursor_down();
+        let (cursor, scroll) = (view.cursor, view.scroll);
+        view.focus_file(9);
+        assert_eq!((view.cursor, view.scroll), (cursor, scroll));
     }
 
     #[test]
