@@ -210,6 +210,7 @@ fn synthetic_review(variant: usize) -> SyntheticReview {
         patches,
         staged: Vec::new(),
         staged_states: HashMap::new(),
+        ..Default::default()
     };
     SyntheticReview {
         snapshot,

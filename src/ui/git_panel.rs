@@ -20,7 +20,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
-use crate::diff::FileChangeKind;
+use crate::diff::{FileChangeKind, StatDisplay};
 use crate::git::{BranchStatus, CommitLogEntry, CommitSummary, DiffTarget};
 use crate::review::ReviewStatus;
 
@@ -30,6 +30,7 @@ use super::file_tree::{TreeFile, TreeNode, TreeRow, flatten};
 use super::icons;
 use super::keymap::{Action, Keymap, Scope};
 use super::stage_ops::{StagedState, build_review};
+use super::stat_display::stat_display_spans;
 use super::theme::Theme;
 use super::time_format::{now_unix, relative_time};
 
@@ -227,10 +228,12 @@ fn dir_line(guide: &str, name: &str, collapsed: bool, theme: &Theme) -> Line<'st
 }
 
 /// A file row: its tree guide, a change-kind-tinted type glyph, the basename,
-/// an optional `← old` rename tail, then the right-aligned status cluster
+/// an optional `← old` rename tail, then the right-aligned `+A -R` counts
+/// (see [`super::stat_display::stat_display_spans`]) and status cluster
 /// (staged/review marker + change-kind letter). `content_width` is the list's
-/// inner width in cells; when the row is too wide for a right-aligned cluster,
-/// the cluster still trails after a single space so the status never vanishes.
+/// inner width in cells; when the row is too wide for a right-aligned
+/// cluster, the cluster still trails after a single space so the status
+/// never vanishes.
 #[allow(clippy::too_many_arguments)]
 fn file_line(
     guide: &str,
@@ -240,6 +243,7 @@ fn file_line(
     state: StagedState,
     review: ReviewStatus,
     old_path: Option<&str>,
+    stats: StatDisplay,
     theme: &Theme,
     content_width: usize,
 ) -> Line<'static> {
@@ -261,10 +265,18 @@ fn file_line(
         ));
     }
     let (cluster, cluster_w) = status_cluster(letter, color, state, review, theme);
+    let stat_spans = stat_display_spans(stats, theme);
+    let stat_w = stat_spans.as_ref().map_or(0, |(_, w)| w + 1);
     let mut line = Line::from(spans);
     let used = line.width() as usize;
-    let pad = content_width.saturating_sub(used + cluster_w + 1).max(1);
+    let pad = content_width
+        .saturating_sub(used + stat_w + cluster_w + 1)
+        .max(1);
     line.spans.push(Span::raw(" ".repeat(pad)));
+    if let Some((spans, _)) = stat_spans {
+        line.spans.extend(spans);
+        line.spans.push(Span::raw(" "));
+    }
     line.spans.extend(cluster);
     line
 }
@@ -527,6 +539,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
                         let f = &app.view.files[*file_index];
                         let state = app.staged_states.get(&f.path).copied().unwrap_or_default();
                         let review = app.review_status(&f.path);
+                        let stats = app
+                            .stats
+                            .get(&f.path)
+                            .copied()
+                            .unwrap_or(StatDisplay::Omitted);
                         let line = file_line(
                             guide,
                             name,
@@ -535,6 +552,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
                             state,
                             review,
                             f.old_path.as_deref(),
+                            stats,
                             theme,
                             content_width,
                         );
@@ -609,17 +627,27 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
     }
 
     let notes = app.annotations.len();
-    let mut counts_text = format!(" [{} files]", app.view.files.len());
+    let dim = |s: String| Span::styled(s, Style::default().fg(theme.footer_text));
+    let mut counts_spans = vec![
+        dim(format!(" [{} files] [", app.view.files.len())),
+        Span::styled(
+            format!("+{}", app.total_stats.added),
+            Style::default().fg(theme.kind_added),
+        ),
+        dim(" ".to_string()),
+        Span::styled(
+            format!("-{}", app.total_stats.removed),
+            Style::default().fg(theme.kind_deleted),
+        ),
+        dim("]".to_string()),
+    ];
     if !app.staged.is_empty() {
-        counts_text.push_str(&format!(" [{} staged]", app.staged.len()));
+        counts_spans.push(dim(format!(" [{} staged]", app.staged.len())));
     }
     if notes > 0 {
-        counts_text.push_str(&format!(" [{notes} notes]"));
+        counts_spans.push(dim(format!(" [{notes} notes]")));
     }
-    let counts = Line::from(Span::styled(
-        counts_text,
-        Style::default().fg(theme.footer_text),
-    ));
+    let counts = Line::from(counts_spans);
 
     // The three bottom rows share the fixed-height slot below the list: the
     // counts, then the tip-commit summary, then the remote keybind hints.
@@ -979,6 +1007,8 @@ impl App {
                 patches: std::mem::replace(&mut self.patches, snapshot.patches),
                 staged: std::mem::replace(&mut self.staged, snapshot.staged),
                 staged_states: std::mem::replace(&mut self.staged_states, snapshot.staged_states),
+                stats: std::mem::replace(&mut self.stats, snapshot.stats),
+                total_stats: std::mem::replace(&mut self.total_stats, snapshot.total),
             });
         } else {
             self.target = target;
@@ -986,6 +1016,8 @@ impl App {
             self.patches = snapshot.patches;
             self.staged = snapshot.staged;
             self.staged_states = snapshot.staged_states;
+            self.stats = snapshot.stats;
+            self.total_stats = snapshot.total;
         }
         self.active_commit = header;
         self.recompute_untracked();
@@ -1012,6 +1044,8 @@ impl App {
         self.patches = suspended.patches;
         self.staged = suspended.staged;
         self.staged_states = suspended.staged_states;
+        self.stats = suspended.stats;
+        self.total_stats = suspended.total_stats;
         self.active_commit = None;
         self.recompute_untracked();
         self.highlight_cache.clear();

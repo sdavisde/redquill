@@ -11,7 +11,7 @@ use std::process::Command;
 
 use thiserror::Error;
 
-use crate::diff::{DiffParseError, FileChangeKind, FileDiff};
+use crate::diff::{DiffParseError, DiffStat, FileChangeKind, FileDiff, StatDisplay, stat_display};
 use crate::forge::{
     self, CredentialChecker, ForgeError, GhCredentialChecker, GlabCredentialChecker, ProviderKind,
     ProviderResolution, PullRequest, ResolutionCache, Thread, UnresolvedReason,
@@ -1019,7 +1019,7 @@ pub struct StagedFile {
 /// the raw patches they were built from (index-aligned with `files`; `None`
 /// for synthetic untracked entries, which have no real patch), and the
 /// paths that currently have staged changes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ReviewSnapshot {
     /// Every file in the diff, in display order: sorted by path
     /// (byte-wise ascending), independent of staged state, so staging or
@@ -1036,6 +1036,14 @@ pub struct ReviewSnapshot {
     /// Per-path [`StagedState`] for the `●`/`±` header/sidebar markers.
     /// Missing entries default to [`StagedState::Unstaged`].
     pub staged_states: HashMap<String, StagedState>,
+    /// Per-path [`StatDisplay`], computed once here from each file's own
+    /// binary/hunk state so every render surface (git panel, staging panel,
+    /// diff pane, review banner) does an `O(1)` lookup instead of walking
+    /// hunks itself. Missing entries (there shouldn't be any for a path in
+    /// `files`) fall back to [`StatDisplay::Omitted`].
+    pub stats: HashMap<String, StatDisplay>,
+    /// The aggregate added/removed counts across every file in `files`.
+    pub total: DiffStat,
 }
 
 /// A single file's staged state, derived from its `git status` index-side
@@ -1209,13 +1217,25 @@ pub fn build_review(
     let mut entries: Vec<(FileDiff, Option<RawFilePatch>)> =
         files.into_iter().zip(patches).collect();
     entries.sort_by(|a, b| a.0.path.cmp(&b.0.path));
-    let (files, patches) = entries.into_iter().unzip();
+    let (files, patches): (Vec<FileDiff>, Vec<Option<RawFilePatch>>) = entries.into_iter().unzip();
+
+    // Computed once here (not per render frame): each file's raw stat feeds
+    // both its own display decision and the running aggregate.
+    let mut stats = HashMap::with_capacity(files.len());
+    let mut total = DiffStat::default();
+    for file in &files {
+        let stat = file.stats();
+        total += stat;
+        stats.insert(file.path.clone(), stat_display(file, stat));
+    }
 
     Ok(ReviewSnapshot {
         files,
         patches,
         staged: staged_from_status(&status),
         staged_states: staged_states_from_status(&status),
+        stats,
+        total,
     })
 }
 

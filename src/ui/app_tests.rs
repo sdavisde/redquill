@@ -1335,6 +1335,7 @@ fn app_with_fake(
         patches: patches.into_iter().map(Some).collect(),
         staged: Vec::new(),
         staged_states: HashMap::new(),
+        ..Default::default()
     };
     (App::with_git(snapshot, target, Box::new(fake)), calls)
 }
@@ -1430,6 +1431,7 @@ fn space_on_untracked_file_falls_back_to_stage_file_at_any_granularity() {
         patches: vec![None],
         staged: Vec::new(),
         staged_states: HashMap::new(),
+        ..Default::default()
     };
     let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
     app.apply(Action::CursorDown); // hunk header
@@ -1454,6 +1456,7 @@ fn untracked_visual_selection_falls_back_to_stage_file() {
         patches: vec![None],
         staged: Vec::new(),
         staged_states: HashMap::new(),
+        ..Default::default()
     };
     let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
     app.apply(Action::CursorDown);
@@ -1687,6 +1690,7 @@ fn refresh_repopulates_branch_and_stash_and_preserves_staged_and_annotations() {
         patches: vec![Some(p)],
         staged: Vec::new(),
         staged_states: HashMap::new(),
+        ..Default::default()
     };
     let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
     // Startup read populated branch/stash state.
@@ -1813,6 +1817,7 @@ fn completed_remote_op_logs_and_refreshes_preserving_staged_and_annotations() {
         patches: vec![Some(p)],
         staged: Vec::new(),
         staged_states: HashMap::new(),
+        ..Default::default()
     };
     let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
     app.annotations
@@ -1872,6 +1877,7 @@ fn commit_app(program: &str) -> (App, Rc<RefCell<Vec<StageCall>>>) {
             letter: 'M',
         }],
         staged_states: HashMap::new(),
+        ..Default::default()
     };
     let app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
     (app, calls)
@@ -2046,6 +2052,7 @@ fn stage_error_sets_message_and_leaves_state_unchanged() {
         patches: vec![Some(p)],
         staged: Vec::new(),
         staged_states: HashMap::new(),
+        ..Default::default()
     };
     let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
     app.apply(Action::CursorDown); // hunk header
@@ -2127,6 +2134,7 @@ fn app_with_mutable_fake(
         patches: initial_files.into_iter().map(Some).collect(),
         staged: staged_from_status(&initial_status),
         staged_states: staged_states_from_status(&initial_status),
+        ..Default::default()
     };
     let app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
     (app, calls, diff_h, status_h)
@@ -2180,6 +2188,7 @@ fn stage_file_then_expand_shows_the_staged_hunks_not_just_the_header() {
         patches: vec![Some(p)],
         staged: Vec::new(),
         staged_states: HashMap::new(),
+        ..Default::default()
     };
     let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
 
@@ -2274,6 +2283,7 @@ fn stage_file_error_sets_message_and_leaves_state_unchanged() {
         patches: vec![Some(p)],
         staged: Vec::new(),
         staged_states: HashMap::new(),
+        ..Default::default()
     };
     let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
     app.apply(Action::StageFile);
@@ -2705,6 +2715,7 @@ mod async_refresh {
             patches: patches.iter().cloned().map(Some).collect(),
             staged: staged_from_status(status),
             staged_states: staged_states_from_status(status),
+            ..Default::default()
         }
     }
 
@@ -3057,6 +3068,7 @@ fn multibuffer_highlights_every_expanded_file_once() {
         patches: vec![Some(a), Some(b)],
         staged: Vec::new(),
         staged_states: HashMap::new(),
+        ..Default::default()
     };
     let mut app = App::with_git(snapshot, DiffTarget::Staged, Box::new(fake));
     // Both files expanded -> a.rs (2 sides) + b.rs (2 sides) = 4 fetches.
@@ -3093,6 +3105,7 @@ fn collapsed_file_is_not_highlighted_until_expanded() {
             letter: 'M',
         }],
         staged_states: HashMap::from([("c.rs".to_string(), StagedState::Full)]),
+        ..Default::default()
     };
     let mut app = App::with_git(snapshot, DiffTarget::Staged, Box::new(fake));
     // Only a.rs (expanded) is highlighted; collapsed c.rs is skipped.
@@ -3131,6 +3144,7 @@ fn app_with_counting_fake(
         patches: initial.into_iter().map(Some).collect(),
         staged: Vec::new(),
         staged_states: HashMap::new(),
+        ..Default::default()
     };
     let app = App::with_git(snapshot, DiffTarget::Staged, Box::new(fake));
     (app, diff_h, show_calls)

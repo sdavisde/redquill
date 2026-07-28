@@ -14,13 +14,14 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::annotate::Classification;
-use crate::diff::{FileChangeKind, LineOrigin, WordSpan};
+use crate::diff::{DiffStat, FileChangeKind, LineOrigin, StatDisplay, WordSpan};
 use crate::git::CommitLogEntry;
 use crate::highlight::TokenKind;
 
 use super::app::App;
 use super::keymap::Keymap;
 use super::rows::{LineRow, ReviewMarker, Row, StagedMarker, ThreadLine};
+use super::stat_display::stat_display_spans;
 use super::theme::{Theme, blend};
 use super::time_format::absolute_date;
 use super::welcome;
@@ -432,6 +433,7 @@ fn file_header_line(
     path: &str,
     old_path: &Option<String>,
     kind: FileChangeKind,
+    stats: StatDisplay,
     selected: bool,
     is_match: bool,
     annotated: bool,
@@ -465,6 +467,10 @@ fn file_header_line(
             path.to_string(),
             Style::default().add_modifier(Modifier::BOLD),
         ));
+    }
+    if let Some((stat_spans, _)) = stat_display_spans(stats, theme) {
+        spans.push(Span::raw(" "));
+        spans.extend(stat_spans);
     }
     spans.push(staged_marker_span(staged_marker, theme));
     spans.push(review_marker_span(review_marker, theme));
@@ -731,6 +737,7 @@ pub(super) fn row_line(
             path,
             old_path,
             kind,
+            stats,
             annotated,
             collapsed,
             staged_marker,
@@ -740,6 +747,7 @@ pub(super) fn row_line(
             path,
             old_path,
             *kind,
+            *stats,
             selected,
             is_match,
             *annotated,
@@ -773,10 +781,11 @@ pub(super) fn row_line(
 }
 
 /// The commit-view header block: short SHA, author name,
-/// absolute date, and the commit subject, rendered above the diff whenever a
-/// commit view (opened from the git panel's History tab) is displayed.
-fn commit_header_line(commit: &CommitLogEntry, theme: &Theme) -> Line<'static> {
-    Line::from(vec![
+/// absolute date, the commit subject, and its aggregate `+A -R` line-change
+/// counts, rendered above the diff whenever a commit view (opened from the
+/// git panel's History tab) is displayed.
+fn commit_header_line(commit: &CommitLogEntry, total: DiffStat, theme: &Theme) -> Line<'static> {
+    let mut spans = vec![
         Span::raw(" "),
         Span::styled(
             commit.short_sha.clone(),
@@ -801,7 +810,12 @@ fn commit_header_line(commit: &CommitLogEntry, theme: &Theme) -> Line<'static> {
                 .fg(theme.footer_text)
                 .add_modifier(Modifier::BOLD),
         ),
-    ])
+    ];
+    if let Some((stat_spans, _)) = stat_display_spans(StatDisplay::Counts(total), theme) {
+        spans.push(Span::raw("  "));
+        spans.extend(stat_spans);
+    }
+    Line::from(spans)
 }
 
 /// How many rows the commit-view header block reserves at the top of the
@@ -837,7 +851,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
     let (header_area, diff_area) = split_area(area, app.active_commit.is_some());
     if let Some(commit) = &app.active_commit {
         frame.render_widget(
-            Paragraph::new(commit_header_line(commit, &app.theme)),
+            Paragraph::new(commit_header_line(commit, app.total_stats, &app.theme)),
             header_area,
         );
     }
@@ -1133,6 +1147,7 @@ mod tests {
             "src/main.rs",
             &None,
             FileChangeKind::Modified,
+            StatDisplay::Omitted,
             false,
             false,
             false,
@@ -1152,6 +1167,7 @@ mod tests {
             "src/main.rs",
             &None,
             FileChangeKind::Modified,
+            StatDisplay::Omitted,
             false,
             false,
             false,
@@ -1171,6 +1187,7 @@ mod tests {
             "src/main.rs",
             &None,
             FileChangeKind::Modified,
+            StatDisplay::Omitted,
             false,
             false,
             false,
@@ -1190,6 +1207,7 @@ mod tests {
             "src/main.rs",
             &None,
             FileChangeKind::Modified,
+            StatDisplay::Omitted,
             false,
             false,
             false,
@@ -1204,6 +1222,7 @@ mod tests {
             "src/main.rs",
             &None,
             FileChangeKind::Modified,
+            StatDisplay::Omitted,
             false,
             false,
             false,
@@ -1223,6 +1242,7 @@ mod tests {
             "src/main.rs",
             &None,
             FileChangeKind::Modified,
+            StatDisplay::Omitted,
             true,
             false,
             false,
@@ -1289,6 +1309,7 @@ mod tests {
             "src/main.rs",
             &None,
             FileChangeKind::Modified,
+            StatDisplay::Omitted,
             false,
             false,
             false,
@@ -1301,6 +1322,108 @@ mod tests {
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains('\u{25cf}'), "staged dot present: {text:?}");
         assert!(text.contains('~'), "deferred marker present: {text:?}");
+    }
+
+    // -- File header line-change counts --------------------------------------
+
+    #[test]
+    fn file_header_line_renders_added_removed_counts() {
+        let theme = Theme::default();
+        let stat = DiffStat {
+            added: 12,
+            removed: 4,
+        };
+        let line = file_header_line(
+            "src/main.rs",
+            &None,
+            FileChangeKind::Modified,
+            StatDisplay::Counts(stat),
+            false,
+            false,
+            false,
+            false,
+            StagedMarker::None,
+            ReviewMarker::None,
+            60,
+            &theme,
+        );
+        let text = spans_to_string(&line.spans);
+        assert!(text.contains("+12"), "added count present: {text:?}");
+        assert!(text.contains("-4"), "removed count present: {text:?}");
+    }
+
+    #[test]
+    fn file_header_line_renders_a_dim_bin_placeholder_for_binary_files() {
+        let theme = Theme::default();
+        let line = file_header_line(
+            "img.png",
+            &None,
+            FileChangeKind::Modified,
+            StatDisplay::Binary,
+            false,
+            false,
+            false,
+            false,
+            StagedMarker::None,
+            ReviewMarker::None,
+            60,
+            &theme,
+        );
+        let text = spans_to_string(&line.spans);
+        assert!(text.contains("bin"), "binary placeholder present: {text:?}");
+        assert!(
+            !text.contains('+') && !text.contains('-'),
+            "a binary file must never render misleading +/- counts: {text:?}"
+        );
+    }
+
+    #[test]
+    fn file_header_line_omits_counts_for_a_pure_rename_with_no_hunks() {
+        let theme = Theme::default();
+        let line = file_header_line(
+            "new.rs",
+            &Some("old.rs".to_string()),
+            FileChangeKind::Renamed,
+            StatDisplay::Omitted,
+            false,
+            false,
+            false,
+            false,
+            StagedMarker::None,
+            ReviewMarker::None,
+            60,
+            &theme,
+        );
+        let text = spans_to_string(&line.spans);
+        assert!(
+            !text.contains('+') && !text.contains('-'),
+            "a hunkless rename must show no counts: {text:?}"
+        );
+    }
+
+    // -- Commit-view header aggregate -----------------------------------------
+
+    fn sample_commit() -> CommitLogEntry {
+        CommitLogEntry {
+            sha: "abc123".to_string(),
+            short_sha: "abc123".to_string(),
+            subject: "a commit".to_string(),
+            author_name: "Jane".to_string(),
+            timestamp: 0,
+        }
+    }
+
+    #[test]
+    fn commit_header_line_renders_the_aggregate_line_change_counts() {
+        let theme = Theme::default();
+        let total = DiffStat {
+            added: 7,
+            removed: 2,
+        };
+        let line = commit_header_line(&sample_commit(), total, &theme);
+        let text = spans_to_string(&line.spans);
+        assert!(text.contains("+7"), "aggregate added count: {text:?}");
+        assert!(text.contains("-2"), "aggregate removed count: {text:?}");
     }
 
     #[test]

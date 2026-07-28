@@ -14,13 +14,16 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
+use crate::diff::StatDisplay;
+
 use super::app::App;
 use super::keymap::{Action, Keymap, Scope};
 use super::stage_ops::StagedFile;
+use super::stat_display::stat_display_spans;
 use super::theme::Theme;
 
-fn item_line(entry: &StagedFile, theme: &Theme) -> Line<'static> {
-    Line::from(vec![
+fn item_line(entry: &StagedFile, stats: StatDisplay, theme: &Theme) -> Line<'static> {
+    let mut spans = vec![
         Span::styled(
             format!("{} ", entry.letter),
             Style::default()
@@ -28,7 +31,12 @@ fn item_line(entry: &StagedFile, theme: &Theme) -> Line<'static> {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(entry.path.clone()),
-    ])
+    ];
+    if let Some((stat_spans, _)) = stat_display_spans(stats, theme) {
+        spans.push(Span::raw(" "));
+        spans.extend(stat_spans);
+    }
+    Line::from(spans)
 }
 
 /// Renders the staging panel into `area` — or, during a review session, the
@@ -91,17 +99,23 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
         return;
     }
 
+    let stats_for = |e: &StagedFile| {
+        app.stats
+            .get(&e.path)
+            .copied()
+            .unwrap_or(StatDisplay::Omitted)
+    };
     let items: Vec<ListItem> = match app.staging_filter.as_ref() {
         Some(filter) => filter
             .indices()
             .iter()
             .filter_map(|&i| app.staged.get(i))
-            .map(|e| ListItem::new(item_line(e, &app.theme)))
+            .map(|e| ListItem::new(item_line(e, stats_for(e), &app.theme)))
             .collect(),
         None => app
             .staged
             .iter()
-            .map(|e| ListItem::new(item_line(e, &app.theme)))
+            .map(|e| ListItem::new(item_line(e, stats_for(e), &app.theme)))
             .collect(),
     };
     let list = List::new(items).highlight_style(Style::default().add_modifier(Modifier::REVERSED));

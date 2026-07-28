@@ -12,7 +12,7 @@ use crate::annotate::{AnnotationStore, Source, Target};
 #[cfg(test)]
 use crate::annotate::Side;
 use crate::config::{Config, ConfigWarning};
-use crate::diff::FileDiff;
+use crate::diff::{DiffStat, FileDiff, StatDisplay};
 use crate::git::{
     BranchStatus, CommitLogEntry, CommitSummary, DiffTarget, LocalBranch, RawFilePatch, RemoteOp,
     StagingMode, StashEntry, commit_command_line, remote_command,
@@ -287,6 +287,17 @@ pub struct App {
     /// panel markers, refreshed alongside `staged`. Missing entries are
     /// [`StagedState::Unstaged`].
     pub staged_states: HashMap<String, StagedState>,
+    /// Per-path [`StatDisplay`], refreshed alongside `staged_states`: how
+    /// each file's `+A -R` line-change counts should render (real counts, a
+    /// `bin` placeholder, or omitted), decided once at rebuild time from
+    /// each file's own binary/hunk state (see [`crate::diff::stat_display`])
+    /// rather than by every render surface separately. Missing entries fall
+    /// back to [`StatDisplay::Omitted`].
+    pub stats: HashMap<String, StatDisplay>,
+    /// The aggregate added/removed line counts across every file in
+    /// `view.files`, refreshed alongside `stats`. Shown in the git panel's
+    /// bottom counts line and the review banner.
+    pub total_stats: DiffStat,
     /// Per-path [`ReviewStatus`] driving the accept/defer markers and the
     /// review banner's progress count (see [`super::review_ops`]),
     /// mirroring how `staged_states` drives the
@@ -725,6 +736,10 @@ pub(super) struct SuspendedView {
     pub(super) staged: Vec<StagedFile>,
     /// `target`'s per-path staged-state map.
     pub(super) staged_states: HashMap<String, StagedState>,
+    /// `target`'s per-path stat-display map.
+    pub(super) stats: HashMap<String, StatDisplay>,
+    /// `target`'s aggregate added/removed counts.
+    pub(super) total_stats: DiffStat,
 }
 
 /// Which mutating background git operation is in flight (see
@@ -779,6 +794,11 @@ impl App {
     pub fn new(files: Vec<FileDiff>) -> App {
         let annotations = AnnotationStore::new();
         let patches = files.iter().map(|_| None).collect();
+        let stats: HashMap<String, StatDisplay> = files
+            .iter()
+            .map(|f| (f.path.clone(), crate::diff::stat_display(f, f.stats())))
+            .collect();
+        let total_stats: DiffStat = files.iter().map(FileDiff::stats).sum();
         let mut app = App {
             view: DiffViewState::new(files),
             help: HelpOverlayState::new(),
@@ -796,6 +816,8 @@ impl App {
             last_commit: None,
             untracked_paths: Vec::new(),
             staged_states: HashMap::new(),
+            stats,
+            total_stats,
             review_states: HashMap::new(),
             staging_cursor: 0,
             staging_filter: None,
@@ -893,6 +915,8 @@ impl App {
         app.patches = snapshot.patches;
         app.staged = snapshot.staged;
         app.staged_states = snapshot.staged_states;
+        app.stats = snapshot.stats;
+        app.total_stats = snapshot.total;
         app.target = target;
         app.stage_ops = Some(ops);
         app.recompute_untracked();

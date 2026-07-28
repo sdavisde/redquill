@@ -284,6 +284,8 @@ impl App {
         self.patches = snapshot.patches;
         self.staged = snapshot.staged;
         self.staged_states = snapshot.staged_states;
+        self.stats = snapshot.stats;
+        self.total_stats = snapshot.total;
         self.recompute_untracked();
         self.refresh_repo_state();
 

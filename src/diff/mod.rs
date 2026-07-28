@@ -9,15 +9,20 @@
 //!   [`FileChangeKind`].
 //! - [`word_diff`] and [`pair_hunk_lines`] compute word-level intra-line
 //!   highlights for paired removed/added lines.
+//! - [`FileDiff::stats`]/[`Hunk::stats`] count added/removed lines, and
+//!   [`stat_display`] decides how a file's counts should render (real
+//!   counts, binary, or omitted).
 
 mod error;
 mod file;
 mod hunk;
 mod line;
+mod stat;
 mod word;
 
 pub use error::DiffParseError;
 pub use file::{FileChangeKind, FileDiff};
 pub use hunk::{Hunk, parse_hunks};
 pub use line::{DiffLine, LineOrigin};
+pub use stat::{DiffStat, StatDisplay, stat_display};
 pub use word::{WordSpan, pair_hunk_lines, word_diff};

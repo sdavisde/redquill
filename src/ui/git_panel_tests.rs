@@ -50,6 +50,27 @@ fn render_panel_with_keymap(app: &App, keymap: &Keymap) -> String {
         .collect()
 }
 
+/// [`render_panel`], but as one `String` per screen row rather than one flat
+/// concatenation — needed to make a per-row assertion (e.g. "this specific
+/// file row has no counts") that can't be confused with unrelated text
+/// elsewhere on screen, like the bottom section's own aggregate counts.
+fn render_panel_lines(app: &App) -> Vec<String> {
+    let backend = TestBackend::new(32, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let area = Rect::new(0, 0, 32, 24);
+    terminal
+        .draw(|frame| render(frame, area, app, &Keymap::default_map()))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect()
+        })
+        .collect()
+}
+
 fn branch(name: &str, upstream: Option<&str>, ab: Option<(u32, u32)>) -> BranchStatus {
     BranchStatus {
         name: name.to_string(),
@@ -118,6 +139,69 @@ fn file_row_shows_staged_marker_name_and_change_letter() {
     assert!(content.contains("session.rs"));
     assert!(content.contains("\u{25cf}")); // staged dot preserved
     assert!(content.contains('M')); // change-kind letter, right-aligned
+}
+
+#[test]
+fn file_row_shows_added_removed_counts_and_keeps_the_status_cluster() {
+    // sample_file's one hunk is `-old`/`+new`: 1 removed, 1 added.
+    let mut app = App::new(vec![sample_file("session.rs")]);
+    app.staged_states = HashMap::from([("session.rs".to_string(), StagedState::Full)]);
+    let content = render_panel(&app);
+    assert!(content.contains("+1"), "added count: {content:?}");
+    assert!(content.contains("-1"), "removed count: {content:?}");
+    assert!(
+        content.contains('M'),
+        "the change-kind letter must still render alongside the counts: {content:?}"
+    );
+}
+
+#[test]
+fn binary_file_row_shows_a_bin_placeholder_instead_of_counts() {
+    let file = FileDiff {
+        path: "img.png".to_string(),
+        old_path: None,
+        kind: crate::diff::FileChangeKind::Modified,
+        is_binary: true,
+        hunks: Vec::new(),
+    };
+    let app = App::new(vec![file]);
+    let content = render_panel(&app);
+    assert!(content.contains("bin"), "binary placeholder: {content:?}");
+}
+
+#[test]
+fn renamed_file_with_no_hunks_omits_counts() {
+    let file = FileDiff {
+        path: "new.rs".to_string(),
+        old_path: Some("old.rs".to_string()),
+        kind: crate::diff::FileChangeKind::Renamed,
+        is_binary: false,
+        hunks: Vec::new(),
+    };
+    let app = App::new(vec![file]);
+    let lines = render_panel_lines(&app);
+    // Check only the file's own row — the bottom section's own aggregate
+    // (always shown, even `+0 -0` for a hunkless review) legitimately
+    // contains '+'/'-' and must not make this assertion a false negative.
+    let row = lines
+        .iter()
+        .find(|l| l.contains("new.rs"))
+        .expect("file row must render");
+    assert!(
+        !row.contains('+') && !row.contains('-'),
+        "a hunkless rename's own row must show no counts: {row:?}"
+    );
+}
+
+#[test]
+fn footer_shows_aggregate_added_removed_counts() {
+    let app = App::new(vec![sample_file("session.rs")]);
+    let content = render_panel(&app);
+    assert!(content.contains("+1"), "aggregate added count: {content:?}");
+    assert!(
+        content.contains("-1"),
+        "aggregate removed count: {content:?}"
+    );
 }
 
 #[test]

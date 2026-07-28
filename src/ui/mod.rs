@@ -73,6 +73,7 @@ mod search;
 mod stage_ops;
 mod staging;
 mod staging_panel;
+mod stat_display;
 mod switcher;
 mod switcher_modal;
 mod syntax;
@@ -738,6 +739,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
             branch,
             accepted,
             total,
+            app.total_stats,
             app.review_stale,
         );
     }

@@ -318,6 +318,7 @@ fn welcome_state_clears_once_a_snapshot_delivers_content() {
         patches: vec![None],
         staged: Vec::new(),
         staged_states: std::collections::HashMap::new(),
+        ..Default::default()
     });
 
     let content = rendered_content(&app, &keymap);

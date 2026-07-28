@@ -14,7 +14,8 @@ use std::ops::Range;
 
 use crate::annotate::{Annotation, AnnotationStore, Classification, Side, Target};
 use crate::diff::{
-    DiffLine, FileChangeKind, FileDiff, Hunk, LineOrigin, WordSpan, pair_hunk_lines, word_diff,
+    DiffLine, FileChangeKind, FileDiff, Hunk, LineOrigin, StatDisplay, WordSpan, pair_hunk_lines,
+    stat_display, word_diff,
 };
 use crate::highlight::TokenKind;
 
@@ -178,6 +179,10 @@ pub enum Row {
         old_path: Option<String>,
         /// The kind of change.
         kind: FileChangeKind,
+        /// How this file's `+A -R` line-change counts should render (see
+        /// [`crate::diff::stat_display`]), computed once here from the
+        /// file's own binary/hunk state.
+        stats: StatDisplay,
         /// Whether this file has a `Target::File` annotation.
         annotated: bool,
         /// Index of the owning file in the diff's file list.
@@ -494,6 +499,7 @@ fn append_file_rows(
         path: file.path.clone(),
         old_path: file.old_path.clone(),
         kind: file.kind,
+        stats: stat_display(file, file.stats()),
         annotated: !file_targeted.is_empty(),
         file_index,
         staged_marker,
@@ -690,6 +696,10 @@ index 1..2 100644
                 path: "f.rs".to_string(),
                 old_path: None,
                 kind: FileChangeKind::Modified,
+                stats: StatDisplay::Counts(crate::diff::DiffStat {
+                    added: 1,
+                    removed: 1
+                }),
                 annotated: false,
                 file_index: 0,
                 staged_marker: StagedMarker::None,

@@ -21,7 +21,9 @@
 //! original suspension untouched, so `Esc` always returns to the true
 //! starting point.
 
-use crate::diff::FileDiff;
+use std::collections::HashMap;
+
+use crate::diff::{FileDiff, stat_display};
 use crate::git::DiffTarget;
 
 use super::app::{App, Mode, SuspendedView};
@@ -69,6 +71,11 @@ impl App {
         };
         let file = FileDiff::synthetic_context(path.clone(), &content);
         let target = DiffTarget::File(path);
+        // Always `Omitted` — an all-context synthetic body has nothing to
+        // count — but computed from the real file rather than hardcoded, so
+        // `stat_display`'s own rule stays the single source of truth.
+        let file_stat = file.stats();
+        let file_stats_map = HashMap::from([(file.path.clone(), stat_display(&file, file_stat))]);
 
         if self.suspended_file_view.is_none() {
             self.file_view_return_mode = return_mode;
@@ -80,11 +87,15 @@ impl App {
                 patches: std::mem::replace(&mut self.patches, vec![None]),
                 staged: std::mem::take(&mut self.staged),
                 staged_states: std::mem::take(&mut self.staged_states),
+                stats: std::mem::replace(&mut self.stats, file_stats_map),
+                total_stats: std::mem::replace(&mut self.total_stats, file_stat),
             });
         } else {
             self.target = target;
             self.view = self.new_diff_view(vec![file]);
             self.patches = vec![None];
+            self.stats = file_stats_map;
+            self.total_stats = file_stat;
         }
 
         // The just-suspended (or just-replaced) content shares the highlight
@@ -127,6 +138,8 @@ impl App {
         self.patches = suspended.patches;
         self.staged = suspended.staged;
         self.staged_states = suspended.staged_states;
+        self.stats = suspended.stats;
+        self.total_stats = suspended.total_stats;
         self.highlight_cache.clear();
         self.rebuild_rows();
         self.mode = self.file_view_return_mode;
