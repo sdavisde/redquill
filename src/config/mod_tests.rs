@@ -117,6 +117,58 @@ fn sidebar_width_wrong_type_is_an_invalid_value() {
 }
 
 #[test]
+fn scrolloff_defaults_to_the_shipped_margin() {
+    let (config, warnings) = Config::from_table(table(""));
+    assert_eq!(config.diff.scrolloff, SCROLLOFF_DEFAULT);
+    assert!(warnings.is_empty());
+}
+
+#[test]
+fn scrolloff_in_range_applies() {
+    let (config, warnings) = Config::from_table(table("[diff]\nscrolloff = 4\n"));
+    assert_eq!(config.diff.scrolloff, 4);
+    assert!(warnings.is_empty());
+
+    // Boundary values are inclusive; 0 means "cursor may reach the edge".
+    let (config, warnings) = Config::from_table(table("[diff]\nscrolloff = 0\n"));
+    assert_eq!(config.diff.scrolloff, 0);
+    assert!(warnings.is_empty());
+    let (config, warnings) =
+        Config::from_table(table(&format!("[diff]\nscrolloff = {SCROLLOFF_MAX}\n")));
+    assert_eq!(config.diff.scrolloff, SCROLLOFF_MAX);
+    assert!(warnings.is_empty());
+}
+
+#[test]
+fn scrolloff_out_of_range_or_wrong_type_is_an_invalid_value() {
+    for raw in [
+        "[diff]\nscrolloff = -1\n",
+        "[diff]\nscrolloff = 100\n",
+        "[diff]\nscrolloff = \"lots\"\n",
+    ] {
+        let (config, warnings) = Config::from_table(table(raw));
+        assert_eq!(config.diff.scrolloff, SCROLLOFF_DEFAULT, "{raw}");
+        assert_eq!(warnings.len(), 1, "{raw}");
+        assert!(matches!(
+            &warnings[0],
+            ConfigWarning::InvalidValue { section, key, .. }
+                if section == "diff" && key == "scrolloff"
+        ));
+    }
+}
+
+#[test]
+fn unknown_key_in_the_diff_section_is_collected_not_fatal() {
+    let (config, warnings) = Config::from_table(table("[diff]\nscrolloff = 6\nbogus = 1\n"));
+    assert_eq!(config.diff.scrolloff, 6);
+    assert_eq!(warnings.len(), 1);
+    assert!(matches!(
+        &warnings[0],
+        ConfigWarning::UnknownKey { section, key } if section == "diff" && key == "bogus"
+    ));
+}
+
+#[test]
 fn search_section_partial_override() {
     let (config, warnings) = Config::from_table(table(
         r#"

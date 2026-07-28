@@ -26,7 +26,6 @@ use crate::review::ReviewStatus;
 
 use super::app::App;
 use super::app::{Mode, PanelTab, SuspendedView};
-use super::diff_view_state::DiffViewState;
 use super::file_tree::{TreeFile, TreeNode, TreeRow, flatten};
 use super::icons;
 use super::keymap::{Action, Keymap, Scope};
@@ -926,7 +925,7 @@ impl App {
             .cloned();
 
         if self.suspended_view.is_none() {
-            let new_view = DiffViewState::new(snapshot.files);
+            let new_view = self.new_diff_view(snapshot.files);
             let old_view = std::mem::replace(&mut self.view, new_view);
             self.suspended_view = Some(SuspendedView {
                 target: std::mem::replace(&mut self.target, target),
@@ -937,7 +936,7 @@ impl App {
             });
         } else {
             self.target = target;
-            self.view = DiffViewState::new(snapshot.files);
+            self.view = self.new_diff_view(snapshot.files);
             self.patches = snapshot.patches;
             self.staged = snapshot.staged;
             self.staged_states = snapshot.staged_states;

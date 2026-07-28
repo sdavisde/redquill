@@ -1066,9 +1066,21 @@ impl App {
     /// [`super::project_search::ProjectSearchState::seeded`]); an
     /// already-open session is untouched, per the FR.
     pub fn set_config(&mut self, config: Config, warnings: Vec<ConfigWarning>) {
+        self.view.set_scrolloff(config.diff.scrolloff);
         self.config = config;
         self.config_warnings = warnings;
         self.config_warning_dismissed = false;
+    }
+
+    /// Builds a fresh diff view over `files` carrying this session's
+    /// config-derived view settings. Every place that *replaces*
+    /// [`App::view`] wholesale (opening a commit view, opening a whole-file
+    /// view) goes through here, so `[diff] scrolloff` isn't silently lost
+    /// when the view is swapped.
+    pub(super) fn new_diff_view(&self, files: Vec<FileDiff>) -> DiffViewState {
+        let mut view = DiffViewState::new(files);
+        view.set_scrolloff(self.config.diff.scrolloff);
+        view
     }
 
     /// Dismisses the config-warning notice (`!`,

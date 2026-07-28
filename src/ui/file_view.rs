@@ -26,7 +26,6 @@ use crate::git::DiffTarget;
 
 use super::app::{App, Mode, SuspendedView};
 use super::code_intel::closest_row_for_new_line;
-use super::diff_view_state::DiffViewState;
 
 impl App {
     /// Opens `path` (repo-relative) as a read-only whole-file view, cursor
@@ -73,7 +72,7 @@ impl App {
 
         if self.suspended_file_view.is_none() {
             self.file_view_return_mode = return_mode;
-            let new_view = DiffViewState::new(vec![file]);
+            let new_view = self.new_diff_view(vec![file]);
             let old_view = std::mem::replace(&mut self.view, new_view);
             self.suspended_file_view = Some(SuspendedView {
                 target: std::mem::replace(&mut self.target, target),
@@ -84,7 +83,7 @@ impl App {
             });
         } else {
             self.target = target;
-            self.view = DiffViewState::new(vec![file]);
+            self.view = self.new_diff_view(vec![file]);
             self.patches = vec![None];
         }
 
@@ -221,6 +220,18 @@ mod tests {
             })
             .collect();
         assert_eq!(lines, vec!["one", "two", "three"]);
+    }
+
+    #[test]
+    fn open_file_view_inherits_the_configured_scrolloff() {
+        let mut app = app_with_file_content("docs/notes.md", "one\ntwo\nthree\n");
+        let mut config = crate::config::Config::default();
+        config.diff.scrolloff = 7;
+        app.set_config(config, Vec::new());
+        app.open_file_view("docs/notes.md".to_string(), None);
+        assert_eq!(app.view.scrolloff(), 7, "swapped-in view keeps the setting");
+        app.return_from_file_view();
+        assert_eq!(app.view.scrolloff(), 7, "and so does the restored one");
     }
 
     #[test]

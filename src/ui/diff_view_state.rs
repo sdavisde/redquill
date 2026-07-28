@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 
 use crate::annotate::Target;
+use crate::config::SCROLLOFF_DEFAULT;
 use crate::diff::FileDiff;
 
 use super::diff_wrap::WrapLayout;
@@ -25,12 +26,9 @@ use super::rows::{MIN_GUTTER_WIDTH, Row, anchor_row_index};
 /// degenerate before the first draw.
 const DEFAULT_VIEWPORT_HEIGHT: usize = 20;
 
-/// The context margin (vim's `scrolloff`): line motions keep this many rows
-/// visible beyond the cursor in the direction of travel, and structural
-/// jumps place the target header this many rows from the top of the
-/// viewport. Degrades toward zero on viewports too small to honor it (see
-/// [`DiffViewState::scroll_margin`]).
-const SCROLLOFF: usize = 3;
+// The context margin (vim's `scrolloff`) lives on the state itself, seeded
+// from `crate::config::SCROLLOFF_DEFAULT` and overridable per user via
+// `[diff] scrolloff` — see `DiffViewState::scrolloff`.
 
 /// The per-view state: the diffed files, which one is selected, the
 /// flattened row model for that file, cursor and scroll positions, and the
@@ -91,6 +89,15 @@ pub struct DiffViewState {
     /// or never-built layout degrades to the identity mapping rather than
     /// misreporting.
     layout: WrapLayout,
+    /// The requested context margin (vim's `scrolloff`): line motions keep
+    /// this many rows visible beyond the cursor in the direction of travel,
+    /// and structural jumps place the target header this many rows from the
+    /// top of the viewport. Seeded from
+    /// [`crate::config::SCROLLOFF_DEFAULT`] and replaced by `[diff]
+    /// scrolloff` via [`DiffViewState::set_scrolloff`]; the *effective*
+    /// margin shrinks on viewports too small to honor it (see
+    /// [`DiffViewState::scroll_margin`]).
+    scrolloff: usize,
 }
 
 impl DiffViewState {
@@ -112,7 +119,21 @@ impl DiffViewState {
             cursor_col: 0,
             content_width: 0,
             layout: WrapLayout::default(),
+            scrolloff: SCROLLOFF_DEFAULT,
         }
+    }
+
+    /// Sets the requested context margin (`[diff] scrolloff`). [`super::App`]
+    /// applies the loaded config here at startup and carries the value onto
+    /// every view it builds afterward (see `App::new_diff_view`), so a
+    /// commit or whole-file view inherits the user's setting.
+    pub fn set_scrolloff(&mut self, scrolloff: usize) {
+        self.scrolloff = scrolloff;
+    }
+
+    /// The requested context margin (see [`DiffViewState::set_scrolloff`]).
+    pub fn scrolloff(&self) -> usize {
+        self.scrolloff
     }
 
     /// The index (into `files`) of the file whose section the cursor is in,
@@ -294,7 +315,7 @@ impl DiffViewState {
     }
 
     /// Moves the cursor down one addressable row, then scrolls to follow it
-    /// with a [`SCROLLOFF`] context margin.
+    /// with a [`DiffViewState::scrolloff`] context margin.
     pub fn cursor_down(&mut self) {
         if !self.rows.is_empty() {
             let target = (self.cursor + 1).min(self.max_cursor());
@@ -304,7 +325,7 @@ impl DiffViewState {
     }
 
     /// Moves the cursor up one addressable row, then scrolls to follow it
-    /// with a [`SCROLLOFF`] context margin.
+    /// with a [`DiffViewState::scrolloff`] context margin.
     pub fn cursor_up(&mut self) {
         if !self.rows.is_empty() {
             let target = self.cursor.saturating_sub(1);
@@ -314,7 +335,7 @@ impl DiffViewState {
     }
 
     /// Moves the cursor down half a viewport, then scrolls to follow it
-    /// with a [`SCROLLOFF`] context margin.
+    /// with a [`DiffViewState::scrolloff`] context margin.
     pub fn half_page_down(&mut self) {
         if !self.rows.is_empty() {
             let step = self.half_page();
@@ -325,7 +346,7 @@ impl DiffViewState {
     }
 
     /// Moves the cursor up half a viewport, then scrolls to follow it
-    /// with a [`SCROLLOFF`] context margin.
+    /// with a [`DiffViewState::scrolloff`] context margin.
     pub fn half_page_up(&mut self) {
         if !self.rows.is_empty() {
             let step = self.half_page();
@@ -407,12 +428,13 @@ impl DiffViewState {
         }
     }
 
-    /// The effective context margin: [`SCROLLOFF`], shrunk so that twice the
-    /// margin still fits strictly inside the viewport. This keeps the
-    /// top/bottom follow conditions disjoint (no oscillation) and degrades
-    /// to a plain edge clamp on tiny viewports.
+    /// The effective context margin: [`DiffViewState::scrolloff`], shrunk so
+    /// that twice the margin still fits strictly inside the viewport. This
+    /// keeps the top/bottom follow conditions disjoint (no oscillation) and
+    /// degrades to a plain edge clamp on tiny viewports.
     fn scroll_margin(&self) -> usize {
-        SCROLLOFF.min(self.viewport_height.saturating_sub(1) / 2)
+        self.scrolloff
+            .min(self.viewport_height.saturating_sub(1) / 2)
     }
 
     /// The largest useful scroll offset: the one that puts the last row on
@@ -422,7 +444,7 @@ impl DiffViewState {
     }
 
     /// Like [`DiffViewState::ensure_visible`], but keeps a
-    /// [`SCROLLOFF`]-sized context margin between the cursor and the
+    /// [`DiffViewState::scrolloff`]-sized context margin between the cursor and the
     /// viewport edge in the direction of travel, degrading gracefully at
     /// the buffer's edges (scroll never underflows past the top or runs
     /// past [`DiffViewState::max_scroll`]).
@@ -449,7 +471,7 @@ impl DiffViewState {
     /// of that hunk/section. If the header row and the first few body rows
     /// below it — `min(remaining body rows, viewport_height / 2)` — are
     /// already fully visible, the scroll is left alone; otherwise the view
-    /// scrolls so the header sits [`SCROLLOFF`] rows from the top of the
+    /// scrolls so the header sits [`DiffViewState::scrolloff`] rows from the top of the
     /// viewport (clamped at the buffer's edges). Also re-derives
     /// [`DiffViewState::selected_file`], like every other motion clamp.
     fn reveal_at_top(&mut self, span_end: usize) {
@@ -649,7 +671,7 @@ impl DiffViewState {
     }
 
     /// Scrolls so the cursor sits near the top of the viewport (the `zt`
-    /// gesture), keeping the same [`SCROLLOFF`]-derived margin above it that
+    /// gesture), keeping the same [`DiffViewState::scrolloff`]-derived margin above it that
     /// [`DiffViewState::reveal_at_top`] uses, and degrading the same way at
     /// the buffer's edges. A no-op on an empty diff.
     pub fn scroll_cursor_top(&mut self) {
@@ -701,7 +723,7 @@ impl DiffViewState {
     }
 
     /// Moves the cursor down a full viewport (the `Ctrl-f` gesture), then
-    /// scrolls to follow it with a [`SCROLLOFF`] context margin. Mirrors
+    /// scrolls to follow it with a [`DiffViewState::scrolloff`] context margin. Mirrors
     /// [`DiffViewState::half_page_down`] at double the step.
     pub fn full_page_down(&mut self) {
         if !self.rows.is_empty() {
@@ -802,11 +824,18 @@ mod tests {
         .unwrap()
     }
 
+    /// The margin these tests pin themselves to, so their hand-computed
+    /// scroll offsets describe the *mechanism* rather than whatever the
+    /// shipped default happens to be. The default itself is covered by
+    /// `default_scrolloff_matches_the_config_default`.
+    const SCROLLOFF: usize = 3;
+
     /// Builds a `DiffViewState` over `files` (with the given per-file
     /// collapse flags), its multibuffer populated the way `App` would after
-    /// a rebuild.
+    /// a rebuild, with the context margin pinned to [`SCROLLOFF`].
     fn multibuffer_view(files: Vec<FileDiff>, collapsed: &[bool]) -> DiffViewState {
         let mut view = DiffViewState::new(files);
+        view.set_scrolloff(SCROLLOFF);
         let paths: Vec<(String, bool)> = view
             .files
             .iter()
@@ -1195,6 +1224,53 @@ index 1..2 100644
                 "step {step}: cursor below view"
             );
         }
+    }
+
+    #[test]
+    fn default_scrolloff_matches_the_config_default() {
+        let view = DiffViewState::new(vec![]);
+        assert_eq!(view.scrolloff(), SCROLLOFF_DEFAULT);
+    }
+
+    #[test]
+    fn a_larger_scrolloff_starts_scrolling_sooner() {
+        let mut view = view_with_raw("big.rs", &long_raw(60)); // 62 rows
+        view.set_viewport_height(30);
+        view.set_scrolloff(10);
+        for _ in 0..20 {
+            view.cursor_down();
+        }
+        // Ten rows still visible below the cursor: cursor sits at
+        // scroll + viewport - 1 - 10.
+        assert_eq!(view.cursor, 20);
+        assert_eq!(view.scroll, 1);
+        assert_eq!(view.cursor - view.scroll, 30 - 1 - 10);
+    }
+
+    #[test]
+    fn a_zero_scrolloff_lets_the_cursor_reach_the_viewport_edge() {
+        let mut view = view_with_raw("big.rs", &long_raw(30)); // 32 rows
+        view.set_viewport_height(10);
+        view.set_scrolloff(0);
+        for _ in 0..9 {
+            view.cursor_down();
+        }
+        assert_eq!(view.cursor, 9);
+        assert_eq!(view.scroll, 0, "cursor rests on the bottom line");
+        view.cursor_down();
+        assert_eq!(view.scroll, 1, "and only then does the view scroll");
+    }
+
+    #[test]
+    fn an_oversized_scrolloff_degrades_to_keeping_the_cursor_centered() {
+        let mut view = view_with_raw("big.rs", &long_raw(30)); // 32 rows
+        view.set_viewport_height(11);
+        view.set_scrolloff(99); // margin clamps to (11 - 1) / 2 = 5
+        for _ in 0..15 {
+            view.cursor_down();
+        }
+        assert_eq!(view.cursor, 15);
+        assert_eq!(view.cursor - view.scroll, 5);
     }
 
     #[test]

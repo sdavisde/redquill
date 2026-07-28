@@ -50,6 +50,25 @@ sidebar_side = "right"
 # sidebar_width = 60
 
 # -----------------------------------------------------------------------
+# [diff] — the diff view's navigation feel
+# -----------------------------------------------------------------------
+[diff]
+
+# How many rows stay visible beyond the cursor before the view starts
+# scrolling instead of letting the cursor walk to the top/bottom edge
+# (vim's `scrolloff`). Also decides how far from the top a hunk/file jump
+# parks its target header. Must be an integer between 0 and 99 inclusive;
+# anything else is an invalid value (warning + default).
+#
+#   0  — the cursor may sit on the very first/last visible row; the view
+#        only scrolls once it would otherwise leave the viewport.
+#   99 — effectively "keep the cursor centered": the margin is capped at
+#        half the viewport height, so any large value behaves the same.
+#
+# Default: 10
+scrolloff = 10
+
+# -----------------------------------------------------------------------
 # [search] — Project Search (`g/`) startup defaults
 # -----------------------------------------------------------------------
 [search]

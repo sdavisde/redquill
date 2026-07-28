@@ -84,6 +84,35 @@ pub struct LayoutConfig {
     pub sidebar_width: Option<u16>,
 }
 
+/// The default `[diff] scrolloff`: how many rows the diff view keeps
+/// visible beyond the cursor in the direction of travel before it starts
+/// scrolling instead of letting the cursor walk to the viewport edge.
+/// Degrades on viewports too small to honor it — see
+/// `crate::ui::DiffViewState`'s effective-margin clamp.
+pub const SCROLLOFF_DEFAULT: usize = 10;
+/// The largest accepted `[diff] scrolloff`. Values beyond this are an
+/// invalid value (warning + default), not a silent clamp; anything at or
+/// above half the viewport already behaves as "keep the cursor centered",
+/// so a larger number buys nothing.
+pub const SCROLLOFF_MAX: usize = 99;
+
+/// `[diff]`: the diff view's own navigation feel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiffConfig {
+    /// Rows of context kept between the cursor and the viewport edge (vim's
+    /// `scrolloff`). `0` lets the cursor sit on the very first/last visible
+    /// row before the view scrolls.
+    pub scrolloff: usize,
+}
+
+impl Default for DiffConfig {
+    fn default() -> Self {
+        DiffConfig {
+            scrolloff: SCROLLOFF_DEFAULT,
+        }
+    }
+}
+
 /// `[search]`: Project Search (`g/`) startup defaults. In-session toggles
 /// (`Alt-c`/`Alt-w`/`Alt-r`) are unaffected once a search session is already
 /// open — this only seeds the state a *fresh* session opens with.
@@ -178,6 +207,7 @@ pub struct LspConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Config {
     pub layout: LayoutConfig,
+    pub diff: DiffConfig,
     pub search: SearchConfig,
     pub editor: EditorConfig,
     pub lsp: LspConfig,
@@ -244,6 +274,9 @@ impl Config {
         if let Some(value) = raw.remove("layout") {
             config.layout = LayoutConfig::from_value(value, &mut warnings);
         }
+        if let Some(value) = raw.remove("diff") {
+            config.diff = DiffConfig::from_value(value, &mut warnings);
+        }
         if let Some(value) = raw.remove("search") {
             config.search = SearchConfig::from_value(value, &mut warnings);
         }
@@ -298,6 +331,32 @@ impl LayoutConfig {
                     )),
                 },
                 other => warnings.push(ConfigWarning::unknown("layout", other)),
+            }
+        }
+        cfg
+    }
+}
+
+impl DiffConfig {
+    fn from_value(value: toml::Value, warnings: &mut Vec<ConfigWarning>) -> DiffConfig {
+        let mut cfg = DiffConfig::default();
+        let Some(table) = value.as_table() else {
+            warnings.push(ConfigWarning::invalid("diff", "diff", "expected a table"));
+            return cfg;
+        };
+        for (key, val) in table {
+            match key.as_str() {
+                "scrolloff" => match val.as_integer() {
+                    Some(n) if (0..=SCROLLOFF_MAX as i64).contains(&n) => {
+                        cfg.scrolloff = n as usize;
+                    }
+                    _ => warnings.push(ConfigWarning::invalid(
+                        "diff",
+                        key,
+                        format!("expected an integer in 0..={SCROLLOFF_MAX}"),
+                    )),
+                },
+                other => warnings.push(ConfigWarning::unknown("diff", other)),
             }
         }
         cfg
