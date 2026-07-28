@@ -39,27 +39,43 @@ fn side_marker(side: Side) -> &'static str {
     }
 }
 
-/// The modal title's target label, e.g. `src/foo.rs:44 (+)`.
+/// The last segment of a repo-relative path. Titles are bounded by the 60%
+/// modal width, and a deep path pushes the line numbers and classification
+/// suffix off the end — the basename is the part that identifies the file.
+fn base_name(path: &str) -> &str {
+    match path.rsplit_once('/') {
+        Some((_, name)) if !name.is_empty() => name,
+        _ => path,
+    }
+}
+
+/// The modal title's target label, e.g. `foo.rs:44 (+)`.
 fn target_label(target: &Target) -> String {
     match target {
         Target::Line {
             path, line, side, ..
-        } => format!("{path}:{line} {}", side_marker(*side)),
+        } => format!("{}:{line} {}", base_name(path), side_marker(*side)),
         Target::Range {
             path,
             start,
             end,
             side,
             ..
-        } => format!("{path}:{start}-{end} {}", side_marker(*side)),
+        } => format!("{}:{start}-{end} {}", base_name(path), side_marker(*side)),
         Target::Hunk {
             path, start, end, ..
         } => {
-            format!("{path}:{start}-{end} {}", side_marker(Side::New))
+            format!(
+                "{}:{start}-{end} {}",
+                base_name(path),
+                side_marker(Side::New)
+            )
         }
-        Target::File { path } => path.clone(),
-        Target::WorktreeLine { path, line } => format!("{path}:{line} (=)"),
-        Target::WorktreeRange { path, start, end } => format!("{path}:{start}-{end} (=)"),
+        Target::File { path } => base_name(path).to_string(),
+        Target::WorktreeLine { path, line } => format!("{}:{line} (=)", base_name(path)),
+        Target::WorktreeRange { path, start, end } => {
+            format!("{}:{start}-{end} (=)", base_name(path))
+        }
     }
 }
 
@@ -80,9 +96,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 .find(thread_id)
                 .map(|t| match &t.anchor {
                     crate::forge::ThreadAnchor::Position { path, line, .. } => {
-                        format!("{path}:{line}")
+                        format!("{}:{line}", base_name(path))
                     }
-                    crate::forge::ThreadAnchor::File { path } => path.clone(),
+                    crate::forge::ThreadAnchor::File { path } => base_name(path).to_string(),
                 })
                 .unwrap_or_else(|| "thread".to_string());
             (
@@ -145,4 +161,61 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let cursor_x = inner.x + (cursor_vcol as u16).min(inner.width.saturating_sub(1));
     let cursor_y = inner.y + (cursor_vrow.saturating_sub(scroll)) as u16;
     frame.set_cursor_position(Position::new(cursor_x, cursor_y));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base_name_strips_directories() {
+        assert_eq!(base_name("src/ui/compose_modal.rs"), "compose_modal.rs");
+        assert_eq!(base_name("README.md"), "README.md");
+        assert_eq!(base_name(""), "");
+        assert_eq!(base_name("src/ui/"), "src/ui/");
+    }
+
+    #[test]
+    fn target_labels_use_the_base_name() {
+        assert_eq!(
+            target_label(&Target::Line {
+                path: "src/deeply/nested/module/handler.rs".to_string(),
+                line: 44,
+                side: Side::New,
+                other_line: None,
+            }),
+            "handler.rs:44 (+)"
+        );
+        assert_eq!(
+            target_label(&Target::Range {
+                path: "src/deeply/nested/module/handler.rs".to_string(),
+                start: 10,
+                end: 20,
+                side: Side::Old,
+                other_end: None,
+            }),
+            "handler.rs:10-20 (-)"
+        );
+        assert_eq!(
+            target_label(&Target::File {
+                path: "src/deeply/nested/module/handler.rs".to_string(),
+            }),
+            "handler.rs"
+        );
+        assert_eq!(
+            target_label(&Target::WorktreeLine {
+                path: "src/deeply/nested/module/handler.rs".to_string(),
+                line: 7,
+            }),
+            "handler.rs:7 (=)"
+        );
+        assert_eq!(
+            target_label(&Target::WorktreeRange {
+                path: "src/deeply/nested/module/handler.rs".to_string(),
+                start: 7,
+                end: 9,
+            }),
+            "handler.rs:7-9 (=)"
+        );
+    }
 }
