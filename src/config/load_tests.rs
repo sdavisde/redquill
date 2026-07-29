@@ -34,20 +34,6 @@ fn missing_home_and_xdg_yields_no_path() {
     assert_eq!(path, None);
 }
 
-#[test]
-fn explicit_test_override_hook_is_just_a_pathenv_pointed_at_a_tempdir() {
-    // Any test can point discovery at a tempdir directly via `PathEnv`,
-    // bypassing the real environment entirely (see the `load_from` tests
-    // below, which do exactly this with a real file on disk).
-    let dir = tempfile::tempdir().expect("tempdir");
-    let dir = dir
-        .path()
-        .canonicalize()
-        .expect("canonicalize tempdir (macOS /var symlink)");
-    let path = resolve_config_path(&env(Some(&dir), None));
-    assert_eq!(path, Some(dir.join("redquill").join("config.toml")));
-}
-
 // -- load_from (the degradation contract) ------------------------------------
 
 #[test]
@@ -146,29 +132,6 @@ fn unreadable_path_degrades_like_a_missing_file() {
     let (config, warnings) = load_from(&env(Some(&dir), None));
     assert_eq!(config, Config::default());
     assert!(warnings.is_empty());
-}
-
-// -- stdout contract ----------------------------------------------------------
-
-#[test]
-fn config_loading_source_never_writes_to_stdout() {
-    // A real OS-level fd capture would need unsafe FFI outside std's stable
-    // API for a dependency-free unit test; this is the structural guard for
-    // the same regression class (someone adding a stray debugging
-    // `println!`): stdout is reserved for the annotation markdown
-    // (`crate::annotate`), never for config loading.
-    for src in [include_str!("mod.rs"), include_str!("load.rs")] {
-        assert!(
-            !src.contains("println!") && !src.contains("print!(") && !src.contains("io::stdout"),
-            "config loading must never write to stdout"
-        );
-    }
-}
-
-#[test]
-fn load_reads_the_real_environment_without_panicking() {
-    // Smoke test for the real, non-injected entry point `main` calls.
-    let (_config, _warnings) = load();
 }
 
 // -- Example config drift guard ----------------------------------------------

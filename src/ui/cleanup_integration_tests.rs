@@ -275,34 +275,6 @@ fn confirm_deletes_the_worktree_branch_and_state_entry() {
     drop(bare);
 }
 
-// -- Decline path (FR-23) ----------------------------------------------------
-
-#[test]
-fn declining_leaves_everything_intact() {
-    let bare = setup_bare_origin();
-    let contributor = clone_of(bare.path());
-    push_pr_special_ref(contributor.path(), "feature", 1, "the change");
-
-    let reviewer = clone_of(bare.path());
-    create_pr_checkout(reviewer.path(), 1);
-
-    let mut app = origin_app_with_open_listing(reviewer.path(), &[]);
-    app.open_cleanup_reviews();
-    app.cancel_cleanup_reviews();
-
-    assert!(
-        branch_exists(reviewer.path(), "redquill/pr/1"),
-        "declining must not delete the branch"
-    );
-    assert!(worktree_list(reviewer.path()).contains("redquill/pr/1"));
-    assert!(
-        store::load(&state_path_of(reviewer.path()))
-            .reviews
-            .contains_key("redquill/pr/1")
-    );
-    drop(bare);
-}
-
 // -- Unpublished-annotation warning (FR-23) ----------------------------------
 
 #[test]

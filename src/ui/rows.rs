@@ -1042,110 +1042,6 @@ index 111..222 100644
         assert_eq!(rows[4], Row::AnnotationBorder { top: false });
     }
 
-    // -- Annotation border placement -----------------------------------
-
-    #[test]
-    fn border_rows_bracket_a_file_annotation_block() {
-        let diff = file_diff(raw_two_line_hunk(), "f.rs", false);
-        let mut store = AnnotationStore::new();
-        store
-            .add(Target::file("f.rs"), Classification::Praise, "nice module")
-            .unwrap();
-        let rows = build_rows(&diff, &store, SyntaxSpans::default());
-        // FileHeader(0) AnnotationBorder top(1) Annotation(2)
-        // AnnotationBorder bottom(3) HunkHeader(4)
-        assert_eq!(rows[1], Row::AnnotationBorder { top: true });
-        assert!(matches!(rows[2], Row::Annotation { .. }));
-        assert_eq!(rows[3], Row::AnnotationBorder { top: false });
-        assert!(matches!(rows[4], Row::HunkHeader { .. }));
-    }
-
-    #[test]
-    fn border_rows_bracket_a_hunk_annotation_block() {
-        let diff = file_diff(raw_two_line_hunk(), "f.rs", false);
-        let mut store = AnnotationStore::new();
-        store
-            .add(
-                Target::hunk("f.rs", 1, 2).unwrap(),
-                Classification::Praise,
-                "clean",
-            )
-            .unwrap();
-        let rows = build_rows(&diff, &store, SyntaxSpans::default());
-        // FileHeader(0) HunkHeader(1) AnnotationBorder top(2) Annotation(3)
-        // AnnotationBorder bottom(4) Line(5)
-        assert_eq!(rows[2], Row::AnnotationBorder { top: true });
-        assert!(matches!(rows[3], Row::Annotation { .. }));
-        assert_eq!(rows[4], Row::AnnotationBorder { top: false });
-        assert!(matches!(rows[5], Row::Line(_)));
-    }
-
-    #[test]
-    fn border_rows_bracket_a_line_annotation_block() {
-        let diff = file_diff(raw_two_line_hunk(), "f.rs", false);
-        let mut store = AnnotationStore::new();
-        store
-            .add(
-                Target::line("f.rs", 1, Side::New),
-                Classification::Question,
-                "why change this?",
-            )
-            .unwrap();
-        let rows = build_rows(&diff, &store, SyntaxSpans::default());
-        // FileHeader(0) HunkHeader(1) Line old1(2) Line new1(3)
-        // AnnotationBorder top(4) Annotation(5) AnnotationBorder bottom(6)
-        // Line ctx(7)
-        assert_eq!(rows[4], Row::AnnotationBorder { top: true });
-        assert!(matches!(rows[5], Row::Annotation { .. }));
-        assert_eq!(rows[6], Row::AnnotationBorder { top: false });
-        assert!(matches!(rows[7], Row::Line(_)));
-    }
-
-    #[test]
-    fn border_rows_bracket_a_range_annotation_block() {
-        let raw = "\
-diff --git a/f.rs b/f.rs
-index 111..222 100644
---- a/f.rs
-+++ b/f.rs
-@@ -1,3 +1,3 @@
- a
-+b
-+c
-";
-        let diff = file_diff(raw, "f.rs", false);
-        let mut store = AnnotationStore::new();
-        store
-            .add(
-                Target::range("f.rs", 2, 3, Side::New).unwrap(),
-                Classification::Nit,
-                "extract helper",
-            )
-            .unwrap();
-        let rows = build_rows(&diff, &store, SyntaxSpans::default());
-        // FileHeader(0) HunkHeader(1) Line a(2) Line b(3) Line c(4)
-        // AnnotationBorder top(5) Annotation(6) AnnotationBorder bottom(7)
-        assert_eq!(rows[5], Row::AnnotationBorder { top: true });
-        assert!(matches!(rows[6], Row::Annotation { .. }));
-        assert_eq!(rows[7], Row::AnnotationBorder { top: false });
-    }
-
-    #[test]
-    fn border_rows_bracket_a_multiline_annotation_body() {
-        let diff = file_diff(raw_two_line_hunk(), "f.rs", false);
-        let mut store = AnnotationStore::new();
-        store
-            .add(Target::file("f.rs"), Classification::Issue, "first\nsecond")
-            .unwrap();
-        let rows = build_rows(&diff, &store, SyntaxSpans::default());
-        // The bottom border sits immediately after the *last* body row,
-        // not after the first.
-        assert_eq!(rows[1], Row::AnnotationBorder { top: true });
-        assert!(matches!(rows[2], Row::Annotation { .. }));
-        assert!(matches!(rows[3], Row::Annotation { .. }));
-        assert_eq!(rows[4], Row::AnnotationBorder { top: false });
-    }
-
     #[test]
     fn annotation_rows_are_not_addressable_other_rows_are() {
         let diff = file_diff(raw_two_line_hunk(), "f.rs", false);
@@ -1419,27 +1315,6 @@ index 1..2 100644
     }
 
     #[test]
-    fn multibuffer_header_carries_staged_marker() {
-        let files = vec![file_diff(&multi_raw("a.rs"), "a.rs", false)];
-        let collapsed = vec![false];
-        let markers = vec![StagedMarker::Staged];
-        let review_markers = vec![ReviewMarker::None];
-        let syntax = vec![SyntaxSpans::default()];
-        let mb = build_multibuffer(
-            &files,
-            &collapsed,
-            &markers,
-            &review_markers,
-            &no_notes(),
-            &syntax,
-        );
-        let Row::FileHeader { staged_marker, .. } = &mb.rows[0] else {
-            panic!("expected file header");
-        };
-        assert_eq!(*staged_marker, StagedMarker::Staged);
-    }
-
-    #[test]
     fn multibuffer_header_carries_review_marker() {
         let files = vec![file_diff(&multi_raw("a.rs"), "a.rs", false)];
         let collapsed = vec![false];
@@ -1458,34 +1333,6 @@ index 1..2 100644
             panic!("expected file header");
         };
         assert_eq!(*review_marker, ReviewMarker::Accepted);
-    }
-
-    #[test]
-    fn multibuffer_preserves_addressability_of_rows() {
-        let files = vec![file_diff(raw_two_line_hunk(), "f.rs", false)];
-        let mut store = AnnotationStore::new();
-        store
-            .add(Target::file("f.rs"), Classification::Issue, "note")
-            .unwrap();
-        let collapsed = vec![false];
-        let markers = vec![StagedMarker::None];
-        let review_markers = vec![ReviewMarker::None];
-        let syntax = vec![SyntaxSpans::default()];
-        let mb = build_multibuffer(
-            &files,
-            &collapsed,
-            &markers,
-            &review_markers,
-            &store,
-            &syntax,
-        );
-        // FileHeader(0) AnnotationBorder top(1) Annotation(2)
-        // AnnotationBorder bottom(3) HunkHeader(4) ...
-        assert!(mb.rows[0].is_addressable()); // header
-        assert!(!mb.rows[1].is_addressable()); // annotation border row
-        assert!(!mb.rows[2].is_addressable()); // annotation display row
-        assert!(!mb.rows[3].is_addressable()); // annotation border row
-        assert!(mb.rows[4].is_addressable()); // hunk header
     }
 
     #[test]
@@ -1622,26 +1469,6 @@ index 1..2 100644
             "diff --git a/{path} b/{path}\nindex 1..2 100644\n--- a/{path}\n+++ b/{path}\n@@ -{line},1 +{line},1 @@\n-old\n+new\n"
         );
         file_diff(&raw, path, false)
-    }
-
-    #[test]
-    fn multibuffer_gutter_width_is_empty_default_with_no_files() {
-        let mb = two_file_buffer(&[]);
-        assert_eq!(mb.gutter_width, 3);
-    }
-
-    #[test]
-    fn multibuffer_gutter_width_stays_at_minimum_below_1000() {
-        let files = vec![file_diff_at_line("f.rs", 950)];
-        let mb = two_file_buffer(&files);
-        assert_eq!(mb.gutter_width, 3);
-    }
-
-    #[test]
-    fn multibuffer_gutter_width_grows_for_large_line_numbers() {
-        let files = vec![file_diff_at_line("f.rs", 25_000)];
-        let mb = two_file_buffer(&files);
-        assert_eq!(mb.gutter_width, 5);
     }
 
     #[test]

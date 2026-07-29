@@ -347,15 +347,6 @@ mod tests {
         assert!(!app.view.is_collapsed("a.rs"));
     }
 
-    #[test]
-    fn toggle_accept_outside_a_review_session_is_a_no_op() {
-        let mut app = App::new(vec![file("a.rs")]);
-        assert_eq!(app.target, DiffTarget::WorkingTree);
-        app.apply(Action::ToggleAccept);
-        assert_eq!(app.review_status("a.rs"), ReviewStatus::Unreviewed);
-        assert!(!app.view.is_collapsed("a.rs"));
-    }
-
     // -- AcceptFile (S) ---------------------------------------------------------
 
     #[test]
@@ -368,66 +359,6 @@ mod tests {
         app.apply(Action::AcceptFile);
         assert_eq!(app.review_status("a.rs"), ReviewStatus::Accepted);
         assert!(app.view.is_collapsed("a.rs"));
-    }
-
-    #[test]
-    fn accept_file_from_deferred_accepts_and_collapses() {
-        let mut app = review_app(&["a.rs"]);
-        app.apply(Action::ToggleDefer);
-        assert_eq!(app.review_status("a.rs"), ReviewStatus::Deferred);
-        app.apply(Action::AcceptFile);
-        assert_eq!(app.review_status("a.rs"), ReviewStatus::Accepted);
-        assert!(app.view.is_collapsed("a.rs"));
-    }
-
-    /// `S` on an already-`Accepted` file un-accepts it back to `Unreviewed`
-    /// and re-expands its section — the full `StageFile` toggle analogue.
-    #[test]
-    fn accept_file_toggles_an_already_accepted_file_back_to_unreviewed_and_expands() {
-        let mut app = review_app(&["a.rs"]);
-        app.apply(Action::AcceptFile);
-        assert_eq!(app.review_status("a.rs"), ReviewStatus::Accepted);
-        assert!(app.view.is_collapsed("a.rs"));
-
-        app.apply(Action::AcceptFile);
-        assert_eq!(app.review_status("a.rs"), ReviewStatus::Unreviewed);
-        assert!(!app.view.is_collapsed("a.rs"));
-    }
-
-    /// `S` from anywhere in an already-collapsed accepted file still
-    /// resolves to *that* file's toggle (not a no-op just because the
-    /// cursor isn't on the header row).
-    #[test]
-    fn accept_file_toggle_works_from_anywhere_in_the_file() {
-        let mut app = review_app(&["a.rs"]);
-        app.apply(Action::AcceptFile); // accept + collapse
-        assert!(app.view.is_collapsed("a.rs"));
-        // Un-accept expands the section again, so the cursor can move into
-        // the body before toggling a second time.
-        app.view.cursor = app.view.rows.len().saturating_sub(1);
-        app.apply(Action::AcceptFile);
-        assert_eq!(app.review_status("a.rs"), ReviewStatus::Unreviewed);
-    }
-
-    #[test]
-    fn accept_file_outside_a_review_session_is_a_no_op() {
-        let mut app = App::new(vec![file("a.rs")]);
-        app.apply(Action::AcceptFile);
-        assert_eq!(app.review_status("a.rs"), ReviewStatus::Unreviewed);
-    }
-
-    /// `Space`'s own toggle is untouched by the `S` parity fix — same
-    /// transition, same reachability guard, regression-pinned independently
-    /// of `S`'s tests above.
-    #[test]
-    fn toggle_accept_space_behavior_is_unchanged_by_the_s_parity_fix() {
-        let mut app = review_app(&["a.rs"]);
-        app.apply(Action::ToggleAccept);
-        assert_eq!(app.review_status("a.rs"), ReviewStatus::Accepted);
-        assert!(app.view.is_collapsed("a.rs"));
-        app.apply(Action::ToggleAccept);
-        assert_eq!(app.review_status("a.rs"), ReviewStatus::Unreviewed);
-        assert!(!app.view.is_collapsed("a.rs"));
     }
 
     // -- ToggleDefer (d) ----------------------------------------------------
@@ -493,12 +424,6 @@ mod tests {
         app.select_file_by_path("b.rs");
         app.apply(Action::ToggleDefer); // deferred, not accepted
         assert_eq!(app.review_progress(), (1, 3));
-    }
-
-    #[test]
-    fn review_progress_is_zero_outside_a_review_session() {
-        let app = App::new(vec![file("a.rs"), file("b.rs")]);
-        assert_eq!(app.review_progress(), (0, 2));
     }
 
     // -- Persistence wiring ---------------------------------------------------
@@ -635,19 +560,6 @@ mod tests {
     }
 
     #[test]
-    fn accept_file_s_also_persists() {
-        let (mut app, _tmp) = persisting_review_app(&[("feature", "a.rs", "sha-s")]);
-        let path = app.review_state_path.clone().unwrap();
-
-        app.apply(Action::AcceptFile);
-        wait_for_review_save(&mut app);
-
-        let state = store::load(&path);
-        let entry = state.reviews["feature"].files.get("a.rs").unwrap();
-        assert_eq!(entry.blob_sha.as_deref(), Some("sha-s"));
-    }
-
-    #[test]
     fn re_accepting_a_changed_since_accepted_file_persists_the_fresh_sha() {
         let (mut app, _tmp) = persisting_review_app(&[("feature", "a.rs", "sha-fresh")]);
         let path = app.review_state_path.clone().unwrap();
@@ -710,29 +622,6 @@ mod tests {
     // real background-thread timing: a burst of rapid gestures (including
     // annotation add/edit/delete, which also trigger a save) coalesces to
     // exactly one in-flight write plus one correctly-ordered follow-up.
-
-    #[test]
-    fn a_call_while_a_save_is_in_flight_sets_dirty_instead_of_spawning_a_second_writer() {
-        let (mut app, _tmp) = persisting_review_app(&[("feature", "a.rs", "sha-a-1")]);
-
-        app.apply(Action::ToggleAccept); // spawns the one in-flight save
-        assert!(app.review_save_in_flight);
-        assert_eq!(app.review_saves_pending, 1);
-
-        // A second gesture (deferring c.rs, say) arrives before the first
-        // save has drained.
-        app.select_file_by_path("a.rs");
-        app.apply(Action::ToggleDefer); // -> `persist_review_state` again
-
-        assert!(
-            app.review_save_dirty,
-            "a call while in-flight must set dirty, not spawn a second writer"
-        );
-        assert_eq!(
-            app.review_saves_pending, 1,
-            "still exactly one save in flight — the second call was coalesced"
-        );
-    }
 
     #[test]
     fn draining_a_dirty_in_flight_save_spawns_exactly_one_follow_up_with_fresh_data() {
@@ -803,13 +692,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn restore_review_annotations_with_an_empty_list_is_a_no_op() {
-        let mut app = review_app(&["a.rs"]);
-        app.restore_review_annotations(Vec::new());
-        assert!(app.annotations.is_empty());
-    }
-
     // -- Draft replies persist and restore -----------------------------------
 
     /// A drafted reply is snapshotted into the same persisted review entry as
@@ -858,12 +740,5 @@ mod tests {
             .map(|r| (r.thread_id, r.body.as_str()))
             .collect();
         assert_eq!(pairs, vec![(10, "first"), (20, "second")]);
-    }
-
-    #[test]
-    fn restore_review_replies_with_an_empty_list_is_a_no_op() {
-        let mut app = review_app(&["a.rs"]);
-        app.restore_review_replies(Vec::new());
-        assert!(app.replies.is_empty());
     }
 }

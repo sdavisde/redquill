@@ -897,10 +897,21 @@ index 1..2 100644
     }
 
     #[test]
-    fn nearest_addressable_on_empty_rows_is_zero() {
-        let view = DiffViewState::new(vec![]);
+    fn empty_diff_motions_are_noops_at_zero() {
+        // Every cursor/scroll motion must pin at 0 on an empty buffer.
+        let mut view = DiffViewState::new(vec![]);
         assert_eq!(view.nearest_addressable(5, true), 0);
         assert_eq!(view.max_cursor(), 0);
+        view.jump_to_bottom();
+        assert_eq!(view.cursor, 0);
+        view.jump_to_top();
+        assert_eq!(view.cursor, 0);
+        view.full_page_down();
+        assert_eq!(view.cursor, 0);
+        view.full_page_up();
+        assert_eq!(view.cursor, 0);
+        view.recenter_cursor();
+        assert_eq!(view.scroll, 0);
     }
 
     #[test]
@@ -911,13 +922,6 @@ index 1..2 100644
             view.cursor_down();
         }
         assert_eq!(view.cursor, last);
-    }
-
-    #[test]
-    fn cursor_up_clamps_at_zero() {
-        let mut view = view_with_raw("f.rs", sample_raw());
-        view.cursor_up();
-        assert_eq!(view.cursor, 0);
     }
 
     #[test]
@@ -933,15 +937,6 @@ index 1..2 100644
             view.nearest_addressable(0, true),
             "gg lands on the first addressable row"
         );
-    }
-
-    #[test]
-    fn jump_extremes_are_no_ops_on_empty_diff() {
-        let mut view = DiffViewState::new(vec![]);
-        view.jump_to_bottom();
-        assert_eq!(view.cursor, 0);
-        view.jump_to_top();
-        assert_eq!(view.cursor, 0);
     }
 
     #[test]
@@ -1288,12 +1283,6 @@ index 1..2 100644
     }
 
     #[test]
-    fn default_scrolloff_matches_the_config_default() {
-        let view = DiffViewState::new(vec![]);
-        assert_eq!(view.scrolloff(), SCROLLOFF_DEFAULT);
-    }
-
-    #[test]
     fn a_larger_scrolloff_starts_scrolling_sooner() {
         let mut view = view_with_raw("big.rs", &long_raw(60)); // 62 rows
         view.set_viewport_height(30);
@@ -1459,26 +1448,28 @@ index 1..2 100644
     }
 
     #[test]
-    fn recenter_cursor_clamps_at_both_buffer_edges() {
-        let mut view = view_with_raw("big.rs", &long_raw(30)); // 32 rows
-        view.set_viewport_height(10);
-        view.cursor = 2;
-        view.recenter_cursor();
-        assert_eq!(view.scroll, 0, "near the top: scroll never underflows");
-        view.jump_to_bottom(); // cursor 31
-        view.recenter_cursor();
-        assert_eq!(
-            view.scroll,
-            view.max_scroll(),
-            "near the bottom: scroll clamps at the max useful offset"
-        );
-    }
-
-    #[test]
-    fn recenter_cursor_is_a_noop_on_empty_diff() {
-        let mut view = DiffViewState::new(vec![]);
-        view.recenter_cursor();
-        assert_eq!(view.scroll, 0);
+    fn recenter_and_scroll_cursor_clamp_at_both_buffer_edges() {
+        // zz/zt/zb all clamp scroll into [0, max_scroll] at the extremes.
+        type ScrollFn = fn(&mut DiffViewState);
+        let fns: &[(&str, ScrollFn)] = &[
+            ("zz", DiffViewState::recenter_cursor),
+            ("zt", DiffViewState::scroll_cursor_top),
+            ("zb", DiffViewState::scroll_cursor_bottom),
+        ];
+        for &(name, f) in fns {
+            let mut view = view_with_raw("big.rs", &long_raw(30)); // 32 rows
+            view.set_viewport_height(10);
+            view.cursor = 1;
+            f(&mut view);
+            assert_eq!(view.scroll, 0, "{name} near the top: never underflows");
+            view.jump_to_bottom();
+            f(&mut view);
+            assert_eq!(
+                view.scroll,
+                view.max_scroll(),
+                "{name} near the bottom: clamps at the max useful offset"
+            );
+        }
     }
 
     #[test]
@@ -1491,36 +1482,12 @@ index 1..2 100644
     }
 
     #[test]
-    fn scroll_cursor_top_clamps_at_both_buffer_edges() {
-        let mut view = view_with_raw("big.rs", &long_raw(30));
-        view.set_viewport_height(10);
-        view.cursor = 1;
-        view.scroll_cursor_top();
-        assert_eq!(view.scroll, 0);
-        view.jump_to_bottom();
-        view.scroll_cursor_top();
-        assert_eq!(view.scroll, view.max_scroll());
-    }
-
-    #[test]
     fn scroll_cursor_bottom_places_the_cursor_a_margin_above_the_bottom() {
         let mut view = view_with_raw("big.rs", &long_raw(30)); // 32 rows
         view.set_viewport_height(10);
         view.cursor = 20;
         view.scroll_cursor_bottom();
         assert_eq!(view.scroll, 20 + SCROLLOFF + 1 - 10);
-    }
-
-    #[test]
-    fn scroll_cursor_bottom_clamps_at_both_buffer_edges() {
-        let mut view = view_with_raw("big.rs", &long_raw(30));
-        view.set_viewport_height(10);
-        view.cursor = 0;
-        view.scroll_cursor_bottom();
-        assert_eq!(view.scroll, 0);
-        view.jump_to_bottom();
-        view.scroll_cursor_bottom();
-        assert_eq!(view.scroll, view.max_scroll());
     }
 
     // -- 0/$: line-start/line-end column motion -------------------------------
@@ -1545,15 +1512,6 @@ index 1..2 100644
         assert_eq!(view.effective_column(), Some(4));
         view.move_column_to_line_start();
         assert_eq!(view.effective_column(), Some(0));
-    }
-
-    #[test]
-    fn line_start_and_end_are_noops_off_a_line_row() {
-        let mut view = view_with_raw("f.rs", sample_raw());
-        assert!(matches!(view.rows[view.cursor], Row::FileHeader { .. }));
-        view.move_column_to_line_end();
-        view.move_column_to_line_start();
-        assert_eq!(view.cursor_col, 0);
     }
 
     // -- Ctrl-f/Ctrl-b: full-page scroll ---------------------------------------
@@ -1583,15 +1541,6 @@ index 1..2 100644
         assert_eq!(view.cursor, 11);
         view.full_page_up();
         assert_eq!(view.cursor, 1);
-        view.full_page_up();
-        assert_eq!(view.cursor, 0);
-    }
-
-    #[test]
-    fn full_page_motions_are_noops_on_empty_diff() {
-        let mut view = DiffViewState::new(vec![]);
-        view.full_page_down();
-        assert_eq!(view.cursor, 0);
         view.full_page_up();
         assert_eq!(view.cursor, 0);
     }

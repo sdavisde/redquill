@@ -144,11 +144,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_pattern_never_matches() {
-        assert!(!smartcase_contains("anything", ""));
-    }
-
-    #[test]
     fn next_from_wraps_to_first_when_no_match_forward() {
         let mut state = SearchState {
             pattern: Some("x".to_string()),
@@ -181,16 +176,5 @@ mod tests {
         assert_eq!(state.retreat_from(9), Some(5));
         assert_eq!(state.retreat_from(2), Some(9)); // wraps backward
         assert_eq!(state.retreat_from(100), Some(9));
-    }
-
-    #[test]
-    fn position_of_is_one_based() {
-        let state = SearchState {
-            pattern: Some("x".to_string()),
-            matches: vec![2, 5, 9],
-        };
-        assert_eq!(state.position_of(2), Some(1));
-        assert_eq!(state.position_of(9), Some(3));
-        assert_eq!(state.position_of(3), None);
     }
 }

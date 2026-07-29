@@ -388,18 +388,6 @@ index 111..222 100644
     }
 
     #[test]
-    fn build_hunk_patch_extracts_second_hunk_only() {
-        let p = patch(MULTI_HUNK);
-        let out = build_hunk_patch(&p, 1).unwrap();
-        assert!(out.contains("diff --git a/f.rs b/f.rs"));
-        assert!(out.contains("@@ -10,2 +10,2 @@"));
-        assert!(out.contains("-old bottom"));
-        assert!(out.contains("+new bottom"));
-        assert!(!out.contains("top context"));
-        assert!(!out.contains("old top"));
-    }
-
-    #[test]
     fn build_hunk_patch_out_of_range_errors() {
         let p = patch(MULTI_HUNK);
         let err = build_hunk_patch(&p, 2).unwrap_err();

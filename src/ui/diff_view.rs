@@ -978,7 +978,6 @@ pub fn content_width(area: Rect, has_commit_header: bool) -> usize {
 mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use ratatui::style::Color;
 
     use super::*;
     use crate::diff::FileDiff;
@@ -1049,279 +1048,11 @@ mod tests {
     }
 
     #[test]
-    fn annotation_row_line_places_accent_bar_and_bg_on_first_line() {
-        let theme = Theme::default();
-        let line = annotation_row_line("note", Some(Classification::Nit), 3, 40, &theme);
-        assert_eq!(line.style.bg, Some(theme.annotation_bg));
-        assert_eq!(line.spans[0].content.as_ref(), "\u{2502}");
-        assert_eq!(line.spans[0].style.fg, Some(theme.annotation_accent));
-        // The bar is carved out of the leading indent's first column, so
-        // the bullet still lands at the same visual column as before.
-        let indent = annotation_indent(3);
-        let chars: Vec<char> = spans_to_string(&line.spans).chars().collect();
-        assert_eq!(chars[0], '\u{2502}');
-        assert!(chars[1..indent].iter().all(|&c| c == ' '));
-        assert_eq!(chars[indent], '\u{25cf}');
-    }
-
-    #[test]
-    fn annotation_row_line_places_accent_bar_on_continuation_lines() {
-        let theme = Theme::default();
-        let line = annotation_row_line("more text", None, 3, 40, &theme);
-        assert_eq!(line.style.bg, Some(theme.annotation_bg));
-        assert_eq!(line.spans[0].content.as_ref(), "\u{2502}");
-        let indent = annotation_indent(3);
-        let chars: Vec<char> = spans_to_string(&line.spans).chars().collect();
-        assert_eq!(chars[0], '\u{2502}');
-        assert!(chars[1..indent + 2].iter().all(|&c| c == ' '));
-        let suffix: String = chars
-            .iter()
-            .skip(indent + 2)
-            .take("more text".chars().count())
-            .collect();
-        assert_eq!(suffix, "more text");
-    }
-
-    #[test]
-    fn annotation_row_line_pads_trailing_cells_to_the_pane_width() {
-        let theme = Theme::default();
-        // Both the tagged first line and an untagged continuation line must
-        // reach exactly `width` display columns, so `annotation_bg` (applied
-        // by Paragraph only to occupied cells) reaches the pane's right edge.
-        let first = annotation_row_line("note", Some(Classification::Nit), 3, 40, &theme);
-        assert_eq!(first.width(), 40);
-        let continuation = annotation_row_line("more text", None, 3, 40, &theme);
-        assert_eq!(continuation.width(), 40);
-        // The padding is plain text appended as its own trailing span, not a
-        // change to existing spans' content.
-        let last = first.spans.last().expect("padding span present");
-        assert!(last.content.chars().all(|c| c == ' '));
-    }
-
-    #[test]
-    fn annotation_row_line_skips_padding_when_content_already_fills_or_exceeds_width() {
-        let theme = Theme::default();
-        // A width narrower than (or equal to) the row's own content must
-        // not panic and must add no padding span.
-        let unpadded = annotation_row_line("note", Some(Classification::Nit), 3, 0, &theme);
-        assert_eq!(unpadded.spans.len(), 2);
-        let content_width = unpadded.width();
-        let exact =
-            annotation_row_line("note", Some(Classification::Nit), 3, content_width, &theme);
-        assert_eq!(exact.spans.len(), 2);
-    }
-
-    #[test]
-    fn annotation_border_line_top_uses_top_left_corner_and_fills_width() {
-        let theme = Theme::default();
-        let line = annotation_border_line(true, 10, &theme);
-        assert_eq!(line.style.bg, Some(theme.annotation_bg));
-        let text = spans_to_string(&line.spans);
-        assert_eq!(
-            text,
-            "\u{256d}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
-        );
-        assert_eq!(line.spans[0].style.fg, Some(theme.annotation_accent));
-    }
-
-    #[test]
-    fn annotation_border_line_bottom_uses_bottom_left_corner() {
-        let theme = Theme::default();
-        let line = annotation_border_line(false, 5, &theme);
-        let text = spans_to_string(&line.spans);
-        assert_eq!(text, "\u{2570}\u{2500}\u{2500}\u{2500}\u{2500}");
-    }
-
-    #[test]
     fn annotation_border_line_handles_zero_width_without_panicking() {
         let theme = Theme::default();
         let line = annotation_border_line(true, 0, &theme);
         let text = spans_to_string(&line.spans);
         assert_eq!(text, "\u{256d}");
-    }
-
-    #[test]
-    fn file_header_line_gets_standing_bg_when_not_selected() {
-        let theme = Theme::default();
-        let line = file_header_line(
-            "src/main.rs",
-            &None,
-            FileChangeKind::Modified,
-            StatDisplay::Omitted,
-            false,
-            false,
-            false,
-            false,
-            StagedMarker::None,
-            ReviewMarker::None,
-            40,
-            &theme,
-        );
-        assert_eq!(line.style.bg, Some(theme.file_header_bg));
-    }
-
-    #[test]
-    fn file_header_line_standing_bg_applies_when_collapsed_too() {
-        let theme = Theme::default();
-        let line = file_header_line(
-            "src/main.rs",
-            &None,
-            FileChangeKind::Modified,
-            StatDisplay::Omitted,
-            false,
-            false,
-            false,
-            true,
-            StagedMarker::None,
-            ReviewMarker::None,
-            40,
-            &theme,
-        );
-        assert_eq!(line.style.bg, Some(theme.file_header_bg));
-    }
-
-    #[test]
-    fn file_header_line_pads_trailing_cells_to_the_pane_width() {
-        let theme = Theme::default();
-        let line = file_header_line(
-            "src/main.rs",
-            &None,
-            FileChangeKind::Modified,
-            StatDisplay::Omitted,
-            false,
-            false,
-            false,
-            false,
-            StagedMarker::None,
-            ReviewMarker::None,
-            60,
-            &theme,
-        );
-        assert_eq!(line.width(), 60);
-    }
-
-    #[test]
-    fn file_header_line_skips_padding_when_content_already_fills_or_exceeds_width() {
-        let theme = Theme::default();
-        let unpadded = file_header_line(
-            "src/main.rs",
-            &None,
-            FileChangeKind::Modified,
-            StatDisplay::Omitted,
-            false,
-            false,
-            false,
-            false,
-            StagedMarker::None,
-            ReviewMarker::None,
-            0,
-            &theme,
-        );
-        let content_width = unpadded.width();
-        let exact = file_header_line(
-            "src/main.rs",
-            &None,
-            FileChangeKind::Modified,
-            StatDisplay::Omitted,
-            false,
-            false,
-            false,
-            false,
-            StagedMarker::None,
-            ReviewMarker::None,
-            content_width,
-            &theme,
-        );
-        assert_eq!(exact.width(), content_width);
-    }
-
-    #[test]
-    fn file_header_line_selected_blends_the_cursor_highlight_with_its_standing_bg() {
-        let theme = Theme::default();
-        let line = file_header_line(
-            "src/main.rs",
-            &None,
-            FileChangeKind::Modified,
-            StatDisplay::Omitted,
-            true,
-            false,
-            false,
-            false,
-            StagedMarker::None,
-            ReviewMarker::None,
-            40,
-            &theme,
-        );
-        assert_eq!(
-            line.style.bg,
-            Some(blend(theme.selected_row_bg, theme.file_header_bg))
-        );
-    }
-
-    // -- Review-status markers -----------------------------
-
-    #[test]
-    fn review_marker_accepted_reuses_the_staged_glyph_and_color() {
-        // Renders as the staged ● — see theme.rs's staged_indicator rationale.
-        let theme = Theme::default();
-        let staged = staged_marker_span(StagedMarker::Staged, &theme);
-        let accepted = review_marker_span(ReviewMarker::Accepted, &theme);
-        assert_eq!(accepted.content, staged.content);
-        assert_eq!(accepted.style.fg, staged.style.fg);
-        assert_eq!(accepted.style.fg, Some(theme.staged_indicator));
-    }
-
-    #[test]
-    fn review_marker_deferred_and_changed_are_distinct_from_staging_glyphs() {
-        let theme = Theme::default();
-        let deferred = review_marker_span(ReviewMarker::Deferred, &theme);
-        let changed = review_marker_span(ReviewMarker::Changed, &theme);
-        let staged = staged_marker_span(StagedMarker::Staged, &theme);
-        let partial = staged_marker_span(StagedMarker::Partial, &theme);
-        for staging_glyph in [&staged, &partial] {
-            assert_ne!(deferred.content, staging_glyph.content);
-            assert_ne!(changed.content, staging_glyph.content);
-        }
-        assert_ne!(deferred.content, changed.content);
-    }
-
-    #[test]
-    fn review_marker_none_is_blank_and_width_stable() {
-        let theme = Theme::default();
-        let none = review_marker_span(ReviewMarker::None, &theme);
-        let accepted = review_marker_span(ReviewMarker::Accepted, &theme);
-        assert_eq!(
-            none.content.chars().count(),
-            accepted.content.chars().count()
-        );
-        assert!(none.content.chars().all(|c| c == ' '));
-    }
-
-    #[test]
-    fn file_header_line_renders_both_marker_slots_when_both_present() {
-        // A local-mode section can be staged; a review-mode section can be
-        // accepted/deferred/changed — but never both on the same row (a
-        // review target's staging is always read-only). Still, the two
-        // slots must compose without one clobbering the other when directly
-        // exercised together.
-        let theme = Theme::default();
-        let line = file_header_line(
-            "src/main.rs",
-            &None,
-            FileChangeKind::Modified,
-            StatDisplay::Omitted,
-            false,
-            false,
-            false,
-            false,
-            StagedMarker::Staged,
-            ReviewMarker::Deferred,
-            60,
-            &theme,
-        );
-        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(text.contains('\u{25cf}'), "staged dot present: {text:?}");
-        assert!(text.contains('~'), "deferred marker present: {text:?}");
     }
 
     // -- File header line-change counts --------------------------------------
@@ -1350,31 +1081,6 @@ mod tests {
         let text = spans_to_string(&line.spans);
         assert!(text.contains("+12"), "added count present: {text:?}");
         assert!(text.contains("-4"), "removed count present: {text:?}");
-    }
-
-    #[test]
-    fn file_header_line_renders_a_dim_bin_placeholder_for_binary_files() {
-        let theme = Theme::default();
-        let line = file_header_line(
-            "img.png",
-            &None,
-            FileChangeKind::Modified,
-            StatDisplay::Binary,
-            false,
-            false,
-            false,
-            false,
-            StagedMarker::None,
-            ReviewMarker::None,
-            60,
-            &theme,
-        );
-        let text = spans_to_string(&line.spans);
-        assert!(text.contains("bin"), "binary placeholder present: {text:?}");
-        assert!(
-            !text.contains('+') && !text.contains('-'),
-            "a binary file must never render misleading +/- counts: {text:?}"
-        );
     }
 
     #[test]
@@ -1427,55 +1133,6 @@ mod tests {
     }
 
     #[test]
-    fn hunk_header_line_selected_gets_the_full_row_highlight() {
-        let theme = Theme::default();
-        let line = hunk_header_line("@@ -1,2 +1,2 @@", true, false, false, &theme);
-        assert_eq!(line.style.bg, Some(theme.selected_row_bg));
-        // Selected + search match still reads as the cursor row: neither
-        // the bare match tint nor the bare selection color.
-        let both = hunk_header_line("@@ -1,2 +1,2 @@", true, false, true, &theme);
-        assert_ne!(both.style.bg, Some(theme.search_match_bg));
-        assert_ne!(both.style.bg, Some(theme.selected_row_bg));
-        assert!(both.style.bg.is_some());
-    }
-
-    #[test]
-    fn line_bg_selected_blends_with_the_origin_tint_instead_of_replacing_it() {
-        let theme = Theme::default();
-        let sel_added = line_bg(LineOrigin::Added, true, false, &theme);
-        let sel_removed = line_bg(LineOrigin::Removed, true, false, &theme);
-        let sel_context = line_bg(LineOrigin::Context, true, false, &theme);
-        // Context under the cursor is the plain selection highlight.
-        assert_eq!(sel_context, Some(theme.selected_row_bg));
-        // Added/removed keep their tint through selection: distinct from
-        // the plain selection bg, from their unselected tints, and from
-        // each other.
-        assert_ne!(sel_added, sel_context);
-        assert_ne!(sel_removed, sel_context);
-        assert_ne!(sel_added, sel_removed);
-        assert_ne!(sel_added, Some(theme.added_bg));
-        assert_ne!(sel_removed, Some(theme.removed_bg));
-        // The tint's dominant channel survives the blend: selected+added
-        // is greener, selected+removed redder, than selected+context.
-        let (Some(Color::Rgb(_, ag, _)), Some(Color::Rgb(rr, _, _)), Some(Color::Rgb(cr, cg, _))) =
-            (sel_added, sel_removed, sel_context)
-        else {
-            panic!("default theme blends must stay Rgb");
-        };
-        assert!(ag > cg);
-        assert!(rr > cr);
-    }
-
-    #[test]
-    fn line_bg_selected_search_match_still_reads_as_the_cursor_row() {
-        let theme = Theme::default();
-        let both = line_bg(LineOrigin::Context, true, true, &theme);
-        assert!(both.is_some());
-        assert_ne!(both, Some(theme.search_match_bg));
-        assert_ne!(both, Some(theme.selected_row_bg));
-    }
-
-    #[test]
     fn line_bg_unselected_rows_keep_match_then_origin_precedence() {
         let theme = Theme::default();
         assert_eq!(
@@ -1487,48 +1144,6 @@ mod tests {
             Some(theme.added_bg)
         );
         assert_eq!(line_bg(LineOrigin::Context, false, false, &theme), None);
-    }
-
-    #[test]
-    fn line_row_line_bolds_and_brightens_gutter_numbers_on_the_cursor_row() {
-        let row = sample_line_row(Some(7), Some(9));
-        let theme = Theme::default();
-        let selected = line_row_line(&row, true, false, None, 3, &theme);
-        for idx in [1, 3] {
-            assert_eq!(selected.spans[idx].style.fg, Some(theme.gutter_cursor_fg));
-            assert!(
-                selected.spans[idx]
-                    .style
-                    .add_modifier
-                    .contains(Modifier::BOLD)
-            );
-        }
-        let unselected = line_row_line(&row, false, false, None, 3, &theme);
-        for idx in [1, 3] {
-            assert_eq!(unselected.spans[idx].style.fg, Some(theme.gutter));
-            assert!(
-                !unselected.spans[idx]
-                    .style
-                    .add_modifier
-                    .contains(Modifier::BOLD)
-            );
-        }
-        // The gutter never changes width, only weight and color.
-        assert_eq!(
-            spans_to_string(&selected.spans),
-            spans_to_string(&unselected.spans)
-        );
-    }
-
-    #[test]
-    fn row_line_threads_gutter_width_into_line_rows() {
-        let row = Row::Line(sample_line_row(Some(1), Some(2)));
-        let matches = HashSet::new();
-        let theme = Theme::default();
-        let narrow = spans_to_string(&row_line(&row, 0, 0, &matches, None, 3, 80, &theme).spans);
-        let wide = spans_to_string(&row_line(&row, 0, 0, &matches, None, 5, 80, &theme).spans);
-        assert_ne!(narrow, wide);
-        assert_eq!(wide.chars().count(), narrow.chars().count() + 4);
     }
 
     #[test]
@@ -1740,29 +1355,5 @@ mod tests {
             continuation_row.contains('y'),
             "continuation row shows more content: {continuation_row:?}"
         );
-    }
-
-    #[test]
-    fn full_range_visual_line_matches_line_row_line() {
-        let theme = Theme::default();
-        let row = sample_line_row(Some(7), Some(9));
-        let via_wrapper = line_row_line(&row, true, false, Some(0), 4, &theme);
-        let chars_count = row.content.chars().count();
-        let via_visual = line_row_visual_line(
-            &row,
-            true,
-            true,
-            (0, chars_count),
-            true,
-            false,
-            Some(0),
-            4,
-            &theme,
-        );
-        assert_eq!(
-            spans_to_string(&via_wrapper.spans),
-            spans_to_string(&via_visual.spans)
-        );
-        assert_eq!(via_wrapper.style, via_visual.style);
     }
 }

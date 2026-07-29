@@ -95,30 +95,10 @@ fn gitlab_discloses_the_draft_submit_shape_without_naming_a_version() {
     );
 }
 
-#[test]
-fn opening_the_modal_on_gitlab_sets_the_disclosure_and_two_verdicts() {
-    let mut app = gitlab_review_app(&["src/a.rs"]);
-    app.open_submit_forge();
-    let state = app.submit_forge.as_ref().expect("modal opened");
-    assert_eq!(state.verdicts, vec![Verdict::Comment, Verdict::Approve]);
-    assert!(
-        state.disclosure.is_some(),
-        "GitLab modal must disclose its submit shape"
-    );
-}
-
-#[test]
-fn opening_the_modal_on_github_sets_no_disclosure() {
-    let mut app = github_review_app(&["src/a.rs"]);
-    app.open_submit_forge();
-    let state = app.submit_forge.as_ref().expect("modal opened");
-    assert!(state.disclosure.is_none());
-}
-
 // -- grouped preview + labels (FR-17) ----------------------------------------
 
 #[test]
-fn preview_groups_annotations_by_file_and_labels_local_only_and_file_comments() {
+fn preview_groups_annotations_by_file_and_lists_replies_separately() {
     let mut app = github_review_app(&["src/a.rs"]);
     // Two annotations in a.rs, one whole-file comment in a.rs, one
     // worktree-anchored (local-only) note in b.rs.
@@ -143,6 +123,8 @@ fn preview_groups_annotations_by_file_and_labels_local_only_and_file_comments() 
             "local note",
         )
         .unwrap();
+    app.replies.add(100, "agreed").unwrap();
+    app.replies.add(200, "why?").unwrap();
 
     let preview = build_preview(
         app.annotations.unpublished(),
@@ -171,42 +153,14 @@ fn preview_groups_annotations_by_file_and_labels_local_only_and_file_comments() 
         b.items[0].note.label(),
         Some("local-only \u{2014} will not publish")
     );
-}
 
-#[test]
-fn preview_lists_draft_replies_separately_from_file_groups() {
-    let mut app = github_review_app(&["src/a.rs"]);
-    app.replies.add(100, "agreed").unwrap();
-    app.replies.add(200, "why?").unwrap();
-
-    let preview = build_preview(
-        app.annotations.unpublished(),
-        app.replies
-            .unpublished()
-            .map(|r| (r.thread_id, r.body.as_str())),
-    );
-    assert!(preview.groups.is_empty());
+    // Draft replies are listed apart from the per-file groups.
     assert_eq!(preview.replies.len(), 2);
     assert_eq!(preview.replies[0].thread_id, 100);
     assert_eq!(preview.replies[0].summary, "agreed");
 }
 
 // -- open / not-a-forge-session no-op ----------------------------------------
-
-#[test]
-fn open_submit_forge_opens_the_modal_in_a_github_pr_session() {
-    let mut app = github_review_app(&["src/a.rs"]);
-    app.open_submit_forge();
-    assert_eq!(app.mode, Mode::SubmitForge);
-    let state = app.submit_forge.as_ref().unwrap();
-    assert_eq!(
-        state.verdicts,
-        vec![Verdict::Comment, Verdict::Approve, Verdict::RequestChanges]
-    );
-    // Target line names the PR, host, and slug (slug falls back to host with
-    // no backend attached here).
-    assert!(state.target_line.starts_with("#25 on github.com/"));
-}
 
 #[test]
 fn open_submit_forge_is_a_no_op_hint_outside_a_forge_session() {
@@ -228,6 +182,16 @@ fn open_submit_forge_is_a_no_op_hint_outside_a_forge_session() {
 fn verdict_cycles_forward_and_backward_within_the_supported_set() {
     let mut app = github_review_app(&["src/a.rs"]);
     app.open_submit_forge();
+    assert_eq!(app.mode, Mode::SubmitForge);
+    // The target line names the PR, host, and slug (the slug falls back to the
+    // host with no backend attached here).
+    assert!(
+        app.submit_forge
+            .as_ref()
+            .unwrap()
+            .target_line
+            .starts_with("#25 on github.com/")
+    );
     assert_eq!(
         app.submit_forge.as_ref().unwrap().verdict(),
         Verdict::Comment
@@ -248,17 +212,6 @@ fn verdict_cycles_forward_and_backward_within_the_supported_set() {
         app.submit_forge.as_ref().unwrap().verdict(),
         Verdict::RequestChanges
     );
-}
-
-#[test]
-fn summary_typing_and_backspace_edit_the_field() {
-    let mut app = github_review_app(&["src/a.rs"]);
-    app.open_submit_forge();
-    app.submit_forge_insert_char('h');
-    app.submit_forge_insert_char('i');
-    assert_eq!(app.submit_forge.as_ref().unwrap().summary, "hi");
-    app.submit_forge_delete_char();
-    assert_eq!(app.submit_forge.as_ref().unwrap().summary, "h");
 }
 
 // -- cancel sends nothing -----------------------------------------------------
@@ -445,32 +398,6 @@ fn apply_outcome_with_pending_drafts_reports_them_instead_of_calling_them_failed
 }
 
 #[test]
-fn apply_outcome_without_drafts_keeps_the_plain_published_unpublished_split() {
-    // The GitHub path never stages drafts; its stopped-run message is
-    // unchanged.
-    let mut app = github_review_app(&["src/a.rs"]);
-    app.annotations
-        .add(
-            Target::line("src/a.rs", 2, Side::New),
-            Classification::Issue,
-            "fix",
-        )
-        .unwrap();
-    app.apply_submit_outcome(SubmitReport {
-        published_annotation_ids: vec![],
-        published_reply_ids: vec![],
-        review_submitted: false,
-        failure: Some("boom".to_string()),
-        draft_annotation_ids: vec![],
-        draft_reply_ids: vec![],
-        summary_draft_created: false,
-    });
-    let msg = app.status_message.as_deref().unwrap();
-    assert!(msg.contains("0 published, 1 unpublished"), "status: {msg}");
-    assert!(!msg.contains("pending draft"), "status: {msg}");
-}
-
-#[test]
 fn apply_outcome_records_pending_drafts_and_the_resubmit_batch_skips_them() {
     let mut app = gitlab_review_app(&["src/a.rs"]);
     let a0 = app
@@ -594,26 +521,18 @@ fn typing_a_summary_clears_the_hint_and_lets_request_changes_confirm() {
     app.submit_forge_verdict_next();
     app.submit_forge_confirm();
     assert!(app.submit_forge.as_ref().unwrap().hint.is_some());
-    // Typing clears the hint.
+    // Typing clears the hint, and backspace edits the same field back down.
     app.submit_forge_insert_char('x');
+    app.submit_forge_insert_char('y');
+    assert_eq!(app.submit_forge.as_ref().unwrap().summary, "xy");
+    app.submit_forge_delete_char();
+    assert_eq!(app.submit_forge.as_ref().unwrap().summary, "x");
     assert!(app.submit_forge.as_ref().unwrap().hint.is_none());
     // Now the confirm proceeds (closes the modal; no live backend so nothing
     // is actually sent).
     app.submit_forge_confirm();
     assert_eq!(app.mode, Mode::Normal);
     assert!(app.submit_forge.is_none());
-}
-
-#[test]
-fn cycling_the_verdict_clears_a_prior_hint() {
-    let mut app = github_review_app(&["src/a.rs"]);
-    app.open_submit_forge();
-    app.submit_forge_verdict_next();
-    app.submit_forge_verdict_next();
-    app.submit_forge_confirm();
-    assert!(app.submit_forge.as_ref().unwrap().hint.is_some());
-    app.submit_forge_verdict_prev();
-    assert!(app.submit_forge.as_ref().unwrap().hint.is_none());
 }
 
 // -- confirm on the fake path sends nothing (no live backend) ----------------

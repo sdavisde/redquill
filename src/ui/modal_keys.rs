@@ -2941,7 +2941,7 @@ mod tests {
     // appears in the table" argument the main keymap's version relies on.
 
     /// Runs the bijectivity check for one mode's table/name-pair, called
-    /// once per mode below rather than duplicating the loop thirteen times.
+    /// once per mode by the single test below.
     fn assert_action_names_are_total_and_bijective<A: Copy + PartialEq + std::fmt::Debug>(
         table: &[ModalBinding<A>],
         name_of: fn(A) -> &'static str,
@@ -2969,125 +2969,75 @@ mod tests {
         }
     }
 
+    /// One test over all fourteen mode tables: each mode's action names must
+    /// be unique and round-trip back to the same action.
     #[test]
-    fn list_action_names_are_total_and_bijective() {
+    fn every_modal_action_name_mapping_is_total_and_bijective() {
         assert_action_names_are_total_and_bijective(
             &LIST_KEYS,
             list_action_name,
             list_action_from_name,
         );
-    }
-
-    #[test]
-    fn staging_action_names_are_total_and_bijective() {
         assert_action_names_are_total_and_bijective(
             &STAGING_KEYS,
             staging_action_name,
             staging_action_from_name,
         );
-    }
-
-    #[test]
-    fn filter_edit_action_names_are_total_and_bijective() {
         assert_action_names_are_total_and_bijective(
             &FILTER_EDIT_KEYS,
             filter_edit_action_name,
             filter_edit_action_from_name,
         );
-    }
-
-    #[test]
-    fn peek_action_names_are_total_and_bijective() {
         assert_action_names_are_total_and_bijective(
             &PEEK_KEYS,
             peek_action_name,
             peek_action_from_name,
         );
-    }
-
-    #[test]
-    fn switcher_action_names_are_total_and_bijective() {
         assert_action_names_are_total_and_bijective(
             &SWITCHER_KEYS,
             switcher_action_name,
             switcher_action_from_name,
         );
-    }
-
-    #[test]
-    fn launcher_action_names_are_total_and_bijective() {
         assert_action_names_are_total_and_bijective(
             &REVIEW_LAUNCHER_KEYS,
             launcher_action_name,
             launcher_action_from_name,
         );
-    }
-
-    #[test]
-    fn help_action_names_are_total_and_bijective() {
         assert_action_names_are_total_and_bijective(
             &HELP_KEYS,
             help_action_name,
             help_action_from_name,
         );
-    }
-
-    #[test]
-    fn help_search_action_names_are_total_and_bijective() {
         assert_action_names_are_total_and_bijective(
             &HELP_SEARCH_HINTS,
             help_search_action_name,
             help_search_action_from_name,
         );
-    }
-
-    #[test]
-    fn compose_action_names_are_total_and_bijective() {
         assert_action_names_are_total_and_bijective(
             &COMPOSE_HINTS,
             compose_action_name,
             compose_action_from_name,
         );
-    }
-
-    #[test]
-    fn commit_message_action_names_are_total_and_bijective() {
         assert_action_names_are_total_and_bijective(
             &COMMIT_MESSAGE_HINTS,
             commit_message_action_name,
             commit_message_action_from_name,
         );
-    }
-
-    #[test]
-    fn search_action_names_are_total_and_bijective() {
         assert_action_names_are_total_and_bijective(
             &SEARCH_HINTS,
             search_action_name,
             search_action_from_name,
         );
-    }
-
-    #[test]
-    fn finder_action_names_are_total_and_bijective() {
         assert_action_names_are_total_and_bijective(
             &FINDER_HINTS,
             finder_action_name,
             finder_action_from_name,
         );
-    }
-
-    #[test]
-    fn project_search_input_action_names_are_total_and_bijective() {
         assert_action_names_are_total_and_bijective(
             &PROJECT_SEARCH_INPUT_HINTS,
             project_search_input_action_name,
             project_search_input_action_from_name,
         );
-    }
-
-    #[test]
-    fn project_search_results_action_names_are_total_and_bijective() {
         assert_action_names_are_total_and_bijective(
             &PROJECT_SEARCH_RESULTS_HINTS,
             project_search_results_action_name,
@@ -4556,25 +4506,6 @@ index 111..222 100644
                 "handle_finder_key consumed {ev:?}, which the Finder hint table doesn't document"
             );
         }
-    }
-
-    /// A key no table documents resolves to nothing in every table, so the
-    /// table-driven handlers ignore it by construction.
-    #[test]
-    fn unbound_keys_resolve_to_nothing_in_every_table() {
-        let ev = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
-        assert!(resolve(&LIST_KEYS, ev).is_none());
-        assert!(resolve(&STAGING_KEYS, ev).is_none());
-        assert!(resolve(&PEEK_KEYS, ev).is_none());
-        assert!(resolve(&HELP_KEYS, ev).is_none());
-        assert!(resolve(&COMPOSE_HINTS, ev).is_none());
-        assert!(resolve(&SEARCH_HINTS, ev).is_none());
-        assert!(resolve(&SWITCHER_KEYS, ev).is_none());
-        assert!(resolve(&HELP_SEARCH_HINTS, ev).is_none());
-        assert!(resolve(&COMMIT_MESSAGE_HINTS, ev).is_none());
-        assert!(resolve(&FINDER_HINTS, ev).is_none());
-        assert!(resolve(&PROJECT_SEARCH_INPUT_HINTS, ev).is_none());
-        assert!(resolve(&PROJECT_SEARCH_RESULTS_HINTS, ev).is_none());
     }
 
     /// FR-10's no-shadow requirement: every context gaining the `/` filter

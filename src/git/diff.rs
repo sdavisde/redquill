@@ -247,62 +247,54 @@ mod tests {
     use super::*;
 
     // -- Capability triple: is_live / staging_mode / supports_code_intel ---
-    //
-    // One test per variant asserting the full triple in a single place, so
-    // the exhaustive-match methods above and this table can't silently drift
-    // apart.
 
     #[test]
-    fn working_tree_capability_triple() {
-        let target = DiffTarget::WorkingTree;
-        assert!(target.is_live());
-        assert_eq!(target.staging_mode(), StagingMode::Stage);
-        assert!(target.supports_code_intel());
-    }
+    fn every_variant_reports_its_capability_triple() {
+        // One row per variant, so the exhaustive-match methods above and this
+        // table can't silently drift apart. `Review` is the one target
+        // besides `WorkingTree` where code intel is truthful: the review
+        // worktree's files match the diff's post-state.
+        let cases: [(DiffTarget, bool, StagingMode, bool); 6] = [
+            (DiffTarget::WorkingTree, true, StagingMode::Stage, true),
+            (DiffTarget::Staged, false, StagingMode::Unstage, false),
+            (
+                DiffTarget::Range("main..HEAD".to_string()),
+                false,
+                StagingMode::ReadOnly,
+                false,
+            ),
+            (
+                DiffTarget::Commit("HEAD".to_string()),
+                false,
+                StagingMode::ReadOnly,
+                false,
+            ),
+            (
+                DiffTarget::File("src/main.rs".to_string()),
+                false,
+                StagingMode::ReadOnly,
+                false,
+            ),
+            (
+                DiffTarget::Review {
+                    base: "main".to_string(),
+                    branch: "feature".to_string(),
+                },
+                false,
+                StagingMode::ReadOnly,
+                true,
+            ),
+        ];
 
-    #[test]
-    fn staged_capability_triple() {
-        let target = DiffTarget::Staged;
-        assert!(!target.is_live());
-        assert_eq!(target.staging_mode(), StagingMode::Unstage);
-        assert!(!target.supports_code_intel());
-    }
-
-    #[test]
-    fn range_capability_triple() {
-        let target = DiffTarget::Range("main..HEAD".to_string());
-        assert!(!target.is_live());
-        assert_eq!(target.staging_mode(), StagingMode::ReadOnly);
-        assert!(!target.supports_code_intel());
-    }
-
-    #[test]
-    fn commit_capability_triple() {
-        let target = DiffTarget::Commit("HEAD".to_string());
-        assert!(!target.is_live());
-        assert_eq!(target.staging_mode(), StagingMode::ReadOnly);
-        assert!(!target.supports_code_intel());
-    }
-
-    #[test]
-    fn file_capability_triple() {
-        let target = DiffTarget::File("src/main.rs".to_string());
-        assert!(!target.is_live());
-        assert_eq!(target.staging_mode(), StagingMode::ReadOnly);
-        assert!(!target.supports_code_intel());
-    }
-
-    #[test]
-    fn review_capability_triple() {
-        let target = DiffTarget::Review {
-            base: "main".to_string(),
-            branch: "feature".to_string(),
-        };
-        assert!(!target.is_live());
-        assert_eq!(target.staging_mode(), StagingMode::ReadOnly);
-        // The one target besides `WorkingTree` where code intel is
-        // truthful: the review worktree's files match the diff's post-state.
-        assert!(target.supports_code_intel());
+        for (target, live, mode, intel) in cases {
+            assert_eq!(target.is_live(), live, "is_live for {target:?}");
+            assert_eq!(target.staging_mode(), mode, "staging_mode for {target:?}");
+            assert_eq!(
+                target.supports_code_intel(),
+                intel,
+                "supports_code_intel for {target:?}"
+            );
+        }
     }
 
     #[test]

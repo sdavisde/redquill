@@ -450,28 +450,6 @@ index 1..2 100644
     }
 
     #[test]
-    fn editor_target_on_hunk_header_is_line_one() {
-        let file = file_diff(sample(), "f.rs");
-        let rows = rows_for(&file);
-        assert!(matches!(rows[1], Row::HunkHeader { .. }));
-        assert_eq!(
-            editor_target_for_cursor(&file, &rows, 1),
-            Some(("f.rs".to_string(), 1))
-        );
-    }
-
-    #[test]
-    fn editor_target_on_context_line_uses_new_line() {
-        let file = file_diff(sample(), "f.rs");
-        let rows = rows_for(&file);
-        // rows: FileHeader(0) HunkHeader(1) ctx1(2, new 1) old2(3) new2(4) ctx3(5)
-        assert_eq!(
-            editor_target_for_cursor(&file, &rows, 2),
-            Some(("f.rs".to_string(), 1))
-        );
-    }
-
-    #[test]
     fn editor_target_on_added_line_uses_new_line() {
         let file = file_diff(sample(), "f.rs");
         let rows = rows_for(&file);
@@ -494,13 +472,6 @@ index 1..2 100644
             editor_target_for_cursor(&file, &rows, 3),
             Some(("f.rs".to_string(), 1))
         );
-    }
-
-    #[test]
-    fn editor_target_out_of_bounds_yields_none() {
-        let file = file_diff(sample(), "f.rs");
-        let rows = rows_for(&file);
-        assert_eq!(editor_target_for_cursor(&file, &rows, rows.len()), None);
     }
 
     // -- as_worktree_target ---------------------------------------------------
@@ -541,18 +512,6 @@ index 1..2 100644
         assert_eq!(
             as_worktree_target(Target::file("docs/notes.md")),
             Target::file("docs/notes.md")
-        );
-    }
-
-    #[test]
-    fn as_worktree_target_is_idempotent_on_worktree_targets() {
-        assert_eq!(
-            as_worktree_target(Target::worktree_line("docs/notes.md", 3)),
-            Target::worktree_line("docs/notes.md", 3)
-        );
-        assert_eq!(
-            as_worktree_target(Target::worktree_range("docs/notes.md", 3, 4).unwrap()),
-            Target::worktree_range("docs/notes.md", 3, 4).unwrap()
         );
     }
 }

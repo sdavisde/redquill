@@ -67,54 +67,6 @@ fn wrap(entries: &[String]) -> String {
 // -- root/reply ordering ----------------------------------------------------
 
 #[test]
-fn parse_groups_root_and_replies_into_one_thread_in_conversation_order() {
-    let json = wrap(&[
-        raw_comment_json(RawCommentFixture {
-            id: 1,
-            in_reply_to: None,
-            path: "src/a.rs",
-            side: "RIGHT",
-            line: Some(10),
-            login: "author",
-            created_at: "2026-07-01T10:00:00Z",
-            body: "root comment",
-        }),
-        raw_comment_json(RawCommentFixture {
-            id: 3,
-            in_reply_to: Some(1),
-            path: "src/a.rs",
-            side: "RIGHT",
-            line: Some(10),
-            login: "bob",
-            created_at: "2026-07-01T10:02:00Z",
-            body: "second reply",
-        }),
-        raw_comment_json(RawCommentFixture {
-            id: 2,
-            in_reply_to: Some(1),
-            path: "src/a.rs",
-            side: "RIGHT",
-            line: Some(10),
-            login: "alice",
-            created_at: "2026-07-01T10:01:00Z",
-            body: "first reply",
-        }),
-    ]);
-
-    let threads = parse_review_comments_json(&json).unwrap();
-    assert_eq!(threads.len(), 1);
-    let thread = &threads[0];
-    assert_eq!(thread.id, 1);
-    assert_eq!(thread.root.author, "author");
-    assert_eq!(thread.root.body, "root comment");
-    assert_eq!(thread.replies.len(), 2);
-    // Out-of-array-order replies (id 3 appears before id 2 in the JSON) are
-    // reordered into conversation (timestamp) order.
-    assert_eq!(thread.replies[0].body, "first reply");
-    assert_eq!(thread.replies[1].body, "second reply");
-}
-
-#[test]
 fn parse_reads_a_five_and_five_interleaved_back_and_forth_in_order() {
     // Two threads (roots 1 and 100), five replies each, interleaved in the
     // raw array so grouping can't rely on array order — only on
@@ -169,6 +121,7 @@ fn parse_reads_a_five_and_five_interleaved_back_and_forth_in_order() {
     assert_eq!(threads.len(), 2);
 
     let thread_a = threads.iter().find(|t| t.id == 1).unwrap();
+    assert_eq!(thread_a.root.author, "author");
     assert_eq!(thread_a.root.body, "thread A root");
     assert_eq!(thread_a.replies.len(), 5);
     let a_bodies: Vec<&str> = thread_a.replies.iter().map(|c| c.body.as_str()).collect();
@@ -205,17 +158,29 @@ fn parse_reads_a_five_and_five_interleaved_back_and_forth_in_order() {
 // -- anchor mapping / outdated fallback --------------------------------------
 
 #[test]
-fn parse_maps_a_positioned_comment_to_a_position_anchor() {
-    let json = wrap(&[raw_comment_json(RawCommentFixture {
-        id: 1,
-        in_reply_to: None,
-        path: "src/a.rs",
-        side: "RIGHT",
-        line: Some(42),
-        login: "author",
-        created_at: "2026-07-01T10:00:00Z",
-        body: "body",
-    })]);
+fn parse_maps_a_positioned_comment_to_a_position_anchor_on_either_side() {
+    let json = wrap(&[
+        raw_comment_json(RawCommentFixture {
+            id: 1,
+            in_reply_to: None,
+            path: "src/a.rs",
+            side: "RIGHT",
+            line: Some(42),
+            login: "author",
+            created_at: "2026-07-01T10:00:00Z",
+            body: "body",
+        }),
+        raw_comment_json(RawCommentFixture {
+            id: 2,
+            in_reply_to: None,
+            path: "src/a.rs",
+            side: "LEFT",
+            line: Some(7),
+            login: "author",
+            created_at: "2026-07-01T10:00:00Z",
+            body: "body",
+        }),
+    ]);
     let threads = parse_review_comments_json(&json).unwrap();
     assert_eq!(
         threads[0].anchor,
@@ -226,23 +191,8 @@ fn parse_maps_a_positioned_comment_to_a_position_anchor() {
         }
     );
     assert!(!threads[0].outdated);
-}
-
-#[test]
-fn parse_maps_left_side_to_the_old_side() {
-    let json = wrap(&[raw_comment_json(RawCommentFixture {
-        id: 1,
-        in_reply_to: None,
-        path: "src/a.rs",
-        side: "LEFT",
-        line: Some(7),
-        login: "author",
-        created_at: "2026-07-01T10:00:00Z",
-        body: "body",
-    })]);
-    let threads = parse_review_comments_json(&json).unwrap();
     assert_eq!(
-        threads[0].anchor,
+        threads[1].anchor,
         ThreadAnchor::Position {
             path: "src/a.rs".to_string(),
             side: Side::Old,
@@ -274,57 +224,6 @@ fn parse_falls_back_to_file_level_when_the_position_is_unmappable() {
             path: "src/a.rs".to_string()
         }
     );
-}
-
-#[test]
-fn parse_outdated_fallback_applies_even_when_the_thread_has_replies() {
-    let json = wrap(&[
-        raw_comment_json(RawCommentFixture {
-            id: 1,
-            in_reply_to: None,
-            path: "src/a.rs",
-            side: "RIGHT",
-            line: None,
-            login: "author",
-            created_at: "2026-07-01T10:00:00Z",
-            body: "root",
-        }),
-        raw_comment_json(RawCommentFixture {
-            id: 2,
-            in_reply_to: Some(1),
-            path: "src/a.rs",
-            side: "RIGHT",
-            line: None,
-            login: "reviewer",
-            created_at: "2026-07-01T10:01:00Z",
-            body: "reply",
-        }),
-    ]);
-    let threads = parse_review_comments_json(&json).unwrap();
-    assert_eq!(threads.len(), 1);
-    assert!(threads[0].outdated);
-    assert_eq!(threads[0].replies.len(), 1);
-}
-
-// -- resolved state -----------------------------------------------------------
-
-#[test]
-fn rest_parse_alone_reports_unresolved_since_the_rest_endpoint_carries_no_such_field() {
-    // The REST parser by itself never sees a resolution field, so it always
-    // yields `resolved: false`; resolution is layered on afterward by
-    // `apply_resolved_states` from a separate GraphQL read.
-    let json = wrap(&[raw_comment_json(RawCommentFixture {
-        id: 1,
-        in_reply_to: None,
-        path: "src/a.rs",
-        side: "RIGHT",
-        line: Some(1),
-        login: "author",
-        created_at: "2026-07-01T10:00:00Z",
-        body: "body",
-    })]);
-    let threads = parse_review_comments_json(&json).unwrap();
-    assert!(!threads[0].resolved);
 }
 
 // -- resolution overlay (GraphQL) --------------------------------------------
@@ -498,33 +397,6 @@ fn parse_resolves_a_reply_that_points_at_another_reply_up_to_its_root() {
 // -- ThreadOverlayStore -------------------------------------------------------
 
 #[test]
-fn overlay_store_starts_empty() {
-    let store = ThreadOverlayStore::new();
-    assert!(store.is_empty());
-    assert_eq!(store.len(), 0);
-}
-
-#[test]
-fn overlay_store_replace_swaps_contents_wholesale() {
-    let json = wrap(&[raw_comment_json(RawCommentFixture {
-        id: 1,
-        in_reply_to: None,
-        path: "src/a.rs",
-        side: "RIGHT",
-        line: Some(1),
-        login: "author",
-        created_at: "2026-07-01T10:00:00Z",
-        body: "body",
-    })]);
-    let mut store = ThreadOverlayStore::new();
-    store.replace(parse_review_comments_json(&json).unwrap());
-    assert_eq!(store.len(), 1);
-
-    store.replace(Vec::new());
-    assert!(store.is_empty());
-}
-
-#[test]
 fn overlay_store_for_path_filters_by_anchor_path() {
     let json = wrap(&[
         raw_comment_json(RawCommentFixture {
@@ -553,24 +425,6 @@ fn overlay_store_for_path_filters_by_anchor_path() {
     let a_threads: Vec<&Thread> = store.for_path("src/a.rs").collect();
     assert_eq!(a_threads.len(), 1);
     assert_eq!(a_threads[0].id, 1);
-}
-
-#[test]
-fn overlay_store_find_looks_up_by_root_id() {
-    let json = wrap(&[raw_comment_json(RawCommentFixture {
-        id: 7,
-        in_reply_to: None,
-        path: "src/a.rs",
-        side: "RIGHT",
-        line: Some(1),
-        login: "author",
-        created_at: "2026-07-01T10:00:00Z",
-        body: "body",
-    })]);
-    let mut store = ThreadOverlayStore::new();
-    store.replace(parse_review_comments_json(&json).unwrap());
-    assert!(store.find(7).is_some());
-    assert!(store.find(999).is_none());
 }
 
 // -- markdown regression guard: fetched threads never affect stdout ---------

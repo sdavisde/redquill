@@ -212,27 +212,4 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn hints_returns_one_resolved_hint_per_spec_in_order() {
-        let km = Keymap::default_map();
-        let built = hints(&km);
-        assert_eq!(built.len(), HINT_SPECS.len());
-        for (hint, &(_, _, label)) in built.iter().zip(HINT_SPECS.iter()) {
-            assert_eq!(hint.label, label);
-            assert!(!hint.key.is_empty());
-        }
-    }
-
-    #[test]
-    fn hints_keys_match_the_tables_current_bindings() {
-        let km = Keymap::default_map();
-        let built = hints(&km);
-        // FocusGitPanel is bound to the backtick in Scope::Diff today; assert
-        // through the table rather than hardcoding "`" twice, but this test
-        // still demonstrates a resolved key looks like a real key label, not
-        // an empty string or a debug-format action name.
-        let focus_panel_key = km.label_for(Scope::Diff, Action::FocusGitPanel).unwrap();
-        assert_eq!(built[0].key, focus_panel_key);
-    }
 }

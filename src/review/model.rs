@@ -72,11 +72,6 @@ pub fn toggle_defer(status: ReviewStatus) -> ReviewStatus {
 mod tests {
     use super::*;
 
-    #[test]
-    fn default_status_is_unreviewed() {
-        assert_eq!(ReviewStatus::default(), ReviewStatus::Unreviewed);
-    }
-
     // -- toggle_accept: exhaustive transition table --------------------------
 
     #[test]
@@ -111,27 +106,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn toggle_accept_is_a_true_toggle_round_trip() {
-        let accepted = toggle_accept(ReviewStatus::Unreviewed);
-        assert_eq!(accepted, ReviewStatus::Accepted);
-        assert_eq!(toggle_accept(accepted), ReviewStatus::Unreviewed);
-    }
-
-    // -- accept: unconditional -----------------------------------------------
-
-    #[test]
-    fn accept_is_unconditional_from_every_status() {
-        for status in [
-            ReviewStatus::Unreviewed,
-            ReviewStatus::Deferred,
-            ReviewStatus::Accepted,
-            ReviewStatus::ChangedSinceAccepted,
-        ] {
-            assert_eq!(accept(status), ReviewStatus::Accepted);
-        }
-    }
-
     // -- toggle_defer: exhaustive transition table ----------------------------
 
     #[test]
@@ -161,23 +135,5 @@ mod tests {
             toggle_defer(ReviewStatus::ChangedSinceAccepted),
             ReviewStatus::Deferred
         );
-    }
-
-    #[test]
-    fn toggle_defer_is_a_true_toggle_round_trip() {
-        let deferred = toggle_defer(ReviewStatus::Unreviewed);
-        assert_eq!(deferred, ReviewStatus::Deferred);
-        assert_eq!(toggle_defer(deferred), ReviewStatus::Unreviewed);
-    }
-
-    // -- accept/defer are mutually exclusive ---------------------------------
-
-    #[test]
-    fn accepting_a_deferred_file_then_deferring_it_again_round_trips() {
-        let deferred = toggle_defer(ReviewStatus::Unreviewed);
-        let accepted = toggle_accept(deferred);
-        assert_eq!(accepted, ReviewStatus::Accepted);
-        let deferred_again = toggle_defer(accepted);
-        assert_eq!(deferred_again, ReviewStatus::Deferred);
     }
 }

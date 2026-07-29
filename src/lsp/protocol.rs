@@ -572,6 +572,67 @@ mod tests {
     }
 
     #[test]
+    fn every_builder_emits_its_method_and_essential_params() {
+        let uri = Uri::from_str("file:///tmp/a.rs").expect("valid uri");
+        let parse = |bytes: Vec<u8>| -> serde_json::Value {
+            serde_json::from_slice(&bytes).expect("valid json")
+        };
+
+        let value = parse(build_initialize(1, Path::new("/tmp/repo")).expect("serializes"));
+        assert_eq!(value["method"], json!("initialize"));
+        assert_eq!(value["id"], json!(1));
+        assert_eq!(value["params"]["rootUri"], json!("file:///tmp/repo"));
+
+        let value = parse(build_initialized().expect("serializes"));
+        assert_eq!(value["method"], json!("initialized"));
+        assert!(value.get("id").is_none(), "a notification carries no id");
+
+        let value = parse(build_did_open(&uri, "rust", "fn main() {}").expect("serializes"));
+        assert_eq!(value["method"], json!("textDocument/didOpen"));
+        assert_eq!(
+            value["params"]["textDocument"]["uri"],
+            json!("file:///tmp/a.rs")
+        );
+        assert_eq!(value["params"]["textDocument"]["languageId"], json!("rust"));
+        assert_eq!(
+            value["params"]["textDocument"]["text"],
+            json!("fn main() {}")
+        );
+
+        let value = parse(build_references(2, &uri, 7, 3).expect("serializes"));
+        assert_eq!(value["method"], json!("textDocument/references"));
+        assert_eq!(value["id"], json!(2));
+        assert_eq!(
+            value["params"]["position"],
+            json!({"line": 7, "character": 3})
+        );
+        assert_eq!(
+            value["params"]["context"]["includeDeclaration"],
+            json!(true)
+        );
+
+        let value = parse(build_hover(3, &uri, 7, 3).expect("serializes"));
+        assert_eq!(value["method"], json!("textDocument/hover"));
+        assert_eq!(value["id"], json!(3));
+        assert_eq!(
+            value["params"]["position"],
+            json!({"line": 7, "character": 3})
+        );
+
+        let value = parse(build_shutdown(4).expect("serializes"));
+        assert_eq!(value["method"], json!("shutdown"));
+        assert_eq!(value["id"], json!(4));
+        assert_eq!(value["params"], json!(null));
+
+        let value = parse(build_exit().expect("serializes"));
+        assert_eq!(value["method"], json!("exit"));
+        assert!(
+            value.get("params").is_none(),
+            "exit carries no params field at all"
+        );
+    }
+
+    #[test]
     fn build_null_reply_echoes_ids_verbatim() {
         let bytes = build_null_reply(&json!("string-id"), json!(null)).expect("should serialize");
         let value: serde_json::Value = serde_json::from_slice(&bytes).expect("valid json");

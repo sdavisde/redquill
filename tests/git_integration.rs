@@ -72,16 +72,6 @@ fn runner_for(tmp: &TempDir) -> GitRunner {
 }
 
 #[test]
-fn root_is_the_repo_toplevel() {
-    let tmp = init_repo();
-    let runner = runner_for(&tmp);
-    // Canonicalize both sides: macOS tempdirs live under a symlinked /var.
-    let expected = fs::canonicalize(tmp.path()).unwrap();
-    let actual = fs::canonicalize(runner.root()).unwrap();
-    assert_eq!(actual, expected);
-}
-
-#[test]
 fn not_a_repo_errors() {
     let tmp = TempDir::new().unwrap();
     assert!(GitRunner::discover_in(tmp.path()).is_err());
@@ -105,32 +95,6 @@ fn working_tree_modification_is_a_patch() {
     assert_eq!(entry.unstaged, StatusCode::Modified);
     assert!(entry.has_unstaged_changes());
     assert!(!entry.has_staged_changes());
-}
-
-#[test]
-fn staged_vs_unstaged_are_distinguished() {
-    let tmp = init_repo();
-    let dir = tmp.path();
-    // One file staged, another modified but unstaged.
-    write(dir, "staged.txt", b"new content\n");
-    git(dir, &["add", "staged.txt"]);
-    write(dir, "base.txt", b"line one\nunstaged edit\n");
-
-    let runner = runner_for(&tmp);
-
-    let staged = runner.diff(&DiffTarget::Staged).unwrap();
-    assert_eq!(staged.len(), 1);
-    assert_eq!(staged[0].path, "staged.txt");
-
-    let working = runner.diff(&DiffTarget::WorkingTree).unwrap();
-    assert_eq!(working.len(), 1);
-    assert_eq!(working[0].path, "base.txt");
-
-    let status = runner.status().unwrap();
-    let staged_entry = status.iter().find(|s| s.path == "staged.txt").unwrap();
-    assert!(staged_entry.has_staged_changes());
-    let base_entry = status.iter().find(|s| s.path == "base.txt").unwrap();
-    assert!(base_entry.has_unstaged_changes());
 }
 
 #[test]

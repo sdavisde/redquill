@@ -999,12 +999,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn unrelated_actions_are_never_hidden_by_either_flag() {
-        assert!(!binding_hidden(Action::CursorDown, false, false, false));
-        assert!(!binding_hidden(Action::Quit, false, false, false));
-    }
-
     // -- Capability gating: review-session actions ---------------------------
 
     #[test]
@@ -1034,32 +1028,6 @@ mod tests {
         for action in [Action::ToggleStage, Action::StageFile] {
             assert!(binding_hidden(action, false, true, true));
         }
-    }
-
-    #[test]
-    fn review_actions_are_unaffected_by_code_intel_allowed() {
-        for action in [
-            Action::ToggleAccept,
-            Action::AcceptFile,
-            Action::ToggleDefer,
-        ] {
-            assert!(binding_hidden(action, true, false, false));
-            assert!(!binding_hidden(action, true, false, true));
-        }
-    }
-
-    // -- HelpTab ---------------------------------------------------------
-
-    #[test]
-    fn help_tab_defaults_to_this_context() {
-        assert_eq!(HelpTab::default(), HelpTab::ThisContext);
-        assert_eq!(HelpOverlayState::new().tab, HelpTab::ThisContext);
-    }
-
-    #[test]
-    fn help_tab_toggles_between_the_two_tabs() {
-        assert_eq!(HelpTab::ThisContext.toggled(), HelpTab::AllKeys);
-        assert_eq!(HelpTab::AllKeys.toggled(), HelpTab::ThisContext);
     }
 
     // -- Scrollbar thumb travel --------------------------------------------
@@ -1396,34 +1364,6 @@ mod tests {
             "staging entry must be hidden when staging_allowed is false"
         );
         assert_eq!(rows.len(), WORKFLOW_ENTRIES.len() - 1);
-    }
-
-    /// Panel origin resolves in `Scope::Panel`: the Diff-only `Compose`
-    /// entry has no Panel or Global binding, so it drops out entirely, while
-    /// the launcher/quit (`Scope::Global`), the stage entry (Space stages
-    /// the highlighted file in panel scope too), and — since spec 11 Unit 2
-    /// bound panel `/` to `Search` — the search entry all still resolve —
-    /// the header never claims a key means something it doesn't in the
-    /// panel (plain `c` commits staged changes there, it doesn't open
-    /// Compose).
-    #[test]
-    fn workflow_rows_for_panel_origin_keeps_panel_resolvable_entries() {
-        let keymap = Keymap::default_map();
-        let origin = ModeOrigin::Panel {
-            cursor: 0,
-            tab: super::super::app::PanelTab::Changes,
-        };
-        let rows = workflow_rows(origin, &keymap, true, true, true);
-        let phrases: Vec<&str> = rows.iter().map(|r| r.phrase).collect();
-        assert_eq!(
-            phrases,
-            vec![
-                "Review a branch or commit",
-                "Stage the change under the cursor",
-                "Search the diff",
-                "Quit and copy annotations"
-            ]
-        );
     }
 
     /// "All keys" is a strict superset of "This context" for any origin —

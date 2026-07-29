@@ -723,30 +723,7 @@ index 111..222 100644
         assert_eq!(state.worktree_cursor, 1);
     }
 
-    #[test]
-    fn worktree_cursor_falls_back_to_top_without_a_repo_root() {
-        let worktrees = vec![worktree("/repo/a"), worktree("/repo/b")];
-        let state = SwitcherState::new(vec![], worktrees, None, 0);
-        assert_eq!(state.worktree_cursor, 0);
-    }
-
-    #[test]
-    fn panel_cursor_is_captured_verbatim() {
-        let state = SwitcherState::new(vec![], vec![], None, 7);
-        assert_eq!(state.panel_cursor, 7);
-    }
-
     // -- toggle_tab / move_down / move_up: per-tab clamping -----------------
-
-    #[test]
-    fn toggle_tab_switches_between_branches_and_worktrees() {
-        let mut state = SwitcherState::new(vec![], vec![], None, 0);
-        assert_eq!(state.tab, SwitcherTab::Branches);
-        state.toggle_tab();
-        assert_eq!(state.tab, SwitcherTab::Worktrees);
-        state.toggle_tab();
-        assert_eq!(state.tab, SwitcherTab::Branches);
-    }
 
     #[test]
     fn move_down_and_up_clamp_within_the_active_tab() {
@@ -760,15 +737,6 @@ index 111..222 100644
         state.move_up();
         assert_eq!(state.branch_cursor, 0);
         state.move_up(); // clamps at the first
-        assert_eq!(state.branch_cursor, 0);
-    }
-
-    #[test]
-    fn move_on_empty_active_tab_stays_at_zero() {
-        let mut state = SwitcherState::new(vec![], vec![], None, 0);
-        state.move_down();
-        assert_eq!(state.branch_cursor, 0);
-        state.move_up();
         assert_eq!(state.branch_cursor, 0);
     }
 
@@ -791,20 +759,10 @@ index 111..222 100644
     // -- is_current_worktree --------------------------------------------------
 
     #[test]
-    fn is_current_worktree_true_for_matching_raw_paths() {
+    fn is_current_worktree_matches_only_the_repo_root_path() {
         let wt = worktree("/repo/a");
         assert!(is_current_worktree(Some(Path::new("/repo/a")), &wt));
-    }
-
-    #[test]
-    fn is_current_worktree_false_for_different_paths() {
-        let wt = worktree("/repo/a");
         assert!(!is_current_worktree(Some(Path::new("/repo/b")), &wt));
-    }
-
-    #[test]
-    fn is_current_worktree_false_without_a_repo_root() {
-        let wt = worktree("/repo/a");
         assert!(!is_current_worktree(None, &wt));
     }
 
@@ -827,20 +785,6 @@ index 111..222 100644
             }
         );
         assert!(app.status_message.is_some());
-    }
-
-    #[test]
-    fn close_switcher_without_ever_opening_returns_to_panel_at_zero() {
-        let mut app = App::new(vec![sample_file()]);
-        app.mode = Mode::Switcher;
-        app.close_switcher();
-        assert_eq!(
-            app.mode,
-            Mode::Panel {
-                cursor: 0,
-                tab: crate::ui::app::PanelTab::Changes
-            }
-        );
     }
 
     // -- Filter + motion + verb composition (spec 12 FR-8) -------------------

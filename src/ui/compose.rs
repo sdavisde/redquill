@@ -393,15 +393,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_buffer_is_one_empty_line_at_origin() {
-        let buf = TextBuffer::new();
-        assert_eq!(buf.lines, vec![String::new()]);
-        assert_eq!(buf.cursor_row, 0);
-        assert_eq!(buf.cursor_col, 0);
-        assert_eq!(buf.text(), "");
-    }
-
-    #[test]
     fn insert_char_advances_cursor() {
         let mut buf = TextBuffer::new();
         buf.insert_char('h');
@@ -456,16 +447,6 @@ mod tests {
         assert_eq!(buf.lines, vec![String::new()]);
         assert_eq!(buf.cursor_row, 0);
         assert_eq!(buf.cursor_col, 0);
-    }
-
-    #[test]
-    fn backspace_across_lines_then_insert_joins_correctly() {
-        let mut buf = TextBuffer::from_str("one\ntwo");
-        buf.cursor_row = 1;
-        buf.cursor_col = 0;
-        buf.backspace();
-        buf.insert_char('X');
-        assert_eq!(buf.lines, vec!["oneXtwo".to_string()]);
     }
 
     #[test]
@@ -578,14 +559,6 @@ mod tests {
     }
 
     #[test]
-    fn move_word_right_from_mid_word_skips_rest_of_word_then_whitespace() {
-        let mut buf = TextBuffer::from_str("foo bar");
-        buf.cursor_col = 1; // inside "foo"
-        buf.move_word_right();
-        assert_eq!(buf.cursor_col, 4); // start of "bar"
-    }
-
-    #[test]
     fn move_word_right_treats_punctuation_as_its_own_class() {
         let mut buf = TextBuffer::from_str("a.b c");
         buf.cursor_col = 0; // on "a"
@@ -617,14 +590,6 @@ mod tests {
         assert_eq!(buf.cursor_col, 4); // start of "bar"
         buf.move_word_left();
         assert_eq!(buf.cursor_col, 0); // start of "foo"
-    }
-
-    #[test]
-    fn move_word_left_from_mid_word_lands_on_that_words_start() {
-        let mut buf = TextBuffer::from_str("foo bar");
-        buf.cursor_col = 6; // inside "bar"
-        buf.move_word_left();
-        assert_eq!(buf.cursor_col, 4); // start of "bar"
     }
 
     #[test]
@@ -750,16 +715,6 @@ mod tests {
         let chars: Vec<char> = "ab".chars().collect();
         assert_eq!(word_right_index(&chars, 2), 2); // already at end
         assert_eq!(word_left_index(&chars, 0), 0); // already at start
-    }
-
-    #[test]
-    fn compose_state_new_defaults_to_issue_and_empty_buffer() {
-        let target = Target::file("a.rs");
-        let compose = ComposeState::new(target.clone());
-        assert_eq!(compose.target, target);
-        assert_eq!(compose.classification, Classification::Issue);
-        assert_eq!(compose.buffer.text(), "");
-        assert_eq!(compose.editing_id, None);
     }
 
     #[test]

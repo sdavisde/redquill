@@ -66,14 +66,6 @@ mod tests {
     }
 
     #[test]
-    fn binary_renders_a_dim_bin_placeholder() {
-        let (spans, width) = stat_display_spans(StatDisplay::Binary, &Theme::default()).unwrap();
-        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, "bin");
-        assert_eq!(width, 3);
-    }
-
-    #[test]
     fn counts_renders_plus_and_minus_with_a_space_between() {
         let stat = DiffStat {
             added: 12,

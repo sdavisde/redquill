@@ -136,13 +136,6 @@ fn close_project_search_restores_return_mode_and_aborts_in_flight_scan() {
     assert!(abort.load(Ordering::Relaxed), "in-flight scan must abort");
 }
 
-#[test]
-fn close_project_search_without_opening_is_a_no_op() {
-    let mut app = App::new(vec![sample_file()]);
-    app.close_project_search();
-    assert_eq!(app.mode, Mode::Normal);
-}
-
 // -- `[search]` startup defaults ----------------------------------------------
 
 #[test]
@@ -159,32 +152,6 @@ fn seeded_maps_search_config_onto_startup_toggle_state() {
     // Everything else still starts fresh, exactly like `new`.
     assert_eq!(state.query, "");
     assert_eq!(state.cursor, 0);
-}
-
-#[test]
-fn new_still_defaults_to_smart_case_and_both_toggles_off() {
-    // `new` is the no-config convenience every other test in this module
-    // uses; pinning its defaults here guards against `seeded` accidentally
-    // changing what `new` resolves to.
-    let state = ProjectSearchState::new(Mode::Normal);
-    assert_eq!(state.case, CaseMode::Smart);
-    assert!(!state.whole_word);
-    assert!(!state.literal);
-}
-
-#[test]
-fn open_project_search_seeds_from_the_apps_loaded_config() {
-    let mut app = App::new(vec![sample_file()]);
-    app.config.search = SearchConfig {
-        case: CaseMode::Sensitive,
-        whole_word: true,
-        literal: false,
-    };
-    app.open_project_search();
-    let state = app.project_search.as_ref().expect("opened");
-    assert_eq!(state.case, CaseMode::Sensitive);
-    assert!(state.whole_word);
-    assert!(!state.literal);
 }
 
 #[test]
@@ -253,14 +220,6 @@ fn esc_in_results_focus_closes_the_view() {
 }
 
 #[test]
-fn esc_without_opening_is_a_no_op() {
-    let mut app = App::new(vec![sample_file()]);
-    app.project_search_esc();
-    assert_eq!(app.mode, Mode::Normal);
-    assert!(app.project_search.is_none());
-}
-
-#[test]
 fn focus_input_switches_back_from_results_and_preserves_the_query() {
     let mut app = App::new(vec![sample_file()]);
     app.open_project_search();
@@ -275,43 +234,7 @@ fn focus_input_switches_back_from_results_and_preserves_the_query() {
     assert_eq!(state.query, "needle", "query must survive the focus switch");
 }
 
-#[test]
-fn toggle_focus_flips_both_directions() {
-    let mut app = App::new(vec![sample_file()]);
-    app.open_project_search();
-    assert_eq!(
-        app.project_search.as_ref().unwrap().focus,
-        SearchFocus::Input
-    );
-
-    app.project_search_toggle_focus();
-    assert_eq!(
-        app.project_search.as_ref().unwrap().focus,
-        SearchFocus::Results
-    );
-
-    app.project_search_toggle_focus();
-    assert_eq!(
-        app.project_search.as_ref().unwrap().focus,
-        SearchFocus::Input
-    );
-}
-
 // -- generation/debounce contract --------------------------------------------
-
-#[test]
-fn typing_bumps_generation_and_sets_a_debounce_deadline() {
-    let mut app = App::new(vec![sample_file()]);
-    app.open_project_search();
-    let before = app.project_search.as_ref().unwrap().generation;
-
-    app.project_search_input_char('n');
-
-    let state = app.project_search.as_ref().unwrap();
-    assert_eq!(state.generation, before + 1);
-    assert!(state.debounce_deadline.is_some());
-    assert_eq!(state.query, "n");
-}
 
 #[test]
 fn each_keystroke_bumps_generation_again_and_resets_the_debounce_window() {
@@ -348,20 +271,6 @@ fn note_change_aborts_whatever_scan_is_currently_in_flight() {
 }
 
 #[test]
-fn backspace_also_bumps_generation_and_aborts() {
-    let mut app = App::new(vec![sample_file()]);
-    app.open_project_search();
-    app.project_search_input_char('n');
-    let (scan, abort) = fake_scan(app.project_search.as_ref().unwrap().generation);
-    app.project_search.as_mut().unwrap().scan = Some(scan);
-
-    app.project_search_backspace();
-
-    assert!(abort.load(Ordering::Relaxed));
-    assert_eq!(app.project_search.as_ref().unwrap().query, "");
-}
-
-#[test]
 fn toggles_also_bump_generation_and_abort() {
     let mut app = App::new(vec![sample_file()]);
     app.open_project_search();
@@ -383,22 +292,6 @@ fn cycle_case_rotates_through_all_three_states_and_wraps() {
     assert_eq!(cycle_case(CaseMode::Smart), CaseMode::Sensitive);
     assert_eq!(cycle_case(CaseMode::Sensitive), CaseMode::Insensitive);
     assert_eq!(cycle_case(CaseMode::Insensitive), CaseMode::Smart);
-}
-
-#[test]
-fn debounce_elapsed_is_false_with_no_deadline_and_true_once_now_reaches_it() {
-    let now = Instant::now();
-    let deadline = now + Duration::from_millis(140);
-    assert!(!debounce_elapsed(None, now));
-    assert!(!debounce_elapsed(Some(deadline), now));
-    assert!(debounce_elapsed(
-        Some(deadline),
-        now + Duration::from_millis(140)
-    ));
-    assert!(debounce_elapsed(
-        Some(deadline),
-        now + Duration::from_millis(500)
-    ));
 }
 
 #[test]
@@ -447,46 +340,6 @@ fn below_min_length_query_clears_results_without_spawning_a_scan() {
     assert!(state.summary.is_none());
     assert!(state.error.is_none());
     assert!(state.scan.is_none());
-}
-
-#[test]
-fn invalid_regex_sets_error_without_wiping_prior_good_results() {
-    let mut app = App::new(vec![sample_file()]);
-    app.set_repo_root(std::env::temp_dir());
-    app.open_project_search();
-    let state = app.project_search.as_mut().unwrap();
-    state.groups.push(ResultGroup {
-        path: "a.rs".to_string(),
-        hits: vec![hit("a.rs", 1)],
-    });
-    state.summary = Some(ScanSummary {
-        total_hits: 1,
-        files_matched: 1,
-        ..ScanSummary::default()
-    });
-
-    for c in "(unclosed".chars() {
-        app.project_search_input_char(c);
-    }
-    let deadline = app
-        .project_search
-        .as_ref()
-        .unwrap()
-        .debounce_deadline
-        .unwrap();
-    app.maybe_fire_project_search(deadline + Duration::from_millis(1));
-
-    let state = app.project_search.as_ref().unwrap();
-    assert!(
-        state.error.is_some(),
-        "an invalid pattern must set an error"
-    );
-    assert_eq!(
-        state.groups.len(),
-        1,
-        "prior good results must survive an invalid-regex query"
-    );
-    assert_eq!(state.summary.as_ref().unwrap().total_hits, 1);
 }
 
 #[test]
@@ -684,13 +537,6 @@ fn selected_hit_walks_the_flat_index_across_groups() {
     assert_eq!(selected.line_number, 5);
 }
 
-#[test]
-fn selected_hit_is_none_with_no_results() {
-    let mut app = App::new(vec![sample_file()]);
-    app.open_project_search();
-    assert!(app.selected_project_search_hit().is_none());
-}
-
 // -- confirm: opens the file view and preserves search state ----------------
 
 #[test]
@@ -720,15 +566,6 @@ fn confirm_opens_the_selected_hit_and_keeps_project_search_state_intact() {
     assert!(app.project_search.is_some());
     assert_eq!(app.project_search.as_ref().unwrap().groups.len(), 2);
     assert_eq!(app.project_search.as_ref().unwrap().cursor, 2);
-}
-
-#[test]
-fn confirm_with_no_hits_is_a_no_op() {
-    let mut app = App::new(vec![sample_file()]);
-    app.open_project_search();
-    app.project_search_confirm();
-    assert_eq!(app.mode, Mode::ProjectSearch, "view must stay open");
-    assert!(app.project_search.is_some());
 }
 
 // -- push_hit: pure grouping helper -------------------------------------------

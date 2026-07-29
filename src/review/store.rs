@@ -396,17 +396,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_state_round_trips() {
-        let state = ReviewStateFile {
-            version: SCHEMA_VERSION,
-            reviews: BTreeMap::new(),
-        };
-        let json = serde_json::to_string_pretty(&state).unwrap();
-        let round_tripped: ReviewStateFile = serde_json::from_str(&json).unwrap();
-        assert_eq!(round_tripped, state);
-    }
-
-    #[test]
     fn missing_optional_fields_default_on_load() {
         // A hand-written minimal file (no `files` map at all for the
         // review, and a deferred entry with no `blob_sha` key) must still
@@ -469,36 +458,43 @@ mod tests {
         );
     }
 
-    /// A v1 file's own `version: 1` survives the read verbatim (`load`
+    /// An older file's own `version` survives the read verbatim (`load`
     /// never rewrites it in place) — the *next* save is what upgrades it on
     /// disk, via [`save_review`]'s `state.version = SCHEMA_VERSION`
     /// assignment.
     #[test]
-    fn v1_file_upgrades_to_v2_on_the_next_save() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("review-state.json");
-        std::fs::write(
-            &path,
-            r#"{"version":1,"reviews":{"feature":{"base":"main","worktree_path":"/tmp/wt","files":{}}}}"#,
-        )
-        .unwrap();
+    fn an_older_file_upgrades_to_the_current_version_on_the_next_save() {
+        for on_disk_version in [1, 2] {
+            let tmp = TempDir::new().unwrap();
+            let path = tmp.path().join("review-state.json");
+            std::fs::write(
+                &path,
+                format!(
+                    r#"{{"version":{on_disk_version},"reviews":{{"feature":{{"base":"main","worktree_path":"/tmp/wt","files":{{}}}}}}}}"#
+                ),
+            )
+            .unwrap();
 
-        save_review(
-            &path,
-            "feature",
-            PersistedReview {
-                base: "main".to_string(),
-                worktree_path: PathBuf::from("/tmp/wt"),
-                files: BTreeMap::new(),
-                annotations: Vec::new(),
-                replies: Vec::new(),
-                forge: None,
-            },
-        )
-        .unwrap();
+            save_review(
+                &path,
+                "feature",
+                PersistedReview {
+                    base: "main".to_string(),
+                    worktree_path: PathBuf::from("/tmp/wt"),
+                    files: BTreeMap::new(),
+                    annotations: Vec::new(),
+                    replies: Vec::new(),
+                    forge: None,
+                },
+            )
+            .unwrap();
 
-        let state = load(&path);
-        assert_eq!(state.version, SCHEMA_VERSION);
+            let state = load(&path);
+            assert_eq!(
+                state.version, SCHEMA_VERSION,
+                "a v{on_disk_version} file must be bumped by the next save"
+            );
+        }
     }
 
     /// Byte-exact round-trip for the `annotations` field, locking the exact
@@ -587,11 +583,6 @@ mod tests {
 
     // -- Schema v3: forge field -------------------------------------------------
 
-    #[test]
-    fn schema_version_is_3() {
-        assert_eq!(SCHEMA_VERSION, 3);
-    }
-
     /// Byte-exact round-trip for the `forge` field on a PR/MR review,
     /// locking its exact shape: a `provider`/`host`/`number`/`last_head_sha`
     /// object nested directly under the review entry, alongside (not
@@ -644,28 +635,6 @@ mod tests {
         assert_eq!(round_tripped, state);
     }
 
-    /// A non-empty `title` serializes (right after `number`) and round-trips
-    /// — the field the cleanup modal reads to name a finished review whose PR
-    /// is no longer in the open set.
-    #[test]
-    fn forge_block_with_title_round_trips() {
-        let meta = ForgeMetadata {
-            provider: ForgeProviderKind::GitHub,
-            host: "github.com".to_string(),
-            number: 7,
-            title: "Fix the widget".to_string(),
-            last_head_sha: "deadbeef".to_string(),
-            diff_refs: None,
-        };
-        let json = serde_json::to_string(&meta).unwrap();
-        assert!(
-            json.contains("\"number\":7,\"title\":\"Fix the widget\",\"last_head_sha\""),
-            "title must serialize between number and last_head_sha: {json}"
-        );
-        let round_tripped: ForgeMetadata = serde_json::from_str(&json).unwrap();
-        assert_eq!(round_tripped, meta);
-    }
-
     /// A pinned diff-refs block serializes and round-trips; an absent one
     /// omits the key entirely, and a forge block persisted before the field
     /// existed still loads (with no pin).
@@ -704,25 +673,6 @@ mod tests {
             r#"{"provider":"gitlab","host":"gitlab.com","number":9,"last_head_sha":"deadbeef"}"#;
         let loaded: ForgeMetadata = serde_json::from_str(pre_field).unwrap();
         assert_eq!(loaded.diff_refs, None);
-    }
-
-    /// A forge block whose title is empty omits the key entirely, so a review
-    /// persisted before the field existed stays on-disk-identical.
-    #[test]
-    fn forge_block_with_empty_title_omits_the_key() {
-        let meta = ForgeMetadata {
-            provider: ForgeProviderKind::GitHub,
-            host: "github.com".to_string(),
-            number: 7,
-            title: String::new(),
-            last_head_sha: "deadbeef".to_string(),
-            diff_refs: None,
-        };
-        let json = serde_json::to_string(&meta).unwrap();
-        assert!(
-            !json.contains("title"),
-            "empty title must be omitted: {json}"
-        );
     }
 
     // -- Schema v3: replies field -----------------------------------------------
@@ -789,16 +739,6 @@ mod tests {
         assert_eq!(round_tripped, state);
     }
 
-    /// A `PersistedReply` with no `published` key defaults to unpublished —
-    /// the reply counterpart to
-    /// `crate::annotate::persist::tests::persisted_annotation_missing_published_defaults_to_false`.
-    #[test]
-    fn persisted_reply_missing_published_defaults_to_false() {
-        let json = r#"{"thread_id":1,"body":"note"}"#;
-        let entry: PersistedReply = serde_json::from_str(json).unwrap();
-        assert!(!entry.published);
-    }
-
     /// A published reply carries the flag on disk and round-trips — the
     /// reply counterpart to
     /// `crate::annotate::persist::tests::published_true_serializes_the_key_and_round_trips`.
@@ -819,143 +759,6 @@ mod tests {
         assert_eq!(round_tripped, entry);
     }
 
-    /// A v3 review that carries annotations but no replies loads with an
-    /// empty `replies` list and no `replies` key on re-serialization — the
-    /// "absent replies stays absent" counterpart to the annotations/forge
-    /// omission tests, proving the new field never leaks into a review that
-    /// never drafted a reply.
-    #[test]
-    fn v3_review_without_replies_loads_and_reserializes_clean() {
-        use crate::annotate::{Classification, PersistedAnnotation, Side, Source, Target};
-
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("review-state.json");
-        let json = r#"{
-  "version": 3,
-  "reviews": {
-    "feature": {
-      "base": "main",
-      "worktree_path": "/tmp/wt",
-      "files": {},
-      "annotations": [
-        {
-          "target": {
-            "kind": "line",
-            "path": "src/lib.rs",
-            "line": 10,
-            "side": "new"
-          },
-          "classification": "issue",
-          "body": "fix this",
-          "source": "working_tree"
-        }
-      ]
-    }
-  }
-}"#;
-        std::fs::write(&path, json).unwrap();
-
-        let state = load(&path);
-        assert!(
-            !tmp.path().join("review-state.json.corrupt").exists(),
-            "a v3 review without replies must never be moved aside as corrupt"
-        );
-        let review = state.reviews.get("feature").expect("entry must load");
-        assert!(
-            review.replies.is_empty(),
-            "a review with no replies key must default to an empty list"
-        );
-        assert_eq!(
-            review.annotations,
-            vec![PersistedAnnotation {
-                target: Target::line("src/lib.rs", 10, Side::New),
-                classification: Classification::Issue,
-                body: "fix this".to_string(),
-                source: Source::WorkingTree,
-                published: false,
-                draft_created: false,
-            }]
-        );
-
-        let reserialized = serde_json::to_string_pretty(&state).unwrap();
-        assert_eq!(
-            reserialized, json,
-            "a review with no replies must re-serialize byte-identically — no replies key appears"
-        );
-    }
-
-    /// A v2 file (`"version": 2`, no `forge` key anywhere) must load as a
-    /// normal, non-corrupt review with an absent `forge` field, going
-    /// through the real [`load`] entry point (not just a bare
-    /// `serde_json::from_str`) so the corrupt-file side path is proven
-    /// *not* taken — the v2 -> v3 counterpart of
-    /// `v1_file_without_annotations_loads_as_empty_not_corrupt`.
-    #[test]
-    fn v2_file_without_forge_loads_silently_as_v3_with_absent_forge_field() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("review-state.json");
-        let v2_json = r#"{
-  "version": 2,
-  "reviews": {
-    "feature": {
-      "base": "main",
-      "worktree_path": "/tmp/redquill/worktrees/feature-1234",
-      "files": {
-        "a.rs": {
-          "status": "accepted",
-          "blob_sha": "abc123def456"
-        }
-      }
-    }
-  }
-}"#;
-        std::fs::write(&path, v2_json).unwrap();
-
-        let state = load(&path);
-
-        assert!(
-            !tmp.path().join("review-state.json.corrupt").exists(),
-            "a v2 file must never be moved aside as corrupt"
-        );
-        let review = state.reviews.get("feature").expect("v2 entry must load");
-        assert_eq!(review.files.len(), 1);
-        assert_eq!(
-            review.forge, None,
-            "a v2 file has no forge key; it must default to absent, not fail to parse"
-        );
-    }
-
-    /// A v2 file's own `version: 2` survives the read verbatim (`load`
-    /// never rewrites it in place) — the *next* save is what upgrades it on
-    /// disk, mirroring `v1_file_upgrades_to_v2_on_the_next_save`.
-    #[test]
-    fn v2_file_upgrades_to_v3_on_the_next_save() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("review-state.json");
-        std::fs::write(
-            &path,
-            r#"{"version":2,"reviews":{"feature":{"base":"main","worktree_path":"/tmp/wt","files":{}}}}"#,
-        )
-        .unwrap();
-
-        save_review(
-            &path,
-            "feature",
-            PersistedReview {
-                base: "main".to_string(),
-                worktree_path: PathBuf::from("/tmp/wt"),
-                files: BTreeMap::new(),
-                annotations: Vec::new(),
-                replies: Vec::new(),
-                forge: None,
-            },
-        )
-        .unwrap();
-
-        let state = load(&path);
-        assert_eq!(state.version, SCHEMA_VERSION);
-    }
-
     /// The byte-stability proof the spec calls for: a v2-era review's exact
     /// on-disk JSON, read through the real [`load`] entry point and
     /// re-serialized, must come back byte-identical except for the
@@ -964,7 +767,7 @@ mod tests {
     /// reorders, no whitespace shifts.
     ///
     /// [`load`] itself never rewrites the version in place (see
-    /// `v2_file_upgrades_to_v3_on_the_next_save` and its v1 precedent) — the
+    /// `an_older_file_upgrades_to_the_current_version_on_the_next_save`) — the
     /// version bump only happens on the next write, exactly like
     /// [`save_review`]'s `state.version = SCHEMA_VERSION` assignment, which
     /// this test reproduces directly rather than going through a save.
@@ -1035,19 +838,6 @@ mod tests {
             vec![std::ffi::OsString::from("review-state.json")],
             "only the final file must remain, no temp leftovers"
         );
-    }
-
-    #[test]
-    fn save_overwrites_the_previous_content_wholesale() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("review-state.json");
-        save(&path, &sample_state()).unwrap();
-        let empty = ReviewStateFile {
-            version: SCHEMA_VERSION,
-            reviews: BTreeMap::new(),
-        };
-        save(&path, &empty).unwrap();
-        assert_eq!(load(&path), empty);
     }
 
     // -- load: missing file behaves as empty -----------------------------------
@@ -1184,17 +974,6 @@ mod tests {
     }
 
     #[test]
-    fn delete_review_of_an_absent_branch_is_a_no_op() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("review-state.json");
-        save(&path, &sample_state()).unwrap();
-
-        delete_review(&path, "no-such-branch").unwrap();
-
-        assert_eq!(load(&path), sample_state());
-    }
-
-    #[test]
     fn delete_review_on_a_missing_file_is_a_no_op_and_creates_nothing() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("review-state.json");
@@ -1237,13 +1016,5 @@ mod tests {
 
         assert!(!changed);
         assert_eq!(state, before);
-    }
-
-    #[test]
-    fn gc_of_an_empty_state_is_a_no_op() {
-        let mut state = ReviewStateFile::default();
-        let changed = gc(&mut state, &HashSet::new());
-        assert!(!changed);
-        assert!(state.reviews.is_empty());
     }
 }

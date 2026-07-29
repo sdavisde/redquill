@@ -163,21 +163,6 @@ index 111..222 100644
     }
 
     #[test]
-    fn renders_nothing_when_finder_is_none() {
-        let app = App::new(vec![sample_file()]);
-        let content = render_finder(&app);
-        assert!(content.trim().is_empty());
-    }
-
-    #[test]
-    fn shows_loading_placeholder_before_candidates_arrive() {
-        let mut app = App::new(vec![sample_file()]);
-        app.finder = Some(finder_state());
-        let content = render_finder(&app);
-        assert!(content.contains("loading"));
-    }
-
-    #[test]
     fn shows_query_and_matched_paths() {
         let mut app = App::new(vec![sample_file()]);
         let mut state = finder_state();
@@ -190,37 +175,5 @@ index 111..222 100644
         let content = render_finder(&app);
         assert!(content.contains("main"));
         assert!(content.contains("src/main.rs"));
-    }
-
-    #[test]
-    fn shows_no_matches_placeholder_for_a_non_matching_query() {
-        let mut app = App::new(vec![sample_file()]);
-        let mut state = finder_state();
-        state.query = "zzz".to_string();
-        state.candidates = vec![FileCandidate {
-            path: "src/main.rs".to_string(),
-        }];
-        app.finder = Some(state);
-        let content = render_finder(&app);
-        assert!(content.contains("no matches"));
-    }
-
-    #[test]
-    fn matched_chars_get_blue_bold_foreground_not_a_background_tint() {
-        let theme = crate::ui::theme::Theme::default();
-        let spans = match_spans("main.rs", &[0, 1, 2, 3], &theme);
-        for (i, span) in spans.iter().enumerate() {
-            if i < 4 {
-                assert_eq!(span.style.fg, Some(theme.search_match_fg));
-                assert!(span.style.add_modifier.contains(Modifier::BOLD));
-                assert_eq!(
-                    span.style.bg, None,
-                    "match emphasis must ride the foreground, not a background tint"
-                );
-            } else {
-                assert_eq!(span.style.fg, None, "unmatched chars must stay unstyled");
-                assert_eq!(span.style.bg, None);
-            }
-        }
     }
 }

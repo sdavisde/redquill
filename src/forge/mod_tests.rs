@@ -51,18 +51,16 @@ const FORGE_SETUP_DOCS: &str = include_str!("../../docs/forge-setup.md");
 const README: &str = include_str!("../../README.md");
 
 #[test]
-fn readme_links_the_forge_setup_docs() {
+fn forge_setup_docs_are_linked_and_track_the_shipped_behavior() {
     assert!(
         README.contains("docs/forge-setup.md"),
         "README.md must link docs/forge-setup.md"
     );
-}
 
-#[test]
-fn forge_setup_docs_cover_every_fr5_degraded_state() {
-    // Mirrors the exact copy `prs_degraded_body_lines` in
-    // `review_launcher_modal.rs` renders, so the docs can't silently drift
-    // from what the tab actually says.
+    // The degraded-state copy mirrors `prs_degraded_body_lines` in
+    // `review_launcher_modal.rs`; the GitLab lines mirror the shipped
+    // credential lookup, draft-note submit and verdict limit — so neither can
+    // silently drift from what the app actually does.
     let must_contain = [
         "no forge remote",
         "gh auth login --hostname",
@@ -75,25 +73,6 @@ fn forge_setup_docs_cover_every_fr5_degraded_state() {
         "is installed but not logged in for",
         "switch tabs and back to retry",
         "No open pull requests on",
-    ];
-    let missing: Vec<&str> = must_contain
-        .into_iter()
-        .filter(|s| !FORGE_SETUP_DOCS.contains(s))
-        .collect();
-    assert!(
-        missing.is_empty(),
-        "docs/forge-setup.md is missing coverage for: {missing:?}"
-    );
-}
-
-#[test]
-fn forge_setup_docs_cover_the_gitlab_end_to_end_reality() {
-    // GitLab is no longer "in progress": the docs must describe the local
-    // `glab` credential lookup (zero-config self-managed detection), the
-    // draft-notes submit with its visible fallback, and the comment/approve
-    // verdict limit — the shipped Unit-6 behavior, so the doc can't drift back
-    // to the retired "not supported yet" copy.
-    let must_contain = [
         "glab config get token --host",
         "draft note",
         "bulk_publish",
@@ -105,7 +84,7 @@ fn forge_setup_docs_cover_the_gitlab_end_to_end_reality() {
         .collect();
     assert!(
         missing.is_empty(),
-        "docs/forge-setup.md is missing GitLab coverage for: {missing:?}"
+        "docs/forge-setup.md is missing coverage for: {missing:?}"
     );
     assert!(
         !FORGE_SETUP_DOCS.contains("isn't supported yet"),

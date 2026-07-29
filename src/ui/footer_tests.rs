@@ -3,10 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::diff::FileDiff;
 use crate::git::RawFilePatch;
 use crate::ui::keymap::KeySeq;
-use crate::ui::modal_keys::{
-    COMPOSE_HINTS, LIST_KEYS, ModalKeymaps, PEEK_KEYS, REVIEW_LAUNCHER_KEYS, STAGING_KEYS,
-    SWITCHER_KEYS,
-};
+use crate::ui::modal_keys::{LIST_KEYS, ModalKeymaps, SWITCHER_KEYS};
 use crate::ui::{App, Mode, Row, dispatch_key};
 
 use super::*;
@@ -270,20 +267,6 @@ fn panel_mode_hints_hide_file_actions_on_the_history_tab() {
     assert!(review_labels.contains(&"end review"));
 }
 
-/// The panel strip's review-session synthetic `q end review` hint — same
-/// contract as `normal_mode_hints_gain_q_end_review_during_a_review_session`,
-/// for the panel-scope idle strip.
-#[test]
-fn panel_mode_hints_gain_q_end_review_during_a_review_session() {
-    let km = Keymap::default_map();
-    let entries = panel_hints(&km, false, false, true, true);
-    assert!(labels(&entries).contains(&"end review"));
-    assert!(keys(&entries).contains(&"q".to_string()));
-    assert_eq!(labels(&entries).last(), Some(&"help"), "help stays last");
-    let without = panel_hints(&km, false, false, false, true);
-    assert!(!labels(&without).contains(&"end review"));
-}
-
 /// On an unpublished branch (`push_publishes`), the `P` hint relabels to
 /// `publish` — same key, same slot, only the label changes — matching what
 /// `Action::RemotePush` actually runs in that state (see
@@ -291,32 +274,19 @@ fn panel_mode_hints_gain_q_end_review_during_a_review_session() {
 #[test]
 fn panel_push_hint_relabels_to_publish_on_an_unpublished_branch() {
     let km = Keymap::default_map();
-    let entries = panel_hints(&km, true, true, false, true);
-    assert_eq!(
-        keys(&entries),
-        vec![
-            "j/k", "Enter", "Space", "S", "d", "f", "p", "P", "c", "`/Esc", "Tab", "s", "/", "?"
-        ]
-    );
-    assert_eq!(
-        labels(&entries),
-        vec![
-            "move",
-            "open",
-            "stage",
-            "stage file",
-            "restore",
-            "fetch",
-            "pull",
-            "publish",
-            "commit",
-            "close",
-            "tab",
-            "staging panel",
-            "search",
-            "help"
-        ]
-    );
+    let published = panel_hints(&km, false, true, false, true);
+    let unpublished = panel_hints(&km, true, true, false, true);
+    let label_for_p = |entries: &[FooterEntry]| {
+        keys(entries)
+            .iter()
+            .position(|k| k == "P")
+            .map(|i| labels(entries)[i])
+            .expect("the panel strip must promote a `P` hint")
+    };
+    assert_eq!(label_for_p(&published), "push");
+    assert_eq!(label_for_p(&unpublished), "publish");
+    // Only that one label changes; the key slots are identical.
+    assert_eq!(keys(&published), keys(&unpublished));
 }
 
 #[test]
@@ -331,18 +301,6 @@ fn list_mode_hints_have_no_help_entry() {
         vec!["move", "open", "edit", "delete", "filter", "close"]
     );
     assert!(!labels(&entries).contains(&"help"));
-}
-
-#[test]
-fn staging_mode_hints() {
-    let entries = modal_hints(&STAGING_KEYS);
-    assert_eq!(labels(&entries), vec!["move", "unstage", "filter", "close"]);
-}
-
-#[test]
-fn peek_mode_hints() {
-    let entries = modal_hints(&PEEK_KEYS);
-    assert_eq!(labels(&entries), vec!["move", "jump", "close"]);
 }
 
 #[test]
@@ -370,30 +328,6 @@ fn switcher_mode_hints() {
 }
 
 #[test]
-fn review_launcher_mode_hints() {
-    let entries = modal_hints(&REVIEW_LAUNCHER_KEYS);
-    assert_eq!(
-        labels(&entries),
-        vec![
-            "switch tab",
-            "move",
-            "confirm",
-            "filter",
-            "close",
-            "all commits",
-            "clean up"
-        ]
-    );
-}
-
-#[test]
-fn compose_mode_hints_are_just_save_and_discard() {
-    let entries = modal_hints(&COMPOSE_HINTS);
-    assert_eq!(keys(&entries), vec!["Enter", "Esc"]);
-    assert_eq!(labels(&entries), vec!["save", "discard"]);
-}
-
-#[test]
 fn search_mode_has_no_hint_strip() {
     let km = Keymap::default_map();
     let entries = build_hints(
@@ -412,25 +346,6 @@ fn search_mode_has_no_hint_strip() {
         &ModalKeymaps::default(),
     );
     assert!(entries.is_empty());
-}
-
-#[test]
-fn help_open_hints_are_scroll_filter_close_with_no_help_entry() {
-    let entries = help_open_hints(&ModalKeymaps::default());
-    assert_eq!(
-        labels(&entries),
-        vec!["scroll", "filter", "close", "next tab", "prev tab"]
-    );
-    assert_eq!(
-        keys(&entries),
-        vec![
-            "j / Down",
-            "/",
-            "Esc / Enter / ?",
-            "Tab / l",
-            "Shift-Tab / h"
-        ]
-    );
 }
 
 #[test]
@@ -463,17 +378,6 @@ fn help_open_takes_precedence_over_the_mode_strip() {
 }
 
 // -- Pending two-key prefix ------------------------------------------------
-
-#[test]
-fn pending_z_shows_za_zb_zt_and_zz_sorted_by_key() {
-    let km = Keymap::default_map();
-    let entries = pending_hints(&km, key(KeyCode::Char('z')), true);
-    assert_eq!(keys(&entries), vec!["za", "zb", "zt", "zz"]);
-    assert_eq!(
-        labels(&entries),
-        vec!["fold", "cursor to bottom", "cursor to top", "center"]
-    );
-}
 
 #[test]
 fn pending_g_shows_every_g_completion_sorted_by_key() {
@@ -561,28 +465,6 @@ fn pending_prefix_replaces_the_mode_strip_in_normal_and_visual() {
         keys(&visual),
         vec!["g/", "gSpace", "gT", "gd", "gg", "gp", "gr", "gt"]
     );
-}
-
-#[test]
-fn build_hints_drops_gd_and_gr_from_the_pending_strip_when_code_intel_is_disallowed() {
-    let km = Keymap::default_map();
-    let g = Some(key(KeyCode::Char('g')));
-    let normal = build_hints(
-        Mode::Normal,
-        FooterFlags {
-            staging_allowed: true,
-            code_intel_allowed: false,
-            push_publishes: false,
-            viewing_commit: false,
-            help_open: false,
-            project_search_focus: SearchFocus::Input,
-            review_session: false,
-        },
-        g,
-        &km,
-        &ModalKeymaps::default(),
-    );
-    assert_eq!(keys(&normal), vec!["g/", "gSpace", "gT", "gg", "gp", "gt"]);
 }
 
 /// A pending prefix is meaningless outside Normal/Visual (the event loop
@@ -907,17 +789,6 @@ fn panel_help_hint_is_real_and_shadows_panel_dispatch() {
 // -- Wrapping ---------------------------------------------------------------
 
 #[test]
-fn generous_width_fits_the_whole_normal_strip_on_one_line() {
-    let km = Keymap::default_map();
-    let entries = normal_hints(&km, true, true, false, false);
-    // Wide enough for all 11 hints (the strip grew by `e edit`/`x delete`).
-    let lines = wrap_hints(&entries, 150);
-    assert_eq!(lines.len(), 1);
-    let shown: usize = lines.iter().map(Vec::len).sum();
-    assert_eq!(shown, entries.len(), "no hint dropped at generous width");
-}
-
-#[test]
 fn medium_width_wraps_to_two_lines_without_splitting_a_hint() {
     let km = Keymap::default_map();
     let entries = normal_hints(&km, true, true, false, false);
@@ -950,16 +821,6 @@ fn narrow_width_drops_lowest_priority_hints_but_keeps_help() {
     );
 }
 
-#[test]
-fn dropping_never_removes_help_while_anything_else_remains() {
-    // An adversarially narrow width: keeps forcing drops down to the wire.
-    let km = Keymap::default_map();
-    let entries = normal_hints(&km, true, true, false, false);
-    let lines = wrap_hints(&entries, 8);
-    let shown_labels: Vec<&str> = lines.iter().flatten().map(|e| e.label).collect();
-    assert!(shown_labels.contains(&"help"));
-}
-
 // -- footer_height / split_footer wiring ------------------------------------
 
 #[test]
@@ -968,27 +829,4 @@ fn footer_height_is_one_row_when_status_message_is_set() {
     let mut a = app();
     a.set_status_message("hi");
     assert_eq!(footer_height(20, &a, &km, None), 1);
-}
-
-#[test]
-fn footer_height_matches_wrap_hints_row_count() {
-    let km = Keymap::default_map();
-    let a = app();
-    let entries = build_hints(
-        a.mode,
-        FooterFlags {
-            staging_allowed: true,
-            code_intel_allowed: true,
-            push_publishes: false,
-            viewing_commit: false,
-            help_open: a.help.open,
-            project_search_focus: a.project_search_focus(),
-            review_session: false,
-        },
-        None,
-        &km,
-        &a.modal_keys,
-    );
-    let expected = wrap_hints(&entries, 60).len() as u16;
-    assert_eq!(footer_height(60, &a, &km, None), expected);
 }

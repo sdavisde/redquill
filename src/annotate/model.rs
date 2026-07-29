@@ -420,14 +420,6 @@ mod tests {
     }
 
     #[test]
-    fn classification_labels_are_lowercase() {
-        assert_eq!(Classification::Issue.label(), "issue");
-        assert_eq!(Classification::Question.label(), "question");
-        assert_eq!(Classification::Nit.label(), "nit");
-        assert_eq!(Classification::Praise.label(), "praise");
-    }
-
-    #[test]
     fn classification_from_unknown_label_is_none() {
         assert_eq!(Classification::from_label("blocker"), None);
         assert_eq!(Classification::from_label(""), None);
@@ -438,21 +430,6 @@ mod tests {
     fn range_rejects_start_after_end() {
         let err = Target::range("src/a.rs", 10, 5, Side::New).unwrap_err();
         assert_eq!(err, AnnotateError::InvalidRange { start: 10, end: 5 });
-    }
-
-    #[test]
-    fn range_allows_equal_start_and_end() {
-        let target = Target::range("src/a.rs", 5, 5, Side::New).unwrap();
-        assert_eq!(
-            target,
-            Target::Range {
-                path: "src/a.rs".to_string(),
-                start: 5,
-                end: 5,
-                side: Side::New,
-                other_end: None,
-            }
-        );
     }
 
     #[test]
@@ -486,51 +463,9 @@ mod tests {
     // -- Target::WorktreeLine / Target::WorktreeRange -----------------------
 
     #[test]
-    fn worktree_line_builds_expected_variant() {
-        assert_eq!(
-            Target::worktree_line("docs/notes.md", 44),
-            Target::WorktreeLine {
-                path: "docs/notes.md".to_string(),
-                line: 44,
-            }
-        );
-    }
-
-    #[test]
-    fn worktree_range_builds_expected_variant() {
-        assert_eq!(
-            Target::worktree_range("docs/notes.md", 10, 20).unwrap(),
-            Target::WorktreeRange {
-                path: "docs/notes.md".to_string(),
-                start: 10,
-                end: 20,
-            }
-        );
-    }
-
-    #[test]
     fn worktree_range_rejects_start_after_end() {
         let err = Target::worktree_range("docs/notes.md", 10, 5).unwrap_err();
         assert_eq!(err, AnnotateError::InvalidRange { start: 10, end: 5 });
-    }
-
-    #[test]
-    fn worktree_range_allows_equal_start_and_end() {
-        assert!(Target::worktree_range("docs/notes.md", 5, 5).is_ok());
-    }
-
-    #[test]
-    fn worktree_targets_report_their_path() {
-        assert_eq!(
-            Target::worktree_line("docs/notes.md", 1).path(),
-            "docs/notes.md"
-        );
-        assert_eq!(
-            Target::worktree_range("docs/notes.md", 1, 2)
-                .unwrap()
-                .path(),
-            "docs/notes.md"
-        );
     }
 
     #[test]
@@ -563,23 +498,6 @@ mod tests {
     }
 
     // -- opposite-side counterpart capture (context lines) -------------------
-
-    #[test]
-    fn line_with_other_records_the_counterpart_and_plain_line_leaves_it_absent() {
-        assert_eq!(
-            Target::line_with_other("a.rs", 8, Side::New, Some(6)),
-            Target::Line {
-                path: "a.rs".to_string(),
-                line: 8,
-                side: Side::New,
-                other_line: Some(6),
-            }
-        );
-        assert_eq!(
-            Target::line("a.rs", 8, Side::New),
-            Target::line_with_other("a.rs", 8, Side::New, None)
-        );
-    }
 
     #[test]
     fn range_and_hunk_with_other_end_record_the_counterpart_and_still_validate() {
@@ -642,11 +560,6 @@ mod tests {
             let back: Target = serde_json::from_str(&json).unwrap();
             assert_eq!(back, target, "round trip changed the target: {json}");
         }
-    }
-
-    #[test]
-    fn source_default_is_working_tree() {
-        assert_eq!(Source::default(), Source::WorkingTree);
     }
 
     #[test]

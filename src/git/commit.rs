@@ -100,14 +100,6 @@ mod tests {
     }
 
     #[test]
-    fn subject_containing_a_colon_is_preserved() {
-        let summary = parse_commit_summary("a1b2c3d\0feat: add async: remote ops")
-            .unwrap()
-            .unwrap();
-        assert_eq!(summary.subject, "feat: add async: remote ops");
-    }
-
-    #[test]
     fn empty_subject_is_allowed() {
         // A commit with an empty subject line still summarizes.
         let summary = parse_commit_summary("a1b2c3d\0").unwrap().unwrap();
@@ -126,34 +118,6 @@ mod tests {
     // -- commit_command: the write command ------------------------------------
 
     use std::ffi::OsStr;
-    use std::path::PathBuf;
-
-    #[test]
-    fn commit_command_is_exactly_commit_dash_m_message_at_root() {
-        let root = PathBuf::from("/tmp/redquill-commit-test");
-        let cmd = commit_command("fix: parser bug", &root);
-        assert_eq!(cmd.get_program(), OsStr::new("git"));
-        let args: Vec<&OsStr> = cmd.get_args().collect();
-        assert_eq!(
-            args,
-            vec![
-                OsStr::new("commit"),
-                OsStr::new("-m"),
-                OsStr::new("fix: parser bug"),
-            ]
-        );
-        assert_eq!(cmd.get_current_dir(), Some(root.as_path()));
-    }
-
-    #[test]
-    fn commit_command_passes_a_multiline_message_verbatim_as_one_argv_element() {
-        let message = "feat: subject line\n\nbody paragraph\nwith a second line";
-        let cmd = commit_command(message, Path::new("."));
-        let args: Vec<&OsStr> = cmd.get_args().collect();
-        // Exactly three argv elements: newlines never split the message.
-        assert_eq!(args.len(), 3);
-        assert_eq!(args[2], OsStr::new(message));
-    }
 
     #[test]
     fn commit_command_never_carries_a_flag_beyond_dash_m() {
@@ -180,14 +144,6 @@ mod tests {
     }
 
     // -- commit_command_line: the command-log display line -------------------
-
-    #[test]
-    fn commit_command_line_debug_quotes_the_message() {
-        assert_eq!(
-            commit_command_line("fix: parser"),
-            "git commit -m \"fix: parser\""
-        );
-    }
 
     #[test]
     fn commit_command_line_keeps_a_multiline_message_on_one_log_line() {

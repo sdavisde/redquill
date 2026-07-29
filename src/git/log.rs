@@ -122,26 +122,14 @@ mod tests {
     }
 
     #[test]
-    fn subject_containing_a_colon_is_preserved() {
-        let input = "sha\0sha\0feat: add async: remote ops\0A\x001700000000\n";
-        let entries = parse_commit_log(input).unwrap();
-        assert_eq!(entries[0].subject, "feat: add async: remote ops");
-    }
-
-    #[test]
-    fn subject_containing_internal_whitespace_is_preserved() {
-        let input = "sha\0sha\0fix   weird   spacing\0A\x001700000000\n";
-        let entries = parse_commit_log(input).unwrap();
-        assert_eq!(entries[0].subject, "fix   weird   spacing");
-    }
-
-    #[test]
-    fn subject_containing_quote_characters_is_preserved() {
-        let input = "sha\0sha\0fix: handle \"quoted\" and 'single' text\0A\x001700000000\n";
+    fn subject_punctuation_and_internal_whitespace_are_preserved() {
+        // Only NUL delimits fields, so colons, quotes and runs of spaces all
+        // have to survive verbatim.
+        let input = "sha\0sha\0feat: handle \"quoted\"   and 'single': text\0A\x001700000000\n";
         let entries = parse_commit_log(input).unwrap();
         assert_eq!(
             entries[0].subject,
-            "fix: handle \"quoted\" and 'single' text"
+            "feat: handle \"quoted\"   and 'single': text"
         );
     }
 

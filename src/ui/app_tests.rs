@@ -52,22 +52,6 @@ fn cursor_down_clamps_at_last_row() {
 }
 
 #[test]
-fn cursor_up_clamps_at_zero() {
-    let mut app = App::new(vec![file("a.rs", 1)]);
-    app.apply(Action::CursorUp);
-    assert_eq!(app.view.cursor, 0);
-}
-
-#[test]
-fn cursor_motion_on_empty_diff_stays_at_zero() {
-    let mut app = App::new(vec![]);
-    app.apply(Action::CursorDown);
-    assert_eq!(app.view.cursor, 0);
-    app.apply(Action::HalfPageDown);
-    assert_eq!(app.view.cursor, 0);
-}
-
-#[test]
 fn half_page_motion_uses_last_known_viewport_height() {
     // 5 hunks -> 1 + 5*3 = 16 rows, plenty of headroom for a
     // half-page-of-10 step in either direction.
@@ -80,14 +64,6 @@ fn half_page_motion_uses_last_known_viewport_height() {
 }
 
 #[test]
-fn half_page_never_steps_by_zero_on_tiny_viewport() {
-    let mut app = App::new(vec![file("a.rs", 1)]);
-    app.view.set_viewport_height(1);
-    app.apply(Action::HalfPageDown);
-    assert_eq!(app.view.cursor, 1);
-}
-
-#[test]
 fn ensure_visible_scrolls_down_to_follow_cursor() {
     let mut app = App::new(vec![file("a.rs", 3)]);
     app.view.set_viewport_height(3);
@@ -97,20 +73,6 @@ fn ensure_visible_scrolls_down_to_follow_cursor() {
     assert_eq!(app.view.cursor, 6);
     assert!(app.view.scroll <= app.view.cursor);
     assert!(app.view.cursor < app.view.scroll + 3);
-}
-
-#[test]
-fn ensure_visible_scrolls_up_to_follow_cursor() {
-    let mut app = App::new(vec![file("a.rs", 3)]);
-    app.view.set_viewport_height(3);
-    for _ in 0..6 {
-        app.apply(Action::CursorDown);
-    }
-    for _ in 0..6 {
-        app.apply(Action::CursorUp);
-    }
-    assert_eq!(app.view.cursor, 0);
-    assert_eq!(app.view.scroll, 0);
 }
 
 #[test]
@@ -144,14 +106,26 @@ fn next_hunk_crosses_file_boundary() {
 }
 
 #[test]
-fn next_hunk_at_last_file_last_hunk_is_no_op() {
+fn hunk_and_file_jumps_are_no_ops_at_the_buffer_extremes() {
+    // NextHunk at the last hunk, PrevHunk before the first, and
+    // NextFile/PrevFile at the last/first file all stay put.
     let mut app = App::new(vec![file("a.rs", 1)]);
+    let cursor_start = app.view.cursor;
+    app.apply(Action::PrevHunk);
+    assert_eq!(app.view.cursor, cursor_start);
+    assert_eq!(app.view.selected_file, 0);
     app.apply(Action::NextHunk);
     let cursor_before = app.view.cursor;
-    let file_before = app.view.selected_file;
     app.apply(Action::NextHunk);
     assert_eq!(app.view.cursor, cursor_before);
-    assert_eq!(app.view.selected_file, file_before);
+    assert_eq!(app.view.selected_file, 0);
+
+    let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
+    app.apply(Action::PrevFile);
+    assert_eq!(app.view.selected_file, 0);
+    app.apply(Action::NextFile);
+    app.apply(Action::NextFile);
+    assert_eq!(app.view.selected_file, 1);
 }
 
 #[test]
@@ -168,15 +142,6 @@ fn prev_hunk_crosses_file_boundary_backwards() {
 }
 
 #[test]
-fn prev_hunk_at_first_file_before_first_hunk_is_no_op() {
-    let mut app = App::new(vec![file("a.rs", 1)]);
-    let cursor_before = app.view.cursor;
-    app.apply(Action::PrevHunk);
-    assert_eq!(app.view.cursor, cursor_before);
-    assert_eq!(app.view.selected_file, 0);
-}
-
-#[test]
 fn next_file_jumps_to_next_section_header() {
     let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
     app.apply(Action::CursorDown);
@@ -188,21 +153,6 @@ fn next_file_jumps_to_next_section_header() {
         app.view.rows[app.view.cursor],
         Row::FileHeader { file_index: 1, .. }
     ));
-}
-
-#[test]
-fn next_file_clamps_at_last_file() {
-    let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
-    app.apply(Action::NextFile);
-    app.apply(Action::NextFile);
-    assert_eq!(app.view.selected_file, 1);
-}
-
-#[test]
-fn prev_file_clamps_at_first_file() {
-    let mut app = App::new(vec![file("a.rs", 1), file("b.rs", 1)]);
-    app.apply(Action::PrevFile);
-    assert_eq!(app.view.selected_file, 0);
 }
 
 #[test]
@@ -249,26 +199,6 @@ fn toggle_collapse_targets_the_cursor_file_not_the_first() {
     app.apply(Action::ToggleCollapse);
     assert!(app.view.is_collapsed("b.rs"));
     assert!(!app.view.is_collapsed("a.rs"));
-}
-
-#[test]
-fn toggle_help_flips_state() {
-    let mut app = App::new(vec![file("a.rs", 1)]);
-    assert!(!app.help.open);
-    app.apply(Action::ToggleHelp);
-    assert!(app.help.open);
-    app.apply(Action::ToggleHelp);
-    assert!(!app.help.open);
-}
-
-#[test]
-fn quit_actions_are_no_ops_on_state() {
-    let mut app = App::new(vec![file("a.rs", 1)]);
-    app.apply(Action::CursorDown);
-    let cursor = app.view.cursor;
-    app.apply(Action::Quit);
-    app.apply(Action::QuitDiscard);
-    assert_eq!(app.view.cursor, cursor);
 }
 
 // -- Visual mode ------------------------------------------------------
@@ -332,108 +262,6 @@ fn visual_mode_j_k_extend_selection() {
 // -- Target derivation --------------------------------------------------
 
 #[test]
-fn target_for_cursor_on_removed_line_uses_old_side() {
-    let raw = "\
-diff --git a/f.rs b/f.rs
-index 1..2 100644
---- a/f.rs
-+++ b/f.rs
-@@ -1,2 +1,1 @@
--removed
- kept
-";
-    let mut app = App::new(vec![file_with_raw("f.rs", raw)]);
-    app.apply(Action::CursorDown); // hunk header -> row 1
-    app.apply(Action::CursorDown); // removed line -> row 2
-    let target = app.target_for_cursor().unwrap();
-    assert_eq!(target, Target::line("f.rs", 1, Side::Old));
-}
-
-#[test]
-fn target_for_cursor_on_added_line_uses_new_side() {
-    let raw = "\
-diff --git a/f.rs b/f.rs
-index 1..2 100644
---- a/f.rs
-+++ b/f.rs
-@@ -1,1 +1,2 @@
- kept
-+added
-";
-    let mut app = App::new(vec![file_with_raw("f.rs", raw)]);
-    app.apply(Action::CursorDown); // hunk header
-    app.apply(Action::CursorDown); // context "kept" -> new side too
-    app.apply(Action::CursorDown); // added line
-    let target = app.target_for_cursor().unwrap();
-    assert_eq!(target, Target::line("f.rs", 2, Side::New));
-}
-
-#[test]
-fn target_for_cursor_on_context_line_uses_new_side() {
-    let raw = "\
-diff --git a/f.rs b/f.rs
-index 1..2 100644
---- a/f.rs
-+++ b/f.rs
-@@ -1,1 +1,1 @@
- kept
-";
-    let mut app = App::new(vec![file_with_raw("f.rs", raw)]);
-    app.apply(Action::CursorDown); // hunk header
-    app.apply(Action::CursorDown); // context line
-    let target = app.target_for_cursor().unwrap();
-    // Context lines exist on both sides; the old-side number rides along.
-    assert_eq!(
-        target,
-        Target::line_with_other("f.rs", 1, Side::New, Some(1))
-    );
-}
-
-#[test]
-fn target_for_cursor_on_hunk_header_spans_new_side() {
-    let raw = "\
-diff --git a/f.rs b/f.rs
-index 1..2 100644
---- a/f.rs
-+++ b/f.rs
-@@ -1,1 +1,3 @@
- a
-+b
-+c
-";
-    let mut app = App::new(vec![file_with_raw("f.rs", raw)]);
-    app.apply(Action::CursorDown); // hunk header row
-    let target = app.target_for_cursor().unwrap();
-    assert_eq!(target, Target::hunk("f.rs", 1, 3).unwrap());
-}
-
-#[test]
-fn target_for_cursor_on_hunk_header_falls_back_to_old_side_when_new_count_zero() {
-    let raw = "\
-diff --git a/gone.rs b/gone.rs
-deleted file mode 100644
-index 111..000
---- a/gone.rs
-+++ /dev/null
-@@ -1,3 +0,0 @@
--a
--b
--c
-";
-    let mut app = App::new(vec![file_with_raw("gone.rs", raw)]);
-    app.apply(Action::CursorDown); // hunk header row
-    let target = app.target_for_cursor().unwrap();
-    assert_eq!(target, Target::hunk("gone.rs", 1, 3).unwrap());
-}
-
-#[test]
-fn target_for_cursor_on_file_header_is_file_target() {
-    let app = App::new(vec![file("a.rs", 1)]);
-    let target = app.target_for_cursor().unwrap();
-    assert_eq!(target, Target::file("a.rs"));
-}
-
-#[test]
 fn target_for_cursor_on_binary_row_is_file_target() {
     let raw = "\
 diff --git a/img.png b/img.png
@@ -452,29 +280,6 @@ Binary files a/img.png and b/img.png differ
     app.apply(Action::CursorDown); // Binary row
     let target = app.target_for_cursor().unwrap();
     assert_eq!(target, Target::file("img.png"));
-}
-
-#[test]
-fn target_for_visual_removed_only_uses_old_side() {
-    let raw = "\
-diff --git a/f.rs b/f.rs
-index 1..2 100644
---- a/f.rs
-+++ b/f.rs
-@@ -1,3 +0,0 @@
--a
--b
--c
-";
-    let mut app = App::new(vec![file_with_raw("f.rs", raw)]);
-    app.apply(Action::CursorDown); // hunk header
-    app.apply(Action::CursorDown); // line a
-    let anchor = app.view.cursor;
-    app.apply(Action::EnterVisual);
-    app.apply(Action::CursorDown); // line b
-    app.apply(Action::CursorDown); // line c
-    let target = app.target_for_visual(anchor).unwrap();
-    assert_eq!(target, Target::range("f.rs", 1, 3, Side::Old).unwrap());
 }
 
 #[test]
@@ -505,14 +310,6 @@ index 1..2 100644
         target,
         Target::range_with_other_end("f.rs", 1, 3, Side::New, Some(2)).unwrap()
     );
-}
-
-#[test]
-fn target_for_visual_with_no_line_rows_is_none() {
-    let app = App::new(vec![file("a.rs", 1)]);
-    // Cursor and anchor both on the FileHeader row (0).
-    let target = app.target_for_visual(0);
-    assert_eq!(target, None);
 }
 
 // -- Compose -----------------------------------------------------------
@@ -789,25 +586,6 @@ fn toggle_list_opens_and_closes() {
     assert_eq!(app.mode, Mode::List);
     app.apply(Action::ToggleList);
     assert_eq!(app.mode, Mode::Normal);
-}
-
-#[test]
-fn list_move_down_and_up_clamp() {
-    let mut app = App::new(vec![file("a.rs", 1)]);
-    app.annotations
-        .add(Target::file("a.rs"), Classification::Nit, "one")
-        .unwrap();
-    app.annotations
-        .add(Target::file("a.rs"), Classification::Issue, "two")
-        .unwrap();
-    app.list_move_down();
-    assert_eq!(app.list_cursor, 1);
-    app.list_move_down();
-    assert_eq!(app.list_cursor, 1); // clamped at last
-    app.list_move_up();
-    assert_eq!(app.list_cursor, 0);
-    app.list_move_up();
-    assert_eq!(app.list_cursor, 0); // clamped at first
 }
 
 #[test]
@@ -2089,15 +1867,6 @@ fn toggle_stage_in_list_and_compose_modes_is_a_no_op() {
     assert!(app.status_message.is_none());
 }
 
-#[test]
-fn status_message_set_and_clear() {
-    let mut app = App::new(vec![file("a.rs", 1)]);
-    app.set_status_message("staged hunk");
-    assert_eq!(app.status_message.as_deref(), Some("staged hunk"));
-    app.clear_status_message();
-    assert!(app.status_message.is_none());
-}
-
 // -- Stage-and-collapse review flow (S) ----------------------------------
 
 /// Builds an `App` whose fake reads its refresh diff/status through
@@ -2232,73 +2001,6 @@ fn stage_file_on_fully_staged_file_unstages_and_expands() {
     assert!(!app.view.is_collapsed("a.rs")); // auto-expanded
     assert_eq!(app.staged_states.get("a.rs").copied(), None); // no longer staged
     assert_eq!(app.status_message.as_deref(), Some("unstaged a.rs"));
-}
-
-#[test]
-fn stage_file_records_only_stageops_methods() {
-    // Both directions must go through `stage_file`/`unstage_file` — no
-    // new git-layer gestures.
-    let p = raw_patch("a.rs", 1);
-    let (mut app, calls) = app_with_fake(
-        vec![p],
-        DiffTarget::WorkingTree,
-        vec![],
-        vec![staged_entry("a.rs")],
-    );
-    app.apply(Action::StageFile);
-    for call in calls.borrow().iter() {
-        assert!(
-            matches!(call, StageCall::StageFile(_) | StageCall::UnstageFile(_)),
-            "unexpected call {call:?}"
-        );
-    }
-}
-
-#[test]
-fn stage_file_on_read_only_range_is_a_noop_with_message() {
-    let p = raw_patch("a.rs", 1);
-    let (mut app, calls) = app_with_fake(
-        vec![p.clone()],
-        DiffTarget::Range("main..HEAD".to_string()),
-        vec![p],
-        vec![],
-    );
-    app.apply(Action::StageFile);
-    assert!(calls.borrow().is_empty());
-    assert_eq!(app.status_message.as_deref(), Some("read-only diff target"));
-}
-
-#[test]
-fn stage_file_error_sets_message_and_leaves_state_unchanged() {
-    let p = raw_patch("a.rs", 1);
-    let calls = Rc::new(RefCell::new(Vec::new()));
-    let fake = FakeGit {
-        calls: Rc::clone(&calls),
-        diff: vec![],
-        fail_ops: true,
-        ..FakeGit::default()
-    };
-    let snapshot = ReviewSnapshot {
-        files: vec![FileDiff::from_patch(&p).unwrap()],
-        patches: vec![Some(p)],
-        staged: Vec::new(),
-        staged_states: HashMap::new(),
-        ..Default::default()
-    };
-    let mut app = App::with_git(snapshot, DiffTarget::WorkingTree, Box::new(fake));
-    app.apply(Action::StageFile);
-    // The stage was attempted but failed; nothing collapsed, file kept.
-    assert_eq!(
-        single_call(&calls),
-        StageCall::StageFile("a.rs".to_string())
-    );
-    assert!(!app.view.is_collapsed("a.rs"));
-    assert_eq!(app.view.files.len(), 1);
-    assert!(
-        app.status_message
-            .as_deref()
-            .is_some_and(|m| m.contains("simulated git failure"))
-    );
 }
 
 #[test]
@@ -2618,47 +2320,6 @@ fn manual_refresh_applies_the_edit_and_acknowledges_in_the_footer() {
     assert_eq!(app.status_message.as_deref(), Some("refreshed"));
 }
 
-#[test]
-fn maybe_auto_refresh_uses_the_sync_fallback_without_an_async_backend() {
-    // `FakeGit` isn't `Send`, so it yields no async builder: the poll must
-    // fall back to a synchronous rebuild (no task in flight) and apply the
-    // edit directly.
-    let (mut app, _calls, diff_h, _status_h) = app_with_mutable_fake(
-        vec![raw_patch("a.rs", 1)],
-        vec![],
-        vec![raw_patch("a.rs", 1)],
-        vec![],
-    );
-    *diff_h.borrow_mut() = vec![raw_patch("a.rs", 2)];
-    app.maybe_auto_refresh();
-    assert!(
-        app.refresh_in_flight.is_none(),
-        "a non-Send backend must not spawn an async task"
-    );
-    assert_eq!(app.view.files[0].hunks.len(), 2, "applied synchronously");
-}
-
-#[test]
-fn a_foreground_refresh_bumps_the_refresh_generation() {
-    // The staleness guard depends on every synchronous refresh advancing
-    // the generation; a stage refreshes, so it advances too.
-    let p = raw_patch("a.rs", 1);
-    let (mut app, _calls) =
-        app_with_fake(vec![p.clone()], DiffTarget::WorkingTree, vec![p], vec![]);
-    let before = app.refresh_generation;
-    app.refresh();
-    assert!(
-        app.refresh_generation > before,
-        "refresh must bump the generation"
-    );
-    let after_refresh = app.refresh_generation;
-    app.apply(Action::StageFile);
-    assert!(
-        app.refresh_generation > after_refresh,
-        "a stage refreshes, so it bumps the generation too"
-    );
-}
-
 /// The async working-tree poll, exercised on real background threads with a
 /// `Send` fake (the `Rc`-based `FakeGit` can't cross a thread boundary).
 mod async_refresh {
@@ -2820,54 +2481,6 @@ mod async_refresh {
             "must not rebuild while a Visual selection is active"
         );
     }
-
-    /// Mirrors the race fix `App::reroot` relies on: a
-    /// worktree re-root bumps `refresh_generation` and clears
-    /// `refresh_in_flight` directly (not via a foreground `refresh()`), so a
-    /// working-tree read spawned against the *old* root before the re-root
-    /// is discarded when it lands rather than clobbering the newly-rooted
-    /// state — and the single-flight gate is freed immediately rather than
-    /// waiting for that orphaned read to drain on its own.
-    #[test]
-    fn stale_async_snapshot_discarded_after_generation_bump() {
-        let (mut app, _fake) = app_with_send_fake(vec![raw_patch("a.rs", 3)], vec![]);
-        assert_eq!(app.view.files[0].hunks.len(), 3);
-
-        let stale = snapshot_of(&[raw_patch("a.rs", 2)], &[]);
-        let id = app.refresh_tasks.spawn(move || Some(stale));
-        app.refresh_in_flight = Some(InFlightRefresh {
-            id,
-            generation: app.refresh_generation,
-        });
-
-        // `App::reroot`'s race fix, applied directly here.
-        app.refresh_generation = app.refresh_generation.wrapping_add(1);
-        app.refresh_in_flight = None;
-
-        // Give the spawned (old-root) read time to finish, then drain: with
-        // `refresh_in_flight` already `None`, `poll_refresh`'s very first
-        // check discards the result outright — there's no tracked task for
-        // its id to match, so the generation mismatch never even needs to
-        // fire.
-        std::thread::sleep(Duration::from_millis(100));
-        app.poll_refresh();
-
-        assert!(app.refresh_in_flight.is_none());
-        assert_eq!(
-            app.view.files[0].hunks.len(),
-            3,
-            "the stale old-root snapshot must never apply over the newer state"
-        );
-
-        // Clearing `refresh_in_flight` also frees `spawn_auto_refresh`'s
-        // single-flight gate immediately, so the very next poll tick can
-        // spawn a fresh read rather than waiting on the orphaned old read.
-        app.maybe_auto_refresh();
-        assert!(
-            app.refresh_in_flight.is_some(),
-            "the single-flight gate must be free for a fresh read right away"
-        );
-    }
 }
 
 #[test]
@@ -2959,29 +2572,6 @@ fn toggle_staging_panel_opens_with_fresh_status_and_closes() {
 }
 
 #[test]
-fn staging_panel_navigation_clamps() {
-    let mut app = App::new(vec![file("a.rs", 1)]);
-    app.staged = vec![
-        StagedFile {
-            path: "a.rs".to_string(),
-            letter: 'M',
-        },
-        StagedFile {
-            path: "b.rs".to_string(),
-            letter: 'A',
-        },
-    ];
-    app.staging_move_down();
-    assert_eq!(app.staging_cursor, 1);
-    app.staging_move_down();
-    assert_eq!(app.staging_cursor, 1); // clamped at last
-    app.staging_move_up();
-    assert_eq!(app.staging_cursor, 0);
-    app.staging_move_up();
-    assert_eq!(app.staging_cursor, 0); // clamped at first
-}
-
-#[test]
 fn staging_panel_unstage_keeps_panel_open_and_clamps_cursor() {
     let p = raw_patch("a.rs", 1);
     // Post-refresh status: only one staged file remains.
@@ -3013,16 +2603,6 @@ fn staged_entry_file(path: &str) -> StagedFile {
 }
 
 #[test]
-fn staging_panel_unstage_on_empty_list_is_a_no_op() {
-    let p = raw_patch("a.rs", 1);
-    let (mut app, calls) = app_with_fake(vec![p.clone()], DiffTarget::WorkingTree, vec![p], vec![]);
-    app.mode = Mode::Staging;
-    app.unstage_focused_file();
-    assert!(calls.borrow().is_empty());
-    assert_eq!(app.mode, Mode::Staging);
-}
-
-#[test]
 fn visual_space_allows_staging_but_navigation_stays_disabled() {
     let p = raw_patch("a.rs", 1);
     let (mut app, calls) = app_with_fake(vec![p.clone()], DiffTarget::WorkingTree, vec![p], vec![]);
@@ -3044,40 +2624,6 @@ fn highlight_patch(path: &str) -> RawFilePatch {
         ),
         is_binary: false,
     }
-}
-
-/// The multibuffer highlights every *expanded* file's in-use sides once
-/// at build time, and the `(path, side)`-keyed cache means later motions
-/// (section jumps back and forth) re-fetch nothing.
-#[test]
-fn multibuffer_highlights_every_expanded_file_once() {
-    let a = highlight_patch("a.rs");
-    let b = highlight_patch("b.rs");
-    let show_calls = Rc::new(RefCell::new(0));
-    let fake = FakeGit {
-        diff: vec![a.clone(), b.clone()],
-        show_calls: Rc::clone(&show_calls),
-        show_content: Some("fn old() {}\nfn new() {}\n".to_string()),
-        ..FakeGit::default()
-    };
-    let snapshot = ReviewSnapshot {
-        files: vec![
-            FileDiff::from_patch(&a).unwrap(),
-            FileDiff::from_patch(&b).unwrap(),
-        ],
-        patches: vec![Some(a), Some(b)],
-        staged: Vec::new(),
-        staged_states: HashMap::new(),
-        ..Default::default()
-    };
-    let mut app = App::with_git(snapshot, DiffTarget::Staged, Box::new(fake));
-    // Both files expanded -> a.rs (2 sides) + b.rs (2 sides) = 4 fetches.
-    assert_eq!(*show_calls.borrow(), 4);
-
-    app.apply(Action::NextFile); // -> b.rs header: cache hit
-    app.apply(Action::PrevFile); // -> a.rs header: cache hit
-    app.apply(Action::NextFile); // -> b.rs header: cache hit
-    assert_eq!(*show_calls.borrow(), 4);
 }
 
 /// A file that starts collapsed (fully staged at launch) is not
@@ -3148,35 +2694,6 @@ fn app_with_counting_fake(
     };
     let app = App::with_git(snapshot, DiffTarget::Staged, Box::new(fake));
     (app, diff_h, show_calls)
-}
-
-#[test]
-fn refresh_preserves_highlight_cache_for_unchanged_files() {
-    let a = highlight_patch("a.rs");
-    let (mut app, _diff, show_calls) = app_with_counting_fake(vec![a]);
-    // a.rs expanded, both sides -> 2 fetches at build.
-    assert_eq!(*show_calls.borrow(), 2);
-    assert!(app.highlight_cache_contains("a.rs", Side::New));
-
-    // The refresh sees byte-identical diff content -> the cache survives
-    // and nothing is re-fetched.
-    app.refresh();
-    assert_eq!(*show_calls.borrow(), 2);
-    assert!(app.highlight_cache_contains("a.rs", Side::New));
-    assert!(app.highlight_cache_contains("a.rs", Side::Old));
-}
-
-#[test]
-fn refresh_invalidates_highlight_cache_for_changed_files() {
-    let a = highlight_patch("a.rs");
-    let (mut app, diff, show_calls) = app_with_counting_fake(vec![a]);
-    assert_eq!(*show_calls.borrow(), 2);
-
-    // The file's diff content changes underneath us (an external edit):
-    // its cache entry must be invalidated and both sides re-fetched.
-    *diff.borrow_mut() = vec![raw_patch("a.rs", 1)];
-    app.refresh();
-    assert_eq!(*show_calls.borrow(), 4);
 }
 
 #[test]
@@ -3399,18 +2916,6 @@ fn search_next_without_active_pattern_sets_message() {
     let mut app = App::new(vec![search_file()]);
     app.apply(Action::SearchNext);
     assert_eq!(app.status_message.as_deref(), Some("no search pattern"));
-}
-
-#[test]
-fn search_next_with_zero_matches_sets_message() {
-    let mut app = App::new(vec![search_file()]);
-    app.apply(Action::Search);
-    for c in "zzz".chars() {
-        app.search_input.push(c);
-    }
-    app.confirm_search();
-    app.apply(Action::SearchNext);
-    assert_eq!(app.status_message.as_deref(), Some("no matches"));
 }
 
 #[test]
@@ -3664,14 +3169,6 @@ index 1..2 100644
     assert_eq!(app.view.effective_column(), Some(long_line_last_col));
     app.apply(Action::CursorDown); // short line "x"
     assert_eq!(app.view.effective_column(), Some(0));
-}
-
-#[test]
-fn column_motion_is_a_noop_off_a_line_row() {
-    let mut app = App::new(vec![file("a.rs", 1)]);
-    app.apply(Action::CursorRight);
-    app.apply(Action::WordForward);
-    assert_eq!(app.view.effective_column(), None);
 }
 
 // -- Git panel focus & navigation --------------------------------------

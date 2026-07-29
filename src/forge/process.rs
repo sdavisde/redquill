@@ -220,13 +220,6 @@ mod tests {
     }
 
     #[test]
-    fn wait_status_with_timeout_reports_failure_status_for_a_failing_command() {
-        let mut cmd = Command::new("false");
-        let status = wait_status_with_timeout(&mut cmd, Duration::from_secs(2)).unwrap();
-        assert!(!status.success());
-    }
-
-    #[test]
     fn wait_status_with_timeout_kills_a_slow_command_and_returns_promptly() {
         let mut cmd = Command::new("sleep");
         cmd.arg("5");

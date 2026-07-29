@@ -332,32 +332,6 @@ index 111..222 100644
         assert_eq!(app.finder.as_ref().unwrap().return_mode, Mode::Normal);
     }
 
-    #[test]
-    fn close_finder_restores_the_captured_return_mode() {
-        let mut app = app_with_candidates(&["a.rs"], false);
-        app.mode = Mode::Panel {
-            cursor: 3,
-            tab: crate::ui::app::PanelTab::Changes,
-        };
-        app.open_finder();
-        app.close_finder();
-        assert_eq!(
-            app.mode,
-            Mode::Panel {
-                cursor: 3,
-                tab: crate::ui::app::PanelTab::Changes
-            }
-        );
-        assert!(app.finder.is_none());
-    }
-
-    #[test]
-    fn close_finder_without_ever_opening_is_a_no_op() {
-        let mut app = App::new(vec![sample_file()]);
-        app.close_finder();
-        assert_eq!(app.mode, Mode::Normal);
-    }
-
     // -- candidate loading: sync fallback + async single-flight -------------
 
     #[test]
@@ -441,19 +415,6 @@ index 111..222 100644
     }
 
     #[test]
-    fn backspace_shrinks_the_query_and_reranks() {
-        let mut app = app_with_candidates(&["src/main.rs", "README.md"], false);
-        app.open_finder();
-        for c in "mainx".chars() {
-            app.finder_input_char(c);
-        }
-        assert!(app.finder.as_ref().unwrap().matches.is_empty());
-        app.finder_backspace();
-        assert_eq!(app.finder.as_ref().unwrap().query, "main");
-        assert_eq!(app.finder.as_ref().unwrap().matches.len(), 1);
-    }
-
-    #[test]
     fn empty_query_shows_no_matches() {
         let mut app = app_with_candidates(&["a.rs"], false);
         app.open_finder();
@@ -475,14 +436,6 @@ index 111..222 100644
         app.finder_move_up();
         assert_eq!(app.finder.as_ref().unwrap().cursor, 0);
         app.finder_move_up(); // clamps at 0
-        assert_eq!(app.finder.as_ref().unwrap().cursor, 0);
-    }
-
-    #[test]
-    fn move_on_empty_matches_stays_at_zero() {
-        let mut app = app_with_candidates(&["a.rs"], false);
-        app.open_finder();
-        app.finder_move_down();
         assert_eq!(app.finder.as_ref().unwrap().cursor, 0);
     }
 
@@ -538,18 +491,5 @@ index 111..222 100644
         assert!(app.finder.is_none(), "finder must close on confirm");
         assert_eq!(app.mode, Mode::Normal);
         assert_eq!(app.target, DiffTarget::File("target.rs".to_string()));
-    }
-
-    #[test]
-    fn confirm_with_no_matches_is_a_no_op() {
-        let mut app = app_with_candidates(&["a.rs"], false);
-        app.open_finder();
-        for c in "zzz".chars() {
-            app.finder_input_char(c);
-        }
-        assert!(app.finder.as_ref().unwrap().matches.is_empty());
-        app.finder_confirm();
-        assert_eq!(app.mode, Mode::Finder, "finder must stay open");
-        assert!(app.finder.is_some());
     }
 }

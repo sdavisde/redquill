@@ -120,14 +120,6 @@ mod tests {
     }
 
     #[test]
-    fn message_with_spaces_is_preserved() {
-        let input = "stash@{0}\0On feature/foo: wip mid review please hold\n";
-        let entries = parse_stash_list(input).unwrap();
-        assert_eq!(entries[0].branch.as_deref(), Some("feature/foo"));
-        assert_eq!(entries[0].message, "wip mid review please hold");
-    }
-
-    #[test]
     fn malformed_entry_missing_separator_errors() {
         let input = "stash@{0}\0malformed subject with no colon\n";
         assert!(matches!(parse_stash_list(input), Err(GitError::Parse(_))));

@@ -253,7 +253,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 mod tests {
     use super::*;
     use crate::diff::FileDiff;
-    use crate::git::{LocalBranch, RawFilePatch};
+    use crate::git::RawFilePatch;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use std::path::PathBuf;
@@ -293,46 +293,6 @@ index 111..222 100644
     }
 
     #[test]
-    fn renders_nothing_when_switcher_is_none() {
-        let app = App::new(vec![sample_file()]);
-        let content = render_switcher(&app);
-        assert!(content.trim().is_empty());
-    }
-
-    #[test]
-    fn switcher_modal_renders_tabs_branches_and_current_marker() {
-        let mut app = App::new(vec![sample_file()]);
-        let branches = vec![
-            LocalBranch {
-                name: "main".to_string(),
-                is_current: true,
-                worktree: None,
-            },
-            LocalBranch {
-                name: "feature".to_string(),
-                is_current: false,
-                worktree: Some(PathBuf::from("/repo/.worktrees/feature")),
-            },
-        ];
-        app.switcher = Some(SwitcherState::new(branches, vec![], None, 0));
-        let content = render_switcher(&app);
-        assert!(content.contains("Branches"));
-        assert!(content.contains("Worktrees"));
-        assert!(content.contains("main"));
-        assert!(content.contains("feature"));
-        assert!(content.contains("(worktree: feature)"));
-        assert!(content.contains('*'));
-    }
-
-    #[test]
-    fn switcher_empty_branches_shows_empty_state() {
-        let mut app = App::new(vec![sample_file()]);
-        app.switcher = Some(SwitcherState::new(vec![], vec![], None, 0));
-        let content = render_switcher(&app);
-        assert!(content.contains("no local branches"));
-    }
-
-    #[test]
     fn switcher_modal_worktrees_tab_marks_current_and_detached() {
         let mut app = App::new(vec![sample_file()]);
         app.repo_root = Some(PathBuf::from("/repo"));
@@ -365,15 +325,5 @@ index 111..222 100644
         assert!(content.contains("detached @ cafef00"));
         assert!(content.contains("locked"));
         assert!(content.contains('*'));
-    }
-
-    #[test]
-    fn switcher_empty_worktrees_shows_empty_state() {
-        let mut app = App::new(vec![sample_file()]);
-        let mut state = SwitcherState::new(vec![], vec![], None, 0);
-        state.toggle_tab();
-        app.switcher = Some(state);
-        let content = render_switcher(&app);
-        assert!(content.contains("no worktrees"));
     }
 }

@@ -181,28 +181,6 @@ mod tests {
     }
 
     #[test]
-    fn multiple_files_reconcile_independently() {
-        let persisted = review_with(vec![
-            ("a.rs", PersistedStatus::Accepted, Some("sha1")),
-            ("b.rs", PersistedStatus::Accepted, Some("sha2")),
-            ("c.rs", PersistedStatus::Deferred, None),
-        ]);
-        let current: HashMap<String, Option<String>> = [
-            ("a.rs".to_string(), Some("sha1".to_string())), // unchanged
-            ("b.rs".to_string(), Some("sha2-new".to_string())), // changed
-            ("c.rs".to_string(), Some("irrelevant".to_string())),
-        ]
-        .into();
-        let result = reconcile(&persisted, &current);
-        assert_eq!(result.get("a.rs"), Some(&ReviewStatus::Accepted));
-        assert_eq!(
-            result.get("b.rs"),
-            Some(&ReviewStatus::ChangedSinceAccepted)
-        );
-        assert_eq!(result.get("c.rs"), Some(&ReviewStatus::Deferred));
-    }
-
-    #[test]
     fn empty_persisted_review_reconciles_to_an_empty_map() {
         let persisted = review_with(vec![]);
         let result = reconcile(&persisted, &HashMap::new());

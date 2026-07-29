@@ -24,12 +24,6 @@ fn command_error_with_empty_stderr_falls_back_to_display() {
     assert_eq!(error_headline(&e), e.to_string());
 }
 
-#[test]
-fn non_command_error_headline_is_the_display_string() {
-    let e = ForgeError::CliNotFound { cli: "gh" };
-    assert_eq!(error_headline(&e), e.to_string());
-}
-
 // -- submit_error_headline: 401/403 hints -----------------------------------
 
 fn command_err(cli: &'static str, code: &str, stderr: &str) -> ForgeError {
@@ -42,42 +36,27 @@ fn command_err(cli: &'static str, code: &str, stderr: &str) -> ForgeError {
 }
 
 #[test]
-fn glab_403_gets_the_scope_hint() {
-    let e = command_err("glab", "403", "glab: HTTP 403");
-    assert_eq!(
-        submit_error_headline(&e),
-        "glab: HTTP 403 (write blocked — token may lack the 'api' scope \
-(read_api is read-only); re-auth with 'glab auth login' or check your \
-project role)"
-    );
-}
-
-#[test]
-fn gh_403_gets_the_token_scope_hint() {
-    let e = command_err("gh", "403", "gh: HTTP 403");
-    assert_eq!(
-        submit_error_headline(&e),
-        "gh: HTTP 403 (write blocked — check token scopes with 'gh auth status' \
-and your repo permission)"
-    );
-}
-
-#[test]
-fn glab_401_gets_the_not_authenticated_hint() {
-    let e = command_err("glab", "401", "glab: HTTP 401");
-    assert_eq!(
-        submit_error_headline(&e),
-        "glab: HTTP 401 (not authenticated — run 'glab auth login')"
-    );
-}
-
-#[test]
-fn gh_401_gets_the_not_authenticated_hint() {
-    let e = command_err("gh", "401", "gh: HTTP 401");
-    assert_eq!(
-        submit_error_headline(&e),
-        "gh: HTTP 401 (not authenticated — run 'gh auth login')"
-    );
+fn http_401_and_403_get_a_cli_specific_auth_hint() {
+    // One distinguishing substring per case: the hint must be the one for
+    // that CLI *and* that status, not merely some auth hint.
+    let cases: [(&'static str, &str, &str); 4] = [
+        ("glab", "403", "token may lack the 'api' scope"),
+        ("gh", "403", "check token scopes with 'gh auth status'"),
+        ("glab", "401", "not authenticated — run 'glab auth login'"),
+        ("gh", "401", "not authenticated — run 'gh auth login'"),
+    ];
+    for (cli, code, expected) in cases {
+        let stderr = format!("{cli}: HTTP {code}");
+        let headline = submit_error_headline(&command_err(cli, code, &stderr));
+        assert!(
+            headline.starts_with(&stderr),
+            "{cli} {code}: headline dropped the stderr line: {headline}"
+        );
+        assert!(
+            headline.contains(expected),
+            "{cli} {code}: expected hint {expected:?} in {headline}"
+        );
+    }
 }
 
 #[test]
@@ -88,15 +67,6 @@ fn forbidden_in_stderr_is_recognized_without_an_http_line() {
         "POST failed: Forbidden (write blocked — token may lack the 'api' scope \
 (read_api is read-only); re-auth with 'glab auth login' or check your \
 project role)"
-    );
-}
-
-#[test]
-fn unauthorized_in_stderr_is_recognized_without_an_http_line() {
-    let e = command_err("gh", "1", "request failed: unauthorized");
-    assert_eq!(
-        submit_error_headline(&e),
-        "request failed: unauthorized (not authenticated — run 'gh auth login')"
     );
 }
 

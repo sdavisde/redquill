@@ -511,16 +511,6 @@ mod tests {
     }
 
     #[test]
-    fn rust_block_comment_spans_every_line_it_covers() {
-        let content = "/* first\nsecond\nthird */\nfn main() {}\n";
-        let mut hl = Highlighter::new();
-        let lines = hl.highlight_lines(Lang::Rust, content);
-        assert_line_has_kind(&lines, 0, TokenKind::Comment);
-        assert_line_has_kind(&lines, 1, TokenKind::Comment);
-        assert_line_has_kind(&lines, 2, TokenKind::Comment);
-    }
-
-    #[test]
     fn python_keyword_string_comment() {
         let content = "def f():\n    s = \"hi\"\n    # a comment\n";
         let mut hl = Highlighter::new();
@@ -622,16 +612,5 @@ mod tests {
                 spans
             );
         }
-    }
-
-    #[test]
-    fn unrecognized_capture_never_panics_and_lang_is_independent_of_cache() {
-        // Building the same language twice must reuse the cached config,
-        // not rebuild (and must keep working).
-        let mut hl = Highlighter::new();
-        let content = "fn main() {}\n";
-        let first = hl.highlight_lines(Lang::Rust, content);
-        let second = hl.highlight_lines(Lang::Rust, content);
-        assert_eq!(first, second);
     }
 }

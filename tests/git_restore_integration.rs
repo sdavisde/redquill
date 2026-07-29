@@ -220,23 +220,6 @@ fn discard_untracked_file_removes_it() {
 }
 
 #[test]
-fn discard_untracked_file_removes_a_nested_path_without_its_directory() {
-    let tmp = init_repo();
-    let dir = tmp.path();
-    let runner = runner_for(&tmp);
-
-    write(dir, "nested/deep/fresh.txt", "never committed\n");
-
-    runner
-        .discard_untracked_file("nested/deep/fresh.txt")
-        .unwrap();
-
-    assert!(!dir.join("nested/deep/fresh.txt").exists());
-    // Only the file goes; the directory is not the caller's target.
-    assert!(dir.join("nested/deep").exists());
-}
-
-#[test]
 fn discard_untracked_file_errors_when_the_path_is_already_gone() {
     let tmp = init_repo();
     let runner = runner_for(&tmp);

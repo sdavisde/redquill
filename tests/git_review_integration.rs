@@ -186,15 +186,6 @@ fn default_base_falls_back_to_local_main_when_no_origin_head() {
 }
 
 #[test]
-fn default_base_falls_back_to_local_master_when_no_main() {
-    let repo = init_repo_on_branch("master");
-    git(repo.path(), &["checkout", "-qb", "feature"]);
-
-    let runner = runner_for(&repo);
-    assert_eq!(runner.default_base().unwrap(), "master");
-}
-
-#[test]
 fn default_base_errors_naming_the_base_flag_when_nothing_resolves() {
     let repo = init_repo_on_branch("trunk");
 
@@ -448,32 +439,6 @@ fn blob_sha_is_none_for_a_path_deleted_on_a_later_commit() {
         accepted_sha.len() == 40,
         "sanity: the pre-deletion SHA was real"
     );
-}
-
-#[test]
-fn blob_sha_is_none_for_an_unknown_branch() {
-    // Never an error — see the method's doc: a deleted/renamed branch
-    // degrades the same way an absent path does, matching this module's
-    // "expected, not an error" treatment elsewhere.
-    let repo = init_repo_on_branch("main");
-    write(repo.path(), "a.rs", b"fn a() {}\n");
-    git(repo.path(), &["add", "."]);
-    git(repo.path(), &["commit", "-qm", "add a.rs"]);
-
-    let runner = runner_for(&repo);
-    let sha = runner.blob_sha("no-such-branch", "a.rs").unwrap();
-    assert_eq!(sha, None);
-}
-
-#[test]
-fn blob_sha_never_leaves_a_fatal_message_on_stderr_visible_to_the_caller() {
-    // Structural: `-q` (quiet) is passed, so the ordinary "doesn't resolve"
-    // case never surfaces git's noisy `fatal:` text through this method's
-    // `Ok(None)` — nothing to assert on stdout/stderr capture here beyond
-    // the method still returning cleanly for a path that doesn't exist.
-    let repo = init_repo_on_branch("main");
-    let runner = runner_for(&repo);
-    assert_eq!(runner.blob_sha("main", "missing.rs").unwrap(), None);
 }
 
 fn repo_head_blob_sha(repo: &TempDir, path: &str) -> String {

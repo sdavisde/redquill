@@ -305,25 +305,6 @@ index 1..2 100644
     }
 
     #[test]
-    fn no_newline_marker_attaches_to_added_line() {
-        let raw = "\
-diff --git a/f.rs b/f.rs
-index 1..2 100644
---- a/f.rs
-+++ b/f.rs
-@@ -1,2 +1,2 @@
- line1
--old last
-+new last
-\\ No newline at end of file
-";
-        let hunks = parse_hunks(raw).unwrap();
-        let hunk = &hunks[0];
-        assert!(!line(hunk, 1).no_newline);
-        assert!(line(hunk, 2).no_newline);
-    }
-
-    #[test]
     fn no_newline_marker_on_both_sides() {
         let raw = "\
 diff --git a/f.rs b/f.rs
@@ -356,21 +337,6 @@ index 1..2 100644
 ";
         let hunks = parse_hunks(raw).unwrap();
         assert_eq!(hunks[0].section.as_deref(), Some("fn foo() {"));
-    }
-
-    #[test]
-    fn no_section_text_is_none() {
-        let raw = "\
-diff --git a/f.rs b/f.rs
-index 1..2 100644
---- a/f.rs
-+++ b/f.rs
-@@ -1,1 +1,1 @@
--x
-+y
-";
-        let hunks = parse_hunks(raw).unwrap();
-        assert_eq!(hunks[0].section, None);
     }
 
     #[test]

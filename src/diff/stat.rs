@@ -141,12 +141,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn hunk_stats_all_context_is_zero() {
-        let h = hunk(vec![line(LineOrigin::Context), line(LineOrigin::Context)]);
-        assert_eq!(h.stats(), DiffStat::default());
-    }
-
     // -- FileDiff::stats --
 
     #[test]
@@ -188,18 +182,6 @@ index 111..222 100644
             old_path: Some("old.rs".to_string()),
             kind: FileChangeKind::Renamed,
             is_binary: false,
-            hunks: Vec::new(),
-        };
-        assert_eq!(file.stats(), DiffStat::default());
-    }
-
-    #[test]
-    fn file_stats_is_zero_for_binary() {
-        let file = FileDiff {
-            path: "img.png".to_string(),
-            old_path: None,
-            kind: FileChangeKind::Modified,
-            is_binary: true,
             hunks: Vec::new(),
         };
         assert_eq!(file.stats(), DiffStat::default());

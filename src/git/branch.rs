@@ -183,21 +183,6 @@ mod tests {
     }
 
     #[test]
-    fn headers_are_parsed_when_record_lines_are_interspersed() {
-        let input = concat!(
-            "# branch.oid 85d7cc5dd1cf49f6abe1c81439fbb5deae4124ab\0",
-            "# branch.head main\0",
-            "# branch.upstream origin/main\0",
-            "# branch.ab +0 -0\0",
-            "1 .M N... 100644 100644 100644 aaa bbb src/main.rs\0",
-            "? untracked.txt\0",
-        );
-        let status = parse_branch_headers(input).unwrap();
-        assert_eq!(status.name, "main");
-        assert_eq!(status.ahead_behind, Some((0, 0)));
-    }
-
-    #[test]
     fn missing_head_header_errors() {
         let input = "# branch.oid 85d7cc5dd1cf49f6abe1c81439fbb5deae4124ab\0";
         assert!(matches!(

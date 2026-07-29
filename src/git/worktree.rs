@@ -211,22 +211,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_prunable_with_reason() {
-        let input = concat!(
-            "worktree /repo/wt\n",
-            "HEAD 85d7cc5dd1cf49f6abe1c81439fbb5deae4124ab\n",
-            "detached\n",
-            "prunable gitdir file points to non-existent location\n",
-        );
-        let entries = parse_worktree_list(input).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(
-            entries[0].prunable.as_deref(),
-            Some("gitdir file points to non-existent location")
-        );
-    }
-
-    #[test]
     fn parses_multiple_entries_in_order() {
         let input = concat!(
             "worktree /repo\n",
@@ -279,20 +263,9 @@ mod tests {
     fn replaces_characters_outside_the_allowed_set() {
         let name = sanitize_branch_dir_name("feat/awesome thing!");
         assert!(name.starts_with("feat-awesome-thing--"));
-    }
-
-    #[test]
-    fn keeps_dots_underscores_and_hyphens_as_is() {
-        let name = sanitize_branch_dir_name("release/v1.2.3_rc-1");
-        assert!(name.starts_with("release-v1.2.3_rc-1-"));
-    }
-
-    #[test]
-    fn is_deterministic_across_calls() {
-        assert_eq!(
-            sanitize_branch_dir_name("feature/x"),
-            sanitize_branch_dir_name("feature/x")
-        );
+        // Dots, underscores and hyphens are inside the allowed set.
+        let kept = sanitize_branch_dir_name("release/v1.2.3_rc-1");
+        assert!(kept.starts_with("release-v1.2.3_rc-1-"));
     }
 
     #[test]

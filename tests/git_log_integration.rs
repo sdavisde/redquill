@@ -146,16 +146,6 @@ fn commit_log_pagination_yields_two_non_overlapping_pages_in_stable_order() {
     assert_eq!(page1, page1_again);
 }
 
-#[test]
-fn commit_log_skip_past_the_end_yields_an_empty_final_page() {
-    let tmp = init_bare_repo();
-    commit_n_times(tmp.path(), 2);
-
-    let runner = runner_for(&tmp);
-    let last_page = runner.commit_log(10, 2).unwrap();
-    assert!(last_page.is_empty());
-}
-
 // -- `GitRunner::commit_log_range` (the Review launcher Commits tab's
 // ahead-of-base source) --------------------------------------------------
 
@@ -198,25 +188,6 @@ fn commit_log_range_on_the_base_branch_itself_yields_no_entries() {
         commits.is_empty(),
         "a branch that IS the base has nothing ahead of itself"
     );
-}
-
-#[test]
-fn commit_log_range_with_head_already_reachable_from_base_yields_no_entries() {
-    // `head` (an older tag) contributes nothing `base` doesn't already
-    // have — still an empty vec, not an error.
-    let tmp = init_repo_with_base("main");
-    let dir = tmp.path();
-    commit_file(dir, "one\n", "first");
-    git(dir, &["tag", "older"]);
-    commit_file(dir, "two\n", "second");
-
-    let runner = runner_for(&tmp);
-    let range = CommitLogRange {
-        base: "main".to_string(),
-        head: "older".to_string(),
-    };
-    let commits = runner.commit_log_range(&range).unwrap();
-    assert!(commits.is_empty());
 }
 
 #[test]

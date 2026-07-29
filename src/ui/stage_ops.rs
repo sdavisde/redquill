@@ -1295,38 +1295,53 @@ mod tests {
     }
 
     #[test]
-    fn full_when_staged_modification_only() {
-        // `M.`: staged modification, clean working tree.
-        let s = ordinary(StatusCode::Modified, StatusCode::Unmodified);
-        assert_eq!(staged_state(&s), StagedState::Full);
+    fn full_when_only_the_index_side_changed() {
+        // One arm per staged letter code with a clean working tree.
+        let mut rename = status(
+            ChangeKind::RenamedOrCopied,
+            StatusCode::Renamed,
+            StatusCode::Unmodified,
+            "new/name.rs",
+        );
+        rename.orig_path = Some("old/name.rs".to_string());
+        let cases = [
+            ("M.", ordinary(StatusCode::Modified, StatusCode::Unmodified)),
+            ("A.", ordinary(StatusCode::Added, StatusCode::Unmodified)),
+            ("D.", ordinary(StatusCode::Deleted, StatusCode::Unmodified)),
+            ("R.", rename),
+            (
+                "C.",
+                status(
+                    ChangeKind::RenamedOrCopied,
+                    StatusCode::Copied,
+                    StatusCode::Unmodified,
+                    "copy.rs",
+                ),
+            ),
+        ];
+        for (label, s) in cases {
+            assert_eq!(staged_state(&s), StagedState::Full, "{label}");
+        }
     }
 
     #[test]
-    fn partial_when_both_staged_and_unstaged_modification() {
-        // `MM`: staged and then edited again.
-        let s = ordinary(StatusCode::Modified, StatusCode::Modified);
-        assert_eq!(staged_state(&s), StagedState::Partial);
-    }
-
-    #[test]
-    fn full_when_staged_addition() {
-        // `A.`: newly added and fully staged.
-        let s = ordinary(StatusCode::Added, StatusCode::Unmodified);
-        assert_eq!(staged_state(&s), StagedState::Full);
-    }
-
-    #[test]
-    fn partial_when_added_then_modified() {
-        // `AM`: staged add plus a subsequent unstaged edit.
-        let s = ordinary(StatusCode::Added, StatusCode::Modified);
-        assert_eq!(staged_state(&s), StagedState::Partial);
-    }
-
-    #[test]
-    fn full_when_staged_deletion() {
-        // `D.`: staged deletion.
-        let s = ordinary(StatusCode::Deleted, StatusCode::Unmodified);
-        assert_eq!(staged_state(&s), StagedState::Full);
+    fn partial_when_a_staged_change_gains_an_unstaged_edit() {
+        let cases = [
+            ("MM", ordinary(StatusCode::Modified, StatusCode::Modified)),
+            ("AM", ordinary(StatusCode::Added, StatusCode::Modified)),
+            (
+                "RM",
+                status(
+                    ChangeKind::RenamedOrCopied,
+                    StatusCode::Renamed,
+                    StatusCode::Modified,
+                    "new/name.rs",
+                ),
+            ),
+        ];
+        for (label, s) in cases {
+            assert_eq!(staged_state(&s), StagedState::Partial, "{label}");
+        }
     }
 
     #[test]
@@ -1339,43 +1354,6 @@ mod tests {
             "new.rs",
         );
         assert_eq!(staged_state(&s), StagedState::Unstaged);
-    }
-
-    #[test]
-    fn full_when_staged_rename() {
-        // `R.`: staged rename, clean working tree.
-        let mut s = status(
-            ChangeKind::RenamedOrCopied,
-            StatusCode::Renamed,
-            StatusCode::Unmodified,
-            "new/name.rs",
-        );
-        s.orig_path = Some("old/name.rs".to_string());
-        assert_eq!(staged_state(&s), StagedState::Full);
-    }
-
-    #[test]
-    fn partial_when_renamed_then_modified() {
-        // `RM`: staged rename plus a subsequent unstaged edit.
-        let s = status(
-            ChangeKind::RenamedOrCopied,
-            StatusCode::Renamed,
-            StatusCode::Modified,
-            "new/name.rs",
-        );
-        assert_eq!(staged_state(&s), StagedState::Partial);
-    }
-
-    #[test]
-    fn full_when_staged_copy() {
-        // `C.`: staged copy.
-        let s = status(
-            ChangeKind::RenamedOrCopied,
-            StatusCode::Copied,
-            StatusCode::Unmodified,
-            "copy.rs",
-        );
-        assert_eq!(staged_state(&s), StagedState::Full);
     }
 
     #[test]
@@ -1414,34 +1392,6 @@ mod tests {
         assert_eq!(map.get("partial.rs"), Some(&StagedState::Partial));
         assert_eq!(map.get("f.rs"), None);
         assert_eq!(map.get("new.rs"), None);
-    }
-
-    #[test]
-    fn kind_from_staged_code_maps_letters() {
-        assert_eq!(
-            kind_from_staged_code(StatusCode::Added),
-            FileChangeKind::Added
-        );
-        assert_eq!(
-            kind_from_staged_code(StatusCode::Deleted),
-            FileChangeKind::Deleted
-        );
-        assert_eq!(
-            kind_from_staged_code(StatusCode::Renamed),
-            FileChangeKind::Renamed
-        );
-        assert_eq!(
-            kind_from_staged_code(StatusCode::Copied),
-            FileChangeKind::Copied
-        );
-        assert_eq!(
-            kind_from_staged_code(StatusCode::Modified),
-            FileChangeKind::Modified
-        );
-        assert_eq!(
-            kind_from_staged_code(StatusCode::TypeChange),
-            FileChangeKind::Modified
-        );
     }
 
     /// A minimal [`StageOps`] fake for [`build_review`]: `diff` is

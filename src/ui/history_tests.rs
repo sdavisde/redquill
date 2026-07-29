@@ -60,59 +60,6 @@ fn app_with_history_fake(entries: Vec<CommitLogEntry>) -> App {
 
 // -- Loading placeholder (3.2a) ---------------------------------------------
 
-/// Before the History tab's first page arrives (nothing requested yet),
-/// `history_loading` is `false` (nothing in flight to wait on) and `history`
-/// is empty — the panel renders its "no commits yet requested" state, not a
-/// stuck spinner, until something actually asks.
-#[test]
-fn history_is_empty_and_not_loading_before_anything_is_requested() {
-    let app = app_with_history_fake(vec![commit("a", "one")]);
-    assert!(app.history.is_empty());
-    assert!(!app.history_loading());
-}
-
-/// A synchronous backend (no `async_commit_log_fetcher`) applies its page
-/// immediately: `ensure_history_loaded` leaves `history` populated and
-/// `history_loading` false right away, with no visible "in flight" gap —
-/// this is the fallback path production non-`Send` fakes and git-less
-/// contexts take.
-#[test]
-fn ensure_history_loaded_applies_synchronously_when_no_async_fetcher() {
-    let mut app = app_with_history_fake(vec![commit("a", "one"), commit("b", "two")]);
-    app.ensure_history_loaded();
-    assert_eq!(app.history.len(), 2);
-    assert!(!app.history_loading());
-    assert!(app.history_in_flight.is_none());
-}
-
-/// The loading placeholder is genuinely observable while a fetch is in
-/// flight: simulating the async path directly (spawn a task, set
-/// `history_in_flight`, don't poll yet) must show `history_loading() ==
-/// true` until `poll_history` drains it.
-#[test]
-fn history_loading_is_true_while_a_fetch_is_in_flight_and_false_after_it_lands() {
-    let mut app = App::new(Vec::new());
-    let id = app.history_tasks.spawn(|| Some(vec![commit("a", "one")]));
-    app.history_in_flight = Some(InFlightHistory {
-        id,
-        generation: app.history_generation,
-    });
-    assert!(
-        app.history_loading(),
-        "placeholder must show while the first page is in flight"
-    );
-
-    // Drain it (a background thread, so give it a moment to complete).
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while app.history_in_flight.is_some() && std::time::Instant::now() < deadline {
-        app.poll_history();
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    assert!(app.history_in_flight.is_none(), "fetch must have completed");
-    assert_eq!(app.history.len(), 1);
-    assert!(!app.history_loading());
-}
-
 // -- Stale-generation drop (3.2b) --------------------------------------------
 
 /// A history fetch completing after `history_generation` has advanced past

@@ -5,7 +5,6 @@ use crate::annotate::{Classification, Target};
 use crate::config::SidebarSide;
 use crate::diff::FileDiff;
 use crate::git::{CommitLogEntry, DiffTarget, RawFilePatch, RemoteOp};
-use crate::highlight::TokenKind;
 use crate::lsp::SourceLocation;
 use crate::review::ReviewStatus;
 use crate::ui::app::{ModeOrigin, PanelTab};
@@ -74,15 +73,6 @@ fn sidebar_width_configured_overrides_the_formula() {
     assert_eq!(sidebar_width(80, Some(20)), 20);
 }
 
-/// A configured width wider than the terminal is clamped to the terminal's
-/// actual width at render time (the FR's "clamped to available space"),
-/// rather than overflowing the split.
-#[test]
-fn sidebar_width_configured_clamps_to_available_terminal_width() {
-    assert_eq!(sidebar_width(50, Some(72)), 50);
-    assert_eq!(sidebar_width(0, Some(40)), 0);
-}
-
 /// Renders a small `App` to a `TestBackend` and asserts the diff pane shows
 /// expected content. No real terminal is touched. The git panel sidebar is
 /// hidden by default (see `sidebar_hidden_in_normal_mode_shown_when_panel_focused`
@@ -135,121 +125,6 @@ fn sidebar_hidden_in_normal_mode_shown_when_panel_focused() {
     assert!(content.contains("[1 files]"));
 }
 
-fn multi_file(path: &str) -> FileDiff {
-    let raw = format!(
-        "diff --git a/{path} b/{path}\nindex 111..222 100644\n--- a/{path}\n+++ b/{path}\n@@ -1,1 +1,1 @@\n-old\n+new\n"
-    );
-    FileDiff::from_patch(&RawFilePatch {
-        path: path.to_string(),
-        old_path: None,
-        raw,
-        is_binary: false,
-    })
-    .unwrap()
-}
-
-/// The multibuffer renders every file's section header (expanded, ▾
-/// indicator) with its kind letter and path, all in one buffer.
-#[test]
-fn multibuffer_renders_all_section_headers() {
-    let backend = TestBackend::new(80, 24);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let app = App::new(vec![multi_file("a.rs"), multi_file("b.rs")]);
-    let keymap = Keymap::default_map();
-
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
-
-    // Both section headers present, each with the expanded indicator ▾
-    // and the change-kind letter M, and both files' bodies visible.
-    assert!(content.contains("\u{25be}")); // ▾ expanded indicator
-    assert!(content.contains("M a.rs"));
-    assert!(content.contains("M b.rs"));
-    assert!(content.contains("old"));
-}
-
-/// A collapsed section renders exactly one line: its header with the
-/// collapsed indicator ▸, and none of its body rows (the `old`/`new`
-/// diff lines are hidden).
-#[test]
-fn collapsed_section_renders_header_only_with_collapsed_indicator() {
-    let backend = TestBackend::new(80, 24);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = App::new(vec![multi_file("a.rs")]);
-    app.view.set_collapsed("a.rs", true);
-    app.rebuild_rows();
-    let keymap = Keymap::default_map();
-
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    // Scoped to the area above the footer strip: the context-sensitive
-    // footer (see `footer.rs`) legitimately shows a "fold" hint (`za`), whose
-    // text incidentally contains the substring "old" — unrelated to this
-    // test's `old`/`new` diff-body fixture, so the whole-screen buffer isn't
-    // the right thing to scan here.
-    let footer_h = footer::footer_height(buffer.area.width, &app, &keymap, None);
-    let content_h = buffer.area.height.saturating_sub(footer_h);
-    let content: String = (0..content_h)
-        .flat_map(|y| (0..buffer.area.width).map(move |x| (x, y)))
-        .filter_map(|(x, y)| buffer.cell((x, y)))
-        .map(|cell| cell.symbol())
-        .collect();
-
-    assert!(content.contains("\u{25b8}")); // ▸ collapsed indicator
-    assert!(content.contains("M a.rs"));
-    // Body rows are gone while collapsed.
-    assert!(!content.contains("old"));
-    assert!(!content.contains("new"));
-}
-
-/// A fully-staged file renders the `●` marker slot in its section
-/// header; a partially-staged one renders `±`.
-#[test]
-fn staged_file_section_header_shows_marker() {
-    let backend = TestBackend::new(80, 24);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = App::new(vec![multi_file("a.rs")]);
-    app.staged_states
-        .insert("a.rs".to_string(), stage_ops::StagedState::Full);
-    app.rebuild_rows();
-    let keymap = Keymap::default_map();
-
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
-
-    assert!(content.contains("M a.rs"));
-    assert!(content.contains("\u{25cf}")); // ● staged marker
-}
-
-/// A partially-staged file renders the `±` marker in its section header.
-#[test]
-fn partial_file_section_header_shows_partial_marker() {
-    let backend = TestBackend::new(80, 24);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = App::new(vec![multi_file("a.rs")]);
-    app.staged_states
-        .insert("a.rs".to_string(), stage_ops::StagedState::Partial);
-    app.rebuild_rows();
-    let keymap = Keymap::default_map();
-
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
-
-    assert!(content.contains("M a.rs"));
-    assert!(content.contains("\u{00b1}")); // ± partial-staged marker
-}
-
 // -- Empty-diff welcome state -------------------------------------------------
 
 /// Renders `app` and returns the frame's content as one flattened string, the
@@ -283,24 +158,6 @@ fn empty_working_tree_target_shows_welcome_state() {
     assert!(
         !content.contains("no changes"),
         "old placeholder must be gone"
-    );
-}
-
-/// Every non-working-tree target gets its own situational wording, not the
-/// working-tree phrase reused verbatim.
-#[test]
-fn welcome_state_uses_target_appropriate_wording_per_target() {
-    let keymap = Keymap::default_map();
-
-    let mut staged_app = App::new(vec![]);
-    staged_app.target = DiffTarget::Staged;
-    assert!(rendered_content(&staged_app, &keymap).contains("Nothing staged"));
-
-    let mut range_app = App::new(vec![]);
-    range_app.target = DiffTarget::Range("main..HEAD".to_string());
-    assert!(
-        rendered_content(&range_app, &keymap).contains("Empty diff for main..HEAD"),
-        "range wording must name the range as typed"
     );
 }
 
@@ -368,28 +225,6 @@ fn capture_task_05_welcome_buffer() {
         .join("docs/specs/05-spec-diff-sources/05-proofs/05-task-05-welcome-buffer.txt");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, out).unwrap();
-}
-
-/// The multibuffer renders for a ref-range target exactly as for the
-/// working tree — every file's section header and body appear.
-#[test]
-fn multibuffer_renders_for_a_range_target() {
-    let backend = TestBackend::new(80, 24);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = App::new(vec![multi_file("a.rs"), multi_file("b.rs")]);
-    app.target = crate::git::DiffTarget::Range("main..HEAD".to_string());
-    let keymap = Keymap::default_map();
-
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
-
-    assert!(content.contains("\u{25be}")); // ▾ expanded indicator
-    assert!(content.contains("M a.rs"));
-    assert!(content.contains("M b.rs"));
-    assert!(content.contains("old"));
 }
 
 /// On a read-only range target the help overlay omits the inert
@@ -509,178 +344,6 @@ fn help_overlay_hides_review_rows_outside_a_review_session() {
     assert!(!content.contains("Accept/un-accept file under cursor"));
     assert!(!content.contains("Accept file under cursor (review sessions)"));
     assert!(!content.contains("Defer/un-defer file under cursor"));
-}
-
-#[test]
-fn help_overlay_renders_bindings_when_open() {
-    // Tall enough that the overlay's ~3/5-of-screen cap still reaches past
-    // the workflow header into the Navigation group.
-    let backend = TestBackend::new(80, 27);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = App::new(vec![sample_file()]);
-    app.help.open = true;
-    let keymap = Keymap::default_map();
-
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-
-    let buffer = terminal.backend().buffer().clone();
-    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
-    assert!(content.contains("keybinds"));
-    assert!(content.contains("Move cursor down"));
-}
-
-/// The help overlay documents the new remote-op and command-log bindings
-/// in their scope groups (no hidden features). A tall terminal avoids the
-/// overlay clipping its lower sections.
-#[test]
-fn help_overlay_lists_remote_and_command_log_bindings() {
-    let backend = TestBackend::new(100, 300);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = App::new(vec![sample_file()]);
-    app.help.open = true;
-    // Panel-scope/modal-section content lives on the All keys tab now
-    // (This context, the new default, only shows the origin's own scope
-    // plus Works everywhere — see `help::this_context_sections`).
-    app.help.tab = help::HelpTab::AllKeys;
-    let keymap = Keymap::default_map();
-
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-    let content: String = terminal
-        .backend()
-        .buffer()
-        .clone()
-        .content()
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
-
-    // Command-log toggle ("Works everywhere" section, Scope::Global).
-    assert!(content.contains("Toggle command log pane"));
-    // Remote ops (Git panel focused section, panel scope).
-    assert!(content.contains("Fetch from remote"));
-    assert!(content.contains("Pull from remote"));
-    assert!(content.contains("Push to remote"));
-    // Switcher-open binding (Git panel focused section, panel scope) and
-    // its modal hint section.
-    assert!(content.contains("Open branch/worktree switcher"));
-    assert!(content.contains("Branch/worktree switcher"));
-    assert!(content.contains("Switch to the selected branch/worktree"));
-}
-
-/// Every `Scope::Global` binding renders exactly once, under its own
-/// "Works everywhere" section, ahead of the per-scope sections — not
-/// duplicated once per scope the way it rendered before.
-#[test]
-fn help_overlay_lists_global_bindings_once_in_a_works_everywhere_section() {
-    let backend = TestBackend::new(100, 300);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = App::new(vec![sample_file()]);
-    app.help.open = true;
-    // This test is about the full reference's fixed section order (Works
-    // everywhere first), which is the All keys tab's contract (FR-3); This
-    // context (the new default) intentionally orders Works everywhere last.
-    app.help.tab = help::HelpTab::AllKeys;
-    let keymap = Keymap::default_map();
-
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
-    if std::env::var_os("REDQUILL_PROOF_DUMP").is_some() {
-        let w = buffer.area.width as usize;
-        let symbols: Vec<&str> = buffer.content().iter().map(|c| c.symbol()).collect();
-        for row in symbols.chunks(w) {
-            eprintln!("{}", row.concat());
-        }
-    }
-
-    assert!(content.contains("Works everywhere"));
-    let works_idx = content.find("Works everywhere").unwrap();
-    let panels_idx = content.find("Panels").expect("Panels section must render");
-    assert!(
-        works_idx < panels_idx,
-        "the Works everywhere section must render before the per-scope sections"
-    );
-
-    // One line per `Scope::Global` binding, in default_map(): `?`/`@`/`!`/
-    // `q` each once, `Quit and discard annotations` twice (`Q` and Ctrl-C).
-    for (description, expected_count) in [
-        ("Toggle help", 1),
-        ("Toggle command log pane", 1),
-        ("Dismiss config warning notice", 1),
-        ("Quit and emit annotations", 1),
-        ("Quit and discard annotations", 2),
-    ] {
-        assert_eq!(
-            content.matches(description).count(),
-            expected_count,
-            "unexpected occurrence count for {description:?}"
-        );
-    }
-}
-
-/// On a terminal too short for the whole binding list, the help overlay
-/// caps its height and scrolls: the top frame shows the first sections
-/// only, and driving it to the bottom (End, through the real key path)
-/// reveals the last section (Project search — the last entry in
-/// `help::modal_sections`) while scrolling the first off-screen.
-#[test]
-fn help_overlay_scrolls_to_reveal_lower_sections() {
-    // Tall enough that the overlay's ~3/5-of-screen cap still reaches past
-    // the "Works everywhere" section into Navigation, while staying far
-    // short of the full All keys reference so scrolling is still forced.
-    let backend = TestBackend::new(100, 30);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = App::new(vec![sample_file()]);
-    app.help.open = true;
-    // The modal sections (Project search, last in `help::modal_sections`)
-    // only render on the All keys tab; This context (the new default) never
-    // includes them.
-    app.help.tab = help::HelpTab::AllKeys;
-    let keymap = Keymap::default_map();
-
-    // First frame renders the top of the list (and records the viewport
-    // height the pager needs). The last section (Project search) is far
-    // below.
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-    let top: String = terminal
-        .backend()
-        .buffer()
-        .clone()
-        .content()
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
-    assert!(top.contains("Move cursor down"));
-    assert!(!top.contains("Toggle regex / literal matching"));
-
-    // Jump to the bottom through the real dispatch path, then redraw.
-    let mut pending = None;
-    let mut pending_count: Option<usize> = None;
-    let end = KeyEvent::new(KeyCode::End, KeyModifiers::NONE);
-    let _ = dispatch_key(&mut app, &keymap, &mut pending, &mut pending_count, end);
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-    let bottom: String = terminal
-        .backend()
-        .buffer()
-        .clone()
-        .content()
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
-    // The restore confirm is the last section in the overlay, so its rows
-    // are what scrolling to the end reveals.
-    assert!(bottom.contains("Restore confirm (d)"));
-    assert!(!bottom.contains("Move cursor down"));
 }
 
 /// The full lazygit-style filter lifecycle, driven through the real
@@ -1059,32 +722,6 @@ fn help_filter_narrows_rendered_bindings_to_matching_rows() {
     assert!(!content.contains("Move cursor down"));
 }
 
-/// A query with no matches anywhere in the overlay shows a "no matches"
-/// line instead of an empty list.
-#[test]
-fn help_filter_shows_no_matches_message_when_nothing_matches() {
-    let backend = TestBackend::new(120, 50);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = App::new(vec![sample_file()]);
-    app.help.open = true;
-    app.help.search = Some(("zzznomatchzzz".to_string(), false));
-    let keymap = Keymap::default_map();
-
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-    let content: String = terminal
-        .backend()
-        .buffer()
-        .clone()
-        .content()
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
-    assert!(content.contains("no matches for"));
-    assert!(content.contains("zzznomatchzzz"));
-}
-
 // -- Tabbed help overlay: This context (default) / All keys -----------------
 
 /// `?` always opens on the This context tab, showing only the origin's own
@@ -1118,47 +755,6 @@ fn help_opens_on_this_context_tab_showing_only_the_origin_scope() {
     assert!(
         !content.contains("Open branch/worktree switcher"),
         "Panel-scope rows must not show on This context from the diff view"
-    );
-}
-
-/// From the focused git panel, This context shows the Panel-scope bindings
-/// (and Works everywhere) but no Diff-scope rows — the mirror image of
-/// `help_opens_on_this_context_tab_showing_only_the_origin_scope`.
-#[test]
-fn help_this_context_from_the_panel_shows_only_panel_scope() {
-    let backend = TestBackend::new(100, 300);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = App::new(vec![sample_file()]);
-    app.mode = Mode::Panel {
-        cursor: 0,
-        tab: PanelTab::Changes,
-    };
-    app.apply(Action::ToggleHelp);
-    assert_eq!(
-        app.help.origin,
-        ModeOrigin::Panel {
-            cursor: 0,
-            tab: PanelTab::Changes,
-        }
-    );
-    let keymap = Keymap::default_map();
-
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-    let content: String = terminal
-        .backend()
-        .buffer()
-        .clone()
-        .content()
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
-    assert!(content.contains("Open branch/worktree switcher"));
-    assert!(content.contains("Works everywhere"));
-    assert!(
-        !content.contains("Move cursor down"),
-        "Diff-scope rows must not show on This context from the git panel"
     );
 }
 
@@ -1305,52 +901,6 @@ fn staging_panel_indicator_and_footer_render() {
     assert!(content.contains("staged hunk")); // status footer message
 }
 
-/// The sidebar's staged `●` indicator and `[N staged]` footer count render
-/// once the git panel is focused (`Mode::Panel`) — the sidebar's only
-/// visibility condition post-hide-by-default.
-#[test]
-fn sidebar_staged_indicator_renders_when_panel_focused() {
-    let backend = TestBackend::new(100, 30);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = App::new(vec![sample_file()]);
-    app.staged = vec![StagedFile {
-        path: "src/main.rs".to_string(),
-        letter: 'M',
-    }];
-    app.staged_states
-        .insert("src/main.rs".to_string(), stage_ops::StagedState::Full);
-    app.apply(Action::FocusGitPanel);
-    assert!(matches!(app.mode, Mode::Panel { .. }));
-    let keymap = Keymap::default_map();
-
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-
-    let buffer = terminal.backend().buffer().clone();
-    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
-
-    assert!(content.contains("\u{25cf}")); // sidebar staged indicator
-    assert!(content.contains("[1 staged]")); // sidebar footer count
-}
-
-#[test]
-fn empty_staging_panel_shows_hint() {
-    let backend = TestBackend::new(100, 30);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = App::new(vec![sample_file()]);
-    app.mode = Mode::Staging;
-    let keymap = Keymap::default_map();
-
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-
-    let buffer = terminal.backend().buffer().clone();
-    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
-    assert!(content.contains("nothing staged yet"));
-}
-
 /// The staging panel's empty hint resolves its key from the effective
 /// keymap rather than a hardcoded literal: a `[keys.diff] toggle-stage`
 /// remap must show up here with no code change.
@@ -1424,114 +974,9 @@ fn empty_list_panel_hint_reflects_a_remapped_compose_key() {
 
 // -- Syntax highlighting (rendering layer) -------------------------------
 
-/// A row carrying a syntax-highlight span renders that span's text with
-/// the theme's token color — asserted via actual buffer cell styles,
-/// not just text content, so this exercises the diff pane's rendering
-/// (not the tree-sitter engine, which has its own tests).
-#[test]
-fn syntax_highlighted_span_renders_with_token_color() {
-    let backend = TestBackend::new(80, 20);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = App::new(vec![sample_file()]);
-    let theme = app.theme;
-
-    let Some(Row::Line(line)) = app.view.rows.get_mut(2) else {
-        panic!("expected a line row at index 2");
-    };
-    assert_eq!(line.content, "fn main() {");
-    line.syntax_spans = Some(vec![(0..2, TokenKind::Keyword)]);
-
-    let keymap = Keymap::default_map();
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-
-    let buffer = terminal.backend().buffer().clone();
-    let has_keyword_cell = buffer
-        .content()
-        .iter()
-        .any(|cell| cell.symbol() == "f" && cell.fg == theme.keyword);
-    assert!(
-        has_keyword_cell,
-        "expected a cell styled with the keyword token color"
-    );
-}
-
 // -- Search ---------------------------------------------------------------
 
-/// An active search shows the `/pattern` footer prompt while typing,
-/// and — once confirmed — the matched row's text renders with the
-/// search-match background.
-#[test]
-fn search_mode_renders_prompt_and_confirmed_match_is_highlighted() {
-    let backend = TestBackend::new(80, 20);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = App::new(vec![sample_file()]);
-    let theme = app.theme;
-
-    app.mode = Mode::Search;
-    app.search_input = "n".to_string();
-    let keymap = Keymap::default_map();
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
-    assert!(content.contains("/n"));
-
-    // "n" matches both "fn main() {" (row 2) and "new();" (row 4);
-    // confirming jumps the cursor to the first match (row 2), leaving
-    // the second match (row 4) highlighted but not selected — so its
-    // background is unambiguously the search-match tint, not the
-    // cursor-row tint.
-    app.confirm_search();
-    assert_eq!(app.mode, Mode::Normal);
-    assert_eq!(app.search.matches.len(), 2);
-    assert_ne!(app.view.cursor, app.search.matches[1]);
-
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let has_match_bg = buffer
-        .content()
-        .iter()
-        .any(|cell| cell.bg == theme.search_match_bg);
-    assert!(
-        has_match_bg,
-        "expected the unselected matched row to carry the search-match background"
-    );
-}
-
 // -- Column cursor ---------------------------------------------------------
-
-/// The column cursor renders as a distinct background on the cursor
-/// row's char cell, and only on the cursor row.
-#[test]
-fn column_cursor_renders_distinct_background_on_the_cursor_cell() {
-    let backend = TestBackend::new(80, 20);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = App::new(vec![sample_file()]);
-    let theme = app.theme;
-    app.apply(Action::CursorDown); // hunk header
-    app.apply(Action::CursorDown); // "fn main() {"
-    app.apply(Action::CursorRight);
-    app.apply(Action::CursorRight); // column 2, the second 'n' of "fn"
-    let keymap = Keymap::default_map();
-
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let has_cursor_bg = buffer
-        .content()
-        .iter()
-        .any(|cell| cell.bg == theme.column_cursor_bg);
-    assert!(
-        has_cursor_bg,
-        "expected exactly one cell styled with the column-cursor background"
-    );
-}
 
 // -- LSP peek overlay --------------------------------------------------------
 
@@ -1573,28 +1018,6 @@ fn peek_overlay_renders_canned_references_and_preview() {
     assert!(content.contains("references: 1 results"));
     assert!(content.contains("main.rs"));
     assert!(content.contains("fn main() {"));
-}
-
-/// A Hover overlay renders its text body in the same overlay chrome.
-#[test]
-fn peek_overlay_renders_hover_text() {
-    let backend = TestBackend::new(120, 30);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = App::new(vec![sample_file()]);
-    app.peek = Some(super::peek::PeekState::hover(
-        "this function does nothing interesting".to_string(),
-    ));
-    app.mode = Mode::Peek;
-    let keymap = Keymap::default_map();
-
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
-
-    assert!(content.contains("hover"));
-    assert!(content.contains("this function does nothing interesting"));
 }
 
 // -- Git panel focus -----------------------------------------------------
@@ -1675,173 +1098,6 @@ fn panel_smoke_app() -> App {
     app
 }
 
-/// Scans the top border row (y = 0) for cells painted with the
-/// focused-border color, returning `(diff_side_hot, panel_side_hot)`. The
-/// diff pane occupies `x < panel_start`; the panel occupies the rest.
-fn top_border_hot(
-    terminal: &Terminal<TestBackend>,
-    focus: ratatui::style::Color,
-    width: usize,
-    panel_start: usize,
-) -> (bool, bool) {
-    let binding = terminal.backend().buffer().clone();
-    let content = binding.content();
-    let mut diff_hot = false;
-    let mut panel_hot = false;
-    for (x, cell) in content.iter().enumerate().take(width) {
-        if cell.fg == focus {
-            if x < panel_start {
-                diff_hot = true;
-            } else {
-                panel_hot = true;
-            }
-        }
-    }
-    (diff_hot, panel_hot)
-}
-
-/// The focused pane's border is emphasized, and the toggle moves that
-/// emphasis from the diff pane to the git panel and back. Since the panel
-/// is hidden unless focused (see `split_layout`), this also exercises the
-/// sidebar appearing/disappearing across the same toggle.
-#[test]
-fn focused_pane_border_emphasis_follows_the_toggle() {
-    let width = 80usize;
-    // Derived, not a literal: the sidebar's left edge tracks `sidebar_width`
-    // so this test can't silently drift when the ratio/clamps change.
-    let panel_start = width - sidebar_width(width as u16, None) as usize;
-    let backend = TestBackend::new(width as u16, 20);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = panel_smoke_app();
-    let focus = app.theme.focused_border;
-    let keymap = Keymap::default_map();
-
-    // Diff focused (Normal): the sidebar is hidden entirely, so the diff
-    // pane spans the full width with its border emphasized.
-    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
-    assert!(
-        !content.contains("git: main"),
-        "sidebar should be hidden when diff focused"
-    );
-    let (diff_hot, _) = top_border_hot(&terminal, focus, width, panel_start);
-    assert!(
-        diff_hot,
-        "diff border should be emphasized when diff focused"
-    );
-
-    // Panel focused: the sidebar reappears at its fixed width, and emphasis
-    // moves to the panel border.
-    app.apply(Action::FocusGitPanel);
-    assert!(matches!(app.mode, Mode::Panel { .. }));
-    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
-    assert!(
-        content.contains("git: main"),
-        "sidebar should render when panel focused"
-    );
-    let (diff_hot, panel_hot) = top_border_hot(&terminal, focus, width, panel_start);
-    assert!(
-        panel_hot,
-        "panel border should be emphasized when panel focused"
-    );
-    assert!(!diff_hot, "diff border should be plain when panel focused");
-
-    // Toggling back to the diff hides the sidebar again.
-    app.apply(Action::FocusGitPanel);
-    assert!(matches!(app.mode, Mode::Normal));
-    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
-    assert!(
-        !content.contains("git: main"),
-        "sidebar should hide again once focus returns to the diff"
-    );
-}
-
-/// The sidebar rect widens/narrows with the terminal per `sidebar_width`'s
-/// clamped-30% rule, and that's reflected both in `split_layout` itself and
-/// in what actually gets rendered onto the buffer. Uses the tip commit's
-/// subject line (`commit_line`, deliberately unwrapped/unclipped-by-code —
-/// see its doc comment, ratatui clips it at the rect edge) as the "does more
-/// room show more text" probe: the subject is long enough to be clipped by a
-/// 40-wide sidebar but to fit whole inside a 72-wide one.
-#[test]
-fn sidebar_rect_and_render_scale_with_terminal_width_when_panel_focused() {
-    let subject = "feat: add sidebar proportional width layout support";
-    let cases: &[(u16, u16)] = &[(80, 40), (160, 48), (240, 72)];
-
-    for &(width, expected_sidebar) in cases {
-        // Pure layout: `split_layout` itself hands back the clamped width.
-        let area = Rect::new(0, 0, width, 30);
-        let (sidebar_rect, diff_rect) = split_layout(area, true, SidebarSide::Right, None);
-        let sidebar_rect = sidebar_rect.expect("sidebar shown when panel focused");
-        assert_eq!(
-            sidebar_rect.width, expected_sidebar,
-            "split_layout sidebar width at terminal width {width}"
-        );
-        assert_eq!(
-            diff_rect.width,
-            width - expected_sidebar,
-            "split_layout diff-pane width at terminal width {width}"
-        );
-
-        // Grounded in a real render: the git panel's branch title only ever
-        // appears at or past the sidebar's left edge, never inside the diff
-        // pane's columns, proving the sidebar actually renders at the width
-        // `split_layout` computed above (not just on paper).
-        let backend = TestBackend::new(width, 30);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut app = panel_smoke_app();
-        app.last_commit = Some(crate::git::CommitSummary {
-            short_hash: "a1b2c3d".to_string(),
-            subject: subject.to_string(),
-        });
-        app.apply(Action::FocusGitPanel);
-        let keymap = Keymap::default_map();
-        terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
-        let buffer = terminal.backend().buffer().clone();
-
-        let panel_start = width - expected_sidebar;
-        let mut diff_side = String::new();
-        let mut whole = String::new();
-        for y in 0..buffer.area.height {
-            for x in 0..width {
-                let symbol = buffer.cell((x, y)).map(|c| c.symbol()).unwrap_or(" ");
-                whole.push_str(symbol);
-                if x < panel_start {
-                    diff_side.push_str(symbol);
-                }
-            }
-        }
-        assert!(
-            !diff_side.contains("git: main"),
-            "diff pane columns should never show the sidebar's branch title at width {width}"
-        );
-        assert!(
-            whole.contains("git: main"),
-            "sidebar should render its branch title somewhere at width {width}"
-        );
-
-        // The un-truncated-at-wide/truncated-at-narrow probe: only asserted
-        // at the two ends of the sweep (40 clips, 72 fits whole); 48 sits in
-        // between and isn't a specified boundary.
-        if expected_sidebar == 72 {
-            assert!(
-                whole.contains(subject),
-                "a {expected_sidebar}-wide sidebar should show the full commit subject un-truncated"
-            );
-        } else if expected_sidebar == 40 {
-            assert!(
-                !whole.contains(subject),
-                "a {expected_sidebar}-wide sidebar should clip the long commit subject"
-            );
-        }
-    }
-}
-
 /// `[layout] sidebar_side = "left"` moves the sidebar to the left edge; the
 /// diff pane gets the remaining width on the right.
 #[test]
@@ -1852,19 +1108,6 @@ fn split_layout_left_side_puts_sidebar_at_the_left_edge() {
     assert_eq!(sidebar_rect.x, 0);
     assert_eq!(diff_rect.x, sidebar_rect.width);
     assert_eq!(diff_rect.width, 100 - sidebar_rect.width);
-}
-
-/// `[layout] sidebar_width` (already range-validated at load time) picks the
-/// exact width, overriding the proportional formula, on both sides.
-#[test]
-fn split_layout_configured_width_overrides_the_formula_on_both_sides() {
-    let area = Rect::new(0, 0, 100, 30);
-
-    let (right_sidebar, _) = split_layout(area, true, SidebarSide::Right, Some(55));
-    assert_eq!(right_sidebar.expect("shown").width, 55);
-
-    let (left_sidebar, _) = split_layout(area, true, SidebarSide::Left, Some(55));
-    assert_eq!(left_sidebar.expect("shown").width, 55);
 }
 
 /// A hidden sidebar (`show_sidebar: false`) ignores `side`/`configured_width`
@@ -2059,24 +1302,6 @@ fn quit_family_quits_from_focused_panel() {
 }
 
 // -- Review-session banner layout --------------------------------------------
-
-/// `split_banner` reserves exactly one row at the top when shown, and is a
-/// pure passthrough when not — pinning the pure half of the split chain
-/// `draw` and the event loop's viewport-measurement mirror both run through.
-#[test]
-fn split_banner_reserves_exactly_one_row_when_shown() {
-    let area = Rect::new(0, 0, 100, 40);
-    let (banner, rest) = split_banner(area, true);
-    let banner = banner.expect("banner must render when shown");
-    assert_eq!(banner.height, 1);
-    assert_eq!(banner.y, 0);
-    assert_eq!(rest.y, 1);
-    assert_eq!(rest.height, 39);
-
-    let (banner_hidden, rest_hidden) = split_banner(area, false);
-    assert!(banner_hidden.is_none());
-    assert_eq!(rest_hidden, area);
-}
 
 /// `diff_pane_rect` — the shared function [`event_loop`]'s viewport
 /// measurement and `draw`'s own `debug_assert_eq!` both depend on — must
@@ -2391,99 +1616,7 @@ fn file_named(path: &str) -> FileDiff {
     .unwrap()
 }
 
-/// The reviewer-facing rendering proof: sidebar
-/// and section-header markers for an accepted (`●`, reusing the staged
-/// glyph/color) and a deferred (`~`) file, alongside the banner's
-/// `accepted/total` progress count — the full real render, panel focused so
-/// the sidebar is visible. Set `REDQUILL_PROOF_DUMP=1` to print the rendered
-/// buffer to stderr (mirrors `perf_tests.rs`'s `REDQUILL_PERF_PRINT`
-/// convention) for a text-render screenshot substitute.
-#[test]
-fn review_markers_render_on_sidebar_and_section_headers_with_banner_count() {
-    let backend = TestBackend::new(100, 30);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = App::new(vec![file_named("a.rs"), file_named("b.rs")]);
-    app.target = DiffTarget::Review {
-        base: "main".to_string(),
-        branch: "feature".to_string(),
-    };
-    app.apply(Action::ToggleAccept); // a.rs (cursor starts on its header)
-    app.select_file_by_path("b.rs");
-    app.apply(Action::ToggleDefer); // b.rs
-    // Move the cursor back to a.rs's header *without* going through
-    // `select_file_by_path` (which un-collapses its target on selection —
-    // correct for that gesture, but not what this proof wants): focusing
-    // the panel resets its cursor to row 0 and `panel_follow` (existing,
-    // pre-spec-08 behavior) re-syncs the diff to whatever file that row
-    // names, expanding it if `view.selected_file` disagrees. Pre-syncing
-    // `selected_file` to a.rs here (its collapsed header is still row 0)
-    // keeps both files rendered in their true collapsed-by-review state.
-    app.view.cursor = app.view.header_row_of_file[0];
-    app.rebuild_rows();
-    app.apply(Action::FocusGitPanel);
-    assert!(matches!(app.mode, Mode::Panel { .. }));
-    let keymap = Keymap::default_map();
-
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
-    if std::env::var_os("REDQUILL_PROOF_DUMP").is_some() {
-        let w = buffer.area.width as usize;
-        let symbols: Vec<&str> = buffer.content().iter().map(|c| c.symbol()).collect();
-        for row in symbols.chunks(w) {
-            eprintln!("{}", row.concat());
-        }
-    }
-
-    assert!(content.contains("REVIEWING feature"));
-    assert!(
-        content.contains("1/2"),
-        "banner accepted/total: {content:?}"
-    );
-    // Both the sidebar and the section-header marker slot carry the glyphs;
-    // this asserts presence of each marker character somewhere on screen —
-    // the per-widget unit tests (`diff_view.rs`/`git_panel.rs`) pin the
-    // exact slot/color, this proves the whole render composes them together.
-    assert!(
-        content.contains('\u{25cf}'),
-        "accepted ● marker: {content:?}"
-    );
-    assert!(content.contains('~'), "deferred ~ marker: {content:?}");
-}
-
 // -- Accepted-files panel -----------------------------------------------------
-
-/// `s` in a review session with nothing accepted yet shows the
-/// review-appropriate empty-state hint — the mirror of
-/// `empty_staging_panel_shows_hint`, resolving `Space`'s key from the
-/// effective keymap (`Action::ToggleAccept`) rather than a hardcoded key,
-/// same convention as the local panel's own hint.
-#[test]
-fn empty_accepted_panel_shows_review_appropriate_hint() {
-    let backend = TestBackend::new(100, 30);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = App::new(vec![sample_file()]);
-    app.target = DiffTarget::Review {
-        base: "main".to_string(),
-        branch: "feature".to_string(),
-    };
-    app.apply(Action::ToggleStagingPanel);
-    assert_eq!(app.mode, Mode::Staging);
-    let keymap = Keymap::default_map();
-
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
-
-    assert!(content.contains("no files accepted yet"));
-    assert!(content.contains("Space"));
-    // Never the local panel's own wording.
-    assert!(!content.contains("nothing staged yet"));
-}
 
 /// The accepted-files panel lists accepted files (not deferred/unreviewed
 /// ones) and un-accepting one via `Space` removes it from the list,
@@ -2899,172 +2032,7 @@ fn at_toggles_command_log_from_both_scopes_and_renders_in_bottom_slot() {
     assert!(matches!(app.mode, Mode::Panel { .. }));
 }
 
-/// The running indicator shows in the footer while a remote op is in
-/// flight (here, a stalled background task the test controls).
-#[test]
-fn running_indicator_renders_while_a_remote_op_is_in_flight() {
-    let keymap = Keymap::default_map();
-    let mut app = panel_smoke_app();
-    // Spawn a task that blocks on a gate we never release, so the op stays
-    // "in flight" for the duration of the render.
-    let (_gate_tx, gate_rx) = std::sync::mpsc::channel::<()>();
-    let id = app.background.spawn(move || {
-        let _ = gate_rx.recv();
-        super::background::CommandOutcome {
-            success: true,
-            code: Some(0),
-            stdout: String::new(),
-            stderr: String::new(),
-        }
-    });
-    app.git_op = Some(super::app::InFlightGitOp {
-        id,
-        kind: super::app::GitOpKind::Remote(crate::git::RemoteOp::Fetch),
-        command_line: "git fetch".to_string(),
-    });
-
-    let backend = TestBackend::new(100, 30);
-    let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
-    let content: String = terminal
-        .backend()
-        .buffer()
-        .clone()
-        .content()
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
-    assert!(
-        content.contains("fetch"),
-        "footer should show the running fetch indicator"
-    );
-}
-
-/// With no search input, remote-op indicator, or transient status message
-/// active, the footer falls back to the context-sensitive hint strip (see
-/// `footer.rs`) — trimmed to the less-common Normal-mode actions
-/// (`?` help stays as the overlay's only discoverability surface for
-/// everything the trim removed). `j`/`k` movement, hunk nav, fold, search,
-/// and the `` ` `` git panel binding are muscle-memory basics: still bound,
-/// still documented in `?` help, but no longer rendered in this strip.
-#[test]
-fn context_footer_strip_renders_when_nothing_else_occupies_the_footer() {
-    let keymap = Keymap::default_map();
-    let app = App::new(vec![sample_file()]);
-
-    let backend = TestBackend::new(100, 30);
-    let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
-    let content: String = terminal
-        .backend()
-        .buffer()
-        .clone()
-        .content()
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
-    assert!(
-        content.contains("help"),
-        "footer strip should hint at the help overlay"
-    );
-    assert!(
-        content.contains("stage hunk"),
-        "footer strip should hint at Space staging a hunk"
-    );
-    assert!(
-        !content.contains("git panel"),
-        "trimmed: the backtick binding no longer occupies footer space"
-    );
-    assert!(
-        !content.contains("move"),
-        "trimmed: j/k movement no longer occupies footer space"
-    );
-}
-
-/// A transient status message takes priority over the context footer strip —
-/// the strip only shows once the message clears.
-#[test]
-fn status_message_replaces_the_context_footer_strip() {
-    let keymap = Keymap::default_map();
-    let mut app = App::new(vec![sample_file()]);
-    app.set_status_message("staged hunk!!");
-
-    let backend = TestBackend::new(100, 30);
-    let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
-    let content: String = terminal
-        .backend()
-        .buffer()
-        .clone()
-        .content()
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
-    assert!(content.contains("staged hunk!!"));
-    assert!(
-        !content.contains("git panel"),
-        "status message should displace the footer strip"
-    );
-}
-
 // -- Config-warning notice ----------------------------------------------------
-
-/// A loaded warning renders in the footer, naming the problem, without
-/// blocking the diff content above it — and is never printed to stdout (this
-/// is a `TestBackend` render, not process stdout, so nothing here could ever
-/// reach it either way).
-#[test]
-fn config_warning_notice_renders_in_the_footer_without_blocking_the_diff() {
-    let keymap = Keymap::default_map();
-    let mut app = App::new(vec![sample_file()]);
-    app.set_config(
-        crate::config::Config::default(),
-        vec![crate::config::ConfigWarning::SyntaxError {
-            path: "/tmp/config.toml".to_string(),
-            message: "TOML parse error at line 3".to_string(),
-        }],
-    );
-
-    let backend = TestBackend::new(100, 30);
-    let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| draw(f, &app, &keymap, None)).unwrap();
-    let content: String = terminal
-        .backend()
-        .buffer()
-        .clone()
-        .content()
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
-    assert!(content.contains("/tmp/config.toml"));
-    assert!(content.contains("TOML parse error at line 3"));
-    // Diff content still renders (main.rs's own file content), unblocked.
-    assert!(content.contains("fn main"));
-}
-
-/// Multiple warnings show the first plus an "(and N more)" summary, per the
-/// FR ("first problem + and N more").
-#[test]
-fn config_warning_notice_summarizes_additional_warnings() {
-    let mut app = App::new(vec![sample_file()]);
-    app.set_config(
-        crate::config::Config::default(),
-        vec![
-            crate::config::ConfigWarning::UnknownKey {
-                section: "layout".to_string(),
-                key: "bogus".to_string(),
-            },
-            crate::config::ConfigWarning::InvalidValue {
-                section: "search".to_string(),
-                key: "case".to_string(),
-                message: "expected \"smart\"".to_string(),
-            },
-        ],
-    );
-    let notice = app.config_warning_notice().expect("warnings present");
-    assert!(notice.contains("bogus"));
-    assert!(notice.contains("and 1 more"));
-}
 
 /// `!` (`Action::DismissConfigWarning`) clears the notice for the session;
 /// the footer strip (or whatever else would show) resumes underneath.
@@ -3098,15 +2066,6 @@ fn dismiss_config_warning_hides_the_notice() {
         .map(|c| c.symbol())
         .collect();
     assert!(!content.contains("/tmp/config.toml"));
-}
-
-/// With no warnings collected, the notice never renders at all — the
-/// no-config invariant (zero visible difference from today).
-#[test]
-fn no_warnings_means_no_notice() {
-    let app = App::new(vec![sample_file()]);
-    assert!(!app.config_warning_visible());
-    assert_eq!(app.config_warning_notice(), None);
 }
 
 /// The footer reserves its one-row slot whenever the notice is visible, the

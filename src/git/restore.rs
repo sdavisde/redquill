@@ -92,3 +92,101 @@ impl GitRunner {
         Err(command_error(args, &output.status, &output.stderr))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// A throwaway repo with no commits. `--source=HEAD` cannot resolve
+    /// there, so every restore below fails before touching anything — and a
+    /// failed restore reports the argv it ran, which is what these tests
+    /// read back.
+    fn commitless_repo() -> TempDir {
+        let tmp = TempDir::new().unwrap();
+        let out = Command::new("git")
+            .current_dir(tmp.path())
+            .args(["init", "-q"])
+            .output()
+            .expect("failed to spawn git");
+        assert!(out.status.success(), "git init failed");
+        tmp
+    }
+
+    /// The exact argv `restore_paths` handed to git, recovered from the
+    /// `GitError::Command` a failing restore carries. Callers must pass
+    /// space-free paths so the joined command string splits back cleanly.
+    fn argv_of(paths: &[&str], scope: RestoreScope) -> Vec<String> {
+        let tmp = commitless_repo();
+        let runner = GitRunner::discover_in(tmp.path()).unwrap();
+        assert!(
+            runner
+                .root()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tmp.path().canonicalize().unwrap()),
+            "runner root escaped the tempdir"
+        );
+        match runner.restore_paths(paths, scope) {
+            Err(GitError::Command { command, .. }) => {
+                command.split(' ').map(str::to_string).collect()
+            }
+            other => panic!("expected a failing restore carrying its argv, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_restore_starts_with_the_fixed_restore_source_head_staged_prefix() {
+        for scope in [RestoreScope::IndexAndWorktree, RestoreScope::IndexOnly] {
+            let argv = argv_of(&["a.rs"], scope);
+            assert_eq!(
+                &argv[..3],
+                &["restore", "--source=HEAD", "--staged"],
+                "{scope:?} must not shift the restore source or drop --staged"
+            );
+        }
+    }
+
+    #[test]
+    fn the_worktree_flag_appears_only_for_the_index_and_worktree_scope() {
+        // The index-only scope is what the staged view uses; a `--worktree`
+        // leaking into it would destroy unshown working-tree edits.
+        for (scope, expected) in [
+            (RestoreScope::IndexAndWorktree, true),
+            (RestoreScope::IndexOnly, false),
+        ] {
+            for paths in [&["a.rs"][..], &["a.rs", "b.rs"][..]] {
+                let argv = argv_of(paths, scope);
+                assert_eq!(
+                    argv.iter().any(|a| a == "--worktree"),
+                    expected,
+                    "{scope:?} with {paths:?} produced {argv:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_pathspec_always_sits_after_a_double_dash_separator() {
+        // A path that looks like a flag must never be readable as one: the
+        // separator is what guarantees that, whatever the path's content.
+        const FIXED: [&str; 4] = ["restore", "--source=HEAD", "--staged", "--worktree"];
+        for scope in [RestoreScope::IndexAndWorktree, RestoreScope::IndexOnly] {
+            let paths = ["--force", "-f", "a.rs"];
+            let argv = argv_of(&paths, scope);
+            let sep = argv
+                .iter()
+                .position(|a| a == "--")
+                .expect("the -- separator must be present");
+            assert_eq!(
+                &argv[sep + 1..],
+                &paths[..],
+                "{scope:?}: the pathspec must be exactly the caller's paths, in order"
+            );
+            assert!(
+                argv[..sep].iter().all(|a| FIXED.contains(&a.as_str())),
+                "{scope:?}: only fixed flags may precede the separator: {argv:?}"
+            );
+        }
+    }
+}

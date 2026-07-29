@@ -1,144 +1,88 @@
 use super::*;
 
-#[test]
-fn https_url_with_git_suffix_yields_the_hostname() {
-    let host = parse_origin_hostname("https://github.com/org/repo.git").unwrap();
-    assert_eq!(host.as_str(), "github.com");
+/// Expected outcome for one `parse_origin_hostname` case.
+enum HostExpect {
+    Host(&'static str),
+    Malformed,
+    InvalidCharset,
 }
 
 #[test]
-fn https_url_without_git_suffix_yields_the_hostname() {
-    let host = parse_origin_hostname("https://github.com/org/repo").unwrap();
-    assert_eq!(host.as_str(), "github.com");
+fn parse_origin_hostname_covers_every_recognized_and_rejected_url_shape() {
+    use HostExpect::*;
+    let cases: &[(&str, HostExpect)] = &[
+        // https, with and without the .git suffix, and with a port to drop.
+        ("https://github.com/org/repo.git", Host("github.com")),
+        ("https://github.com/org/repo", Host("github.com")),
+        ("https://example.com:8443/org/repo.git", Host("example.com")),
+        // ssh, with and without a user, with and without a port.
+        ("ssh://git@github.com/org/repo.git", Host("github.com")),
+        ("ssh://git@example.com:22/org/repo.git", Host("example.com")),
+        ("ssh://example.com/org/repo.git", Host("example.com")),
+        // scp-like, flat and multi-label host with a nested path.
+        ("git@github.com:org/repo.git", Host("github.com")),
+        (
+            "git@gitlab.example.com:group/sub/repo.git",
+            Host("gitlab.example.com"),
+        ),
+        // The full accepted charset: alphanumerics, dashes, dots.
+        (
+            "https://git-hub.example-01.co/org/repo.git",
+            Host("git-hub.example-01.co"),
+        ),
+        // Nothing to parse a hostname out of at all.
+        ("", Malformed),
+        ("not a url", Malformed),
+        ("https://", Malformed),
+        ("ftp://host.example.com/path", Malformed),
+        // A local filesystem path is malformed, never read as scp-like.
+        ("/home/user/repos/origin", Malformed),
+        // A hostname was found but carries a disallowed character.
+        ("https://ho$t.example.com/org/repo", InvalidCharset),
+        ("git@host_name.example.com:org/repo.git", InvalidCharset),
+    ];
+
+    for (url, expected) in cases {
+        let got = parse_origin_hostname(url);
+        match expected {
+            Host(want) => match got {
+                Ok(host) => assert_eq!(host.as_str(), *want, "{url}"),
+                Err(err) => panic!("{url}: expected host {want}, got error {err}"),
+            },
+            Malformed => assert!(
+                matches!(got, Err(RemoteUrlError::Malformed(_))),
+                "{url}: expected Malformed, got {got:?}"
+            ),
+            InvalidCharset => assert!(
+                matches!(got, Err(RemoteUrlError::InvalidCharset(_))),
+                "{url}: expected InvalidCharset, got {got:?}"
+            ),
+        }
+    }
 }
 
 #[test]
-fn https_url_with_explicit_port_drops_the_port() {
-    let host = parse_origin_hostname("https://example.com:8443/org/repo.git").unwrap();
-    assert_eq!(host.as_str(), "example.com");
-}
+fn parse_origin_repo_slug_covers_every_recognized_and_rejected_url_shape() {
+    let cases: &[(&str, Option<&str>)] = &[
+        ("https://github.com/org/repo.git", Some("org/repo")),
+        ("https://github.com/org/repo", Some("org/repo")),
+        (
+            "ssh://git@example.com:22/group/sub/repo.git",
+            Some("group/sub/repo"),
+        ),
+        ("git@github.com:org/repo.git", Some("org/repo")),
+        (
+            "git@gitlab.example.com:group/sub/repo.git",
+            Some("group/sub/repo"),
+        ),
+        // No path at all, and the malformed shapes, yield no slug.
+        ("https://github.com", None),
+        ("not a url", None),
+        ("", None),
+        ("ftp://host.example.com/org/repo", None),
+    ];
 
-#[test]
-fn ssh_url_with_user_yields_the_hostname() {
-    let host = parse_origin_hostname("ssh://git@github.com/org/repo.git").unwrap();
-    assert_eq!(host.as_str(), "github.com");
-}
-
-#[test]
-fn ssh_url_with_user_and_port_yields_the_hostname() {
-    let host = parse_origin_hostname("ssh://git@example.com:22/org/repo.git").unwrap();
-    assert_eq!(host.as_str(), "example.com");
-}
-
-#[test]
-fn ssh_url_without_user_yields_the_hostname() {
-    let host = parse_origin_hostname("ssh://example.com/org/repo.git").unwrap();
-    assert_eq!(host.as_str(), "example.com");
-}
-
-#[test]
-fn scp_like_form_yields_the_hostname() {
-    let host = parse_origin_hostname("git@github.com:org/repo.git").unwrap();
-    assert_eq!(host.as_str(), "github.com");
-}
-
-#[test]
-fn scp_like_form_with_multi_label_hostname_and_nested_path() {
-    let host = parse_origin_hostname("git@gitlab.example.com:group/sub/repo.git").unwrap();
-    assert_eq!(host.as_str(), "gitlab.example.com");
-}
-
-#[test]
-fn empty_string_is_malformed() {
-    let err = parse_origin_hostname("").unwrap_err();
-    assert!(matches!(err, RemoteUrlError::Malformed(_)));
-}
-
-#[test]
-fn plain_text_with_no_recognizable_shape_is_malformed() {
-    let err = parse_origin_hostname("not a url").unwrap_err();
-    assert!(matches!(err, RemoteUrlError::Malformed(_)));
-}
-
-#[test]
-fn https_scheme_with_empty_authority_is_malformed() {
-    let err = parse_origin_hostname("https://").unwrap_err();
-    assert!(matches!(err, RemoteUrlError::Malformed(_)));
-}
-
-#[test]
-fn unsupported_scheme_is_malformed() {
-    let err = parse_origin_hostname("ftp://host.example.com/path").unwrap_err();
-    assert!(matches!(err, RemoteUrlError::Malformed(_)));
-}
-
-#[test]
-fn local_filesystem_path_is_malformed_not_scp_like() {
-    let err = parse_origin_hostname("/home/user/repos/origin").unwrap_err();
-    assert!(matches!(err, RemoteUrlError::Malformed(_)));
-}
-
-#[test]
-fn hostname_with_disallowed_character_is_rejected() {
-    let err = parse_origin_hostname("https://ho$t.example.com/org/repo").unwrap_err();
-    assert!(matches!(err, RemoteUrlError::InvalidCharset(_)));
-}
-
-#[test]
-fn scp_like_hostname_with_underscore_is_rejected() {
-    let err = parse_origin_hostname("git@host_name.example.com:org/repo.git").unwrap_err();
-    assert!(matches!(err, RemoteUrlError::InvalidCharset(_)));
-}
-
-#[test]
-fn valid_hostname_charset_accepts_alphanumerics_dashes_and_dots() {
-    let host = parse_origin_hostname("https://git-hub.example-01.co/org/repo.git").unwrap();
-    assert_eq!(host.as_str(), "git-hub.example-01.co");
-}
-
-// -- parse_origin_repo_slug ---------------------------------------------
-
-#[test]
-fn https_url_slug_drops_the_git_suffix() {
-    let slug = parse_origin_repo_slug("https://github.com/org/repo.git").unwrap();
-    assert_eq!(slug, "org/repo");
-}
-
-#[test]
-fn https_url_slug_without_git_suffix() {
-    let slug = parse_origin_repo_slug("https://github.com/org/repo").unwrap();
-    assert_eq!(slug, "org/repo");
-}
-
-#[test]
-fn ssh_url_slug_with_user_and_port() {
-    let slug = parse_origin_repo_slug("ssh://git@example.com:22/group/sub/repo.git").unwrap();
-    assert_eq!(slug, "group/sub/repo");
-}
-
-#[test]
-fn scp_like_slug() {
-    let slug = parse_origin_repo_slug("git@github.com:org/repo.git").unwrap();
-    assert_eq!(slug, "org/repo");
-}
-
-#[test]
-fn scp_like_slug_with_nested_group() {
-    let slug = parse_origin_repo_slug("git@gitlab.example.com:group/sub/repo.git").unwrap();
-    assert_eq!(slug, "group/sub/repo");
-}
-
-#[test]
-fn https_url_with_no_path_yields_no_slug() {
-    assert_eq!(parse_origin_repo_slug("https://github.com"), None);
-}
-
-#[test]
-fn malformed_url_yields_no_slug() {
-    assert_eq!(parse_origin_repo_slug("not a url"), None);
-    assert_eq!(parse_origin_repo_slug(""), None);
-    assert_eq!(
-        parse_origin_repo_slug("ftp://host.example.com/org/repo"),
-        None
-    );
+    for (url, expected) in cases {
+        assert_eq!(parse_origin_repo_slug(url).as_deref(), *expected, "{url}");
+    }
 }

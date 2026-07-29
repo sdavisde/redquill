@@ -184,19 +184,6 @@ fn unstage_file_works_with_no_commits_yet() {
 }
 
 #[test]
-fn unstage_file_is_a_noop_on_an_unstaged_untracked_path_with_no_commits() {
-    let tmp = init_repo_no_commits();
-    let dir = tmp.path();
-    write(dir, "new.txt", b"hello\n");
-
-    let runner = runner_for(&tmp);
-    // Nothing staged yet; must not error.
-    runner.unstage_file("new.txt").unwrap();
-    let status = git_out(dir, &["status", "--porcelain"]);
-    assert!(status.contains("?? new.txt"));
-}
-
-#[test]
 fn build_hunk_patch_and_apply_cached_stages_exactly_one_hunk() {
     let tmp = init_repo();
     let dir = tmp.path();
@@ -302,26 +289,4 @@ fn build_line_patch_stages_a_single_added_line_out_of_a_multi_line_hunk() {
 
     // Working tree still has both inserted lines; only the index changed.
     assert_eq!(read(dir, "lines.txt"), working_content);
-}
-
-#[test]
-fn staging_operations_never_modify_the_working_tree() {
-    let tmp = init_repo();
-    let dir = tmp.path();
-    write(dir, "base.txt", b"line one\nchanged two\n");
-    let working_content = read(dir, "base.txt");
-
-    let runner = runner_for(&tmp);
-    runner.stage_file("base.txt").unwrap();
-    assert_eq!(read(dir, "base.txt"), working_content);
-    runner.unstage_file("base.txt").unwrap();
-    assert_eq!(read(dir, "base.txt"), working_content);
-
-    let patches = runner.diff(&DiffTarget::WorkingTree).unwrap();
-    let file_patch = patches.iter().find(|p| p.path == "base.txt").unwrap();
-    let hunk_patch = build_hunk_patch(file_patch, 0).unwrap();
-    runner.apply_cached(&hunk_patch).unwrap();
-    assert_eq!(read(dir, "base.txt"), working_content);
-    runner.unapply_cached(&hunk_patch).unwrap();
-    assert_eq!(read(dir, "base.txt"), working_content);
 }

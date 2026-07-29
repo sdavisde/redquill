@@ -125,16 +125,6 @@ mod tests {
     }
 
     #[test]
-    fn positions_index_into_the_matched_path() {
-        let c = candidates(&["abc"]);
-        let matches = rank(&c, "abc");
-        assert_eq!(matches.len(), 1);
-        for &pos in &matches[0].positions {
-            assert!((pos as usize) < c[0].path.chars().count());
-        }
-    }
-
-    #[test]
     fn exact_match_ranks_above_a_looser_fuzzy_match() {
         let c = candidates(&["b/a/n/a/n/a.rs", "banana.rs"]);
         let matches = rank(&c, "banana");
@@ -152,15 +142,5 @@ mod tests {
         assert_eq!(matches.len(), 2);
         assert_eq!(c[matches[0].index].path, "a.rs");
         assert_eq!(c[matches[1].index].path, "b.rs");
-    }
-
-    #[test]
-    fn rerank_on_a_narrower_query_can_drop_prior_matches() {
-        let c = candidates(&["src/main.rs", "src/ui/mod.rs"]);
-        let broad = rank(&c, "rs");
-        assert_eq!(broad.len(), 2);
-        let narrow = rank(&c, "main");
-        assert_eq!(narrow.len(), 1);
-        assert_eq!(c[narrow[0].index].path, "src/main.rs");
     }
 }

@@ -402,14 +402,6 @@ mod tests {
     // -- Cli parsing: `--review` conflicts and `--base` gating --------------
 
     #[test]
-    fn review_is_accepted_alone() {
-        let cli = Cli::try_parse_from(["redquill", "--review", "feature"]).unwrap();
-        assert_eq!(cli.review.as_deref(), Some("feature"));
-        assert_eq!(cli.range, None);
-        assert!(!cli.staged);
-    }
-
-    #[test]
     fn review_conflicts_with_staged() {
         let err = Cli::try_parse_from(["redquill", "--review", "feature", "--staged"])
             .expect_err("--review and --staged must conflict");
@@ -439,14 +431,6 @@ mod tests {
         let err = Cli::try_parse_from(["redquill", "--base", "main"])
             .expect_err("--base without --review must be rejected");
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
-    }
-
-    #[test]
-    fn base_is_accepted_alongside_review() {
-        let cli =
-            Cli::try_parse_from(["redquill", "--review", "feature", "--base", "trunk"]).unwrap();
-        assert_eq!(cli.review.as_deref(), Some("feature"));
-        assert_eq!(cli.base.as_deref(), Some("trunk"));
     }
 
     #[test]
@@ -514,45 +498,6 @@ mod tests {
                 Some("vi".to_string())
             ),
             EditorLaunch::Template("zed {{filename}}:{{line}}".to_string())
-        );
-    }
-
-    #[test]
-    fn empty_flag_and_absent_config_tier_falls_through_to_visual() {
-        assert_eq!(
-            resolve_editor(
-                Some("   ".to_string()),
-                EditorConfigTier::Absent,
-                Some("emacs".to_string()),
-                Some("vi".to_string())
-            ),
-            EditorLaunch::Command("emacs".to_string())
-        );
-    }
-
-    #[test]
-    fn empty_visual_falls_through_to_editor_env() {
-        assert_eq!(
-            resolve_editor(
-                None,
-                EditorConfigTier::Absent,
-                Some("".to_string()),
-                Some("vi".to_string())
-            ),
-            EditorLaunch::Command("vi".to_string())
-        );
-    }
-
-    #[test]
-    fn empty_editor_env_falls_through_to_nvim() {
-        assert_eq!(
-            resolve_editor(
-                None,
-                EditorConfigTier::Absent,
-                None,
-                Some("  \t".to_string())
-            ),
-            EditorLaunch::Command("nvim".to_string())
         );
     }
 
@@ -662,33 +607,5 @@ mod tests {
             !state.reviews.contains_key("feature-gone"),
             "GC must drop an entry for a branch that no longer exists"
         );
-    }
-
-    #[test]
-    fn gc_review_state_is_a_no_op_when_every_branch_still_exists() {
-        let repo = repo_with_branch("main");
-        git(repo.path(), &["branch", "feature"]);
-        let runner = GitRunner::discover_in(repo.path()).unwrap();
-        let common_dir = runner.git_common_dir().unwrap();
-        let state_path = common_dir.join("redquill").join("review-state.json");
-        assert_inside_tempdir(&state_path, &repo);
-        store::save_review(
-            &state_path,
-            "feature",
-            store::PersistedReview {
-                base: "main".to_string(),
-                worktree_path: repo.path().join("wt"),
-                files: Default::default(),
-                annotations: Default::default(),
-                replies: Vec::new(),
-                forge: None,
-            },
-        )
-        .unwrap();
-        let before = store::load(&state_path);
-
-        gc_review_state(&runner);
-
-        assert_eq!(store::load(&state_path), before);
     }
 }

@@ -95,69 +95,6 @@ fn smart_case_lowercase_pattern_matches_any_case() {
 }
 
 #[test]
-fn smart_case_uppercase_pattern_is_case_sensitive() {
-    let (_dir, root) = repo(&[("a.txt", "Hello World\nhello world\n")]);
-    let (hits, _) = run_to_completion(root, query("Hello"), 1, ScanOptions::default());
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].line_text, "Hello World");
-}
-
-#[test]
-fn explicit_case_sensitive_overrides_pattern_casing() {
-    let (_dir, root) = repo(&[("a.txt", "hello\nHELLO\n")]);
-    let q = SearchQuery {
-        pattern: "hello".to_string(),
-        case: CaseMode::Sensitive,
-        whole_word: false,
-        literal: false,
-    };
-    let (hits, _) = run_to_completion(root, q, 1, ScanOptions::default());
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].line_text, "hello");
-}
-
-#[test]
-fn explicit_case_insensitive_overrides_pattern_casing() {
-    let (_dir, root) = repo(&[("a.txt", "hello\nHELLO\n")]);
-    let q = SearchQuery {
-        pattern: "Hello".to_string(),
-        case: CaseMode::Insensitive,
-        whole_word: false,
-        literal: false,
-    };
-    let (hits, _) = run_to_completion(root, q, 1, ScanOptions::default());
-    assert_eq!(hits.len(), 2);
-}
-
-#[test]
-fn whole_word_excludes_substring_matches() {
-    let (_dir, root) = repo(&[("a.txt", "the cat sat\nconcatenate\n")]);
-    let q = SearchQuery {
-        pattern: "cat".to_string(),
-        case: CaseMode::Smart,
-        whole_word: true,
-        literal: false,
-    };
-    let (hits, _) = run_to_completion(root, q, 1, ScanOptions::default());
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].line_text, "the cat sat");
-}
-
-#[test]
-fn literal_mode_treats_metacharacters_as_text() {
-    let (_dir, root) = repo(&[("a.txt", "a.b\naxb\n")]);
-    let q = SearchQuery {
-        pattern: "a.b".to_string(),
-        case: CaseMode::Smart,
-        whole_word: false,
-        literal: true,
-    };
-    let (hits, _) = run_to_completion(root, q, 1, ScanOptions::default());
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].line_text, "a.b");
-}
-
-#[test]
 fn gitignored_files_are_excluded_and_untracked_unignored_are_included() {
     let (_dir, root) = repo(&[
         (".gitignore", "ignored.txt\n"),

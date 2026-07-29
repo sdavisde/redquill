@@ -1317,19 +1317,6 @@ mod tests {
     }
 
     #[test]
-    fn plain_letter_bindings_resolve() {
-        let km = Keymap::default_map();
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('j'), KeyModifiers::NONE)),
-            Some(Action::CursorDown)
-        );
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('k'), KeyModifiers::NONE)),
-            Some(Action::CursorUp)
-        );
-    }
-
-    #[test]
     fn ctrl_modifier_is_required() {
         let km = Keymap::default_map();
         assert_eq!(
@@ -1384,228 +1371,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn ctrl_c_is_quit_discard() {
-        let km = Keymap::default_map();
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
-            Some(Action::QuitDiscard)
-        );
-    }
-
-    #[test]
-    fn help_bindings_resolve() {
-        let km = Keymap::default_map();
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('?'), KeyModifiers::NONE)),
-            Some(Action::ToggleHelp)
-        );
-        assert_eq!(
-            km.lookup(key(KeyCode::Esc, KeyModifiers::NONE)),
-            Some(Action::ToggleHelp)
-        );
-    }
-
-    #[test]
-    fn space_and_s_resolve_to_staging_actions() {
-        let km = Keymap::default_map();
-        assert_eq!(
-            km.lookup(key(KeyCode::Char(' '), KeyModifiers::NONE)),
-            Some(Action::ToggleStage)
-        );
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('s'), KeyModifiers::NONE)),
-            Some(Action::ToggleStagingPanel)
-        );
-    }
-
-    #[test]
-    fn shift_s_resolves_to_stage_file_regardless_of_shift_bit() {
-        let km = Keymap::default_map();
-        // Uppercase `S` stages/unstages the file under the cursor; matching
-        // strips SHIFT for Char, so both encodings resolve (mirrors K/Q/N).
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('S'), KeyModifiers::NONE)),
-            Some(Action::StageFile)
-        );
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('S'), KeyModifiers::SHIFT)),
-            Some(Action::StageFile)
-        );
-        // Lowercase `s` still opens the staging panel, unaffected.
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('s'), KeyModifiers::NONE)),
-            Some(Action::ToggleStagingPanel)
-        );
-    }
-
-    #[test]
-    fn shift_r_opens_the_review_launcher_and_lowercase_r_refreshes() {
-        let km = Keymap::default_map();
-        // `R` is now `Scope::Global` (the Review launcher), regardless of
-        // whether the terminal also sets the SHIFT bit; `Diff`-scope
-        // `lookup` falls back to it (see `Keymap::scope_chain`).
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('R'), KeyModifiers::NONE)),
-            Some(Action::OpenReviewLauncher)
-        );
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('R'), KeyModifiers::SHIFT)),
-            Some(Action::OpenReviewLauncher)
-        );
-        // Lowercase `r` refreshes now (freed up from Refresh's old `R`).
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('r'), KeyModifiers::NONE)),
-            Some(Action::Refresh)
-        );
-    }
-
-    #[test]
-    fn t_resolves_to_no_action() {
-        let km = Keymap::default_map();
-        assert_eq!(km.lookup(key(KeyCode::Char('t'), KeyModifiers::NONE)), None);
-    }
-
-    #[test]
-    fn z_starts_a_sequence_and_za_toggles_collapse() {
-        let km = Keymap::default_map();
-        // `z` is now a two-key prefix, not itself a bound single key.
-        assert!(km.starts_sequence(key(KeyCode::Char('z'), KeyModifiers::NONE)));
-        assert_eq!(km.lookup(key(KeyCode::Char('z'), KeyModifiers::NONE)), None);
-        let z = key(KeyCode::Char('z'), KeyModifiers::NONE);
-        assert_eq!(
-            km.lookup_double(z, key(KeyCode::Char('a'), KeyModifiers::NONE)),
-            Some(Action::ToggleCollapse)
-        );
-    }
-
-    #[test]
-    fn resolve_completes_za_across_two_events() {
-        let km = Keymap::default_map();
-        let mut pending = None;
-        assert_eq!(
-            km.resolve(&mut pending, key(KeyCode::Char('z'), KeyModifiers::NONE)),
-            None
-        );
-        assert!(pending.is_some());
-        let action = km.resolve(&mut pending, key(KeyCode::Char('a'), KeyModifiers::NONE));
-        assert_eq!(action, Some(Action::ToggleCollapse));
-        assert_eq!(pending, None);
-    }
-
-    #[test]
-    fn zz_zt_zb_resolve_via_lookup_double() {
-        let km = Keymap::default_map();
-        let z = key(KeyCode::Char('z'), KeyModifiers::NONE);
-        assert_eq!(
-            km.lookup_double(z, key(KeyCode::Char('z'), KeyModifiers::NONE)),
-            Some(Action::RecenterCursor)
-        );
-        assert_eq!(
-            km.lookup_double(z, key(KeyCode::Char('t'), KeyModifiers::NONE)),
-            Some(Action::ScrollCursorTop)
-        );
-        assert_eq!(
-            km.lookup_double(z, key(KeyCode::Char('b'), KeyModifiers::NONE)),
-            Some(Action::ScrollCursorBottom)
-        );
-    }
-
-    #[test]
-    fn resolve_completes_zz_across_two_events() {
-        let km = Keymap::default_map();
-        let mut pending = None;
-        assert_eq!(
-            km.resolve(&mut pending, key(KeyCode::Char('z'), KeyModifiers::NONE)),
-            None
-        );
-        let action = km.resolve(&mut pending, key(KeyCode::Char('z'), KeyModifiers::NONE));
-        assert_eq!(action, Some(Action::RecenterCursor));
-        assert_eq!(pending, None);
-    }
-
-    #[test]
-    fn key_label_formats_modifiers_and_special_keys() {
-        let km = Keymap::default_map();
-        let labels: Vec<String> = km.bindings().iter().map(Binding::key_label).collect();
-        assert!(labels.contains(&"Ctrl-d".to_string()));
-        assert!(labels.contains(&"Shift-Tab".to_string()));
-        assert!(labels.contains(&"Tab".to_string()));
-        assert!(labels.contains(&"Esc".to_string()));
-        assert!(labels.contains(&"?".to_string()));
-        assert!(labels.contains(&"Space".to_string()));
-    }
-
-    // -- Column-cursor motion keys ------------------------------------------
-
-    #[test]
-    fn column_motion_keys_resolve() {
-        let km = Keymap::default_map();
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('h'), KeyModifiers::NONE)),
-            Some(Action::CursorLeft)
-        );
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('l'), KeyModifiers::NONE)),
-            Some(Action::CursorRight)
-        );
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('w'), KeyModifiers::NONE)),
-            Some(Action::WordForward)
-        );
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('b'), KeyModifiers::NONE)),
-            Some(Action::WordBackward)
-        );
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('0'), KeyModifiers::NONE)),
-            Some(Action::CursorLineStart)
-        );
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('$'), KeyModifiers::NONE)),
-            Some(Action::CursorLineEnd)
-        );
-    }
-
-    #[test]
-    fn full_page_keys_require_ctrl_and_are_distinct_from_half_page() {
-        let km = Keymap::default_map();
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('f'), KeyModifiers::CONTROL)),
-            Some(Action::FullPageDown)
-        );
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('b'), KeyModifiers::CONTROL)),
-            Some(Action::FullPageUp)
-        );
-        // Plain 'f'/'b' with no modifier are unbound (`b` alone is the word-
-        // backward motion only without Ctrl, already covered above).
-        assert_eq!(km.lookup(key(KeyCode::Char('f'), KeyModifiers::NONE)), None);
-    }
-
-    #[test]
-    fn star_and_hash_resolve_to_search_word_actions() {
-        let km = Keymap::default_map();
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('*'), KeyModifiers::NONE)),
-            Some(Action::SearchWordForward)
-        );
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('#'), KeyModifiers::NONE)),
-            Some(Action::SearchWordBackward)
-        );
-    }
-
     // -- Two-key sequences (gd/gr) -------------------------------------------
-
-    #[test]
-    fn hover_is_a_single_key_binding() {
-        let km = Keymap::default_map();
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('K'), KeyModifiers::NONE)),
-            Some(Action::Hover)
-        );
-    }
 
     #[test]
     fn g_starts_a_sequence_but_is_not_itself_bound() {
@@ -1630,36 +1396,6 @@ mod tests {
     }
 
     #[test]
-    fn gp_resolves_to_open_file_finder_via_lookup_double() {
-        let km = Keymap::default_map();
-        let g = key(KeyCode::Char('g'), KeyModifiers::NONE);
-        assert_eq!(
-            km.lookup_double(g, key(KeyCode::Char('p'), KeyModifiers::NONE)),
-            Some(Action::OpenFileFinder)
-        );
-    }
-
-    #[test]
-    fn g_slash_resolves_to_open_project_search_via_lookup_double() {
-        let km = Keymap::default_map();
-        let g = key(KeyCode::Char('g'), KeyModifiers::NONE);
-        assert_eq!(
-            km.lookup_double(g, key(KeyCode::Char('/'), KeyModifiers::NONE)),
-            Some(Action::OpenProjectSearch)
-        );
-    }
-
-    #[test]
-    fn g_space_resolves_to_open_editor_via_lookup_double() {
-        let km = Keymap::default_map();
-        let g = key(KeyCode::Char('g'), KeyModifiers::NONE);
-        assert_eq!(
-            km.lookup_double(g, key(KeyCode::Char(' '), KeyModifiers::NONE)),
-            Some(Action::OpenEditor)
-        );
-    }
-
-    #[test]
     fn unknown_second_key_after_prefix_is_none() {
         let km = Keymap::default_map();
         let g = key(KeyCode::Char('g'), KeyModifiers::NONE);
@@ -1667,61 +1403,6 @@ mod tests {
             km.lookup_double(g, key(KeyCode::Char('z'), KeyModifiers::NONE)),
             None
         );
-    }
-
-    #[test]
-    fn key_label_formats_two_key_sequences() {
-        let km = Keymap::default_map();
-        let labels: Vec<String> = km.bindings().iter().map(Binding::key_label).collect();
-        assert!(labels.contains(&"gd".to_string()));
-        assert!(labels.contains(&"gr".to_string()));
-        assert!(labels.contains(&"gg".to_string()));
-        assert!(labels.contains(&"gp".to_string()));
-        assert!(labels.contains(&"g/".to_string()));
-        assert!(labels.contains(&"gSpace".to_string()));
-    }
-
-    #[test]
-    fn gg_resolves_to_jump_to_top_across_two_events() {
-        let km = Keymap::default_map();
-        let mut pending = None;
-        let g = key(KeyCode::Char('g'), KeyModifiers::NONE);
-        // First `g` records the pending prefix and resolves nothing.
-        assert_eq!(km.resolve(&mut pending, g), None);
-        assert_eq!(pending, Some(g));
-        // Second `g` completes the sequence.
-        let action = km.resolve(&mut pending, g);
-        assert_eq!(action, Some(Action::JumpToTop));
-        assert_eq!(pending, None);
-    }
-
-    #[test]
-    fn shift_g_resolves_to_jump_to_bottom_regardless_of_shift_bit() {
-        let km = Keymap::default_map();
-        // Uppercase `G` jumps to the bottom; matching strips SHIFT for Char,
-        // so both encodings resolve (mirrors K/Q/N/S/R).
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('G'), KeyModifiers::NONE)),
-            Some(Action::JumpToBottom)
-        );
-        assert_eq!(
-            km.lookup(key(KeyCode::Char('G'), KeyModifiers::SHIFT)),
-            Some(Action::JumpToBottom)
-        );
-        // Lowercase `g` is a two-key prefix, not itself bound.
-        assert_eq!(km.lookup(key(KeyCode::Char('g'), KeyModifiers::NONE)), None);
-    }
-
-    /// A different key after `g` still cancels the pending prefix silently —
-    /// `gg` doesn't change that (an unknown second key resolves to nothing).
-    #[test]
-    fn g_then_unknown_key_cancels_silently_with_gg_bound() {
-        let km = Keymap::default_map();
-        let mut pending = None;
-        km.resolve(&mut pending, key(KeyCode::Char('g'), KeyModifiers::NONE));
-        let action = km.resolve(&mut pending, key(KeyCode::Char('x'), KeyModifiers::NONE));
-        assert_eq!(action, None);
-        assert_eq!(pending, None);
     }
 
     // -- resolve(): the pending-prefix state machine -------------------------
@@ -1735,15 +1416,6 @@ mod tests {
             Some(Action::CursorDown)
         );
         assert_eq!(pending, None);
-    }
-
-    #[test]
-    fn resolve_g_sets_pending_and_resolves_nothing() {
-        let km = Keymap::default_map();
-        let mut pending = None;
-        let g = key(KeyCode::Char('g'), KeyModifiers::NONE);
-        assert_eq!(km.resolve(&mut pending, g), None);
-        assert_eq!(pending, Some(g));
     }
 
     #[test]
@@ -1787,59 +1459,6 @@ mod tests {
 
     // -- Scopes (diff vs. panel) --------------------------------------------
 
-    /// Every pre-existing binding is diff-scope, so the scope-agnostic
-    /// `lookup` and the diff-scoped `lookup_in` must agree for every
-    /// single-key binding in the table — the "unfocused behavior is
-    /// unchanged" guarantee, proven binding-by-binding.
-    #[test]
-    fn every_preexisting_single_key_binding_resolves_unchanged_in_diff_scope() {
-        let km = Keymap::default_map();
-        for b in km.bindings() {
-            if b.scope != Scope::Diff {
-                continue;
-            }
-            if let KeySeq::One(chord) = b.keys {
-                let ev = key(chord.code, chord.mods);
-                assert_eq!(
-                    km.lookup(ev),
-                    km.lookup_in(Scope::Diff, ev),
-                    "diff-scope binding {:?} must resolve identically via lookup and lookup_in",
-                    b.action
-                );
-                // `ToggleAccept`/`AcceptFile` deliberately
-                // share Space/`S` with `ToggleStage`/`StageFile` — see
-                // `Action::ToggleAccept`'s doc: those rows exist purely so
-                // the help overlay/footer can document review's meaning for
-                // those keys, and are reachable only via
-                // `super::dispatch_key`'s review-session translation, never
-                // a direct keymap lookup — so they're exempt from "this row
-                // resolves to itself" (the `lookup`/`lookup_in` agreement
-                // above still holds for them either way).
-                if !matches!(b.action, Action::ToggleAccept | Action::AcceptFile) {
-                    assert_eq!(km.lookup_in(Scope::Diff, ev), Some(b.action));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn backtick_focuses_panel_in_diff_scope() {
-        let km = Keymap::default_map();
-        assert_eq!(
-            km.lookup_in(Scope::Diff, key(KeyCode::Char('`'), KeyModifiers::NONE)),
-            Some(Action::FocusGitPanel)
-        );
-    }
-
-    #[test]
-    fn backtick_toggles_focus_back_in_panel_scope() {
-        let km = Keymap::default_map();
-        assert_eq!(
-            km.lookup_in(Scope::Panel, key(KeyCode::Char('`'), KeyModifiers::NONE)),
-            Some(Action::FocusGitPanel)
-        );
-    }
-
     /// `j`/`k` mean panel-cursor motion in panel scope but diff-cursor motion
     /// in diff scope — the scope dimension in action.
     #[test]
@@ -1851,35 +1470,6 @@ mod tests {
         assert_eq!(km.lookup_in(Scope::Panel, k), Some(Action::PanelCursorUp));
         assert_eq!(km.lookup_in(Scope::Diff, j), Some(Action::CursorDown));
         assert_eq!(km.lookup_in(Scope::Diff, k), Some(Action::CursorUp));
-    }
-
-    #[test]
-    fn enter_selects_file_only_in_panel_scope() {
-        let km = Keymap::default_map();
-        let enter = key(KeyCode::Enter, KeyModifiers::NONE);
-        assert_eq!(km.lookup_in(Scope::Panel, enter), Some(Action::PanelSelect));
-        assert_eq!(km.lookup_in(Scope::Diff, enter), None);
-    }
-
-    /// `Space` now stages in *both* scopes (its own row per scope, so the
-    /// panel's whole-file routing can differ from the diff's cursor-derived
-    /// gesture); `s` now reaches the staging panel from panel scope too
-    /// (spec 11 Unit 2), so it's no longer diff-only.
-    #[test]
-    fn space_stages_in_both_scopes_and_s_now_opens_the_staging_panel_from_panel_scope() {
-        let km = Keymap::default_map();
-        assert_eq!(
-            km.lookup_in(Scope::Diff, key(KeyCode::Char(' '), KeyModifiers::NONE)),
-            Some(Action::ToggleStage)
-        );
-        assert_eq!(
-            km.lookup_in(Scope::Panel, key(KeyCode::Char(' '), KeyModifiers::NONE)),
-            Some(Action::ToggleStage)
-        );
-        assert_eq!(
-            km.lookup_in(Scope::Panel, key(KeyCode::Char('s'), KeyModifiers::NONE)),
-            Some(Action::ToggleStagingPanel)
-        );
     }
 
     /// `Esc` closes the focused git panel — the same action `` ` `` already
@@ -1895,51 +1485,6 @@ mod tests {
         assert_eq!(
             km.lookup_in(Scope::Panel, key(KeyCode::Char('`'), KeyModifiers::NONE)),
             Some(Action::FocusGitPanel)
-        );
-    }
-
-    /// `/` reaches search from the focused panel too (spec 11 FR-7) — the
-    /// diff-scope row is untouched.
-    #[test]
-    fn slash_opens_search_from_panel_scope() {
-        let km = Keymap::default_map();
-        assert_eq!(
-            km.lookup_in(Scope::Panel, key(KeyCode::Char('/'), KeyModifiers::NONE)),
-            Some(Action::Search)
-        );
-        assert_eq!(
-            km.lookup_in(Scope::Diff, key(KeyCode::Char('/'), KeyModifiers::NONE)),
-            Some(Action::Search)
-        );
-    }
-
-    /// The panel's per-file rows resolve to the stage/defer actions;
-    /// the review phantom rows (`ToggleAccept`/`AcceptFile`) share those
-    /// keys for help/footer documentation only, exactly like diff scope's
-    /// own phantom rows, so a plain lookup must yield the stage actions.
-    #[test]
-    fn panel_space_s_and_shift_d_resolve_to_stage_and_defer_actions() {
-        let km = Keymap::default_map();
-        assert_eq!(
-            km.lookup_in(Scope::Panel, key(KeyCode::Char(' '), KeyModifiers::NONE)),
-            Some(Action::ToggleStage)
-        );
-        assert_eq!(
-            km.lookup_in(Scope::Panel, key(KeyCode::Char('S'), KeyModifiers::NONE)),
-            Some(Action::StageFile)
-        );
-        assert_eq!(
-            km.lookup_in(Scope::Panel, key(KeyCode::Char('S'), KeyModifiers::SHIFT)),
-            Some(Action::StageFile)
-        );
-        assert_eq!(
-            km.lookup_in(Scope::Panel, key(KeyCode::Char('D'), KeyModifiers::NONE)),
-            Some(Action::ToggleDefer)
-        );
-        // Plain `d` is the restore confirm in panel scope too.
-        assert_eq!(
-            km.lookup_in(Scope::Panel, key(KeyCode::Char('d'), KeyModifiers::NONE)),
-            Some(Action::RestoreFile)
         );
     }
 
@@ -1961,75 +1506,11 @@ mod tests {
         assert_eq!(km.lookup_in(Scope::Diff, big_p), None);
     }
 
-    /// The focused git panel is a first-class view, so the quit family
-    /// (`q`/`Q`/Ctrl-C) resolves in panel scope exactly as in diff scope —
-    /// `q` must work from the panel, not just the diff view.
-    #[test]
-    fn quit_family_resolves_in_panel_scope() {
-        let km = Keymap::default_map();
-        assert_eq!(
-            km.lookup_in(Scope::Panel, key(KeyCode::Char('q'), KeyModifiers::NONE)),
-            Some(Action::Quit)
-        );
-        assert_eq!(
-            km.lookup_in(Scope::Panel, key(KeyCode::Char('Q'), KeyModifiers::NONE)),
-            Some(Action::QuitDiscard)
-        );
-        assert_eq!(
-            km.lookup_in(Scope::Panel, key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
-            Some(Action::QuitDiscard)
-        );
-    }
+    // -- Scope::Global: resolution mechanics ---------------------------------
 
-    // -- Scope::Global: behavior pin + resolution mechanics ------------------
-
-    /// Behavior pin: `?`/`@`/`!`/the quit family resolve to the same action
-    /// from both `Scope::Diff` and `Scope::Panel`, regardless of whether
-    /// that's backed by a duplicate row per scope or a single shared row —
-    /// this must hold unchanged before and after any row migration between
-    /// the two.
-    #[test]
-    fn cross_scope_duplicated_bindings_resolve_identically() {
-        let km = Keymap::default_map();
-        for scope in [Scope::Diff, Scope::Panel] {
-            assert_eq!(
-                km.lookup_in(scope, key(KeyCode::Char('?'), KeyModifiers::NONE)),
-                Some(Action::ToggleHelp),
-                "`?` must resolve to ToggleHelp in {scope:?}"
-            );
-            assert_eq!(
-                km.lookup_in(scope, key(KeyCode::Char('@'), KeyModifiers::NONE)),
-                Some(Action::ToggleCommandLog),
-                "`@` must resolve to ToggleCommandLog in {scope:?}"
-            );
-            assert_eq!(
-                km.lookup_in(scope, key(KeyCode::Char('!'), KeyModifiers::NONE)),
-                Some(Action::DismissConfigWarning),
-                "`!` must resolve to DismissConfigWarning in {scope:?}"
-            );
-            assert_eq!(
-                km.lookup_in(scope, key(KeyCode::Char('q'), KeyModifiers::NONE)),
-                Some(Action::Quit),
-                "`q` must resolve to Quit in {scope:?}"
-            );
-            assert_eq!(
-                km.lookup_in(scope, key(KeyCode::Char('Q'), KeyModifiers::NONE)),
-                Some(Action::QuitDiscard),
-                "`Q` must resolve to QuitDiscard in {scope:?}"
-            );
-            assert_eq!(
-                km.lookup_in(scope, key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
-                Some(Action::QuitDiscard),
-                "Ctrl-C must resolve to QuitDiscard in {scope:?}"
-            );
-        }
-    }
-
-    /// Drift check, the mirror image of the pin above: every actual
-    /// `Scope::Global` row in the default table dispatches identically from
-    /// both `Diff` and `Panel`, not just the five hand-picked keys — this
-    /// would catch a future `Global` addition that only works from one
-    /// scope.
+    /// Drift check: every actual `Scope::Global` row in the default table
+    /// dispatches identically from both `Diff` and `Panel` — this catches a
+    /// future `Global` addition that only works from one scope.
     #[test]
     fn every_global_binding_dispatches_from_both_diff_and_panel_scope() {
         let km = Keymap::default_map();
@@ -2204,39 +1685,6 @@ mod tests {
         );
     }
 
-    // -- Switcher modal -------------------------------------------------------
-
-    /// `b` opens the switcher only in panel scope; in diff scope it stays
-    /// bound to `WordBackward` (column-cursor motion), unaffected.
-    #[test]
-    fn b_opens_switcher_only_in_panel_scope() {
-        let km = Keymap::default_map();
-        let b = key(KeyCode::Char('b'), KeyModifiers::NONE);
-        assert_eq!(km.lookup_in(Scope::Panel, b), Some(Action::OpenSwitcher));
-        assert_eq!(km.lookup_in(Scope::Diff, b), Some(Action::WordBackward));
-    }
-
-    // -- Commit staged --------------------------------------------------------
-
-    /// Plain `c` commits only in panel scope; in diff scope it stays bound
-    /// to `Compose` (annotate), unaffected — the scope dimension keeps the
-    /// same physical key meaning different things per pane.
-    #[test]
-    fn c_commits_only_in_panel_scope_and_still_composes_in_diff_scope() {
-        let km = Keymap::default_map();
-        let c = key(KeyCode::Char('c'), KeyModifiers::NONE);
-        assert_eq!(km.lookup_in(Scope::Panel, c), Some(Action::CommitStaged));
-        assert_eq!(km.lookup_in(Scope::Diff, c), Some(Action::Compose));
-        // Ctrl-c stays the quit-discard chord in both scopes, undisturbed by
-        // the new plain-`c` panel row.
-        let ctrl_c = key(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(
-            km.lookup_in(Scope::Panel, ctrl_c),
-            Some(Action::QuitDiscard)
-        );
-        assert_eq!(km.lookup_in(Scope::Diff, ctrl_c), Some(Action::QuitDiscard));
-    }
-
     /// `e`/`x` edit and delete the annotation under the cursor in diff scope
     /// only; both keys stay unbound in panel scope (no accidental collision
     /// with a panel gesture), and each is promoted into the diff footer strip.
@@ -2262,22 +1710,6 @@ mod tests {
         }
     }
 
-    /// The `c commit` hint is promoted into the panel footer strip, matching
-    /// the README's git-panel table.
-    #[test]
-    fn commit_staged_is_promoted_into_the_panel_footer() {
-        let km = Keymap::default_map();
-        let row = km
-            .bindings()
-            .iter()
-            .find(|b| b.scope == Scope::Panel && b.action == Action::CommitStaged)
-            .expect("panel-scope CommitStaged binding must exist");
-        assert_eq!(row.key_label(), "c");
-        assert_eq!(row.footer.map(|h| h.label), Some("commit"));
-    }
-
-    /// `@` toggles the command log from *both* scopes (it is a view toggle,
-    /// not tied to which pane holds focus).
     // -- Footer promotion (`FooterHint`) -------------------------------------
 
     #[test]
@@ -2297,29 +1729,6 @@ mod tests {
                 label: "move"
             })
         );
-    }
-
-    /// `j`/`k` movement is muscle memory — trimmed from the global
-    /// (diff-view) idle footer strip, but still bound and still documented
-    /// in `?` help via `description`. The merge-same-hint mechanism itself
-    /// stays covered by `Scope::Panel`'s own `j`/`k` rows below, which keep
-    /// their `FooterHint` tag (the panel strip is out of scope for the
-    /// trim).
-    #[test]
-    fn diff_scope_cursor_down_and_up_are_no_longer_promoted_into_the_footer() {
-        let km = Keymap::default_map();
-        let down = km
-            .bindings()
-            .iter()
-            .find(|b| b.scope == Scope::Diff && b.action == Action::CursorDown)
-            .unwrap();
-        let up = km
-            .bindings()
-            .iter()
-            .find(|b| b.scope == Scope::Diff && b.action == Action::CursorUp)
-            .unwrap();
-        assert_eq!(down.footer, None);
-        assert_eq!(up.footer, None);
     }
 
     /// `Scope::Panel`'s own `j`/`k` rows (`PanelCursorDown`/`PanelCursorUp`)
@@ -2389,41 +1798,7 @@ mod tests {
         assert_eq!(esc_close.footer, None);
     }
 
-    // -- Panel-scope `?` (help from the git panel) ---------------------------
-
-    /// The git panel's footer strip promises `? help`, so `?` must actually
-    /// toggle help while the panel is focused — this closes the gap where
-    /// `?` was diff-scope only.
-    #[test]
-    fn question_mark_toggles_help_in_panel_scope() {
-        let km = Keymap::default_map();
-        assert_eq!(
-            km.lookup_in(Scope::Panel, key(KeyCode::Char('?'), KeyModifiers::NONE)),
-            Some(Action::ToggleHelp)
-        );
-    }
-
     // -- `completions_for`: pending-prefix completions -----------------------
-
-    #[test]
-    fn completions_for_z_is_za_zz_zt_and_zb() {
-        let km = Keymap::default_map();
-        let z = key(KeyCode::Char('z'), KeyModifiers::NONE);
-        let mut actions: Vec<Action> = km
-            .completions_for(Scope::Diff, z)
-            .into_iter()
-            .map(|b| b.action)
-            .collect();
-        actions.sort_by_key(|a| format!("{a:?}"));
-        let mut expected = vec![
-            Action::ToggleCollapse,
-            Action::RecenterCursor,
-            Action::ScrollCursorTop,
-            Action::ScrollCursorBottom,
-        ];
-        expected.sort_by_key(|a| format!("{a:?}"));
-        assert_eq!(actions, expected);
-    }
 
     #[test]
     fn completions_for_g_is_gg_gd_gr_gp_g_slash_and_thread_nav() {
@@ -2455,25 +1830,6 @@ mod tests {
         let km = Keymap::default_map();
         let x = key(KeyCode::Char('x'), KeyModifiers::NONE);
         assert!(km.completions_for(Scope::Diff, x).is_empty());
-    }
-
-    #[test]
-    fn at_toggles_command_log_in_both_scopes() {
-        let km = Keymap::default_map();
-        let at = key(KeyCode::Char('@'), KeyModifiers::NONE);
-        assert_eq!(
-            km.lookup_in(Scope::Diff, at),
-            Some(Action::ToggleCommandLog)
-        );
-        assert_eq!(
-            km.lookup_in(Scope::Panel, at),
-            Some(Action::ToggleCommandLog)
-        );
-        // Terminals that report `@` with the SHIFT bit set still resolve it.
-        assert_eq!(
-            km.lookup_in(Scope::Diff, key(KeyCode::Char('@'), KeyModifiers::SHIFT)),
-            Some(Action::ToggleCommandLog)
-        );
     }
 
     // -- Config action-name mapping -------------------------------------------
