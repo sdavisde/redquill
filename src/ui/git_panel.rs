@@ -26,6 +26,7 @@ use crate::review::ReviewStatus;
 
 use super::app::App;
 use super::app::{Mode, PanelTab, SuspendedView};
+use super::elide::elide_left;
 use super::file_tree::{TreeFile, TreeNode, TreeRow, flatten};
 use super::icons;
 use super::keymap::{Action, Keymap, Scope};
@@ -231,9 +232,10 @@ fn dir_line(guide: &str, name: &str, collapsed: bool, theme: &Theme) -> Line<'st
 /// an optional `← old` rename tail, then the right-aligned `+A -R` counts
 /// (see [`super::stat_display::stat_display_spans`]) and status cluster
 /// (staged/review marker + change-kind letter). `content_width` is the list's
-/// inner width in cells; when the row is too wide for a right-aligned
-/// cluster, the cluster still trails after a single space so the status
-/// never vanishes.
+/// inner width in cells; when the row won't fit, the counts and cluster are
+/// kept whole and the name gives instead — the ` ← old` rename tail is
+/// dropped first, then the name is elided from the left
+/// ([`super::elide::elide_left`]), same as the diff pane's file headers.
 #[allow(clippy::too_many_arguments)]
 fn file_line(
     guide: &str,
@@ -255,22 +257,34 @@ fn file_line(
             format!("{} ", icons::file_icon(name)),
             Style::default().fg(color),
         ),
-        Span::raw(name.to_string()),
     ];
-    if let Some(old) = old_path {
-        let (_, old_base) = split_path(old);
-        spans.push(Span::styled(
-            format!(" \u{2190} {old_base}"),
-            Style::default().fg(theme.dir_prefix),
-        ));
-    }
     let (cluster, cluster_w) = status_cluster(letter, color, state, review, theme);
     let stat_spans = stat_display_spans(stats, theme);
     let stat_w = stat_spans.as_ref().map_or(0, |(_, w)| w + 1);
+    let prefix_w: usize = spans.iter().map(Span::width).sum();
+    // Room left for the name once the right-aligned cluster, the counts and a
+    // one-cell gap have taken theirs.
+    let avail = content_width.saturating_sub(prefix_w + stat_w + cluster_w + 1);
+    let tail = old_path.map(|old| {
+        let (_, old_base) = split_path(old);
+        format!(" \u{2190} {old_base}")
+    });
+    // The rename tail is the first thing to go: it's context, the name is the
+    // row's identity.
+    let tail = tail.filter(|t| name.chars().count() + t.chars().count() <= avail);
+    let name = elide_left(
+        name,
+        avail.saturating_sub(tail.as_ref().map_or(0, |t| t.chars().count())),
+    );
+    let mut used = prefix_w + name.chars().count();
+    spans.push(Span::raw(name));
+    if let Some(tail) = tail {
+        used += tail.chars().count();
+        spans.push(Span::styled(tail, Style::default().fg(theme.dir_prefix)));
+    }
     let mut line = Line::from(spans);
-    let used = line.width() as usize;
     let pad = content_width
-        .saturating_sub(used + stat_w + cluster_w + 1)
+        .saturating_sub(used + stat_w + cluster_w)
         .max(1);
     line.spans.push(Span::raw(" ".repeat(pad)));
     if let Some((spans, _)) = stat_spans {

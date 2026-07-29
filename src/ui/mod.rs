@@ -34,6 +34,7 @@ mod diff_view_state;
 mod diff_wrap;
 mod draft_reply;
 mod editor;
+mod elide;
 mod end_review;
 mod end_review_modal;
 mod file_finder;

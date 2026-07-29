@@ -19,6 +19,7 @@ use crate::git::CommitLogEntry;
 use crate::highlight::TokenKind;
 
 use super::app::App;
+use super::elide::elide_left;
 use super::keymap::Keymap;
 use super::rows::{LineRow, ReviewMarker, Row, StagedMarker, ThreadLine};
 use super::stat_display::stat_display_spans;
@@ -428,6 +429,12 @@ fn review_marker_span(marker: ReviewMarker, theme: &Theme) -> Span<'static> {
 /// why): without it, `Paragraph` only paints `file_header_bg` (or the
 /// selected/search-match bg) onto the header's own text, leaving the rest
 /// of the row showing the terminal background.
+///
+/// The `+A -R` counts and the two marker slots are right-aligned to `width`
+/// (the pane's inner content width) and always drawn in full: when the row
+/// can't fit, the *path* gives, elided from the left
+/// ([`super::elide::elide_left`]) so the basename and the status cluster both
+/// survive a narrow pane. Same arrangement as the git panel's file rows.
 #[allow(clippy::too_many_arguments)]
 fn file_header_line(
     path: &str,
@@ -460,20 +467,36 @@ fn file_header_line(
                 .add_modifier(Modifier::BOLD),
         ),
     ];
-    if let Some(old) = old_path {
-        spans.push(Span::raw(format!("{old} \u{2192} {path}")));
+    let stat_spans = stat_display_spans(stats, theme);
+    let staged = staged_marker_span(staged_marker, theme);
+    let review = review_marker_span(review_marker, theme);
+    // Everything to the right of the path, measured off the spans themselves
+    // so the two width-stable marker slots can't drift out of this sum.
+    let cluster_w = stat_spans.as_ref().map_or(0, |(_, w)| *w) + staged.width() + review.width();
+    let prefix_w: usize = spans.iter().map(Span::width).sum();
+    // One cell of gap so the path never abuts the counts.
+    let avail = width.saturating_sub(prefix_w + cluster_w + 1);
+    let text = match old_path {
+        Some(old) => elide_left(&format!("{old} \u{2192} {path}"), avail),
+        None => elide_left(path, avail),
+    };
+    let text_w = text.chars().count();
+    if old_path.is_some() {
+        spans.push(Span::raw(text));
     } else {
         spans.push(Span::styled(
-            path.to_string(),
+            text,
             Style::default().add_modifier(Modifier::BOLD),
         ));
     }
-    if let Some((stat_spans, _)) = stat_display_spans(stats, theme) {
-        spans.push(Span::raw(" "));
+    spans.push(Span::raw(" ".repeat(
+        width.saturating_sub(prefix_w + text_w + cluster_w).max(1),
+    )));
+    if let Some((stat_spans, _)) = stat_spans {
         spans.extend(stat_spans);
     }
-    spans.push(staged_marker_span(staged_marker, theme));
-    spans.push(review_marker_span(review_marker, theme));
+    spans.push(staged);
+    spans.push(review);
     let mut line = Line::from(spans);
     let pad = width.saturating_sub(line.width());
     if pad > 0 {
@@ -1002,6 +1025,44 @@ mod tests {
     /// them concatenated.
     fn spans_to_string(spans: &[Span<'static>]) -> String {
         spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    /// The defect: a path wider than the pane used to push the `+A -R` counts
+    /// and the staged/review markers off the right edge. They are the row's
+    /// status, so they hold their place at `width` and the path elides.
+    #[test]
+    fn file_header_keeps_the_counts_and_markers_at_the_right_edge() {
+        let stats = StatDisplay::Counts(DiffStat {
+            added: 12,
+            removed: 3,
+        });
+        let path = "src/ui/deeply/nested/diff_view.rs";
+        for width in [80, 40, 24] {
+            let line = file_header_line(
+                path,
+                &None,
+                FileChangeKind::Modified,
+                stats,
+                false,
+                false,
+                false,
+                false,
+                StagedMarker::None,
+                ReviewMarker::Deferred,
+                width,
+                &Theme::default(),
+            );
+            let text = spans_to_string(&line.spans);
+            assert_eq!(line.width(), width, "width {width}: {text:?}");
+            assert!(text.ends_with("+12 -3   ~"), "width {width}: {text:?}");
+            // What's shown of the path is the original's tail — the head is
+            // what gets dropped, so the basename outlives the directories.
+            let shown = text.split_whitespace().nth(2).unwrap();
+            assert!(
+                path.ends_with(shown.trim_start_matches('\u{2026}')),
+                "width {width}: {text:?}"
+            );
+        }
     }
 
     #[test]

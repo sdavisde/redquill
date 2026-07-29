@@ -17,23 +17,35 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use crate::diff::StatDisplay;
 
 use super::app::App;
+use super::elide::elide_left;
 use super::keymap::{Action, Keymap, Scope};
 use super::stage_ops::StagedFile;
 use super::stat_display::stat_display_spans;
 use super::theme::Theme;
 
-fn item_line(entry: &StagedFile, stats: StatDisplay, theme: &Theme) -> Line<'static> {
-    let mut spans = vec![
-        Span::styled(
-            format!("{} ", entry.letter),
-            Style::default()
-                .fg(theme.letter_color(entry.letter))
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(entry.path.clone()),
-    ];
-    if let Some((stat_spans, _)) = stat_display_spans(stats, theme) {
-        spans.push(Span::raw(" "));
+/// One list row: status letter, path, then the `+A -R` counts right-aligned
+/// to `width` (the list's inner width in cells). The counts are kept whole and
+/// the path gives instead, elided from the left
+/// ([`super::elide::elide_left`]) — same arrangement as the diff pane's file
+/// headers and the git panel's file rows, since the panel is narrow and full
+/// paths overrun it routinely.
+fn item_line(entry: &StagedFile, stats: StatDisplay, theme: &Theme, width: usize) -> Line<'static> {
+    let letter = Span::styled(
+        format!("{} ", entry.letter),
+        Style::default()
+            .fg(theme.letter_color(entry.letter))
+            .add_modifier(Modifier::BOLD),
+    );
+    let stat_spans = stat_display_spans(stats, theme);
+    let stat_w = stat_spans.as_ref().map_or(0, |(_, w)| *w);
+    let prefix_w = letter.width();
+    // One cell of gap so the path never abuts the counts.
+    let path = elide_left(&entry.path, width.saturating_sub(prefix_w + stat_w + 1));
+    let pad = width
+        .saturating_sub(prefix_w + path.chars().count() + stat_w)
+        .max(1);
+    let mut spans = vec![letter, Span::raw(path), Span::raw(" ".repeat(pad))];
+    if let Some((stat_spans, _)) = stat_spans {
         spans.extend(stat_spans);
     }
     Line::from(spans)
@@ -105,17 +117,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
             .copied()
             .unwrap_or(StatDisplay::Omitted)
     };
+    let width = list_area.width as usize;
     let items: Vec<ListItem> = match app.staging_filter.as_ref() {
         Some(filter) => filter
             .indices()
             .iter()
             .filter_map(|&i| app.staged.get(i))
-            .map(|e| ListItem::new(item_line(e, stats_for(e), &app.theme)))
+            .map(|e| ListItem::new(item_line(e, stats_for(e), &app.theme, width)))
             .collect(),
         None => app
             .staged
             .iter()
-            .map(|e| ListItem::new(item_line(e, stats_for(e), &app.theme)))
+            .map(|e| ListItem::new(item_line(e, stats_for(e), &app.theme, width)))
             .collect(),
     };
     let list = List::new(items).highlight_style(Style::default().add_modifier(Modifier::REVERSED));
