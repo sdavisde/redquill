@@ -29,8 +29,8 @@ use super::time_format::{now_unix, relative_time};
 
 /// A background thread fetch awaiting completion: its [`TaskId`] and the
 /// generation captured at spawn (a straggler from before a bump is dropped).
-/// Same shape as [`super::review_launcher::InFlightPrCheckout`] minus the
-/// finish context, since a thread fetch's result needs none.
+/// Same shape as [`super::file_finder::InFlightFinderLoad`], and for the same
+/// reason: session entry/refresh is a real invalidation point.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct InFlightThreadFetch {
     pub(super) id: TaskId,

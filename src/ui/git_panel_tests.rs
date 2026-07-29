@@ -515,7 +515,6 @@ fn enter_on_dir_row_toggles_collapse_and_keeps_focus() {
 // TestBackend buffer assertions (no real TTY in CI).
 
 use super::super::background::TaskId;
-use super::super::history::InFlightHistory;
 use crate::git::CommitLogEntry;
 
 fn commit(sha: &str, subject: &str, author: &str, ts: i64) -> CommitLogEntry {
@@ -541,10 +540,7 @@ fn app_on_history_tab() -> App {
 fn history_tab_shows_a_loading_placeholder_before_the_first_page_lands() {
     let mut app = app_on_history_tab();
     // Simulate a fetch in flight without actually spawning a thread.
-    app.history_in_flight = Some(InFlightHistory {
-        id: TaskId(0),
-        generation: app.history_generation,
-    });
+    app.history_in_flight = Some(TaskId(0));
     let content = render_panel(&app);
     assert!(content.contains("loading"));
 }

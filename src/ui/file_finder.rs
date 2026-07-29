@@ -48,7 +48,7 @@ impl FinderState {
 }
 
 /// A background file-candidate load awaiting completion. Mirrors
-/// [`super::history::InFlightHistory`]'s shape exactly.
+/// [`super::refresh::InFlightRefresh`]'s shape exactly.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct InFlightFinderLoad {
     /// The background task delivering this load's candidate list.

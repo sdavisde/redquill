@@ -29,7 +29,6 @@ use super::diff_view_state::DiffViewState;
 use super::editor::EditorLaunch;
 use super::file_finder::{FinderState, InFlightFinderLoad};
 use super::help::{HelpOverlayState, HelpTab};
-use super::history::InFlightHistory;
 use super::keymap::Action;
 use super::lsp_ops::LspClient;
 use super::motion;
@@ -462,14 +461,9 @@ pub struct App {
     /// shrinks).
     pub(super) history_exhausted: bool,
     /// The single background commit-log fetch in flight, if any
-    /// (single-flight, mirroring [`InFlightRefresh`]).
-    pub(super) history_in_flight: Option<InFlightHistory>,
-    /// Bumped whenever previously-loaded history is invalidated, so a
-    /// straggling fetch spawned before the bump is dropped on arrival rather
-    /// than applied (mirrors `refresh_generation`). Stays at `0` in
-    /// production today; exists so a future invalidation point has
-    /// somewhere to hook in, and is directly exercised by tests.
-    pub(super) history_generation: u64,
+    /// (single-flight: only one page fetch can exist at a time, and its id is
+    /// matched on drain, so a foreign result can't be applied).
+    pub(super) history_in_flight: Option<TaskId>,
     /// The background-task poller commit-log page fetches run through,
     /// separate from `background`/`refresh_tasks` so their results are
     /// drained independently (see [`App::poll_history`]).
@@ -564,8 +558,6 @@ pub struct App {
     /// `Enter` or refresh can't stack a concurrent fetch/worktree op (see
     /// [`App::spawn_pr_checkout`]/[`App::poll_pr_checkout`]).
     pub(super) pr_checkout_in_flight: Option<super::review_launcher::InFlightPrCheckout>,
-    /// Bumped to invalidate a straggling PR checkout spawned before the bump.
-    pub(super) pr_checkout_generation: u64,
     /// The background-task poller PR checkouts run through, separate from the
     /// PR-list poller so their results drain independently.
     pub(super) pr_checkout_tasks: BackgroundTasks<super::stage_ops::PrCheckoutOutcome>,
@@ -658,7 +650,7 @@ pub struct App {
     /// independently (see [`App::poll_finder`]).
     pub(super) finder_tasks: BackgroundTasks<Option<Vec<FileCandidate>>>,
     /// The single background candidate-list load currently in flight, if
-    /// any (single-flight, mirroring [`InFlightHistory`]).
+    /// any (single-flight, mirroring [`InFlightRefresh`]).
     pub(super) finder_in_flight: Option<InFlightFinderLoad>,
     /// Bumped every time the finder opens, so a straggling load spawned by a
     /// previous open (closed and reopened quickly) is dropped on arrival
@@ -860,7 +852,6 @@ impl App {
             history: Vec::new(),
             history_exhausted: false,
             history_in_flight: None,
-            history_generation: 0,
             history_tasks: BackgroundTasks::new(),
             last_panel_tab: PanelTab::default(),
             last_launcher_tab: LauncherTab::default(),
@@ -877,7 +868,6 @@ impl App {
             cleanup_reviews: Vec::new(),
             restore_request: None,
             pr_checkout_in_flight: None,
-            pr_checkout_generation: 0,
             pr_checkout_tasks: BackgroundTasks::new(),
             review_forge: None,
             review_stale: false,

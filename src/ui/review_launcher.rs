@@ -84,13 +84,12 @@ pub(super) struct PrCheckoutContext {
     pub(super) from_session: bool,
 }
 
-/// A background PR checkout awaiting completion: its [`TaskId`], the
-/// generation captured at spawn (a straggler from before a bump is dropped),
-/// and the [`PrCheckoutContext`] the poll handler finishes with.
+/// A background PR checkout awaiting completion: its [`TaskId`] (matched on
+/// drain, so a foreign result is dropped) and the [`PrCheckoutContext`] the
+/// poll handler finishes with.
 #[derive(Debug, Clone)]
 pub(super) struct InFlightPrCheckout {
     pub(super) id: TaskId,
-    pub(super) generation: u64,
     pub(super) ctx: PrCheckoutContext,
 }
 
@@ -677,13 +676,8 @@ impl App {
 
         match fetcher {
             Some(fetcher) => {
-                let generation = self.pr_checkout_generation;
                 let id = self.pr_checkout_tasks.spawn(move || fetcher(request));
-                self.pr_checkout_in_flight = Some(InFlightPrCheckout {
-                    id,
-                    generation,
-                    ctx,
-                });
+                self.pr_checkout_in_flight = Some(InFlightPrCheckout { id, ctx });
             }
             None => {
                 // Synchronous fallback: the backend can't cross a thread
@@ -702,9 +696,9 @@ impl App {
     }
 
     /// Drains a completed background PR checkout (once per event-loop tick,
-    /// alongside [`App::poll_launcher_prs`]). Drops a stale result — spawned
-    /// before `pr_checkout_generation` was bumped — or a task-panic result
-    /// (surfaced as a one-line diagnostic that leaves local state untouched);
+    /// alongside [`App::poll_launcher_prs`]). Drops a foreign result (one
+    /// whose id isn't the single in-flight checkout's) and turns a task panic
+    /// into a one-line diagnostic that leaves local state untouched;
     /// otherwise finishes the checkout into a review session.
     pub(super) fn poll_pr_checkout(&mut self) {
         for (id, result) in self.pr_checkout_tasks.poll() {
@@ -715,9 +709,6 @@ impl App {
                 continue;
             }
             self.pr_checkout_in_flight = None;
-            if in_flight.generation != self.pr_checkout_generation {
-                continue;
-            }
             let outcome = result.unwrap_or(PrCheckoutOutcome::Failed {
                 message: "PR checkout task panicked".to_string(),
                 stale_worktree: None,
