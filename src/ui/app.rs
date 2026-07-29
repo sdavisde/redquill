@@ -36,7 +36,7 @@ use super::motion;
 use super::peek::{PeekKind, PeekState};
 use super::project_search::ProjectSearchState;
 use super::refresh::InFlightRefresh;
-use super::review_launcher::{InFlightLauncherCommits, InFlightLauncherPrs, LauncherTab};
+use super::review_launcher::LauncherTab;
 use super::rows::Row;
 use super::search::SearchState;
 use super::stage_ops::{PrFetchOutcome, ReviewSnapshot, StageOps, StagedFile, StagedState};
@@ -502,13 +502,9 @@ pub struct App {
     /// `history_exhausted`, which only means "no *more* pages").
     pub(super) launcher_commits_loaded: bool,
     /// The single background ahead-of-base fetch in flight, if any
-    /// (single-flight, mirroring [`InFlightHistory`]).
-    pub(super) launcher_commits_in_flight: Option<InFlightLauncherCommits>,
-    /// Bumped to invalidate a straggling ahead-of-base fetch spawned before
-    /// the bump (mirrors `history_generation`: stays at `0` in production
-    /// today, exists for a future invalidation point and is exercised
-    /// directly by tests).
-    pub(super) launcher_commits_generation: u64,
+    /// (single-flight: only one task can exist at a time, and its id is
+    /// matched on drain, so a foreign or superseded result can't be applied).
+    pub(super) launcher_commits_in_flight: Option<TaskId>,
     /// The background-task poller ahead-of-base fetches run through,
     /// separate from `history_tasks` so their results are drained
     /// independently (see [`App::poll_launcher_commits`]).
@@ -540,10 +536,7 @@ pub struct App {
     pub(super) launcher_prs: Option<PrFetchOutcome>,
     /// The single background Pull Requests fetch in flight, if any
     /// (single-flight, mirroring `launcher_commits_in_flight`).
-    pub(super) launcher_prs_in_flight: Option<InFlightLauncherPrs>,
-    /// Bumped to invalidate a straggling Pull Requests fetch spawned before
-    /// the bump (mirrors `launcher_commits_generation`).
-    pub(super) launcher_prs_generation: u64,
+    pub(super) launcher_prs_in_flight: Option<TaskId>,
     /// The background-task poller Pull Requests fetches run through,
     /// separate from `launcher_commits_tasks` so their results are drained
     /// independently (see [`App::poll_launcher_prs`]).
@@ -874,13 +867,11 @@ impl App {
             launcher_commits: Vec::new(),
             launcher_commits_loaded: false,
             launcher_commits_in_flight: None,
-            launcher_commits_generation: 0,
             launcher_commits_tasks: BackgroundTasks::new(),
             launcher_all_commits: false,
             launcher_filter: None,
             launcher_prs: None,
             launcher_prs_in_flight: None,
-            launcher_prs_generation: 0,
             launcher_prs_tasks: BackgroundTasks::new(),
             launcher_finished_reviews: Vec::new(),
             cleanup_reviews: Vec::new(),

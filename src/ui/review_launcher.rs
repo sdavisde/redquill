@@ -54,31 +54,6 @@ fn store_provider(kind: ProviderKind) -> ForgeProviderKind {
     }
 }
 
-/// A background ahead-of-base commit-log fetch awaiting completion. Mirrors
-/// [`super::history::InFlightHistory`]'s shape exactly — the Commits tab's
-/// ahead-of-base source reuses the identical single-flight +
-/// generation-guard discipline the History tab pioneered, just against a
-/// single-shot (never paginated) fetch rather than a page sequence.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct InFlightLauncherCommits {
-    /// The background task delivering the ahead-of-base commit list.
-    pub(super) id: TaskId,
-    /// The generation captured when this fetch was spawned.
-    pub(super) generation: u64,
-}
-
-/// A background Pull Requests tab fetch awaiting completion. Same shape as
-/// [`InFlightLauncherCommits`] and for the same reason: single-flight +
-/// generation-guard discipline against a single-shot (never paginated)
-/// fetch.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct InFlightLauncherPrs {
-    /// The background task delivering the [`PrFetchOutcome`].
-    pub(super) id: TaskId,
-    /// The generation captured when this fetch was spawned.
-    pub(super) generation: u64,
-}
-
 /// Everything needed to finish a PR checkout into a review session once its
 /// background fetch/worktree work lands — carried alongside the in-flight
 /// task (and reused verbatim on the synchronous fallback path) so the poll
@@ -1166,11 +1141,10 @@ impl App {
             head: "HEAD".to_string(),
         };
         if let Some(fetcher) = ops.async_commit_log_range_fetcher() {
-            let generation = self.launcher_commits_generation;
             let id = self
                 .launcher_commits_tasks
                 .spawn(move || fetcher(&range).ok());
-            self.launcher_commits_in_flight = Some(InFlightLauncherCommits { id, generation });
+            self.launcher_commits_in_flight = Some(id);
         } else {
             match ops.commit_log_range(&range) {
                 Ok(commits) => self.apply_launcher_commits(commits),
@@ -1180,23 +1154,17 @@ impl App {
     }
 
     /// Drains a completed background ahead-of-base fetch (once per
-    /// event-loop tick, alongside [`App::poll_history`]). Drops a stale
-    /// result — spawned before `launcher_commits_generation` was last
-    /// bumped — or a foreign/task-panic/git-error result silently (marking
-    /// the load "loaded, empty" rather than leaving the placeholder stuck);
-    /// applies a successful list otherwise.
+    /// event-loop tick, alongside [`App::poll_history`]). Drops a foreign
+    /// result (one whose id isn't the single in-flight fetch's) or a
+    /// task-panic/git-error result silently (marking the load "loaded,
+    /// empty" rather than leaving the placeholder stuck); applies a
+    /// successful list otherwise.
     pub(super) fn poll_launcher_commits(&mut self) {
         for (id, result) in self.launcher_commits_tasks.poll() {
-            let Some(in_flight) = self.launcher_commits_in_flight else {
-                continue;
-            };
-            if in_flight.id != id {
+            if self.launcher_commits_in_flight != Some(id) {
                 continue;
             }
             self.launcher_commits_in_flight = None;
-            if in_flight.generation != self.launcher_commits_generation {
-                continue;
-            }
             match result {
                 Ok(Some(commits)) => self.apply_launcher_commits(commits),
                 _ => self.launcher_commits_loaded = true,
@@ -1265,9 +1233,8 @@ impl App {
             return;
         };
         if let Some(fetcher) = ops.async_pr_list_fetcher() {
-            let generation = self.launcher_prs_generation;
             let id = self.launcher_prs_tasks.spawn(fetcher);
-            self.launcher_prs_in_flight = Some(InFlightLauncherPrs { id, generation });
+            self.launcher_prs_in_flight = Some(id);
         } else {
             let outcome = ops.list_open_prs();
             self.set_launcher_prs(outcome);
@@ -1276,22 +1243,16 @@ impl App {
 
     /// Drains a completed background Pull Requests fetch (once per
     /// event-loop tick, alongside [`App::poll_launcher_commits`]). Drops a
-    /// stale result — spawned before `launcher_prs_generation` was last
-    /// bumped — or a task-panic result silently, applying a successful
-    /// outcome (which may itself be a degraded [`PrFetchOutcome`] variant —
-    /// still a value, not dropped) otherwise.
+    /// foreign result (one whose id isn't the single in-flight fetch's)
+    /// silently and turns a task panic into a failed outcome, applying a
+    /// successful outcome (which may itself be a degraded [`PrFetchOutcome`]
+    /// variant — still a value, not dropped) otherwise.
     pub(super) fn poll_launcher_prs(&mut self) {
         for (id, result) in self.launcher_prs_tasks.poll() {
-            let Some(in_flight) = self.launcher_prs_in_flight else {
-                continue;
-            };
-            if in_flight.id != id {
+            if self.launcher_prs_in_flight != Some(id) {
                 continue;
             }
             self.launcher_prs_in_flight = None;
-            if in_flight.generation != self.launcher_prs_generation {
-                continue;
-            }
             match result {
                 Ok(outcome) => self.set_launcher_prs(outcome),
                 Err(_) => {
@@ -1773,10 +1734,7 @@ index 111..222 100644
         let id = app
             .launcher_commits_tasks
             .spawn(|| Some(vec![commit("a", "one")]));
-        app.launcher_commits_in_flight = Some(InFlightLauncherCommits {
-            id,
-            generation: app.launcher_commits_generation,
-        });
+        app.launcher_commits_in_flight = Some(id);
         assert!(
             app.launcher_commits_loading(),
             "placeholder must show while the fetch is in flight"
@@ -1801,10 +1759,7 @@ index 111..222 100644
         let id = app
             .launcher_commits_tasks
             .spawn(|| Some(vec![commit("a", "one")]));
-        app.launcher_commits_in_flight = Some(InFlightLauncherCommits {
-            id,
-            generation: app.launcher_commits_generation,
-        });
+        app.launcher_commits_in_flight = Some(id);
         app.stage_ops = Some(Box::new(SyncCommitRangeOps {
             base: "main",
             commits: vec![commit("b", "two")],
@@ -1814,7 +1769,7 @@ index 111..222 100644
 
         // Still the original in-flight task; the synchronous fake's list
         // was never applied (a second fetch never started).
-        assert_eq!(app.launcher_commits_in_flight.map(|f| f.id), Some(id));
+        assert_eq!(app.launcher_commits_in_flight, Some(id));
         assert!(app.launcher_commits.is_empty());
     }
 
@@ -2215,10 +2170,7 @@ index 111..222 100644
             repo_label: "org/repo".to_string(),
             prs: vec![pr(1, "one")],
         });
-        app.launcher_prs_in_flight = Some(InFlightLauncherPrs {
-            id,
-            generation: app.launcher_prs_generation,
-        });
+        app.launcher_prs_in_flight = Some(id);
         app.stage_ops = Some(Box::new(SyncPrListOps {
             outcome: PrFetchOutcome::Loaded {
                 repo_label: "org/repo".to_string(),
@@ -2230,7 +2182,7 @@ index 111..222 100644
 
         // Still the original in-flight task; the synchronous fake's outcome
         // was never applied (a second fetch never started).
-        assert_eq!(app.launcher_prs_in_flight.map(|f| f.id), Some(id));
+        assert_eq!(app.launcher_prs_in_flight, Some(id));
         assert!(app.launcher_prs.is_none());
     }
 

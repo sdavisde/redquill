@@ -611,11 +611,7 @@ index 111..222 100644
                 timestamp: 1_700_000_000,
             }])
         });
-        app.launcher_commits_in_flight =
-            Some(super::super::review_launcher::InFlightLauncherCommits {
-                id,
-                generation: app.launcher_commits_generation,
-            });
+        app.launcher_commits_in_flight = Some(id);
         app.mode = Mode::ReviewLauncher {
             tab: LauncherTab::Commits,
             cursor: 0,
