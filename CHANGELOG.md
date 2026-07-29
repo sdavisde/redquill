@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.19.0](https://github.com/sdavisde/redquill/compare/v0.18.0...v0.19.0) (2026-07-29)
+
+
+### Features
+
+* **ui:** restore a file's changes from the diff view and git panel ([130a8bb](https://github.com/sdavisde/redquill/commit/130a8bbc1953e09d91b53717e60a6373bafb5530))
+
+
+### Bug Fixes
+
+* **ui:** keep the annotation's classification visible in the compose title ([eaa3fc1](https://github.com/sdavisde/redquill/commit/eaa3fc16b2ba258123f8b357a0cfb726447edadd))
+
 ## [0.18.0](https://github.com/sdavisde/redquill/compare/v0.17.2...v0.18.0) (2026-07-28)
 
 
