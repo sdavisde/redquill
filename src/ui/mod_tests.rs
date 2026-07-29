@@ -677,7 +677,9 @@ fn help_overlay_scrolls_to_reveal_lower_sections() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(bottom.contains("Close the thread overlay"));
+    // The restore confirm is the last section in the overlay, so its rows
+    // are what scrolling to the end reveals.
+    assert!(bottom.contains("Restore confirm (d)"));
     assert!(!bottom.contains("Move cursor down"));
 }
 
@@ -2263,7 +2265,7 @@ fn shift_s_accepts_the_cursor_file_in_a_review_session_via_dispatch_key() {
 
 /// `d` toggles defer, bound directly (no translation needed).
 #[test]
-fn d_defers_the_cursor_file_in_a_review_session_via_dispatch_key() {
+fn shift_d_defers_the_cursor_file_in_a_review_session_via_dispatch_key() {
     let keymap = Keymap::default_map();
     let mut pending: Option<KeyEvent> = None;
     let mut pending_count: Option<usize> = None;
@@ -2278,7 +2280,7 @@ fn d_defers_the_cursor_file_in_a_review_session_via_dispatch_key() {
         &keymap,
         &mut pending,
         &mut pending_count,
-        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('D'), KeyModifiers::NONE),
     );
 
     assert_eq!(app.review_status("src/main.rs"), ReviewStatus::Deferred);
@@ -2329,7 +2331,32 @@ fn space_and_shift_s_never_produce_review_state_outside_a_review_session() {
 /// as when the key was unbound: no state change, no status message, mode
 /// untouched.
 #[test]
-fn d_is_a_total_no_op_outside_a_review_session_via_dispatch_key() {
+fn shift_d_is_a_total_no_op_outside_a_review_session_via_dispatch_key() {
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let mut pending_count: Option<usize> = None;
+    let mut app = App::new(vec![sample_file()]);
+    assert_eq!(app.target, DiffTarget::WorkingTree);
+
+    dispatch_key(
+        &mut app,
+        &keymap,
+        &mut pending,
+        &mut pending_count,
+        KeyEvent::new(KeyCode::Char('D'), KeyModifiers::NONE),
+    );
+
+    assert_eq!(app.review_status("src/main.rs"), ReviewStatus::Unreviewed);
+    assert!(!app.view.is_collapsed("src/main.rs"));
+    assert!(app.status_message.is_none());
+    assert_eq!(app.mode, Mode::Normal);
+}
+
+/// Plain `d` is the restore confirm, not defer: with no git backend wired it
+/// declines with a footer hint and opens nothing, rather than silently
+/// pretending to have restored something.
+#[test]
+fn d_without_a_git_backend_declines_instead_of_opening_the_restore_confirm() {
     let keymap = Keymap::default_map();
     let mut pending: Option<KeyEvent> = None;
     let mut pending_count: Option<usize> = None;
@@ -2344,10 +2371,11 @@ fn d_is_a_total_no_op_outside_a_review_session_via_dispatch_key() {
         KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
     );
 
-    assert_eq!(app.review_status("src/main.rs"), ReviewStatus::Unreviewed);
-    assert!(!app.view.is_collapsed("src/main.rs"));
-    assert!(app.status_message.is_none());
     assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("restore unavailable (no git backend)")
+    );
 }
 
 fn file_named(path: &str) -> FileDiff {
@@ -3725,11 +3753,11 @@ fn panel_keys_translate_to_accept_and_defer_in_a_review_session() {
     assert_eq!(app.review_status("src/main.rs"), ReviewStatus::Unreviewed);
     press_one(&mut app, &keymap, KeyCode::Char('S'));
     assert_eq!(app.review_status("src/main.rs"), ReviewStatus::Accepted);
-    press_one(&mut app, &keymap, KeyCode::Char('d'));
+    press_one(&mut app, &keymap, KeyCode::Char('D'));
     assert_eq!(
         app.review_status("src/main.rs"),
         ReviewStatus::Deferred,
-        "d replaces the accepted status with deferred"
+        "D replaces the accepted status with deferred"
     );
     assert!(
         matches!(app.mode, Mode::Panel { .. }),
@@ -3737,15 +3765,15 @@ fn panel_keys_translate_to_accept_and_defer_in_a_review_session() {
     );
 }
 
-/// Outside a review session the panel's `d` stays a total no-op, exactly
-/// like the diff view's unconditional `d` binding.
+/// Outside a review session the panel's `D` stays a total no-op, exactly
+/// like the diff view's unconditional `D` binding.
 #[test]
-fn panel_d_stays_inert_outside_a_review_session_through_dispatch() {
+fn panel_shift_d_stays_inert_outside_a_review_session_through_dispatch() {
     let mut app = App::new(vec![sample_file()]);
     let keymap = Keymap::default_map();
     press_one(&mut app, &keymap, KeyCode::Char('`'));
     press_one(&mut app, &keymap, KeyCode::Char('j'));
-    press_one(&mut app, &keymap, KeyCode::Char('d'));
+    press_one(&mut app, &keymap, KeyCode::Char('D'));
     assert!(app.review_states.is_empty());
     assert!(app.status_message.is_none());
 }

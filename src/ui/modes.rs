@@ -18,8 +18,8 @@ use super::App;
 use super::modal_keys::{
     self, AcceptedPanelAction, CleanupReviewsAction, CommitMessageAction, ComposeAction,
     ConfirmRemoteOpAction, EndReviewAction, FilterEditAction, FinderAction, LauncherAction,
-    ListAction, PeekAction, ProjectSearchInputAction, ProjectSearchResultsAction, SearchAction,
-    StagingAction, SubmitForgeAction, SwitcherAction, ThreadViewAction,
+    ListAction, PeekAction, ProjectSearchInputAction, ProjectSearchResultsAction, RestoreAction,
+    SearchAction, StagingAction, SubmitForgeAction, SwitcherAction, ThreadViewAction,
 };
 use super::motion;
 
@@ -411,7 +411,8 @@ pub(super) fn handle_panel_key(
             | Action::StageFile
             | Action::ToggleAccept
             | Action::AcceptFile
-            | Action::ToggleDefer),
+            | Action::ToggleDefer
+            | Action::RestoreFile),
         ) => {
             panel_file_action(app, action);
             Flow::Continue
@@ -489,6 +490,21 @@ pub(super) fn handle_confirm_remote_op_key(app: &mut App, key: KeyEvent) {
     match action {
         ConfirmRemoteOpAction::Confirm => app.confirm_remote_op(),
         ConfirmRemoteOpAction::Cancel => app.cancel_confirm_remote_op(),
+    }
+}
+
+/// Handles one key event while [`super::Mode::ConfirmRestore`] is active:
+/// resolves against `app.modal_keys.restore`, dispatching confirm/cancel
+/// through [`App`]'s state-transition methods (`src/ui/restore.rs`). An
+/// unbound key does nothing — the modal never falls through to the view
+/// underneath, so a stray keystroke can't dismiss the gate.
+pub(super) fn handle_restore_key(app: &mut App, key: KeyEvent) {
+    let Some(action) = modal_keys::resolve(&app.modal_keys.restore, key) else {
+        return;
+    };
+    match action {
+        RestoreAction::Confirm => app.confirm_confirm_restore(),
+        RestoreAction::Cancel => app.cancel_confirm_restore(),
     }
 }
 

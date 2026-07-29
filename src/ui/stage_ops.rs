@@ -18,8 +18,8 @@ use crate::forge::{
 };
 use crate::git::{
     BranchStatus, ChangeKind, CommitLogEntry, CommitLogRange, CommitSummary, DiffTarget,
-    FileStatus, GitError, GitRunner, LocalBranch, PrRef, RawFilePatch, StashEntry, StatusCode,
-    WorktreeEntry,
+    FileStatus, GitError, GitRunner, LocalBranch, PrRef, RawFilePatch, RestoreScope, StashEntry,
+    StatusCode, WorktreeEntry,
 };
 use crate::search::{FileCandidate, merge_candidates};
 
@@ -203,6 +203,20 @@ pub trait StageOps {
     fn stage_file(&self, path: &str) -> Result<(), GitError>;
     /// Unstages `path` (see [`GitRunner::unstage_file`]).
     fn unstage_file(&self, path: &str) -> Result<(), GitError>;
+    /// Discards uncommitted changes to every path in `paths`, across the
+    /// copies named by `scope` (see [`GitRunner::restore_paths`]). Defaults
+    /// to erroring rather than silently succeeding: a fake that hasn't opted
+    /// in must surface "unavailable" to the user, never pretend a destructive
+    /// op ran.
+    fn restore_paths(&self, _paths: &[&str], _scope: RestoreScope) -> Result<(), GitError> {
+        Err(GitError::Parse("restore unavailable".into()))
+    }
+    /// Deletes an untracked `path` from the working tree (see
+    /// [`GitRunner::discard_untracked_file`]). Same erroring default, and for
+    /// the same reason, as [`StageOps::restore_file`].
+    fn discard_untracked_file(&self, _path: &str) -> Result<(), GitError> {
+        Err(GitError::Parse("restore unavailable".into()))
+    }
     /// Applies `patch` to the index only (see [`GitRunner::apply_cached`]).
     fn apply_cached(&self, patch: &str) -> Result<(), GitError>;
     /// Reverses `patch` against the index only (see
@@ -558,6 +572,14 @@ impl StageOps for GitRunner {
 
     fn unstage_file(&self, path: &str) -> Result<(), GitError> {
         GitRunner::unstage_file(self, path)
+    }
+
+    fn restore_paths(&self, paths: &[&str], scope: RestoreScope) -> Result<(), GitError> {
+        GitRunner::restore_paths(self, paths, scope)
+    }
+
+    fn discard_untracked_file(&self, path: &str) -> Result<(), GitError> {
+        GitRunner::discard_untracked_file(self, path)
     }
 
     fn apply_cached(&self, patch: &str) -> Result<(), GitError> {

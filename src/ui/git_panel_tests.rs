@@ -1058,27 +1058,42 @@ fn panel_shift_s_accepts_in_a_review_session() {
 }
 
 #[test]
-fn panel_d_toggle_defers_in_a_review_session() {
+fn panel_shift_d_toggle_defers_in_a_review_session() {
     let mut app = review_panel_app();
     app.apply(Action::FocusGitPanel);
-    press(&mut app, KeyCode::Char('d'));
+    press(&mut app, KeyCode::Char('D'));
     assert_eq!(app.review_status("src/a.rs"), ReviewStatus::Deferred);
     assert!(
         render_panel(&app).contains('~'),
         "the deferred marker must update immediately"
     );
-    press(&mut app, KeyCode::Char('d'));
+    press(&mut app, KeyCode::Char('D'));
     assert_eq!(app.review_status("src/a.rs"), ReviewStatus::Unreviewed);
 }
 
 #[test]
-fn panel_d_outside_a_review_session_is_a_total_no_op() {
+fn panel_shift_d_outside_a_review_session_is_a_total_no_op() {
     let (mut app, calls) = panel_actions_app();
     app.apply(Action::FocusGitPanel);
-    press(&mut app, KeyCode::Char('d'));
+    press(&mut app, KeyCode::Char('D'));
     assert!(calls.borrow().is_empty());
     assert!(app.status_message.is_none());
     assert!(app.review_states.is_empty());
+}
+
+/// Plain `d` in the panel opens the restore confirm on the highlighted file
+/// and stops there — the gesture that reaches git is the confirm, never the
+/// keypress.
+#[test]
+fn panel_d_opens_the_restore_confirm_without_touching_git() {
+    let (mut app, calls) = panel_actions_app();
+    app.apply(Action::FocusGitPanel);
+    press(&mut app, KeyCode::Char('d'));
+    assert!(matches!(
+        app.mode,
+        crate::ui::app::Mode::ConfirmRestore { .. }
+    ));
+    assert!(calls.borrow().is_empty());
 }
 
 // -- Panel coherence: Esc leaves, s and / reach through (spec 11 Unit 2) -----
@@ -1337,10 +1352,10 @@ fn panel_actions_journey_transcript() {
             },
         );
     }
-    press(&mut review, KeyCode::Char('d'));
+    press(&mut review, KeyCode::Char('D'));
     assert_eq!(review.review_status("notes.md"), ReviewStatus::Deferred);
     step(
-        "press d on notes.md: deferred, ~ appears",
+        "press D on notes.md: deferred, ~ appears",
         &panel_frame(&review),
     );
     assert_eq!(review.review_progress(), (2, 3));

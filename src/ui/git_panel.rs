@@ -743,7 +743,8 @@ impl App {
             | Mode::ConfirmRemoteOp { .. }
             | Mode::ThreadView
             | Mode::SubmitForge
-            | Mode::CleanupReviews { .. } => {}
+            | Mode::CleanupReviews { .. }
+            | Mode::ConfirmRestore { .. } => {}
             Mode::Normal | Mode::Visual { .. } => {
                 let tab = self.last_panel_tab;
                 self.mode = Mode::Panel {

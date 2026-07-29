@@ -43,7 +43,8 @@ impl App {
             | Mode::ConfirmRemoteOp { .. }
             | Mode::ThreadView
             | Mode::SubmitForge
-            | Mode::CleanupReviews { .. } => {}
+            | Mode::CleanupReviews { .. }
+            | Mode::ConfirmRestore { .. } => {}
             Mode::Normal | Mode::Visual { .. } => {
                 let total = self.list_total_len();
                 if total > 0 {

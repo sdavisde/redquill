@@ -58,13 +58,14 @@ fn keys(entries: &[FooterEntry]) -> Vec<String> {
 fn normal_mode_hints_match_the_curated_list_in_order() {
     let km = Keymap::default_map();
     let entries = normal_hints(&km, true, true, false, false);
-    assert_eq!(keys(&entries), vec!["Space", "S", "c", "e", "x", "?"]);
+    assert_eq!(keys(&entries), vec!["Space", "S", "c", "d", "e", "x", "?"]);
     assert_eq!(
         labels(&entries),
         vec![
             "stage hunk",
             "stage file",
             "comment",
+            "restore",
             "edit",
             "delete",
             "help",
@@ -136,7 +137,11 @@ fn normal_mode_hints_hide_accept_and_stage_but_keep_defer_during_a_review_sessio
     assert!(labels(&entries).contains(&"defer"));
     assert!(!keys(&entries).contains(&"Space".to_string()));
     assert!(!keys(&entries).contains(&"S".to_string()));
-    assert!(keys(&entries).contains(&"d".to_string()));
+    assert!(keys(&entries).contains(&"D".to_string()));
+    // A review target is read-only, so `d restore` is hidden — which is what
+    // lets the two share a footer rank without ever colliding.
+    assert!(!labels(&entries).contains(&"restore"));
+    assert!(!keys(&entries).contains(&"d".to_string()));
 
     // Absent outside a review session, even with staging allowed.
     let without = normal_hints(&km, true, true, false, false);
@@ -177,7 +182,7 @@ fn panel_mode_hints_match_the_curated_list_in_order() {
     assert_eq!(
         keys(&entries),
         vec![
-            "j/k", "Enter", "Space", "S", "f", "p", "P", "c", "`/Esc", "Tab", "s", "/", "?"
+            "j/k", "Enter", "Space", "S", "d", "f", "p", "P", "c", "`/Esc", "Tab", "s", "/", "?"
         ]
     );
     assert_eq!(
@@ -187,6 +192,7 @@ fn panel_mode_hints_match_the_curated_list_in_order() {
             "open",
             "stage",
             "stage file",
+            "restore",
             "fetch",
             "pull",
             "push",
@@ -236,7 +242,10 @@ fn panel_mode_hints_show_accept_and_defer_during_a_review_session() {
     let keys = keys(&entries);
     assert!(keys.contains(&"Space".to_string()));
     assert!(keys.contains(&"S".to_string()));
-    assert!(keys.contains(&"d".to_string()));
+    assert!(keys.contains(&"D".to_string()));
+    // Read-only review target — `d restore` is hidden, so `D defer` owns the
+    // slot uncontested.
+    assert!(!labels.contains(&"restore"));
 }
 
 /// The History tab has no file rows, so the per-file hints hide there —
@@ -286,7 +295,7 @@ fn panel_push_hint_relabels_to_publish_on_an_unpublished_branch() {
     assert_eq!(
         keys(&entries),
         vec![
-            "j/k", "Enter", "Space", "S", "f", "p", "P", "c", "`/Esc", "Tab", "s", "/", "?"
+            "j/k", "Enter", "Space", "S", "d", "f", "p", "P", "c", "`/Esc", "Tab", "s", "/", "?"
         ]
     );
     assert_eq!(
@@ -296,6 +305,7 @@ fn panel_push_hint_relabels_to_publish_on_an_unpublished_branch() {
             "open",
             "stage",
             "stage file",
+            "restore",
             "fetch",
             "pull",
             "publish",

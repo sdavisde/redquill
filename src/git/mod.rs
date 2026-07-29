@@ -47,6 +47,7 @@ mod error;
 mod log;
 mod ls_files;
 mod remote;
+mod restore;
 mod runner;
 mod stage;
 mod stash;
@@ -67,6 +68,7 @@ pub use remote::{
     MANAGED_PR_BRANCH_PREFIX, PrRef, PrRefKind, RemoteOp, base_fetch_command,
     delete_managed_pr_branch_command, pr_fetch_command, pr_peek_fetch_command, remote_command,
 };
+pub use restore::RestoreScope;
 pub use runner::GitRunner;
 pub use stage::{build_hunk_patch, build_line_patch};
 pub use stash::{STASH_LIST_FORMAT, StashEntry, parse_stash_list};

@@ -455,7 +455,7 @@ fn diff_overrides_remap_the_annotation_edit_and_delete_rows() {
     );
     keys.diff.insert(
         "delete-annotation".to_string(),
-        one(KeyCode::Char('D'), KeyModifiers::NONE),
+        one(KeyCode::Char('Y'), KeyModifiers::NONE),
     );
     let (km, warnings) = effective_keymap(&keys);
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
@@ -471,7 +471,7 @@ fn diff_overrides_remap_the_annotation_edit_and_delete_rows() {
     assert_eq!(
         km.lookup_in(
             Scope::Diff,
-            crossterm::event::KeyEvent::new(KeyCode::Char('D'), KeyModifiers::NONE)
+            crossterm::event::KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::NONE)
         ),
         Some(Action::DeleteAnnotation)
     );
@@ -618,8 +618,12 @@ fn panel_overrides_remap_the_file_action_rows() {
         Some(Action::StageFile)
     );
     assert_eq!(
-        km.lookup_in(Scope::Diff, ev(KeyCode::Char('d'))),
+        km.lookup_in(Scope::Diff, ev(KeyCode::Char('D'))),
         Some(Action::ToggleDefer)
+    );
+    assert_eq!(
+        km.lookup_in(Scope::Diff, ev(KeyCode::Char('d'))),
+        Some(Action::RestoreFile)
     );
 }
 

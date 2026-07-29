@@ -176,7 +176,7 @@ impl App {
     }
 
     /// The path of the file under the cursor, or `None` on an empty diff.
-    fn cursor_file_path(&self) -> Option<String> {
+    pub(super) fn cursor_file_path(&self) -> Option<String> {
         self.view
             .files
             .get(self.view.file_of_cursor())

@@ -1361,6 +1361,55 @@ pub(super) static CONFIRM_REMOTE_OP_KEYS: LazyLock<Vec<ModalBinding<ConfirmRemot
         ]
     });
 
+// -- Restore confirm modal ----------------------------------------------------
+
+/// What a key does in the restore confirm modal (`d` in the diff view or the
+/// git panel): a binary gate over discarding one file's uncommitted changes,
+/// opened by [`super::app::App::open_confirm_restore`]. Mirrors
+/// [`CONFIRM_REMOTE_OP_KEYS`]' shape, with no third option — there is nothing
+/// partial to offer between "put this file back" and "leave it alone".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RestoreAction {
+    /// Discards the file's changes (see
+    /// [`super::app::App::confirm_confirm_restore`]).
+    Confirm,
+    /// Closes the modal, changing nothing (see
+    /// [`super::app::App::cancel_confirm_restore`]).
+    Cancel,
+}
+
+/// The restore confirm modal's key table, for the help overlay, footer strip,
+/// and [`super::modes::handle_restore_key`]'s dispatch. Not config-remappable
+/// yet — see module doc.
+pub(super) static RESTORE_KEYS: LazyLock<Vec<ModalBinding<RestoreAction>>> = LazyLock::new(|| {
+    vec![
+        ModalBinding {
+            description: "Discard this file's changes (no undo)",
+            keys: vec![
+                ModalKey::plain(KeyCode::Enter),
+                ModalKey::plain(KeyCode::Char('y')),
+            ],
+            action: RestoreAction::Confirm,
+            footer: Some(FooterHint {
+                rank: 1,
+                label: "restore",
+            }),
+        },
+        ModalBinding {
+            description: "Cancel — close this modal, change nothing",
+            keys: vec![
+                ModalKey::plain(KeyCode::Esc),
+                ModalKey::plain(KeyCode::Char('n')),
+            ],
+            action: RestoreAction::Cancel,
+            footer: Some(FooterHint {
+                rank: 2,
+                label: "cancel",
+            }),
+        },
+    ]
+});
+
 // -- Finished-review cleanup confirm modal -----------------------------------
 
 /// What a key does in the finished-review cleanup confirm modal
@@ -2828,6 +2877,9 @@ pub struct ModalKeymaps {
     /// The finished-review cleanup confirm modal. Not config-remappable yet —
     /// see [`CLEANUP_REVIEWS_KEYS`].
     pub(super) cleanup_reviews: Vec<ModalBinding<CleanupReviewsAction>>,
+    /// The restore confirm modal. Not config-remappable yet — see
+    /// [`RESTORE_KEYS`].
+    pub(super) restore: Vec<ModalBinding<RestoreAction>>,
     /// The shared `/` list-filter editing sub-state (see
     /// [`FILTER_EDIT_KEYS`]) — one table reused by every filter-gaining
     /// context (list, staging, accepted panel, switcher).
@@ -2853,6 +2905,7 @@ impl Default for ModalKeymaps {
             end_review: END_REVIEW_KEYS.clone(),
             accepted_panel: ACCEPTED_PANEL_KEYS.clone(),
             confirm_remote_op: CONFIRM_REMOTE_OP_KEYS.clone(),
+            restore: RESTORE_KEYS.clone(),
             thread_view: THREAD_VIEW_KEYS.clone(),
             submit_forge: SUBMIT_FORGE_KEYS.clone(),
             cleanup_reviews: CLEANUP_REVIEWS_KEYS.clone(),

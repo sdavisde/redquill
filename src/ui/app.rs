@@ -175,6 +175,18 @@ pub enum Mode {
     /// on cancel/confirm. The enumerated snapshot lives in
     /// [`App::cleanup_reviews`] (see [`super::cleanup_reviews`]).
     CleanupReviews { origin: ModeOrigin },
+    /// The restore confirm modal (`restore-file`, `d`) is open: a binary gate
+    /// naming the one file whose uncommitted changes are about to be thrown
+    /// away. Nothing touches the repo until the reviewer confirms from here —
+    /// this is the only redquill operation that destroys work git cannot get
+    /// back, so the modal is a hard boundary, not a courtesy.
+    ///
+    /// The file itself lives in [`App::restore_request`] rather than in this
+    /// payload: [`Mode`] is `Copy`, and a `String` field would remove that
+    /// crate-wide (the same reason [`Mode::CleanupReviews`] keeps its
+    /// snapshot on `App`). `origin` is where `d` was pressed from, restored
+    /// exactly on cancel *and* on confirm.
+    ConfirmRestore { origin: ModeOrigin },
 }
 
 /// Where a modal-launching gesture was pressed from, so closing that modal
@@ -549,6 +561,11 @@ pub struct App {
     /// at open time so a background list refresh can't shift the rows out from
     /// under the confirmation. Empty while the modal is closed.
     pub(super) cleanup_reviews: Vec<crate::review::FinishedReview>,
+    /// The file the restore confirm modal ([`Mode::ConfirmRestore`]) is
+    /// asking about, frozen at open time so a background refresh can't shift
+    /// which path a confirm lands on. `None` while the modal is closed — see
+    /// [`super::restore`].
+    pub(super) restore_request: Option<super::restore::RestoreRequest>,
     /// The single background PR checkout (`Enter` on a PR row, or a mid-
     /// session refresh) in flight, if any — single-flight, so a second
     /// `Enter` or refresh can't stack a concurrent fetch/worktree op (see
@@ -867,6 +884,7 @@ impl App {
             launcher_prs_tasks: BackgroundTasks::new(),
             launcher_finished_reviews: Vec::new(),
             cleanup_reviews: Vec::new(),
+            restore_request: None,
             pr_checkout_in_flight: None,
             pr_checkout_generation: 0,
             pr_checkout_tasks: BackgroundTasks::new(),
@@ -961,12 +979,32 @@ impl App {
     /// with no real patch is a synthetic untracked file (see
     /// [`build_review`]). Only meaningful with a git backend attached.
     pub(super) fn recompute_untracked(&mut self) {
+        // A missing patch alone does NOT mean untracked. Two kinds of entry
+        // carry `None`: the synthetic all-added sections built for untracked
+        // files, and *tracked* fully-staged files with no textual staged
+        // hunks (a staged deletion, or a binary file) — those get a
+        // header-only placeholder. Only the first kind is untracked, and the
+        // staged state separates them cleanly: a fully-staged entry is
+        // `StagedState::Full`, while an untracked file has no staged changes
+        // at all and so never appears in `staged_states`.
+        //
+        // Getting this wrong is not cosmetic. `restore` reads this set to
+        // choose between putting a file back from HEAD and deleting it off
+        // disk outright.
         self.untracked_paths = self
             .view
             .files
             .iter()
             .zip(&self.patches)
-            .filter(|(_, patch)| patch.is_none())
+            .filter(|(file, patch)| {
+                patch.is_none()
+                    && self
+                        .staged_states
+                        .get(&file.path)
+                        .copied()
+                        .unwrap_or_default()
+                        != StagedState::Full
+            })
             .map(|(file, _)| file.path.clone())
             .collect();
     }
@@ -1306,6 +1344,7 @@ impl App {
             Action::ToggleAccept => self.toggle_accept_file(),
             Action::AcceptFile => self.accept_file(),
             Action::ToggleDefer => self.toggle_defer_file(),
+            Action::RestoreFile => self.open_confirm_restore(),
             Action::EditAnnotation => self.edit_annotation_under_cursor(),
             Action::DeleteAnnotation => self.delete_annotation_under_cursor(),
             Action::OpenThread => self.open_thread_view(),

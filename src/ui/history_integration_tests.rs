@@ -935,6 +935,7 @@ fn commit_view_help_overlay_shows_only_truthful_keys() {
             binding.action,
             Action::ToggleStage
                 | Action::StageFile
+                | Action::RestoreFile
                 | Action::GotoDefinition
                 | Action::GotoReferences
                 | Action::Hover

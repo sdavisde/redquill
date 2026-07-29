@@ -103,7 +103,7 @@ fn group_of(action: Action) -> &'static str {
         | JumpToTop | JumpToBottom | NextHunk | PrevHunk | NextFile | PrevFile | ToggleCollapse
         | RecenterCursor | ScrollCursorTop | ScrollCursorBottom => "Navigation",
         EnterVisual | Compose | EditAnnotation | DeleteAnnotation => "Annotate",
-        ToggleStage | StageFile | ToggleStagingPanel => "Stage",
+        ToggleStage | StageFile | ToggleStagingPanel | RestoreFile => "Stage",
         ToggleAccept | AcceptFile | ToggleDefer | OpenThread | NextThread | PrevThread
         | SubmitForgeReview => "Review",
         Search | SearchNext | SearchPrev | SearchWordForward | SearchWordBackward => "Search",
@@ -163,7 +163,9 @@ fn key_line(key: &str, description: &str, key_width: usize, theme: &Theme) -> Li
 ///   no-ops (see [`super::app::App::stage_file`] / [`super::staging::toggle_stage`]),
 ///   so listing them would be untruthful; the staging-panel toggle stays
 ///   visible because it still works (it shows the index regardless of
-///   target).
+///   target). `RestoreFile` rides the same flag: it refuses on exactly the
+///   same targets (see [`super::app::App::open_confirm_restore`]), since a
+///   read-only target has no working tree to write back to.
 /// - On any target whose new side isn't the live working tree, `gd`/`gr`/`K`
 ///   are inert no-ops too (see [`super::code_intel::request`], gated on
 ///   [`crate::git::DiffTarget::supports_code_intel`]), so they're hidden the
@@ -173,15 +175,21 @@ fn key_line(key: &str, description: &str, key_width: usize, theme: &Theme) -> Li
 ///   inert-but-listed" convention this repo follows for capability gating —
 ///   and, since [`crate::git::DiffTarget::Review`]'s [`crate::git::StagingMode`]
 ///   is always [`crate::git::StagingMode::ReadOnly`], `staging_allowed`
-///   already hides `ToggleStage`/`StageFile` during a review session, so the
-///   two families of rows never both show for the same key at once.
+///   already hides `ToggleStage`/`StageFile`/`RestoreFile` during a review
+///   session, so the two families of rows never both show for the same key
+///   at once — which is also what lets `d restore` and `D defer` share a
+///   footer rank: they are mutually exclusive by construction.
 pub(super) fn binding_hidden(
     action: Action,
     staging_allowed: bool,
     code_intel_allowed: bool,
     review_session: bool,
 ) -> bool {
-    (!staging_allowed && matches!(action, Action::ToggleStage | Action::StageFile))
+    (!staging_allowed
+        && matches!(
+            action,
+            Action::ToggleStage | Action::StageFile | Action::RestoreFile
+        ))
         || (!code_intel_allowed
             && matches!(
                 action,
@@ -226,7 +234,7 @@ fn modal_hints<A: Clone>(table: &[ModalBinding<A>]) -> Vec<(String, &'static str
 /// applies), so only one of the two ever documents itself here at a time,
 /// exactly like `Action::ToggleStage`/`Action::ToggleAccept`'s mutual
 /// exclusion in [`binding_hidden`].
-fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 17] {
+fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 18] {
     let staging_section = if review_session {
         (
             "Accepted files panel (s, review sessions)",
@@ -283,6 +291,7 @@ fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 
             "Cleanup finished reviews (X, Pull Requests tab)",
             modal_hints(&modal_keys.cleanup_reviews),
         ),
+        ("Restore confirm (d)", modal_hints(&modal_keys.restore)),
     ]
 }
 

@@ -185,12 +185,18 @@ pub enum Action {
     /// [`Action::StageFile`]'s "works from anywhere" gesture. Reached via
     /// the same dispatch-time translation as [`Action::ToggleAccept`].
     AcceptFile,
-    /// `d` in a review session: toggles the cursor file between `Deferred`
+    /// `D` in a review session: toggles the cursor file between `Deferred`
     /// and `Unreviewed` (see [`crate::review::toggle_defer`]). Unlike the
     /// two actions above, this is bound directly in [`Scope::Diff`]; its
     /// handler self-guards on `App::in_review_session()`, so outside a
-    /// review session `d` stays a total no-op.
+    /// review session `D` stays a total no-op.
     ToggleDefer,
+    /// `d` in the diff view and the git panel: opens the restore confirm
+    /// modal for the cursor file (see [`super::app::Mode::ConfirmRestore`]).
+    /// The keypress itself never touches the repo — the modal is the safety
+    /// boundary, and it is the only way to reach the one operation redquill
+    /// performs that destroys uncommitted work.
+    RestoreFile,
     /// `e` in the diff view: opens the in-place edit compose for the
     /// annotation under the cursor (resolved by
     /// [`super::annotation_overlap`]). A no-op with a status hint when no
@@ -293,6 +299,7 @@ pub(crate) fn action_name(action: Action) -> &'static str {
         ToggleAccept => "toggle-accept",
         AcceptFile => "accept-file",
         ToggleDefer => "toggle-defer",
+        RestoreFile => "restore-file",
         EditAnnotation => "edit-annotation",
         DeleteAnnotation => "delete-annotation",
         OpenThread => "open-thread",
@@ -374,6 +381,7 @@ pub(crate) fn action_from_name(name: &str) -> Option<Action> {
         "toggle-accept" => ToggleAccept,
         "accept-file" => AcceptFile,
         "toggle-defer" => ToggleDefer,
+        "restore-file" => RestoreFile,
         "edit-annotation" => EditAnnotation,
         "delete-annotation" => DeleteAnnotation,
         "open-thread" => OpenThread,
@@ -794,12 +802,22 @@ impl Keymap {
                     AcceptFile,
                     "Accept file under cursor",
                 ),
+                // Defer sits on `D`, not `d`: the tri-state's middle rung is
+                // the rarest gesture in the set, and plain `d` is worth more
+                // to the restore confirm below.
                 d(
-                    KeySeq::one(Char('d'), none),
+                    KeySeq::one(Char('D'), none),
                     ToggleDefer,
                     "Defer/un-defer file under cursor",
                 )
                 .footer(6, "defer"),
+                // Opens the confirm modal only — see `Action::RestoreFile`.
+                d(
+                    KeySeq::one(Char('d'), none),
+                    RestoreFile,
+                    "Restore file under cursor, discarding its changes",
+                )
+                .footer(6, "restore"),
                 d(
                     KeySeq::one(Char('`'), none),
                     FocusGitPanel,
@@ -979,11 +997,17 @@ impl Keymap {
                 )
                 .footer(4, "accept file"),
                 p(
-                    KeySeq::one(Char('d'), none),
+                    KeySeq::one(Char('D'), none),
                     ToggleDefer,
                     "Defer/un-defer the highlighted file",
                 )
                 .footer(5, "defer"),
+                p(
+                    KeySeq::one(Char('d'), none),
+                    RestoreFile,
+                    "Restore the highlighted file, discarding its changes",
+                )
+                .footer(5, "restore"),
                 p(
                     KeySeq::one(Tab, none),
                     TogglePanelTab,
@@ -1313,9 +1337,14 @@ mod tests {
             Some(Action::HalfPageDown)
         );
         // Plain 'd' (no modifier) is a different binding entirely — the
-        // review-session defer toggle, not half-page-down.
+        // restore confirm, not half-page-down.
         assert_eq!(
             km.lookup(key(KeyCode::Char('d'), KeyModifiers::NONE)),
+            Some(Action::RestoreFile)
+        );
+        // And uppercase 'D' is a third: the review-session defer toggle.
+        assert_eq!(
+            km.lookup(key(KeyCode::Char('D'), KeyModifiers::NONE)),
             Some(Action::ToggleDefer)
         );
     }
@@ -1889,7 +1918,7 @@ mod tests {
     /// keys for help/footer documentation only, exactly like diff scope's
     /// own phantom rows, so a plain lookup must yield the stage actions.
     #[test]
-    fn panel_space_s_and_d_resolve_to_stage_and_defer_actions() {
+    fn panel_space_s_and_shift_d_resolve_to_stage_and_defer_actions() {
         let km = Keymap::default_map();
         assert_eq!(
             km.lookup_in(Scope::Panel, key(KeyCode::Char(' '), KeyModifiers::NONE)),
@@ -1904,8 +1933,13 @@ mod tests {
             Some(Action::StageFile)
         );
         assert_eq!(
-            km.lookup_in(Scope::Panel, key(KeyCode::Char('d'), KeyModifiers::NONE)),
+            km.lookup_in(Scope::Panel, key(KeyCode::Char('D'), KeyModifiers::NONE)),
             Some(Action::ToggleDefer)
+        );
+        // Plain `d` is the restore confirm in panel scope too.
+        assert_eq!(
+            km.lookup_in(Scope::Panel, key(KeyCode::Char('d'), KeyModifiers::NONE)),
+            Some(Action::RestoreFile)
         );
     }
 

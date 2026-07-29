@@ -268,7 +268,8 @@ impl App {
             | Mode::ConfirmRemoteOp { .. }
             | Mode::ThreadView
             | Mode::SubmitForge
-            | Mode::CleanupReviews { .. } => {}
+            | Mode::CleanupReviews { .. }
+            | Mode::ConfirmRestore { .. } => {}
             Mode::Normal | Mode::Visual { .. } => {
                 if self.in_review_session() {
                     self.refresh_accepted_list();

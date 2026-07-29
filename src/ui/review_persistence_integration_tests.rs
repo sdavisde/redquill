@@ -202,7 +202,7 @@ fn resume_staleness_re_accept_and_finish_round_trip_against_real_git() {
         app.select_file_by_path("b.rs");
         press(&mut app, &keymap, &mut pending, KeyCode::Char(' ')); // accept b.rs
         app.select_file_by_path("c.rs");
-        press(&mut app, &keymap, &mut pending, KeyCode::Char('d')); // defer c.rs
+        press(&mut app, &keymap, &mut pending, KeyCode::Char('D')); // defer c.rs
         wait_for_review_save(&mut app);
         assert_eq!(app.review_progress(), (2, 3));
         // Pause: `app` is simply dropped here (no `finish`), exactly like
