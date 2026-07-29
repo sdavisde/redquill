@@ -265,6 +265,7 @@ fn commit_view_hides_and_disarms_staging_keys() {
             help_open: app.help.open,
             project_search_focus: app.project_search_focus(),
             review_session: app.in_review_session(),
+            forge_review: app.in_forge_review(),
         },
         None,
         &keymap,
@@ -279,12 +280,14 @@ fn commit_view_hides_and_disarms_staging_keys() {
         Action::ToggleStage,
         staging_allowed,
         code_intel_allowed,
+        false,
         false
     ));
     assert!(help::binding_hidden(
         Action::StageFile,
         staging_allowed,
         code_intel_allowed,
+        false,
         false
     ));
 
@@ -838,7 +841,7 @@ fn commit_view_help_overlay_shows_only_truthful_keys() {
         );
         // staging_allowed=false, code_intel_allowed=false in a commit view.
         assert_eq!(
-            help::binding_hidden(binding.action, false, false, false),
+            help::binding_hidden(binding.action, false, false, false, false),
             inert,
             "commit-view overlay lists exactly the keys that work: {:?} \
              (hidden should be {inert})",

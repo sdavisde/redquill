@@ -826,6 +826,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
                 help_open: app.help.open,
                 project_search_focus: app.project_search_focus(),
                 review_session: app.in_review_session(),
+                forge_review: app.in_forge_review(),
             },
             pending,
             keymap,
@@ -860,6 +861,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
             staging_allowed,
             code_intel_allowed,
             app.in_review_session(),
+            app.in_forge_review(),
             &state,
         );
     }

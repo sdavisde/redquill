@@ -179,11 +179,17 @@ fn key_line(key: &str, description: &str, key_width: usize, theme: &Theme) -> Li
 ///   session, so the two families of rows never both show for the same key
 ///   at once — which is also what lets `d restore` and `D defer` share a
 ///   footer rank: they are mutually exclusive by construction.
+/// - `gx` rides a narrower flag than the rest of the review family:
+///   `forge_review` is true only for a PR/MR session (one carrying
+///   [`super::app::App::review_forge`]), not for a local-branch review,
+///   which has no PR to open. `forge_review` implies `review_session`;
+///   the reverse does not hold.
 pub(super) fn binding_hidden(
     action: Action,
     staging_allowed: bool,
     code_intel_allowed: bool,
     review_session: bool,
+    forge_review: bool,
 ) -> bool {
     (!staging_allowed
         && matches!(
@@ -202,8 +208,8 @@ pub(super) fn binding_hidden(
                     | Action::AcceptFile
                     | Action::ToggleDefer
                     | Action::SubmitForgeReview
-                    | Action::OpenPrInBrowser
             ))
+        || (!forge_review && matches!(action, Action::OpenPrInBrowser))
 }
 
 /// Flattens a per-mode key table (see [`super::modal_keys`]) into the
@@ -422,6 +428,7 @@ fn global_section(
     staging_allowed: bool,
     code_intel_allowed: bool,
     review_session: bool,
+    forge_review: bool,
 ) -> Section {
     let rows = bindings
         .iter()
@@ -432,6 +439,7 @@ fn global_section(
                 staging_allowed,
                 code_intel_allowed,
                 review_session,
+                forge_review,
             )
         })
         .map(|b| (b.key_label(), b.description))
@@ -450,6 +458,7 @@ fn diff_group_sections(
     staging_allowed: bool,
     code_intel_allowed: bool,
     review_session: bool,
+    forge_review: bool,
 ) -> Vec<Section> {
     GROUP_ORDER
         .iter()
@@ -463,6 +472,7 @@ fn diff_group_sections(
                         staging_allowed,
                         code_intel_allowed,
                         review_session,
+                        forge_review,
                     )
                 })
                 .map(|b| (b.key_label(), b.description))
@@ -481,6 +491,7 @@ fn panel_section(
     staging_allowed: bool,
     code_intel_allowed: bool,
     review_session: bool,
+    forge_review: bool,
 ) -> Section {
     let rows = bindings
         .iter()
@@ -491,6 +502,7 @@ fn panel_section(
                 staging_allowed,
                 code_intel_allowed,
                 review_session,
+                forge_review,
             )
         })
         .map(|b| (b.key_label(), b.description))
@@ -553,6 +565,7 @@ pub(super) fn workflow_rows(
     staging_allowed: bool,
     code_intel_allowed: bool,
     review_session: bool,
+    forge_review: bool,
 ) -> Vec<WorkflowRow> {
     let scope = match origin {
         ModeOrigin::Normal | ModeOrigin::Visual { .. } => Scope::Diff,
@@ -561,7 +574,13 @@ pub(super) fn workflow_rows(
     WORKFLOW_ENTRIES
         .iter()
         .filter(|(_, action)| {
-            !binding_hidden(*action, staging_allowed, code_intel_allowed, review_session)
+            !binding_hidden(
+                *action,
+                staging_allowed,
+                code_intel_allowed,
+                review_session,
+                forge_review,
+            )
         })
         .filter_map(|&(phrase, action)| {
             keymap
@@ -606,6 +625,7 @@ fn this_context_sections(
     staging_allowed: bool,
     code_intel_allowed: bool,
     review_session: bool,
+    forge_review: bool,
 ) -> Vec<Section> {
     let mut sections = match origin {
         ModeOrigin::Normal | ModeOrigin::Visual { .. } => diff_group_sections(
@@ -613,12 +633,14 @@ fn this_context_sections(
             staging_allowed,
             code_intel_allowed,
             review_session,
+            forge_review,
         ),
         ModeOrigin::Panel { .. } => vec![panel_section(
             bindings,
             staging_allowed,
             code_intel_allowed,
             review_session,
+            forge_review,
         )],
     };
     sections.push(global_section(
@@ -626,6 +648,7 @@ fn this_context_sections(
         staging_allowed,
         code_intel_allowed,
         review_session,
+        forge_review,
     ));
     sections
 }
@@ -640,24 +663,28 @@ fn all_keys_sections(
     staging_allowed: bool,
     code_intel_allowed: bool,
     review_session: bool,
+    forge_review: bool,
 ) -> Vec<Section> {
     let mut sections = vec![global_section(
         bindings,
         staging_allowed,
         code_intel_allowed,
         review_session,
+        forge_review,
     )];
     sections.extend(diff_group_sections(
         bindings,
         staging_allowed,
         code_intel_allowed,
         review_session,
+        forge_review,
     ));
     sections.push(panel_section(
         bindings,
         staging_allowed,
         code_intel_allowed,
         review_session,
+        forge_review,
     ));
     sections.extend(modal_sections(modal_keys, review_session));
     sections
@@ -697,8 +724,9 @@ fn tab_bar(active: HelpTab, theme: &Theme) -> Line<'static> {
 /// inert file/hunk staging gestures; `code_intel_allowed` is `false`
 /// whenever the target's new side isn't the live working tree, hiding the
 /// inert `gd`/`gr`/`K` gestures; `review_session` is `false` outside a
-/// review session, hiding the accept/defer gestures — see [`binding_hidden`]
-/// for how the three combine.
+/// review session, hiding the accept/defer gestures; `forge_review` is
+/// `false` outside a *PR/MR* review specifically, hiding `gx` — see
+/// [`binding_hidden`] for how the four combine.
 ///
 /// The box caps its height to ~3/5 of `area` and scrolls the overflow; see
 /// [`HelpViewState`] for the scroll/filter/tab fields `state` carries.
@@ -711,6 +739,7 @@ pub fn render(
     staging_allowed: bool,
     code_intel_allowed: bool,
     review_session: bool,
+    forge_review: bool,
     state: &HelpViewState,
 ) {
     let scroll = state.scroll;
@@ -727,6 +756,7 @@ pub fn render(
             staging_allowed,
             code_intel_allowed,
             review_session,
+            forge_review,
         ),
         HelpTab::AllKeys => all_keys_sections(
             bindings,
@@ -734,6 +764,7 @@ pub fn render(
             staging_allowed,
             code_intel_allowed,
             review_session,
+            forge_review,
         ),
     };
     // Column width is computed from the active tab's unfiltered rows, so it
@@ -762,6 +793,7 @@ pub fn render(
             staging_allowed,
             code_intel_allowed,
             review_session,
+            forge_review,
         )
         .into_iter()
         .filter(|row| row_matches(&row.key, row.phrase, query))
@@ -982,11 +1014,11 @@ mod tests {
             Action::Hover,
         ] {
             assert!(
-                binding_hidden(action, true, false, false),
+                binding_hidden(action, true, false, false, false),
                 "{action:?} must be hidden when code-intel is unsupported"
             );
             assert!(
-                !binding_hidden(action, true, true, false),
+                !binding_hidden(action, true, true, false, false),
                 "{action:?} must be shown when code-intel is supported"
             );
         }
@@ -995,8 +1027,8 @@ mod tests {
     #[test]
     fn staging_actions_are_unaffected_by_code_intel_allowed() {
         for action in [Action::ToggleStage, Action::StageFile] {
-            assert!(binding_hidden(action, false, true, false));
-            assert!(!binding_hidden(action, true, true, false));
+            assert!(binding_hidden(action, false, true, false, false));
+            assert!(!binding_hidden(action, true, true, false, false));
         }
     }
 
@@ -1010,11 +1042,11 @@ mod tests {
             Action::ToggleDefer,
         ] {
             assert!(
-                binding_hidden(action, true, true, false),
+                binding_hidden(action, true, true, false, false),
                 "{action:?} must be hidden outside a review session"
             );
             assert!(
-                !binding_hidden(action, true, true, true),
+                !binding_hidden(action, true, true, true, false),
                 "{action:?} must be shown during a review session"
             );
         }
@@ -1027,7 +1059,7 @@ mod tests {
         // families of bindings (staging vs. review) never both show for the
         // same physical key at once.
         for action in [Action::ToggleStage, Action::StageFile] {
-            assert!(binding_hidden(action, false, true, true));
+            assert!(binding_hidden(action, false, true, true, false));
         }
     }
 
@@ -1064,7 +1096,9 @@ mod tests {
         terminal
             .draw(|frame| {
                 let area = frame.area();
-                render(frame, area, &tables, &theme, true, true, true, &state);
+                render(
+                    frame, area, &tables, &theme, true, true, true, false, &state,
+                );
             })
             .unwrap();
         terminal.backend().buffer().clone()
@@ -1169,7 +1203,9 @@ mod tests {
     fn this_context_sections_for_normal_origin_is_diff_scope_plus_global() {
         let keymap = Keymap::default_map();
         let bindings = keymap.bindings();
-        let sections = this_context_sections(ModeOrigin::Normal, bindings, true, true, true);
+        // Every capability flag permissive — the premise of this test is
+        // "nothing hidden", so `forge_review` is true like the rest.
+        let sections = this_context_sections(ModeOrigin::Normal, bindings, true, true, true, true);
         let rows = all_rows(&sections);
 
         for binding in bindings
@@ -1201,12 +1237,13 @@ mod tests {
     fn this_context_sections_for_visual_origin_matches_normal() {
         let keymap = Keymap::default_map();
         let bindings = keymap.bindings();
-        let normal = this_context_sections(ModeOrigin::Normal, bindings, true, true, false);
+        let normal = this_context_sections(ModeOrigin::Normal, bindings, true, true, false, false);
         let visual = this_context_sections(
             ModeOrigin::Visual { anchor: 3 },
             bindings,
             true,
             true,
+            false,
             false,
         );
         assert_eq!(all_rows(&normal), all_rows(&visual));
@@ -1223,7 +1260,7 @@ mod tests {
             cursor: 0,
             tab: super::super::app::PanelTab::Changes,
         };
-        let sections = this_context_sections(origin, bindings, true, true, false);
+        let sections = this_context_sections(origin, bindings, true, true, false, false);
         let rows = all_rows(&sections);
 
         for binding in bindings
@@ -1232,7 +1269,7 @@ mod tests {
             // Capability-hidden rows (here: the review-only accept/defer
             // rows, since the flags say "no review session") are gated out
             // of the section exactly like their diff-scope counterparts.
-            .filter(|b| !binding_hidden(b.action, true, true, false))
+            .filter(|b| !binding_hidden(b.action, true, true, false, false))
         {
             assert!(
                 rows.iter()
@@ -1259,7 +1296,8 @@ mod tests {
     fn this_context_sections_apply_capability_gating() {
         let keymap = Keymap::default_map();
         let bindings = keymap.bindings();
-        let sections = this_context_sections(ModeOrigin::Normal, bindings, false, true, false);
+        let sections =
+            this_context_sections(ModeOrigin::Normal, bindings, false, true, false, false);
         let rows = all_rows(&sections);
         assert!(
             !rows
@@ -1298,7 +1336,7 @@ mod tests {
     #[test]
     fn workflow_rows_resolves_every_entry_in_order_for_normal_origin() {
         let keymap = Keymap::default_map();
-        let rows = workflow_rows(ModeOrigin::Normal, &keymap, true, true, true);
+        let rows = workflow_rows(ModeOrigin::Normal, &keymap, true, true, true, false);
         assert_eq!(rows.len(), WORKFLOW_ENTRIES.len());
         for (row, &(phrase, action)) in rows.iter().zip(WORKFLOW_ENTRIES.iter()) {
             assert_eq!(row.phrase, phrase);
@@ -1324,7 +1362,7 @@ mod tests {
         );
         let (keymap, warnings) = super::super::keymap_config::effective_keymap(&keys);
         assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
-        let rows = workflow_rows(ModeOrigin::Normal, &keymap, true, true, true);
+        let rows = workflow_rows(ModeOrigin::Normal, &keymap, true, true, true, false);
         let row = rows
             .iter()
             .find(|r| r.phrase == "Review a branch or commit")
@@ -1341,7 +1379,7 @@ mod tests {
         keys.diff.insert("compose".to_string(), Vec::new());
         let (keymap, warnings) = super::super::keymap_config::effective_keymap(&keys);
         assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
-        let rows = workflow_rows(ModeOrigin::Normal, &keymap, true, true, true);
+        let rows = workflow_rows(ModeOrigin::Normal, &keymap, true, true, true, false);
         assert!(
             !rows.iter().any(|r| r.phrase == "Comment on a line"),
             "an unbound action's entry must not render"
@@ -1357,7 +1395,7 @@ mod tests {
     #[test]
     fn workflow_rows_hides_a_capability_gated_entry() {
         let keymap = Keymap::default_map();
-        let rows = workflow_rows(ModeOrigin::Normal, &keymap, false, true, true);
+        let rows = workflow_rows(ModeOrigin::Normal, &keymap, false, true, true, false);
         assert!(
             !rows
                 .iter()
@@ -1374,7 +1412,14 @@ mod tests {
         let keymap = Keymap::default_map();
         let modal_keys = ModalKeymaps::default();
         let bindings = keymap.bindings();
-        let all_keys_rows = all_rows(&all_keys_sections(bindings, &modal_keys, true, true, true));
+        let all_keys_rows = all_rows(&all_keys_sections(
+            bindings,
+            &modal_keys,
+            true,
+            true,
+            true,
+            false,
+        ));
         for origin in [
             ModeOrigin::Normal,
             ModeOrigin::Panel {
@@ -1382,7 +1427,9 @@ mod tests {
                 tab: super::super::app::PanelTab::Changes,
             },
         ] {
-            let context_rows = all_rows(&this_context_sections(origin, bindings, true, true, true));
+            let context_rows = all_rows(&this_context_sections(
+                origin, bindings, true, true, true, false,
+            ));
             for (k, d) in &context_rows {
                 assert!(
                     all_keys_rows.iter().any(|(ak, ad)| ak == k && ad == d),

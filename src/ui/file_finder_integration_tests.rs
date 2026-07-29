@@ -244,6 +244,7 @@ fn file_view_hides_and_disarms_staging_and_code_intel_keys() {
             help_open: app.help.open,
             project_search_focus: app.project_search_focus(),
             review_session: app.in_review_session(),
+            forge_review: app.in_forge_review(),
         },
         None,
         &keymap,
@@ -264,6 +265,7 @@ fn file_view_hides_and_disarms_staging_and_code_intel_keys() {
             action,
             staging_allowed,
             code_intel_allowed,
+            false,
             false
         ));
     }

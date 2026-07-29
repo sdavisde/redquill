@@ -70,6 +70,7 @@ fn keymap_hints(
     staging_allowed: bool,
     code_intel_allowed: bool,
     review_session: bool,
+    forge_review: bool,
 ) -> Vec<FooterEntry> {
     let mut grouped: Vec<(FooterHint, Vec<String>)> = Vec::new();
     for b in km
@@ -82,6 +83,7 @@ fn keymap_hints(
             staging_allowed,
             code_intel_allowed,
             review_session,
+            forge_review,
         ) {
             continue;
         }
@@ -160,6 +162,7 @@ fn normal_hints(
     code_intel_allowed: bool,
     viewing_commit: bool,
     review_session: bool,
+    forge_review: bool,
 ) -> Vec<FooterEntry> {
     let mut entries = keymap_hints(
         km,
@@ -167,6 +170,7 @@ fn normal_hints(
         staging_allowed,
         code_intel_allowed,
         review_session,
+        forge_review,
     );
     if viewing_commit {
         entries.push(FooterEntry {
@@ -211,6 +215,7 @@ fn panel_hints(
     push_publishes: bool,
     staging_allowed: bool,
     review_session: bool,
+    forge_review: bool,
     changes_tab: bool,
 ) -> Vec<FooterEntry> {
     // Capability-gated like `normal_hints`: a read-only target hides the
@@ -226,6 +231,7 @@ fn panel_hints(
         staging_allowed && changes_tab,
         true,
         review_session && changes_tab,
+        forge_review && changes_tab,
     );
     if push_publishes
         && let Some(hint) = km
@@ -342,13 +348,21 @@ fn fallback_pending_label(action: Action) -> &'static str {
 /// key text for a stable, predictable order. `code_intel_allowed` drops
 /// `gd`/`gr` the same way [`super::help::binding_hidden`] hides them from the
 /// help overlay, so a pending `g` never advertises an inert code-intel jump.
-fn pending_hints(km: &Keymap, prefix: KeyEvent, code_intel_allowed: bool) -> Vec<FooterEntry> {
-    // No two-key sequence is a review action, so `review_session` is always
-    // permissive here; it can never actually hide a completion.
+fn pending_hints(
+    km: &Keymap,
+    prefix: KeyEvent,
+    code_intel_allowed: bool,
+    forge_review: bool,
+) -> Vec<FooterEntry> {
+    // `review_session` is permissive here (no two-key sequence is gated on it
+    // alone), but `forge_review` is not: `gx` is a two-key review action, so a
+    // pending `g` outside a PR session must not advertise it.
     let mut entries: Vec<FooterEntry> = km
         .completions_for(Scope::Diff, prefix)
         .into_iter()
-        .filter(|b| !super::help::binding_hidden(b.action, true, code_intel_allowed, true))
+        .filter(|b| {
+            !super::help::binding_hidden(b.action, true, code_intel_allowed, true, forge_review)
+        })
         .map(|b| FooterEntry {
             rank: 1,
             key: b.key_label(),
@@ -403,6 +417,11 @@ pub(super) struct FooterFlags {
     /// reviewing, so its hint changes too, even though outside a review
     /// session `q` carries no footer hint at all.
     pub(super) review_session: bool,
+    /// Whether the review session is a *forge PR/MR* one (see
+    /// [`super::app::App::in_forge_review`]) rather than a local-branch
+    /// review. Narrower than `review_session`, and the only thing that lets
+    /// `gx` into a strip: a branch review has no PR to open.
+    pub(super) forge_review: bool,
 }
 
 /// Builds the footer strip's hints for the current app state — the pure core
@@ -428,6 +447,7 @@ pub(super) fn build_hints(
         help_open,
         project_search_focus,
         review_session,
+        forge_review,
     } = flags;
     if help_open {
         return help_open_hints(modal_keys);
@@ -435,7 +455,7 @@ pub(super) fn build_hints(
     if let Some(prefix) = pending
         && matches!(mode, Mode::Normal | Mode::Visual { .. })
     {
-        return pending_hints(km, prefix, code_intel_allowed);
+        return pending_hints(km, prefix, code_intel_allowed, forge_review);
     }
     match mode {
         Mode::Normal => normal_hints(
@@ -444,6 +464,7 @@ pub(super) fn build_hints(
             code_intel_allowed,
             viewing_commit,
             review_session,
+            forge_review,
         ),
         Mode::Visual { .. } => visual_hints(km, staging_allowed),
         Mode::Panel { tab, .. } => panel_hints(
@@ -451,6 +472,7 @@ pub(super) fn build_hints(
             push_publishes,
             staging_allowed,
             review_session,
+            forge_review,
             tab == super::app::PanelTab::Changes,
         ),
         Mode::List => modal_hints(&modal_keys.list),
@@ -573,6 +595,7 @@ pub(super) fn footer_height(
             help_open: app.help.open,
             project_search_focus: app.project_search_focus(),
             review_session: app.in_review_session(),
+            forge_review: app.in_forge_review(),
         },
         pending,
         keymap,

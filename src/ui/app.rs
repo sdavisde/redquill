@@ -1029,6 +1029,13 @@ impl App {
         }
     }
 
+    /// Whether this is a forge PR/MR review — a review session that actually
+    /// has a PR behind it, as opposed to a local-branch review. Gates `gx`
+    /// (and its footer/help row), which has nothing to open otherwise.
+    pub(super) fn in_forge_review(&self) -> bool {
+        self.in_review_session() && self.review_forge.is_some()
+    }
+
     /// What the review banner names the session: `#<number> <title>` for a
     /// forge PR/MR review, otherwise the branch name. The managed branch a PR
     /// review runs on (`redquill/pr/<n>`) is a redquill implementation
