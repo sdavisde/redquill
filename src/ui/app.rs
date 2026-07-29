@@ -593,6 +593,10 @@ pub struct App {
     /// The single in-flight browser open, if any — a second `gx` while one is
     /// running is ignored rather than launching a second tab.
     pub(super) pr_web_in_flight: Option<super::background::TaskId>,
+    /// What the in-flight open is opening ("PR"/"branch"/"commit"), captured
+    /// at spawn so the completion message names it even if the view moved on
+    /// underneath (a refresh can reroot mid-open).
+    pub(super) web_target_noun: &'static str,
     /// Whether the last thread fetch failed: drives the one-line "comments
     /// unavailable" banner notice. Cleared by a successful fetch.
     pub(super) threads_unavailable: bool,
@@ -884,6 +888,7 @@ impl App {
             thread_fetch_generation: 0,
             pr_web_tasks: BackgroundTasks::new(),
             pr_web_in_flight: None,
+            web_target_noun: "page",
             threads_unavailable: false,
             thread_view: None,
             submit_forge: None,
@@ -1027,13 +1032,6 @@ impl App {
             DiffTarget::Review { branch, .. } => Some(branch.as_str()),
             _ => None,
         }
-    }
-
-    /// Whether this is a forge PR/MR review — a review session that actually
-    /// has a PR behind it, as opposed to a local-branch review. Gates `gx`
-    /// (and its footer/help row), which has nothing to open otherwise.
-    pub(super) fn in_forge_review(&self) -> bool {
-        self.in_review_session() && self.review_forge.is_some()
     }
 
     /// What the review banner names the session: `#<number> <title>` for a
@@ -1363,7 +1361,7 @@ impl App {
             Action::NextThread => self.next_thread(),
             Action::PrevThread => self.prev_thread(),
             Action::SubmitForgeReview => self.open_submit_forge(),
-            Action::OpenPrInBrowser => self.open_pr_in_browser(),
+            Action::OpenInBrowser => self.open_in_browser(),
             // `Quit`/`QuitDiscard` end the session; `OpenEditor` suspends the
             // TUI to spawn the configured editor. Both are intercepted by
             // `super::dispatch_key` before reaching here (see `Action::Quit`'s

@@ -170,6 +170,36 @@ impl GitRunner {
             .unwrap_or(false)
     }
 
+    /// Whether `branch` exists on `origin` as of the last fetch. Used to
+    /// keep a forge "open this branch" navigation from landing on a 404 for
+    /// work that was never pushed; a stale answer (nothing fetched since the
+    /// branch appeared) errs toward reporting it missing, which is the safe
+    /// direction for a navigation hint.
+    pub fn origin_has_branch(&self, branch: &str) -> bool {
+        self.rev_exists(&format!("refs/remotes/origin/{branch}"))
+    }
+
+    /// Whether `sha` is contained in any `origin/*` ref as of the last
+    /// fetch — the commit-shaped counterpart of
+    /// [`GitRunner::origin_has_branch`]. A revision git can't resolve at all
+    /// answers `false` rather than erroring, matching
+    /// [`GitRunner::rev_exists`]'s "expected, not a failure" treatment.
+    pub fn origin_has_commit(&self, sha: &str) -> bool {
+        Command::new("git")
+            .current_dir(&self.root)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .args([
+                "branch",
+                "--remotes",
+                "--contains",
+                sha,
+                "--format=%(refname)",
+            ])
+            .output()
+            .map(|o| o.status.success() && !o.stdout.is_empty())
+            .unwrap_or(false)
+    }
+
     /// Returns a page of the commit log for the current branch (or `HEAD`
     /// when detached), newest first: up to `count` commits, skipping the
     /// first `skip` (page 2 of size 100 -> `count = 100, skip = 100`).

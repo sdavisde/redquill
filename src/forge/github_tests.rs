@@ -55,6 +55,37 @@ fn pr_list_command_has_the_fixed_argv_and_hardened_env() {
     assert!(envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))));
 }
 
+/// The commit page is reached by the *positional* sha, not `--commit=<sha>`:
+/// `gh browse --commit=<sha>` resolves to `/tree/<sha>` (the repository tree
+/// as of that commit) while the bare positional resolves to `/commit/<sha>`
+/// (the commit's own diff). Verified against `gh` 2.x with `gh browse -n`;
+/// pinned here because the two spellings differ by one character and fail
+/// silently — landing the reviewer on a plausible-looking wrong page.
+#[test]
+fn browse_argv_is_read_only_and_puts_the_sha_positionally() {
+    let branch = branch_web_command("feature/thing");
+    assert_eq!(branch.get_program(), OsStr::new("gh"));
+    let args: Vec<&OsStr> = branch.get_args().collect();
+    assert_eq!(
+        args,
+        vec![
+            OsStr::new("browse"),
+            OsStr::new("--branch"),
+            OsStr::new("feature/thing"),
+        ]
+    );
+
+    let commit = commit_web_command("abc123");
+    let args: Vec<&OsStr> = commit.get_args().collect();
+    assert_eq!(args, vec![OsStr::new("browse"), OsStr::new("abc123")]);
+    assert!(
+        !args
+            .iter()
+            .any(|a| a.to_string_lossy().starts_with("--commit")),
+        "--commit=<sha> would open /tree/<sha>, not the commit's own diff"
+    );
+}
+
 #[test]
 fn pr_web_command_is_a_read_only_view_argv_carrying_only_the_typed_number() {
     let cmd = pr_web_command(42);

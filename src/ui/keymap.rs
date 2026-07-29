@@ -228,7 +228,7 @@ pub enum Action {
     /// browser via the forge CLI. A read-only navigation — nothing is
     /// written to the forge. A no-op with a status hint outside a forge PR
     /// review session.
-    OpenPrInBrowser,
+    OpenInBrowser,
 }
 
 /// The kebab-case config action-name for every [`Action`] variant (the
@@ -312,7 +312,7 @@ pub(crate) fn action_name(action: Action) -> &'static str {
         NextThread => "next-thread",
         PrevThread => "prev-thread",
         SubmitForgeReview => "submit-forge-review",
-        OpenPrInBrowser => "open-pr-in-browser",
+        OpenInBrowser => "open-in-browser",
     }
 }
 
@@ -395,7 +395,7 @@ pub(crate) fn action_from_name(name: &str) -> Option<Action> {
         "next-thread" => NextThread,
         "prev-thread" => PrevThread,
         "submit-forge-review" => SubmitForgeReview,
-        "open-pr-in-browser" => OpenPrInBrowser,
+        "open-in-browser" => OpenInBrowser,
         _ => return None,
     })
 }
@@ -781,7 +781,7 @@ impl Keymap {
                 // sit together at the strip's tail.
                 d(
                     KeySeq::two(Char('g'), none, Char('x'), none),
-                    OpenPrInBrowser,
+                    OpenInBrowser,
                     "Open the PR/MR in your browser",
                 )
                 .footer(9, "open PR"),
@@ -1837,7 +1837,7 @@ mod tests {
                 Action::NextThread,
                 Action::OpenEditor,
                 Action::OpenFileFinder,
-                Action::OpenPrInBrowser,
+                Action::OpenInBrowser,
                 Action::OpenProjectSearch,
                 Action::PrevThread,
             ]

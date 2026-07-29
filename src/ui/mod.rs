@@ -41,7 +41,7 @@ mod file_finder_modal;
 mod file_tree;
 mod file_view;
 mod footer;
-mod forge_open;
+pub(crate) mod forge_open;
 mod forge_submit;
 mod forge_threads;
 mod git_panel;
@@ -826,7 +826,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
                 help_open: app.help.open,
                 project_search_focus: app.project_search_focus(),
                 review_session: app.in_review_session(),
-                forge_review: app.in_forge_review(),
+                web_target: app.web_target_kind(),
             },
             pending,
             keymap,
@@ -861,7 +861,7 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
             staging_allowed,
             code_intel_allowed,
             app.in_review_session(),
-            app.in_forge_review(),
+            app.web_target_kind(),
             &state,
         );
     }

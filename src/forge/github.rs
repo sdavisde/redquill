@@ -54,6 +54,69 @@ pub fn pr_web_command(number: u64) -> Command {
     cmd
 }
 
+/// Builds the fixed argv for `gh browse --branch <branch>`, which resolves
+/// to the repo's `/tree/<branch>` page. `branch` is a git ref name read back
+/// from git, passed as its own argv element (never interpolated into a
+/// command line), so it cannot inject a flag or a second command.
+pub fn branch_web_command(branch: &str) -> Command {
+    let mut cmd = Command::new("gh");
+    cmd.args(["browse", "--branch", branch]);
+    harden(&mut cmd);
+    cmd
+}
+
+/// Builds the fixed argv for `gh browse <sha>`, which resolves to the repo's
+/// `/commit/<sha>` page.
+///
+/// The SHA is deliberately the *positional* argument rather than
+/// `--commit=<sha>`: `gh browse --commit=<sha>` opens `/tree/<sha>` (the
+/// repository tree as of that commit), whereas the bare positional opens
+/// `/commit/<sha>` (the commit's own diff) — which is what a reviewer
+/// looking at a commit view is asking for. Verified against `gh` 2.x with
+/// `gh browse -n`.
+pub fn commit_web_command(sha: &str) -> Command {
+    let mut cmd = Command::new("gh");
+    cmd.args(["browse", sha]);
+    harden(&mut cmd);
+    cmd
+}
+
+/// Runs one of the `gh` browse/view commands above, mapping a spawn failure
+/// or non-zero exit onto [`ForgeError`]. `label` names the invocation in the
+/// error only.
+fn run_web(mut cmd: Command, label: &'static str) -> Result<(), ForgeError> {
+    let output = run_captured_with_timeout(&mut cmd, WEB_TIMEOUT).map_err(|source| {
+        if source.kind() == std::io::ErrorKind::NotFound {
+            ForgeError::CliNotFound { cli: "gh" }
+        } else {
+            ForgeError::Spawn { cli: "gh", source }
+        }
+    })?;
+    if !output.status.success() {
+        return Err(ForgeError::Command {
+            cli: "gh",
+            command: label.to_string(),
+            code: output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_string()),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Opens `branch`'s tree page in the user's browser via `gh`.
+pub fn open_branch_in_browser(branch: &str) -> Result<(), ForgeError> {
+    run_web(branch_web_command(branch), "browse --branch")
+}
+
+/// Opens `sha`'s commit page in the user's browser via `gh`.
+pub fn open_commit_in_browser(sha: &str) -> Result<(), ForgeError> {
+    run_web(commit_web_command(sha), "browse <sha>")
+}
+
 /// Opens PR `number` in the user's browser via `gh`. Output is captured
 /// (never inherited) so `gh`'s "Opening … in your browser" line can't
 /// scribble over the TUI. A read-only navigation, not a forge write. Thin

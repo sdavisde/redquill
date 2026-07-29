@@ -70,7 +70,7 @@ fn keymap_hints(
     staging_allowed: bool,
     code_intel_allowed: bool,
     review_session: bool,
-    forge_review: bool,
+    web_target: Option<super::forge_open::WebTargetKind>,
 ) -> Vec<FooterEntry> {
     let mut grouped: Vec<(FooterHint, Vec<String>)> = Vec::new();
     for b in km
@@ -83,7 +83,7 @@ fn keymap_hints(
             staging_allowed,
             code_intel_allowed,
             review_session,
-            forge_review,
+            web_target,
         ) {
             continue;
         }
@@ -162,7 +162,7 @@ fn normal_hints(
     code_intel_allowed: bool,
     viewing_commit: bool,
     review_session: bool,
-    forge_review: bool,
+    web_target: Option<super::forge_open::WebTargetKind>,
 ) -> Vec<FooterEntry> {
     let mut entries = keymap_hints(
         km,
@@ -170,8 +170,22 @@ fn normal_hints(
         staging_allowed,
         code_intel_allowed,
         review_session,
-        forge_review,
+        web_target,
     );
+    // `gx`'s table row carries the PR wording; a branch/commit view relabels
+    // it so the strip names what the key would actually open.
+    if let Some(kind) = web_target
+        && let Some(hint) = km
+            .bindings()
+            .iter()
+            .find(|b| b.scope == Scope::Diff && b.action == Action::OpenInBrowser)
+            .and_then(|b| b.footer)
+        && let Some(entry) = entries
+            .iter_mut()
+            .find(|e| e.rank == hint.rank && e.label == hint.label)
+    {
+        entry.label = kind.label();
+    }
     if viewing_commit {
         entries.push(FooterEntry {
             rank: 6,
@@ -215,7 +229,7 @@ fn panel_hints(
     push_publishes: bool,
     staging_allowed: bool,
     review_session: bool,
-    forge_review: bool,
+    web_target: Option<super::forge_open::WebTargetKind>,
     changes_tab: bool,
 ) -> Vec<FooterEntry> {
     // Capability-gated like `normal_hints`: a read-only target hides the
@@ -231,7 +245,7 @@ fn panel_hints(
         staging_allowed && changes_tab,
         true,
         review_session && changes_tab,
-        forge_review && changes_tab,
+        web_target.filter(|_| changes_tab),
     );
     if push_publishes
         && let Some(hint) = km
@@ -352,24 +366,27 @@ fn pending_hints(
     km: &Keymap,
     prefix: KeyEvent,
     code_intel_allowed: bool,
-    forge_review: bool,
+    web_target: Option<super::forge_open::WebTargetKind>,
 ) -> Vec<FooterEntry> {
     // `review_session` is permissive here (no two-key sequence is gated on it
-    // alone), but `forge_review` is not: `gx` is a two-key review action, so a
-    // pending `g` outside a PR session must not advertise it.
+    // alone), but `web_target` is not: `gx` is a two-key gated action, so a
+    // pending `g` in a view with nothing to open must not advertise it.
     let mut entries: Vec<FooterEntry> = km
         .completions_for(Scope::Diff, prefix)
         .into_iter()
         .filter(|b| {
-            !super::help::binding_hidden(b.action, true, code_intel_allowed, true, forge_review)
+            !super::help::binding_hidden(b.action, true, code_intel_allowed, true, web_target)
         })
         .map(|b| FooterEntry {
             rank: 1,
             key: b.key_label(),
-            label: b
-                .footer
-                .map(|h| h.label)
-                .unwrap_or_else(|| fallback_pending_label(b.action)),
+            label: match (b.action, web_target) {
+                (Action::OpenInBrowser, Some(kind)) => kind.label(),
+                _ => b
+                    .footer
+                    .map(|h| h.label)
+                    .unwrap_or_else(|| fallback_pending_label(b.action)),
+            },
         })
         .collect();
     entries.sort_by(|a, b| a.key.cmp(&b.key));
@@ -417,11 +434,11 @@ pub(super) struct FooterFlags {
     /// reviewing, so its hint changes too, even though outside a review
     /// session `q` carries no footer hint at all.
     pub(super) review_session: bool,
-    /// Whether the review session is a *forge PR/MR* one (see
-    /// [`super::app::App::in_forge_review`]) rather than a local-branch
-    /// review. Narrower than `review_session`, and the only thing that lets
-    /// `gx` into a strip: a branch review has no PR to open.
-    pub(super) forge_review: bool,
+    /// What `gx` would open from this view (see
+    /// [`super::app::App::web_target`]), or `None` where it would open
+    /// nothing. Gates `gx` into a strip at all, and picks its label —
+    /// "open PR"/"open branch"/"open commit".
+    pub(super) web_target: Option<super::forge_open::WebTargetKind>,
 }
 
 /// Builds the footer strip's hints for the current app state — the pure core
@@ -447,7 +464,7 @@ pub(super) fn build_hints(
         help_open,
         project_search_focus,
         review_session,
-        forge_review,
+        web_target,
     } = flags;
     if help_open {
         return help_open_hints(modal_keys);
@@ -455,7 +472,7 @@ pub(super) fn build_hints(
     if let Some(prefix) = pending
         && matches!(mode, Mode::Normal | Mode::Visual { .. })
     {
-        return pending_hints(km, prefix, code_intel_allowed, forge_review);
+        return pending_hints(km, prefix, code_intel_allowed, web_target);
     }
     match mode {
         Mode::Normal => normal_hints(
@@ -464,7 +481,7 @@ pub(super) fn build_hints(
             code_intel_allowed,
             viewing_commit,
             review_session,
-            forge_review,
+            web_target,
         ),
         Mode::Visual { .. } => visual_hints(km, staging_allowed),
         Mode::Panel { tab, .. } => panel_hints(
@@ -472,7 +489,7 @@ pub(super) fn build_hints(
             push_publishes,
             staging_allowed,
             review_session,
-            forge_review,
+            web_target,
             tab == super::app::PanelTab::Changes,
         ),
         Mode::List => modal_hints(&modal_keys.list),
@@ -595,7 +612,7 @@ pub(super) fn footer_height(
             help_open: app.help.open,
             project_search_focus: app.project_search_focus(),
             review_session: app.in_review_session(),
-            forge_review: app.in_forge_review(),
+            web_target: app.web_target_kind(),
         },
         pending,
         keymap,

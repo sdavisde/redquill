@@ -167,6 +167,25 @@ fn mr_detail_command_has_the_fixed_argv_and_hardened_env() {
 }
 
 #[test]
+fn branch_web_command_is_a_read_only_view_argv() {
+    let cmd = branch_web_command("feature/thing");
+    assert_eq!(cmd.get_program(), OsStr::new("glab"));
+    let args: Vec<&OsStr> = cmd.get_args().collect();
+    assert_eq!(
+        args,
+        vec![
+            OsStr::new("repo"),
+            OsStr::new("view"),
+            OsStr::new("--branch"),
+            OsStr::new("feature/thing"),
+            OsStr::new("--web"),
+        ]
+    );
+    let envs: Vec<_> = cmd.get_envs().collect();
+    assert!(envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))));
+}
+
+#[test]
 fn mr_web_command_is_a_read_only_view_argv_carrying_only_the_typed_iid() {
     let cmd = mr_web_command(42);
     assert_eq!(cmd.get_program(), OsStr::new("glab"));

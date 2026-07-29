@@ -47,7 +47,7 @@ use super::stage_ops::{PrCheckoutOutcome, PrCheckoutRequest, PrFetchOutcome, Sta
 /// Maps a freshly-resolved [`ProviderKind`] onto the persisted
 /// [`ForgeProviderKind`] a review session carries — the two are the same
 /// two-forge distinction named in different layers (detection vs. persistence).
-fn store_provider(kind: ProviderKind) -> ForgeProviderKind {
+pub(super) fn store_provider(kind: ProviderKind) -> ForgeProviderKind {
     match kind {
         ProviderKind::GitHub => ForgeProviderKind::GitHub,
         ProviderKind::GitLab => ForgeProviderKind::GitLab,

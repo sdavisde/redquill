@@ -209,6 +209,49 @@ pub fn mr_web_command(iid: u64) -> Command {
     cmd
 }
 
+/// Builds the fixed argv for `glab repo view --branch <branch> --web`,
+/// which resolves to the project's tree page for that branch. `branch` is a
+/// git ref name passed as its own argv element, never interpolated.
+///
+/// GitLab has no `glab` counterpart for a *commit* page (`glab` has no
+/// `browse`, and `repo view --branch <sha>` would open the tree at that
+/// commit, not the commit's own diff), so there is deliberately no
+/// `commit_web_command` here — see [`super::WebCapability`].
+pub fn branch_web_command(branch: &str) -> Command {
+    let mut cmd = Command::new("glab");
+    cmd.args(["repo", "view", "--branch", branch, "--web"]);
+    harden_glab(&mut cmd);
+    cmd
+}
+
+/// Opens `branch`'s tree page in the user's browser via `glab`.
+pub fn open_branch_in_browser(branch: &str) -> Result<(), ForgeError> {
+    let mut cmd = branch_web_command(branch);
+    let output = run_captured_with_timeout(&mut cmd, WEB_TIMEOUT).map_err(|source| {
+        if source.kind() == std::io::ErrorKind::NotFound {
+            ForgeError::CliNotFound { cli: "glab" }
+        } else {
+            ForgeError::Spawn {
+                cli: "glab",
+                source,
+            }
+        }
+    })?;
+    if !output.status.success() {
+        return Err(ForgeError::Command {
+            cli: "glab",
+            command: "repo view --web".to_string(),
+            code: output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_string()),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Opens MR `iid` in the user's browser via `glab`. Output is captured
 /// (never inherited) so the CLI's own chatter can't scribble over the TUI.
 /// A read-only navigation, not a forge write. Thin spawn wrapper,

@@ -171,13 +171,13 @@ pub type AsyncPrCheckoutFetcher = Box<dyn Fn(PrCheckoutRequest) -> PrCheckoutOut
 /// indirection as the other `Async*` aliases.
 pub type AsyncThreadFetcher = Box<dyn Fn(u64) -> Result<Vec<Thread>, String> + Send>;
 
-/// A `Send` closure handing one PR/MR's web URL to the platform's browser
-/// off the render thread (`gh pr view --web` / `glab mr view --web`). Takes
-/// the PR number and returns unit or a one-line diagnostic for the status
-/// line. A read-only navigation — the forge CLI is asked to *open* the PR,
-/// never to write to it. Same cloned-handle indirection as the other
-/// `Async*` aliases.
-pub type AsyncPrWebOpener = Box<dyn Fn(u64) -> Result<(), String> + Send>;
+/// A `Send` closure handing one [`super::forge_open::WebTarget`]'s page to
+/// the platform's browser off the render thread. The target is captured at
+/// construction, so the closure takes nothing and returns unit or an
+/// already-worded diagnostic for the status line. A read-only navigation —
+/// the forge CLI is asked to *open* a page, never to write to it. Same
+/// cloned-handle indirection as the other `Async*` aliases.
+pub type AsyncWebOpener = Box<dyn Fn() -> Result<(), String> + Send>;
 
 /// A `Send` closure running one whole submit sequence — the reviews-endpoint
 /// POST plus the sequential follow-ups — off the render thread, returning the
@@ -442,14 +442,16 @@ pub trait StageOps {
     ) -> Option<AsyncThreadFetcher> {
         None
     }
-    /// A `Send` closure opening one PR/MR in the browser off the render
-    /// thread (see [`AsyncPrWebOpener`]), dispatched by `provider` to `gh` or
-    /// `glab`. The default returns `None`, so a fake backend reports "can't
-    /// open" rather than launching anything; [`GitRunner`] overrides it.
-    fn async_pr_web_opener(
+    /// A `Send` closure opening `target`'s forge page in the browser off the
+    /// render thread (see [`AsyncWebOpener`]), dispatched by `provider` to
+    /// `gh` or `glab`. The default returns `None`, so a fake backend reports
+    /// "can't open" rather than launching anything; [`GitRunner`] overrides
+    /// it.
+    fn async_web_opener(
         &self,
         _provider: crate::review::store::ForgeProviderKind,
-    ) -> Option<AsyncPrWebOpener> {
+        _target: super::forge_open::WebTarget,
+    ) -> Option<AsyncWebOpener> {
         None
     }
     /// The forge provider a prior background PR list already resolved for
@@ -780,19 +782,44 @@ impl StageOps for GitRunner {
         }))
     }
 
-    fn async_pr_web_opener(
+    fn async_web_opener(
         &self,
         provider: crate::review::store::ForgeProviderKind,
-    ) -> Option<AsyncPrWebOpener> {
+        target: super::forge_open::WebTarget,
+    ) -> Option<AsyncWebOpener> {
+        use super::forge_open::WebTarget;
         use crate::review::store::ForgeProviderKind;
-        // No cloned handle needed: both CLIs infer the repo/project from the
-        // working directory, so the closure captures nothing but `provider`.
-        Some(Box::new(move |number| match provider {
-            ForgeProviderKind::GitLab => {
-                forge::open_mr_in_browser(number).map_err(|e| e.to_string())
+        // Cloned handle so the branch/commit paths can ask git whether the
+        // ref is even on `origin` before opening a page that would 404.
+        let runner = self.clone();
+        Some(Box::new(move || match (&target, provider) {
+            (WebTarget::Pr(number), ForgeProviderKind::GitLab) => {
+                forge::open_mr_in_browser(*number).map_err(|e| e.to_string())
             }
-            ForgeProviderKind::GitHub => {
-                forge::open_pr_in_browser(number).map_err(|e| e.to_string())
+            (WebTarget::Pr(number), ForgeProviderKind::GitHub) => {
+                forge::open_pr_in_browser(*number).map_err(|e| e.to_string())
+            }
+            (WebTarget::Branch(branch), _) => {
+                if !runner.origin_has_branch(branch) {
+                    return Err(format!("{branch} isn't on origin \u{2014} push it first"));
+                }
+                match provider {
+                    ForgeProviderKind::GitLab => forge::glab_open_branch_in_browser(branch),
+                    ForgeProviderKind::GitHub => forge::gh_open_branch_in_browser(branch),
+                }
+                .map_err(|e| e.to_string())
+            }
+            // `glab` has no route to a commit page at all (see
+            // `forge_open`'s module doc), so this reports why rather than
+            // opening the tree-at-commit near-miss.
+            (WebTarget::Commit(_), ForgeProviderKind::GitLab) => {
+                Err("glab can't open a commit page \u{2014} only branches and MRs".to_string())
+            }
+            (WebTarget::Commit(sha), ForgeProviderKind::GitHub) => {
+                if !runner.origin_has_commit(sha) {
+                    return Err(format!("{sha} isn't on origin \u{2014} push it first"));
+                }
+                forge::open_commit_in_browser(sha).map_err(|e| e.to_string())
             }
         }))
     }

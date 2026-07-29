@@ -265,7 +265,7 @@ fn commit_view_hides_and_disarms_staging_keys() {
             help_open: app.help.open,
             project_search_focus: app.project_search_focus(),
             review_session: app.in_review_session(),
-            forge_review: app.in_forge_review(),
+            web_target: app.web_target_kind(),
         },
         None,
         &keymap,
@@ -281,14 +281,14 @@ fn commit_view_hides_and_disarms_staging_keys() {
         staging_allowed,
         code_intel_allowed,
         false,
-        false
+        None
     ));
     assert!(help::binding_hidden(
         Action::StageFile,
         staging_allowed,
         code_intel_allowed,
         false,
-        false
+        None
     ));
 
     // Inert: pressing space (ToggleStage) does nothing observable to git
@@ -837,11 +837,11 @@ fn commit_view_help_overlay_shows_only_truthful_keys() {
                 | Action::AcceptFile
                 | Action::ToggleDefer
                 | Action::SubmitForgeReview
-                | Action::OpenPrInBrowser
+                | Action::OpenInBrowser
         );
         // staging_allowed=false, code_intel_allowed=false in a commit view.
         assert_eq!(
-            help::binding_hidden(binding.action, false, false, false, false),
+            help::binding_hidden(binding.action, false, false, false, None),
             inert,
             "commit-view overlay lists exactly the keys that work: {:?} \
              (hidden should be {inert})",

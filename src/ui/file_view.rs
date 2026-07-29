@@ -371,7 +371,7 @@ mod tests {
                 help_open: false,
                 project_search_focus: app.project_search_focus(),
                 review_session: app.in_review_session(),
-                forge_review: app.in_forge_review(),
+                web_target: app.web_target_kind(),
             },
             None,
             &keymap,
@@ -388,7 +388,7 @@ mod tests {
                 staging_allowed,
                 code_intel_allowed,
                 false,
-                false
+                None
             ));
         }
         for action in [
@@ -401,7 +401,7 @@ mod tests {
                 staging_allowed,
                 code_intel_allowed,
                 false,
-                false
+                None
             ));
         }
     }

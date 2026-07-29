@@ -2,6 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::diff::FileDiff;
 use crate::git::RawFilePatch;
+use crate::ui::forge_open::WebTargetKind;
 use crate::ui::keymap::KeySeq;
 use crate::ui::modal_keys::{LIST_KEYS, ModalKeymaps, SWITCHER_KEYS};
 use crate::ui::{App, Mode, Row, dispatch_key};
@@ -54,7 +55,7 @@ fn keys(entries: &[FooterEntry]) -> Vec<String> {
 #[test]
 fn normal_mode_hints_match_the_curated_list_in_order() {
     let km = Keymap::default_map();
-    let entries = normal_hints(&km, true, true, false, false, false);
+    let entries = normal_hints(&km, true, true, false, false, None);
     assert_eq!(keys(&entries), vec!["Space", "S", "c", "d", "e", "x", "?"]);
     assert_eq!(
         labels(&entries),
@@ -78,18 +79,18 @@ fn normal_mode_hints_match_the_curated_list_in_order() {
 #[test]
 fn normal_mode_hints_gain_esc_return_while_viewing_a_commit() {
     let km = Keymap::default_map();
-    let entries = normal_hints(&km, true, true, true, false, false);
+    let entries = normal_hints(&km, true, true, true, false, None);
     assert!(labels(&entries).contains(&"return"));
     assert!(keys(&entries).contains(&"Esc".to_string()));
     // Absent otherwise.
-    let without = normal_hints(&km, true, true, false, false, false);
+    let without = normal_hints(&km, true, true, false, false, None);
     assert!(!labels(&without).contains(&"return"));
 }
 
 #[test]
 fn normal_mode_hints_exclude_staging_when_not_allowed() {
     let km = Keymap::default_map();
-    let entries = normal_hints(&km, false, true, false, false, false);
+    let entries = normal_hints(&km, false, true, false, false, None);
     assert!(!labels(&entries).contains(&"stage hunk"));
     assert!(!labels(&entries).contains(&"stage file"));
     // Everything else survives (edit/delete are staging-independent).
@@ -105,36 +106,47 @@ fn normal_mode_hints_exclude_staging_when_not_allowed() {
 #[test]
 fn normal_mode_hints_gain_q_end_review_during_a_review_session() {
     let km = Keymap::default_map();
-    let entries = normal_hints(&km, true, true, false, true, false);
+    let entries = normal_hints(&km, true, true, false, true, None);
     assert!(labels(&entries).contains(&"end review"));
     assert!(keys(&entries).contains(&"q".to_string()));
     assert_eq!(labels(&entries).last(), Some(&"help"), "help stays last");
     // Absent outside a review session.
-    let without = normal_hints(&km, true, true, false, false, false);
+    let without = normal_hints(&km, true, true, false, false, None);
     assert!(!labels(&without).contains(&"end review"));
 }
 
-/// `gx` is PR-review-only, and the banner deliberately doesn't name it (or
-/// `q`) — the footer strip is the only always-visible surface either key
-/// has. It must reach the Normal strip in a forge PR review, and must stay
-/// out of it in a *local-branch* review, which is a review session with no
-/// PR behind it: promoting `gx` there would advertise a key whose only
-/// effect is a "nothing to open" hint.
+/// `gx`'s strip entry follows the view's web target: present with the
+/// target's own wording where there is one, absent entirely where there
+/// isn't. The banner deliberately names neither `gx` nor `q`, so the strip
+/// is the only always-visible surface either key has — and a strip entry
+/// saying "open PR" on a branch review (or anything at all on a plain
+/// working-tree diff) would advertise a key whose only effect is a
+/// "nothing to open" hint.
 #[test]
-fn normal_mode_hints_gain_gx_open_pr_only_in_a_forge_pr_review() {
+fn normal_mode_hints_label_gx_by_its_web_target_and_omit_it_without_one() {
     let km = Keymap::default_map();
-    let pr_review = normal_hints(&km, true, true, false, true, true);
-    assert!(labels(&pr_review).contains(&"open PR"));
-    assert!(keys(&pr_review).contains(&"gx".to_string()));
+    let cases = [
+        (WebTargetKind::Pr, "open PR"),
+        (WebTargetKind::Branch, "open branch"),
+        (WebTargetKind::Commit, "open commit"),
+    ];
+    for (kind, expected) in cases {
+        let entries = normal_hints(&km, true, true, false, true, Some(kind));
+        assert!(
+            labels(&entries).contains(&expected),
+            "{kind:?} must label gx {expected:?}: {:?}",
+            labels(&entries)
+        );
+        assert!(keys(&entries).contains(&"gx".to_string()));
+    }
 
-    let branch_review = normal_hints(&km, true, true, false, true, false);
-    assert!(
-        !labels(&branch_review).contains(&"open PR"),
-        "a local-branch review has no PR to open"
-    );
-
-    let no_review = normal_hints(&km, true, true, false, false, false);
-    assert!(!labels(&no_review).contains(&"open PR"));
+    for review_session in [true, false] {
+        let entries = normal_hints(&km, true, true, false, review_session, None);
+        assert!(
+            !keys(&entries).contains(&"gx".to_string()),
+            "no web target -> no gx (review_session={review_session})"
+        );
+    }
 }
 
 /// During a review session, `staging_allowed` is always `false` for a review
@@ -149,7 +161,7 @@ fn normal_mode_hints_hide_accept_and_stage_but_keep_defer_during_a_review_sessio
     let km = Keymap::default_map();
     // A review target is always `staging_allowed = false` (read-only) — see
     // `App::target.staging_mode()` for `DiffTarget::Review`.
-    let entries = normal_hints(&km, false, true, false, true, false);
+    let entries = normal_hints(&km, false, true, false, true, None);
     assert!(!labels(&entries).contains(&"stage hunk"));
     assert!(!labels(&entries).contains(&"stage file"));
     assert!(!labels(&entries).contains(&"accept"));
@@ -164,7 +176,7 @@ fn normal_mode_hints_hide_accept_and_stage_but_keep_defer_during_a_review_sessio
     assert!(!keys(&entries).contains(&"d".to_string()));
 
     // Absent outside a review session, even with staging allowed.
-    let without = normal_hints(&km, true, true, false, false, false);
+    let without = normal_hints(&km, true, true, false, false, None);
     assert!(!labels(&without).contains(&"accept"));
     assert!(!labels(&without).contains(&"accept file"));
     assert!(!labels(&without).contains(&"defer"));
@@ -198,7 +210,7 @@ fn visual_mode_hints_exclude_stage_lines_when_not_allowed() {
 #[test]
 fn panel_mode_hints_match_the_curated_list_in_order() {
     let km = Keymap::default_map();
-    let entries = panel_hints(&km, false, true, false, false, true);
+    let entries = panel_hints(&km, false, true, false, None, true);
     assert_eq!(
         keys(&entries),
         vec![
@@ -233,7 +245,7 @@ fn panel_mode_hints_match_the_curated_list_in_order() {
 #[test]
 fn panel_mode_hints_hide_stage_rows_on_a_read_only_target() {
     let km = Keymap::default_map();
-    let entries = panel_hints(&km, false, false, false, false, true);
+    let entries = panel_hints(&km, false, false, false, None, true);
     assert!(!labels(&entries).contains(&"stage"));
     assert!(!labels(&entries).contains(&"stage file"));
     assert_eq!(
@@ -252,7 +264,7 @@ fn panel_mode_hints_hide_stage_rows_on_a_read_only_target() {
 #[test]
 fn panel_mode_hints_show_accept_and_defer_during_a_review_session() {
     let km = Keymap::default_map();
-    let entries = panel_hints(&km, false, false, true, false, true);
+    let entries = panel_hints(&km, false, false, true, None, true);
     let labels = labels(&entries);
     assert!(labels.contains(&"accept"));
     assert!(labels.contains(&"accept file"));
@@ -275,14 +287,14 @@ fn panel_mode_hints_show_accept_and_defer_during_a_review_session() {
 #[test]
 fn panel_mode_hints_hide_file_actions_on_the_history_tab() {
     let km = Keymap::default_map();
-    let entries = panel_hints(&km, false, true, false, false, false);
+    let entries = panel_hints(&km, false, true, false, None, false);
     assert_eq!(
         keys(&entries),
         vec![
             "j/k", "Enter", "f", "p", "P", "c", "`/Esc", "Tab", "s", "/", "?"
         ]
     );
-    let review_entries = panel_hints(&km, false, false, true, false, false);
+    let review_entries = panel_hints(&km, false, false, true, None, false);
     let review_labels = labels(&review_entries);
     assert!(!review_labels.contains(&"accept"));
     assert!(!review_labels.contains(&"accept file"));
@@ -297,8 +309,8 @@ fn panel_mode_hints_hide_file_actions_on_the_history_tab() {
 #[test]
 fn panel_push_hint_relabels_to_publish_on_an_unpublished_branch() {
     let km = Keymap::default_map();
-    let published = panel_hints(&km, false, true, false, false, true);
-    let unpublished = panel_hints(&km, true, true, false, false, true);
+    let published = panel_hints(&km, false, true, false, None, true);
+    let unpublished = panel_hints(&km, true, true, false, None, true);
     let label_for_p = |entries: &[FooterEntry]| {
         keys(entries)
             .iter()
@@ -363,7 +375,7 @@ fn search_mode_has_no_hint_strip() {
             help_open: false,
             project_search_focus: SearchFocus::Input,
             review_session: false,
-            forge_review: false,
+            web_target: None,
         },
         None,
         &km,
@@ -390,7 +402,7 @@ fn help_open_takes_precedence_over_the_mode_strip() {
             help_open: true,
             project_search_focus: SearchFocus::Input,
             review_session: false,
-            forge_review: false,
+            web_target: None,
         },
         None,
         &km,
@@ -405,24 +417,31 @@ fn help_open_takes_precedence_over_the_mode_strip() {
 // -- Pending two-key prefix ------------------------------------------------
 
 /// `gx` is the first two-key binding that capability gating can hide, so
-/// the pending-`g` strip has to honor `forge_review` rather than passing a
-/// blanket-permissive flag: outside a PR review, pressing `g` must not
-/// advertise a completion whose only effect is a "nothing to open" hint.
+/// the pending-`g` strip has to honor `web_target` rather than passing a
+/// blanket-permissive flag: in a view with nothing to open, pressing `g`
+/// must not advertise a completion that would only report "nothing here".
+/// It carries the target's wording here too, so the pending strip and the
+/// idle strip can't name the same key differently.
 #[test]
-fn pending_g_shows_gx_only_in_a_forge_pr_review() {
+fn pending_g_shows_gx_only_with_a_web_target_and_labels_it_the_same_way() {
     let km = Keymap::default_map();
-    let in_pr = pending_hints(&km, key(KeyCode::Char('g')), true, true);
-    assert!(keys(&in_pr).contains(&"gx".to_string()));
-    assert!(labels(&in_pr).contains(&"open PR"));
+    let on_commit = pending_hints(
+        &km,
+        key(KeyCode::Char('g')),
+        true,
+        Some(WebTargetKind::Commit),
+    );
+    assert!(keys(&on_commit).contains(&"gx".to_string()));
+    assert!(labels(&on_commit).contains(&"open commit"));
 
-    let outside = pending_hints(&km, key(KeyCode::Char('g')), true, false);
+    let outside = pending_hints(&km, key(KeyCode::Char('g')), true, None);
     assert!(!keys(&outside).contains(&"gx".to_string()));
 }
 
 #[test]
 fn pending_g_shows_every_g_completion_sorted_by_key() {
     let km = Keymap::default_map();
-    let entries = pending_hints(&km, key(KeyCode::Char('g')), true, false);
+    let entries = pending_hints(&km, key(KeyCode::Char('g')), true, None);
     assert_eq!(
         keys(&entries),
         vec!["g/", "gSpace", "gT", "gd", "gg", "gp", "gr", "gt"]
@@ -445,7 +464,7 @@ fn pending_g_shows_every_g_completion_sorted_by_key() {
 #[test]
 fn pending_g_drops_gd_and_gr_when_code_intel_is_disallowed() {
     let km = Keymap::default_map();
-    let entries = pending_hints(&km, key(KeyCode::Char('g')), false, false);
+    let entries = pending_hints(&km, key(KeyCode::Char('g')), false, None);
     // `g/` (OpenProjectSearch), `g<Space>` (OpenEditor), `gg` (JumpToTop),
     // `gp` (OpenFileFinder), and `gt`/`gT` (thread nav) aren't code-intel
     // actions, so they survive; `gd`/`gr` don't.
@@ -477,7 +496,7 @@ fn pending_prefix_replaces_the_mode_strip_in_normal_and_visual() {
             help_open: false,
             project_search_focus: SearchFocus::Input,
             review_session: false,
-            forge_review: false,
+            web_target: None,
         },
         g,
         &km,
@@ -497,7 +516,7 @@ fn pending_prefix_replaces_the_mode_strip_in_normal_and_visual() {
             help_open: false,
             project_search_focus: SearchFocus::Input,
             review_session: false,
-            forge_review: false,
+            web_target: None,
         },
         g,
         &km,
@@ -529,13 +548,13 @@ fn pending_prefix_is_ignored_outside_normal_and_visual() {
             help_open: false,
             project_search_focus: SearchFocus::Input,
             review_session: false,
-            forge_review: false,
+            web_target: None,
         },
         g,
         &km,
         &ModalKeymaps::default(),
     );
-    assert_eq!(panel, panel_hints(&km, false, true, false, false, true));
+    assert_eq!(panel, panel_hints(&km, false, true, false, None, true));
 }
 
 #[test]
@@ -590,7 +609,7 @@ fn every_mode_produces_a_nonempty_strip_except_search() {
                 help_open: false,
                 project_search_focus: SearchFocus::Input,
                 review_session: false,
-                forge_review: false,
+                web_target: None,
             },
             None,
             &km,
@@ -612,7 +631,7 @@ fn every_mode_produces_a_nonempty_strip_except_search() {
                 help_open: false,
                 project_search_focus: SearchFocus::Input,
                 review_session: false,
-                forge_review: false,
+                web_target: None,
             },
             None,
             &km,
@@ -637,7 +656,7 @@ fn table_derived_hints_use_real_key_labels() {
             .filter(|b| b.scope == scope || b.scope == Scope::Global)
             .map(|b| b.key_label())
             .collect();
-        let entries = keymap_hints(&km, scope, true, true, true, false);
+        let entries = keymap_hints(&km, scope, true, true, true, None);
         for e in &entries {
             // Merged entries (`j/k`) join two atomic key labels with `/`; an
             // unmerged entry's key can itself legitimately *be* `/` (the
@@ -836,7 +855,7 @@ fn panel_help_hint_is_real_and_shadows_panel_dispatch() {
 #[test]
 fn medium_width_wraps_to_two_lines_without_splitting_a_hint() {
     let km = Keymap::default_map();
-    let entries = normal_hints(&km, true, true, false, false, false);
+    let entries = normal_hints(&km, true, true, false, false, None);
     // 72 fits all 11 hints across two rows (the strip grew by `e`/`x`).
     let lines = wrap_hints(&entries, 72);
     assert_eq!(lines.len(), 2);
@@ -854,7 +873,7 @@ fn medium_width_wraps_to_two_lines_without_splitting_a_hint() {
 #[test]
 fn narrow_width_drops_lowest_priority_hints_but_keeps_help() {
     let km = Keymap::default_map();
-    let entries = normal_hints(&km, true, true, false, false, false);
+    let entries = normal_hints(&km, true, true, false, false, None);
     let lines = wrap_hints(&entries, 20);
     assert!(lines.len() <= 2);
     let shown: usize = lines.iter().map(Vec::len).sum();
