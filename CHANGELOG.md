@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.20.0](https://github.com/sdavisde/redquill/compare/v0.19.0...v0.20.0) (2026-07-29)
+
+
+### Features
+
+* **ui:** drop the end-review hint from the banner, promote gx to the footer ([28313c8](https://github.com/sdavisde/redquill/commit/28313c88c2655cae9809ef76241641f34a4c9df7))
+* **ui:** gx opens the branch or commit too, labelled by what it opens ([4795361](https://github.com/sdavisde/redquill/commit/4795361300fd6afa2ba0f01225487b0b14049a08))
+* **ui:** name the PR in the review banner and open it with gx ([3b67af5](https://github.com/sdavisde/redquill/commit/3b67af56b65ba97f28915e25be78c0ce48c41346))
+
+
+### Bug Fixes
+
+* **ui:** show gx only in a forge PR review, not any review session ([cefecd2](https://github.com/sdavisde/redquill/commit/cefecd2556edb825b00d798528ba1c41f69f0def))
+
 ## [0.19.0](https://github.com/sdavisde/redquill/compare/v0.18.0...v0.19.0) (2026-07-29)
 
 
