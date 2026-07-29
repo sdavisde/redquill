@@ -117,6 +117,20 @@ fn normal_mode_hints_gain_q_end_review_during_a_review_session() {
     assert!(!labels(&without).contains(&"end review"));
 }
 
+/// `gx` is review-session-only, and the banner deliberately doesn't name it
+/// (or `q`) — the footer strip is the only always-visible surface either
+/// key has, so it must reach the Normal strip while reviewing and stay out
+/// of it otherwise.
+#[test]
+fn normal_mode_hints_gain_gx_open_pr_during_a_review_session() {
+    let km = Keymap::default_map();
+    let entries = normal_hints(&km, true, true, false, true);
+    assert!(labels(&entries).contains(&"open PR"));
+    assert!(keys(&entries).contains(&"gx".to_string()));
+    let without = normal_hints(&km, true, true, false, false);
+    assert!(!labels(&without).contains(&"open PR"));
+}
+
 /// During a review session, `staging_allowed` is always `false` for a review
 /// target (read-only), so "stage hunk"/"stage file" are gone. `accept`/
 /// `accept file` (`Space`/`S`) are muscle-memory-adjacent like the other

@@ -1,17 +1,19 @@
 //! The review-session banner: a full-width, single-row band
-//! reading ` REVIEWING <label> — q to end review +A -R` — where `<label>` is
+//! reading ` REVIEWING <label> +A -R` — where `<label>` is
 //! `#<number> <title>` for a forge PR/MR review and the branch name for a
 //! local-branch one (see [`super::app::App::review_banner_label`]) — with the
 //! `<accepted>/<total>` progress count right-aligned at the row's far edge,
 //! shown above everything else in [`super::draw`] whenever
-//! [`super::app::App::in_review_session`] is true.
+//! [`super::app::App::in_review_session`] is true. The keys a review session
+//! offers (`q` to end it, `gx` to open the PR) live in the footer strip, not
+//! here — the banner names what is being reviewed and how far it has got.
 //!
 //! [`layout`] is the pure content half (label/counts/stat/width in, the
 //! banner's text pieces out, truncating only the label — never
 //! wrapping) so it's unit-testable without a terminal; [`banner_text`]
 //! concatenates those pieces into the one-line string the existing
 //! byte-exact tests assert against; [`render`] is the thin ratatui half that
-//! turns the same pieces into styled spans (bold label, dim hint,
+//! turns the same pieces into styled spans (bold label,
 //! kind_added/kind_deleted stat halves) and pads the row to its full width,
 //! painting [`super::theme::Theme::review_banner_bg`]/`review_banner_fg`
 //! across the whole row (the same trailing-space-padding trick
@@ -32,15 +34,12 @@ use super::theme::Theme;
 /// One space of left padding, then the `REVIEWING` word and a trailing
 /// space before the session label.
 const PREFIX: &str = " REVIEWING ";
-/// The de-emphasized hint between the session label and the right-aligned
-/// progress count.
-const HINT: &str = " \u{2014} q to end review";
-
 /// The banner's text, broken into the pieces [`render`] styles individually
-/// (bold label, dim hint) and [`banner_text`] concatenates verbatim.
+/// (bold label, colored stat halves) and [`banner_text`] concatenates
+/// verbatim.
 ///
 /// `Full` covers every terminal wide enough for the fixed chrome (`PREFIX`
-/// plus `HINT` plus the `+A -R` stat segment plus the progress count plus one
+/// plus the `+A -R` stat segment plus the progress count plus one
 /// trailing-space column) to fit, truncating only the label (with a
 /// trailing ellipsis) when it doesn't fit — the label never wraps to a
 /// second row.
@@ -83,19 +82,15 @@ fn layout(
 ) -> BannerLayout {
     let count = format!("{accepted}/{total}");
     let stat_str = stat_text(stat);
-    // PREFIX + HINT + " " + stat + count + one trailing-space column (the
-    // gap between the stat segment and the count is the variable `pad`, not
-    // a fixed column); the fixed-width parts every layout reserves
-    // regardless of the label or padding.
-    let fixed_len = PREFIX.chars().count()
-        + HINT.chars().count()
-        + 1
-        + stat_str.chars().count()
-        + count.chars().count()
-        + 1;
+    // PREFIX + " " + stat + count + one trailing-space column (the gap
+    // between the stat segment and the count is the variable `pad`, not a
+    // fixed column); the fixed-width parts every layout reserves regardless
+    // of the label or padding.
+    let fixed_len =
+        PREFIX.chars().count() + 1 + stat_str.chars().count() + count.chars().count() + 1;
 
     if fixed_len >= width {
-        let full = format!("{PREFIX}{label}{HINT} {stat_str} {count}");
+        let full = format!("{PREFIX}{label} {stat_str} {count}");
         return BannerLayout::Clipped(full.chars().take(width).collect());
     }
 
@@ -103,7 +98,7 @@ fn layout(
     let label_display = if fixed_len + label_len <= width {
         label.to_string()
     } else {
-        // Truncate the label only; the chrome (PREFIX/HINT/stat/count)
+        // Truncate the label only; the chrome (PREFIX/stat/count)
         // never shrinks. Reserves one column for the ellipsis and, budget
         // permitting, one more so the padding between the stat segment and
         // the count never collapses to zero on top of the truncation.
@@ -115,7 +110,6 @@ fn layout(
 
     let used = PREFIX.chars().count()
         + label_display.chars().count()
-        + HINT.chars().count()
         + 1
         + stat_str.chars().count()
         + count.chars().count()
@@ -156,7 +150,7 @@ pub(super) fn banner_text(
             count,
         } => {
             format!(
-                "{PREFIX}{label}{HINT} {}{}{count} ",
+                "{PREFIX}{label} {}{}{count} ",
                 stat_text(stat),
                 " ".repeat(pad)
             )
@@ -197,7 +191,6 @@ pub(super) fn render(
         } => vec![
             Span::styled(PREFIX, fg),
             Span::styled(label, fg.add_modifier(Modifier::BOLD)),
-            Span::styled(HINT, fg.add_modifier(Modifier::DIM)),
             Span::raw(" "),
             // The stat halves use the same kind_added/kind_deleted colors
             // every other diffstat display uses, not the banner's own fg,
@@ -297,10 +290,7 @@ mod tests {
     #[test]
     fn fits_unchanged_when_width_is_generous() {
         let text = banner_text("feature/thing", 4, 12, sample_stat(), 80);
-        let expected = format!(
-            " REVIEWING feature/thing \u{2014} q to end review +7 -2{}4/12 ",
-            " ".repeat(27)
-        );
+        let expected = format!(" REVIEWING feature/thing +7 -2{}4/12 ", " ".repeat(45));
         assert_eq!(text, expected);
     }
 
@@ -319,11 +309,11 @@ mod tests {
     }
 
     #[test]
-    fn renders_the_stat_segment_between_the_hint_and_the_count() {
+    fn renders_the_stat_segment_between_the_label_and_the_count() {
         let text = banner_text("feature/thing", 4, 12, sample_stat(), 80);
         assert!(
-            text.contains("q to end review +7 -2"),
-            "stat segment must sit right after the hint: {text:?}"
+            text.contains("feature/thing +7 -2"),
+            "stat segment must sit right after the label: {text:?}"
         );
     }
 
@@ -354,8 +344,8 @@ mod tests {
         );
         assert!(text.starts_with(" REVIEWING "));
         assert!(
-            text.contains("\u{2014} q to end review"),
-            "the hint must survive truncation: {text:?}"
+            text.contains("+7 -2"),
+            "the stat segment must survive truncation: {text:?}"
         );
         assert!(
             text.ends_with("4/12 "),

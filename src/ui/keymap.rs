@@ -777,13 +777,14 @@ impl Keymap {
                 .footer(9, "submit"),
                 // Open the PR/MR under review on its forge. `gx` is vim's own
                 // "open this in a browser" gesture and was free in this scope.
-                // Not footer-promoted — it's an occasional detour, not part of
-                // the review loop.
+                // Ranked alongside `submit` so the review-session-only verbs
+                // sit together at the strip's tail.
                 d(
                     KeySeq::two(Char('g'), none, Char('x'), none),
                     OpenPrInBrowser,
                     "Open the PR/MR in your browser",
-                ),
+                )
+                .footer(9, "open PR"),
                 d(
                     KeySeq::one(Char('a'), none),
                     ToggleList,
