@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.18.0](https://github.com/sdavisde/redquill/compare/v0.17.2...v0.18.0) (2026-07-28)
+
+
+### Features
+
+* **ui:** make the diff view's scrolloff configurable, default 10 ([eb88d0b](https://github.com/sdavisde/redquill/commit/eb88d0be8713f5d9f3c8bc19c36598d535566ecf))
+
+
+### Bug Fixes
+
+* **ui:** land panel-focused files at the top and sync the panel cursor ([0767e73](https://github.com/sdavisde/redquill/commit/0767e73746f8aeffa120c012dd92ab017ca0b632))
+
 ## [0.17.2](https://github.com/sdavisde/redquill/compare/v0.17.1...v0.17.2) (2026-07-20)
 
 
