@@ -23,7 +23,7 @@ pub enum ReviewStatus {
     /// SHA for this file has since changed (detected at load-time
     /// reconciliation — see [`super::reconcile::reconcile`]). Rendered
     /// un-collapsed with its own marker; a `Space` press re-accepts it at
-    /// the fresh SHA (see [`accept`]).
+    /// the fresh SHA (see [`toggle_accept`]).
     ChangedSinceAccepted,
 }
 
@@ -45,15 +45,6 @@ pub fn toggle_accept(status: ReviewStatus) -> ReviewStatus {
             ReviewStatus::Accepted
         }
     }
-}
-
-/// Unconditionally marks `Accepted`, with no un-accept direction. Not used
-/// by either `Space` or `S` today (both drive the full [`toggle_accept`]
-/// toggle instead); reserved for re-accepting a file whose contents changed
-/// since acceptance, which must always accept forward rather than toggle
-/// back to `Unreviewed` on a repeated press.
-pub fn accept(_status: ReviewStatus) -> ReviewStatus {
-    ReviewStatus::Accepted
 }
 
 /// The `d` gesture: toggles the file between `Deferred` and everything
