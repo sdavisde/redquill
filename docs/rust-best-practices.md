@@ -34,6 +34,11 @@ Portable, project-agnostic discipline for Rust applications. Written as instruct
 
 ## Testing
 
+- A test earns its place by being able to fail on a real defect: feed inputs, assert outputs. If reverting the code under test wouldn't fail it, it isn't a test. The usual impostors: asserting a function was *called* with certain arguments, asserting a table or constant equals its own contents, and re-proving what a derive already guarantees (Default, getters, constructors).
+- One behavior, one test. N same-shaped cases belong in one table-driven test, not N copies; a near-duplicate with cosmetically different input adds maintenance cost, not coverage.
+- Don't pin cosmetics. Exact rendered strings, glyphs, and colors are contracts only where the wording itself is the guardrail (a public stdout format, a destructive-op confirmation naming its target); everywhere else assert the resulting state or decision, not the pixels.
+- Prefer the public seam: drive behavior through events/keypresses and assert the observable outcome. Needing a `#[cfg(test)]`-only accessor to reach internal state is a sign the test is pinned to implementation.
+- Where a unit test and an integration test overlap, keep each only for what the other can't catch (unit: breadth of input shapes; integration: the real tool accepts the output). A unit test that re-runs an integration-covered flow through a fake is the one to delete.
 - TDD where the code is pure (parsers, data transforms, serializers): failing test first, tests committed with the code.
 - Integration tests build throwaway state in tempdirs (`tempfile`); never touch the host repo/filesystem/config. Canonicalize tempdir paths (macOS `/var` symlink).
 - When a file's test module dwarfs its production code, split it out via `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;` — keeps private access, halves the file, zero logic change.

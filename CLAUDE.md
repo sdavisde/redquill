@@ -55,6 +55,7 @@ Generic Rust discipline (error handling, layering, state design, testing, concur
 Project-specific rules on top of it:
 
 - TDD applies to this repo's pure code: git output parsing, diff model, annotation serialization.
+- Before adding a test, name the defect it would catch (Testing, in the imported file above, is the bar). This suite has been pruned once already for tests that echoed tables, pinned cosmetic rendering, or verified call arguments — don't regrow them.
 - Every user-visible action must be reachable from the keymap and listed in the `?` help overlay — no hidden features. Modal key handlers and help hints are driven from the shared tables in `src/ui/modal_keys.rs`; add keys there, never as loose match arms.
 - Performance target: instant feel on a 5k-line diff; if a change makes scrolling or hunk-jumping perceptibly slower, it's a regression. The wall-clock tripwire tests in `src/ui/perf_tests.rs` enforce the complexity class — keep them passing, don't loosen budgets to make a regression fit.
 
