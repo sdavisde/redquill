@@ -223,6 +223,12 @@ pub enum Action {
     /// nothing is ever sent from the keypress itself; the modal is the safety
     /// boundary.
     SubmitForgeReview,
+    /// `gx` in the diff view (vim's "open the thing under the cursor in a
+    /// browser" gesture): hands the PR/MR under review to the platform's
+    /// browser via the forge CLI. A read-only navigation — nothing is
+    /// written to the forge. A no-op with a status hint outside a forge PR
+    /// review session.
+    OpenPrInBrowser,
 }
 
 /// The kebab-case config action-name for every [`Action`] variant (the
@@ -306,6 +312,7 @@ pub(crate) fn action_name(action: Action) -> &'static str {
         NextThread => "next-thread",
         PrevThread => "prev-thread",
         SubmitForgeReview => "submit-forge-review",
+        OpenPrInBrowser => "open-pr-in-browser",
     }
 }
 
@@ -388,6 +395,7 @@ pub(crate) fn action_from_name(name: &str) -> Option<Action> {
         "next-thread" => NextThread,
         "prev-thread" => PrevThread,
         "submit-forge-review" => SubmitForgeReview,
+        "open-pr-in-browser" => OpenPrInBrowser,
         _ => return None,
     })
 }
@@ -767,6 +775,15 @@ impl Keymap {
                     "Submit review to the forge (PR review)",
                 )
                 .footer(9, "submit"),
+                // Open the PR/MR under review on its forge. `gx` is vim's own
+                // "open this in a browser" gesture and was free in this scope.
+                // Not footer-promoted — it's an occasional detour, not part of
+                // the review loop.
+                d(
+                    KeySeq::two(Char('g'), none, Char('x'), none),
+                    OpenPrInBrowser,
+                    "Open the PR/MR in your browser",
+                ),
                 d(
                     KeySeq::one(Char('a'), none),
                     ToggleList,
@@ -1719,7 +1736,7 @@ mod tests {
         let km = Keymap::default_map();
         let mut pending = None;
         km.resolve(&mut pending, key(KeyCode::Char('g'), KeyModifiers::NONE));
-        let action = km.resolve(&mut pending, key(KeyCode::Char('x'), KeyModifiers::NONE));
+        let action = km.resolve(&mut pending, key(KeyCode::Char('q'), KeyModifiers::NONE));
         assert_eq!(action, None);
         assert_eq!(pending, None);
     }
@@ -2426,7 +2443,7 @@ mod tests {
     }
 
     #[test]
-    fn completions_for_g_is_gg_gd_gr_gp_g_slash_and_thread_nav() {
+    fn completions_for_g_is_gg_gd_gr_gp_g_slash_thread_nav_and_gx() {
         let km = Keymap::default_map();
         let g = key(KeyCode::Char('g'), KeyModifiers::NONE);
         let mut actions: Vec<Action> = km
@@ -2444,6 +2461,7 @@ mod tests {
                 Action::NextThread,
                 Action::OpenEditor,
                 Action::OpenFileFinder,
+                Action::OpenPrInBrowser,
                 Action::OpenProjectSearch,
                 Action::PrevThread,
             ]

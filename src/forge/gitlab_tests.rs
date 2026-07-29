@@ -143,6 +143,29 @@ fn mr_detail_command_has_the_fixed_argv_and_hardened_env() {
 }
 
 #[test]
+fn mr_web_command_is_a_read_only_view_argv_carrying_only_the_typed_iid() {
+    let cmd = mr_web_command(42);
+    assert_eq!(cmd.get_program(), OsStr::new("glab"));
+    let args: Vec<&OsStr> = cmd.get_args().collect();
+    assert_eq!(
+        args,
+        vec![
+            OsStr::new("mr"),
+            OsStr::new("view"),
+            OsStr::new("42"),
+            OsStr::new("--web"),
+        ]
+    );
+    let other_cmd = mr_web_command(7);
+    let other: Vec<&OsStr> = other_cmd.get_args().collect();
+    assert_eq!(args[0], other[0]);
+    assert_eq!(args[1], other[1]);
+    assert_ne!(args[2], other[2]);
+    let envs: Vec<_> = cmd.get_envs().collect();
+    assert!(envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))));
+}
+
+#[test]
 fn mr_detail_command_interpolates_only_the_typed_iid() {
     let one = mr_detail_command(1);
     let two = mr_detail_command(2);

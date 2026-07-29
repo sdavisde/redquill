@@ -105,7 +105,7 @@ fn group_of(action: Action) -> &'static str {
         EnterVisual | Compose | EditAnnotation | DeleteAnnotation => "Annotate",
         ToggleStage | StageFile | ToggleStagingPanel | RestoreFile => "Stage",
         ToggleAccept | AcceptFile | ToggleDefer | OpenThread | NextThread | PrevThread
-        | SubmitForgeReview => "Review",
+        | SubmitForgeReview | OpenPrInBrowser => "Review",
         Search | SearchNext | SearchPrev | SearchWordForward | SearchWordBackward => "Search",
         ToggleList | ToggleHelp | FocusGitPanel | ToggleCommandLog | Refresh | OpenFileFinder
         | OpenProjectSearch | OpenEditor | DismissConfigWarning | OpenReviewLauncher => "Panels",
@@ -202,6 +202,7 @@ pub(super) fn binding_hidden(
                     | Action::AcceptFile
                     | Action::ToggleDefer
                     | Action::SubmitForgeReview
+                    | Action::OpenPrInBrowser
             ))
 }
 

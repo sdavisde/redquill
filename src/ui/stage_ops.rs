@@ -171,6 +171,14 @@ pub type AsyncPrCheckoutFetcher = Box<dyn Fn(PrCheckoutRequest) -> PrCheckoutOut
 /// indirection as the other `Async*` aliases.
 pub type AsyncThreadFetcher = Box<dyn Fn(u64) -> Result<Vec<Thread>, String> + Send>;
 
+/// A `Send` closure handing one PR/MR's web URL to the platform's browser
+/// off the render thread (`gh pr view --web` / `glab mr view --web`). Takes
+/// the PR number and returns unit or a one-line diagnostic for the status
+/// line. A read-only navigation — the forge CLI is asked to *open* the PR,
+/// never to write to it. Same cloned-handle indirection as the other
+/// `Async*` aliases.
+pub type AsyncPrWebOpener = Box<dyn Fn(u64) -> Result<(), String> + Send>;
+
 /// A `Send` closure running one whole submit sequence — the reviews-endpoint
 /// POST plus the sequential follow-ups — off the render thread, returning the
 /// [`SubmitReport`] the render thread finishes into per-item published marks
@@ -432,6 +440,16 @@ pub trait StageOps {
         &self,
         _provider: crate::review::store::ForgeProviderKind,
     ) -> Option<AsyncThreadFetcher> {
+        None
+    }
+    /// A `Send` closure opening one PR/MR in the browser off the render
+    /// thread (see [`AsyncPrWebOpener`]), dispatched by `provider` to `gh` or
+    /// `glab`. The default returns `None`, so a fake backend reports "can't
+    /// open" rather than launching anything; [`GitRunner`] overrides it.
+    fn async_pr_web_opener(
+        &self,
+        _provider: crate::review::store::ForgeProviderKind,
+    ) -> Option<AsyncPrWebOpener> {
         None
     }
     /// The forge provider a prior background PR list already resolved for
@@ -758,6 +776,23 @@ impl StageOps for GitRunner {
                     .flatten()
                     .and_then(|url| forge::parse_origin_repo_slug(&url));
                 forge::fetch_review_threads(slug.as_deref(), number).map_err(|e| e.to_string())
+            }
+        }))
+    }
+
+    fn async_pr_web_opener(
+        &self,
+        provider: crate::review::store::ForgeProviderKind,
+    ) -> Option<AsyncPrWebOpener> {
+        use crate::review::store::ForgeProviderKind;
+        // No cloned handle needed: both CLIs infer the repo/project from the
+        // working directory, so the closure captures nothing but `provider`.
+        Some(Box::new(move |number| match provider {
+            ForgeProviderKind::GitLab => {
+                forge::open_mr_in_browser(number).map_err(|e| e.to_string())
+            }
+            ForgeProviderKind::GitHub => {
+                forge::open_pr_in_browser(number).map_err(|e| e.to_string())
             }
         }))
     }

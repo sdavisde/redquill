@@ -42,14 +42,16 @@ pub use detect::{
 pub use github::{
     FileCommentFollowUp, GhSubmitExecutor, PR_LIST_JSON_FIELDS, ReviewCommentPayload,
     ReviewPayload, ReviewSubmissionPlan, build_review_payload, fetch_review_threads,
-    file_comment_command, list_open_prs, parse_pr_list_json, pr_list_command, reply_command,
-    review_comments_command, review_threads_resolved_command, submit_review_command,
+    file_comment_command, list_open_prs, open_pr_in_browser, parse_pr_list_json, pr_list_command,
+    pr_web_command, reply_command, review_comments_command, review_threads_resolved_command,
+    submit_review_command,
 };
 pub use gitlab::{
     DiffRefs, GitlabNote, GitlabReply, GitlabSubmitBatch, GitlabSubmitExecutor, GlabSubmitExecutor,
     MrDetail, NotePosition, NoteTarget, build_note_position, discussions_command,
     fetch_discussions, list_open_mrs, mr_detail, mr_detail_command, mr_list_command,
-    parse_discussions_json, parse_mr_detail_json, parse_mr_list_json, run_gitlab_submit_sequence,
+    mr_web_command, open_mr_in_browser, parse_discussions_json, parse_mr_detail_json,
+    parse_mr_list_json, run_gitlab_submit_sequence,
 };
 pub use remote_url::{Hostname, RemoteUrlError, parse_origin_hostname, parse_origin_repo_slug};
 pub use submit::{

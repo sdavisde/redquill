@@ -41,6 +41,7 @@ mod file_finder_modal;
 mod file_tree;
 mod file_view;
 mod footer;
+mod forge_open;
 mod forge_submit;
 mod forge_threads;
 mod git_panel;
@@ -734,12 +735,12 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
 
     if let Some(banner_area) = banner_area {
         let (accepted, total) = app.review_progress();
-        let branch = app.review_branch().unwrap_or_default();
+        let label = app.review_banner_label();
         review_banner::render(
             frame,
             banner_area,
             &app.theme,
-            branch,
+            &label,
             accepted,
             total,
             app.total_stats,
@@ -1097,6 +1098,9 @@ fn event_loop(
         // Drain a completed background comment-thread fetch into the overlay
         // (or the "comments unavailable" notice), same cadence.
         app.poll_thread_fetch();
+        // Drain a completed `gx` browser open into the status line, same
+        // cadence.
+        app.poll_pr_web_open();
         // Drain a completed background forge submit: mark published items,
         // persist, and report the outcome (or the mid-sequence split).
         app.poll_forge_submit();

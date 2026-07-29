@@ -943,6 +943,7 @@ fn commit_view_help_overlay_shows_only_truthful_keys() {
                 | Action::AcceptFile
                 | Action::ToggleDefer
                 | Action::SubmitForgeReview
+                | Action::OpenPrInBrowser
         );
         // staging_allowed=false, code_intel_allowed=false in a commit view.
         assert_eq!(

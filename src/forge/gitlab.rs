@@ -194,6 +194,52 @@ struct RawMrDetail {
     diff_refs: DiffRefs,
 }
 
+/// How long `glab mr view --web` may run before it's killed. The command
+/// hands the URL to the platform's browser launcher and exits, so this is a
+/// hang guard rather than a real budget.
+const WEB_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Builds the fixed argv for `glab mr view <iid> --web`. The MR iid is a
+/// `u64` end-to-end, so the argv's only variable part can't be anything but
+/// digits, and `glab` infers the project from the working directory.
+pub fn mr_web_command(iid: u64) -> Command {
+    let mut cmd = Command::new("glab");
+    cmd.args(["mr", "view", &iid.to_string(), "--web"]);
+    harden_glab(&mut cmd);
+    cmd
+}
+
+/// Opens MR `iid` in the user's browser via `glab`. Output is captured
+/// (never inherited) so the CLI's own chatter can't scribble over the TUI.
+/// A read-only navigation, not a forge write. Thin spawn wrapper,
+/// deliberately untested — [`mr_web_command`] carries the argv coverage.
+pub fn open_mr_in_browser(iid: u64) -> Result<(), ForgeError> {
+    let mut cmd = mr_web_command(iid);
+    let output = run_captured_with_timeout(&mut cmd, WEB_TIMEOUT).map_err(|source| {
+        if source.kind() == std::io::ErrorKind::NotFound {
+            ForgeError::CliNotFound { cli: "glab" }
+        } else {
+            ForgeError::Spawn {
+                cli: "glab",
+                source,
+            }
+        }
+    })?;
+    if !output.status.success() {
+        return Err(ForgeError::Command {
+            cli: "glab",
+            command: "mr view --web".to_string(),
+            code: output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_string()),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Builds the fixed argv for `glab api projects/:id/merge_requests/<iid>`.
 /// See the module doc for why `api` (not `mr view -F json`) was chosen.
 pub fn mr_detail_command(iid: u64) -> Command {

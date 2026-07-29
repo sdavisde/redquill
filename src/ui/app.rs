@@ -601,6 +601,13 @@ pub struct App {
     /// Bumped on every session entry/refresh so a straggling fetch spawned
     /// before the bump is dropped on arrival (mirrors `finder_generation`).
     pub(super) thread_fetch_generation: u64,
+    /// The background poller `gx`'s browser open runs through (see
+    /// [`super::forge_open`]), separate from the other forge pollers so its
+    /// outcome drains independently.
+    pub(super) pr_web_tasks: BackgroundTasks<Result<(), String>>,
+    /// The single in-flight browser open, if any — a second `gx` while one is
+    /// running is ignored rather than launching a second tab.
+    pub(super) pr_web_in_flight: Option<super::background::TaskId>,
     /// Whether the last thread fetch failed: drives the one-line "comments
     /// unavailable" banner notice. Cleared by a successful fetch.
     pub(super) threads_unavailable: bool,
@@ -894,6 +901,8 @@ impl App {
             thread_fetch_tasks: BackgroundTasks::new(),
             thread_fetch_in_flight: None,
             thread_fetch_generation: 0,
+            pr_web_tasks: BackgroundTasks::new(),
+            pr_web_in_flight: None,
             threads_unavailable: false,
             thread_view: None,
             submit_forge: None,
@@ -1036,6 +1045,21 @@ impl App {
         match &self.target {
             DiffTarget::Review { branch, .. } => Some(branch.as_str()),
             _ => None,
+        }
+    }
+
+    /// What the review banner names the session: `#<number> <title>` for a
+    /// forge PR/MR review, otherwise the branch name. The managed branch a PR
+    /// review runs on (`redquill/pr/<n>`) is a redquill implementation
+    /// detail that says nothing the number doesn't, so the PR's own identity
+    /// replaces it. Falls back to the branch when a persisted review carries
+    /// no title (see [`crate::review::store::ForgeMetadata::title`]).
+    pub(super) fn review_banner_label(&self) -> String {
+        let branch = self.review_branch().unwrap_or_default();
+        match &self.review_forge {
+            Some(forge) if !forge.title.is_empty() => format!("#{} {}", forge.number, forge.title),
+            Some(forge) => format!("#{}", forge.number),
+            None => branch.to_string(),
         }
     }
 
@@ -1351,6 +1375,7 @@ impl App {
             Action::NextThread => self.next_thread(),
             Action::PrevThread => self.prev_thread(),
             Action::SubmitForgeReview => self.open_submit_forge(),
+            Action::OpenPrInBrowser => self.open_pr_in_browser(),
             // `Quit`/`QuitDiscard` end the session; `OpenEditor` suspends the
             // TUI to spawn the configured editor. Both are intercepted by
             // `super::dispatch_key` before reaching here (see `Action::Quit`'s

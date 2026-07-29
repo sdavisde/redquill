@@ -56,6 +56,29 @@ fn pr_list_command_has_the_fixed_argv_and_hardened_env() {
 }
 
 #[test]
+fn pr_web_command_is_a_read_only_view_argv_carrying_only_the_typed_number() {
+    let cmd = pr_web_command(42);
+    assert_eq!(cmd.get_program(), OsStr::new("gh"));
+    let args: Vec<&OsStr> = cmd.get_args().collect();
+    assert_eq!(
+        args,
+        vec![
+            OsStr::new("pr"),
+            OsStr::new("view"),
+            OsStr::new("42"),
+            OsStr::new("--web"),
+        ]
+    );
+    let other_cmd = pr_web_command(7);
+    let other: Vec<&OsStr> = other_cmd.get_args().collect();
+    assert_eq!(args[0], other[0]);
+    assert_eq!(args[1], other[1]);
+    assert_ne!(args[2], other[2]);
+    let envs: Vec<_> = cmd.get_envs().collect();
+    assert!(envs.contains(&(OsStr::new("GH_PROMPT_DISABLED"), Some(OsStr::new("1")))));
+}
+
+#[test]
 fn pr_list_json_fields_are_exactly_fr4s_set() {
     assert_eq!(
         PR_LIST_JSON_FIELDS,

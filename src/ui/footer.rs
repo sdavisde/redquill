@@ -331,6 +331,7 @@ fn fallback_pending_label(action: Action) -> &'static str {
         Action::OpenEditor => "open editor",
         Action::NextThread => "next thread",
         Action::PrevThread => "prev thread",
+        Action::OpenPrInBrowser => "open PR",
         _ => "",
     }
 }

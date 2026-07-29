@@ -38,6 +38,51 @@ pub fn pr_list_command() -> Command {
     cmd
 }
 
+/// How long `gh pr view --web` may run before it's killed. The command
+/// hands the URL to the platform's browser launcher and exits, so this is a
+/// hang guard rather than a real budget.
+const WEB_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Builds the fixed argv for `gh pr view <number> --web`. The PR number is a
+/// `u64` end-to-end, so the argv's only variable part can't be anything but
+/// digits, and `gh` infers the repository from the working directory exactly
+/// as [`pr_list_command`] does.
+pub fn pr_web_command(number: u64) -> Command {
+    let mut cmd = Command::new("gh");
+    cmd.args(["pr", "view", &number.to_string(), "--web"]);
+    harden(&mut cmd);
+    cmd
+}
+
+/// Opens PR `number` in the user's browser via `gh`. Output is captured
+/// (never inherited) so `gh`'s "Opening … in your browser" line can't
+/// scribble over the TUI. A read-only navigation, not a forge write. Thin
+/// spawn wrapper, deliberately untested — [`pr_web_command`] carries the
+/// argv coverage.
+pub fn open_pr_in_browser(number: u64) -> Result<(), ForgeError> {
+    let mut cmd = pr_web_command(number);
+    let output = run_captured_with_timeout(&mut cmd, WEB_TIMEOUT).map_err(|source| {
+        if source.kind() == std::io::ErrorKind::NotFound {
+            ForgeError::CliNotFound { cli: "gh" }
+        } else {
+            ForgeError::Spawn { cli: "gh", source }
+        }
+    })?;
+    if !output.status.success() {
+        return Err(ForgeError::Command {
+            cli: "gh",
+            command: "pr view --web".to_string(),
+            code: output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_string()),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Runs `gh pr list` and returns the typed rows. The only function here
 /// that actually spawns a process — kept thin and deliberately untested;
 /// [`parse_pr_list_json`] carries the fixture coverage, since exercising

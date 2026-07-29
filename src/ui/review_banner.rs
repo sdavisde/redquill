@@ -1,15 +1,17 @@
 //! The review-session banner: a full-width, single-row band
-//! reading ` REVIEWING <branch> — q to end review +A -R` with the
+//! reading ` REVIEWING <label> — q to end review +A -R` — where `<label>` is
+//! `#<number> <title>` for a forge PR/MR review and the branch name for a
+//! local-branch one (see [`super::app::App::review_banner_label`]) — with the
 //! `<accepted>/<total>` progress count right-aligned at the row's far edge,
 //! shown above everything else in [`super::draw`] whenever
 //! [`super::app::App::in_review_session`] is true.
 //!
-//! [`layout`] is the pure content half (branch/counts/stat/width in, the
-//! banner's text pieces out, truncating only the branch name — never
+//! [`layout`] is the pure content half (label/counts/stat/width in, the
+//! banner's text pieces out, truncating only the label — never
 //! wrapping) so it's unit-testable without a terminal; [`banner_text`]
 //! concatenates those pieces into the one-line string the existing
 //! byte-exact tests assert against; [`render`] is the thin ratatui half that
-//! turns the same pieces into styled spans (bold branch, dim hint,
+//! turns the same pieces into styled spans (bold label, dim hint,
 //! kind_added/kind_deleted stat halves) and pads the row to its full width,
 //! painting [`super::theme::Theme::review_banner_bg`]/`review_banner_fg`
 //! across the whole row (the same trailing-space-padding trick
@@ -27,20 +29,20 @@ use crate::diff::DiffStat;
 
 use super::theme::Theme;
 
-/// One space of left padding, then the `REVIEWING` label and a trailing
-/// space before the branch name.
+/// One space of left padding, then the `REVIEWING` word and a trailing
+/// space before the session label.
 const PREFIX: &str = " REVIEWING ";
-/// The de-emphasized hint between the branch name and the right-aligned
+/// The de-emphasized hint between the session label and the right-aligned
 /// progress count.
 const HINT: &str = " \u{2014} q to end review";
 
 /// The banner's text, broken into the pieces [`render`] styles individually
-/// (bold branch, dim hint) and [`banner_text`] concatenates verbatim.
+/// (bold label, dim hint) and [`banner_text`] concatenates verbatim.
 ///
 /// `Full` covers every terminal wide enough for the fixed chrome (`PREFIX`
 /// plus `HINT` plus the `+A -R` stat segment plus the progress count plus one
-/// trailing-space column) to fit, truncating only the branch name (with a
-/// trailing ellipsis) when it doesn't fit — the branch never wraps to a
+/// trailing-space column) to fit, truncating only the label (with a
+/// trailing ellipsis) when it doesn't fit — the label never wraps to a
 /// second row.
 ///
 /// `Clipped` covers the pathologically narrow remainder, where even the
@@ -48,8 +50,8 @@ const HINT: &str = " \u{2014} q to end review";
 /// nicer message.
 enum BannerLayout {
     Full {
-        /// The branch name, truncated with a trailing `…` if it didn't fit.
-        branch: String,
+        /// The session label, truncated with a trailing `…` if it didn't fit.
+        label: String,
         /// Columns of padding between the stat segment and the
         /// right-aligned count.
         pad: usize,
@@ -73,7 +75,7 @@ fn stat_text(stat: DiffStat) -> String {
 /// ratatui/terminal types, so this is directly unit-testable (via
 /// [`banner_text`]) against a plain `width` rather than a real frame.
 fn layout(
-    branch: &str,
+    label: &str,
     accepted: usize,
     total: usize,
     stat: DiffStat,
@@ -84,7 +86,7 @@ fn layout(
     // PREFIX + HINT + " " + stat + count + one trailing-space column (the
     // gap between the stat segment and the count is the variable `pad`, not
     // a fixed column); the fixed-width parts every layout reserves
-    // regardless of the branch name or padding.
+    // regardless of the label or padding.
     let fixed_len = PREFIX.chars().count()
         + HINT.chars().count()
         + 1
@@ -93,26 +95,26 @@ fn layout(
         + 1;
 
     if fixed_len >= width {
-        let full = format!("{PREFIX}{branch}{HINT} {stat_str} {count}");
+        let full = format!("{PREFIX}{label}{HINT} {stat_str} {count}");
         return BannerLayout::Clipped(full.chars().take(width).collect());
     }
 
-    let branch_len = branch.chars().count();
-    let branch_display = if fixed_len + branch_len <= width {
-        branch.to_string()
+    let label_len = label.chars().count();
+    let label_display = if fixed_len + label_len <= width {
+        label.to_string()
     } else {
-        // Truncate the branch name only; the chrome (PREFIX/HINT/stat/count)
+        // Truncate the label only; the chrome (PREFIX/HINT/stat/count)
         // never shrinks. Reserves one column for the ellipsis and, budget
         // permitting, one more so the padding between the stat segment and
         // the count never collapses to zero on top of the truncation.
         let budget = width - fixed_len;
         let keep = budget.saturating_sub(2);
-        let truncated: String = branch.chars().take(keep).collect();
+        let truncated: String = label.chars().take(keep).collect();
         format!("{truncated}\u{2026}")
     };
 
     let used = PREFIX.chars().count()
-        + branch_display.chars().count()
+        + label_display.chars().count()
         + HINT.chars().count()
         + 1
         + stat_str.chars().count()
@@ -120,7 +122,7 @@ fn layout(
         + 1;
     let pad = width.saturating_sub(used);
     BannerLayout::Full {
-        branch: branch_display,
+        label: label_display,
         pad,
         stat,
         count,
@@ -135,7 +137,7 @@ fn layout(
 /// plain `width`, without a real frame).
 #[cfg(test)]
 pub(super) fn banner_text(
-    branch: &str,
+    label: &str,
     accepted: usize,
     total: usize,
     stat: DiffStat,
@@ -145,16 +147,16 @@ pub(super) fn banner_text(
     if width == 0 {
         return String::new();
     }
-    match layout(branch, accepted, total, stat, width) {
+    match layout(label, accepted, total, stat, width) {
         BannerLayout::Clipped(s) => s,
         BannerLayout::Full {
-            branch,
+            label,
             pad,
             stat,
             count,
         } => {
             format!(
-                "{PREFIX}{branch}{HINT} {}{}{count} ",
+                "{PREFIX}{label}{HINT} {}{}{count} ",
                 stat_text(stat),
                 " ".repeat(pad)
             )
@@ -170,7 +172,7 @@ pub(super) fn render(
     frame: &mut Frame,
     area: Rect,
     theme: &Theme,
-    branch: &str,
+    label: &str,
     accepted: usize,
     total: usize,
     stat: DiffStat,
@@ -178,24 +180,23 @@ pub(super) fn render(
 ) {
     let fg = Style::default().fg(theme.review_banner_fg);
     // A stale PR checkout (entered after a fetch failure left a prior
-    // worktree) folds a visible marker into the branch label so the reviewer
+    // worktree) folds a visible marker into the session label so the reviewer
     // can't miss that the checkout may lag the PR's real head.
-    let label = if stale {
-        format!("{branch} \u{26A0} STALE")
+    let marked = if stale {
+        format!("{label} \u{26A0} STALE")
     } else {
-        branch.to_string()
+        label.to_string()
     };
-    let branch = label.as_str();
-    let spans = match layout(branch, accepted, total, stat, area.width as usize) {
+    let spans = match layout(&marked, accepted, total, stat, area.width as usize) {
         BannerLayout::Clipped(s) => vec![Span::styled(s, fg.add_modifier(Modifier::BOLD))],
         BannerLayout::Full {
-            branch,
+            label,
             pad,
             stat,
             count,
         } => vec![
             Span::styled(PREFIX, fg),
-            Span::styled(branch, fg.add_modifier(Modifier::BOLD)),
+            Span::styled(label, fg.add_modifier(Modifier::BOLD)),
             Span::styled(HINT, fg.add_modifier(Modifier::DIM)),
             Span::raw(" "),
             // The stat halves use the same kind_added/kind_deleted colors
@@ -240,7 +241,7 @@ mod tests {
     }
 
     /// Flattens a full-width banner render into a plain string.
-    fn render_line(branch: &str, accepted: usize, total: usize, stale: bool) -> String {
+    fn render_line(label: &str, accepted: usize, total: usize, stale: bool) -> String {
         let backend = TestBackend::new(80, 1);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -250,7 +251,7 @@ mod tests {
                     frame,
                     area,
                     &Theme::default(),
-                    branch,
+                    label,
                     accepted,
                     total,
                     sample_stat(),
