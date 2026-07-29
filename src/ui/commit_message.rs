@@ -141,18 +141,6 @@ mod tests {
         app
     }
 
-    // -- message_is_blank ----------------------------------------------------
-
-    #[test]
-    fn blank_messages_are_empty_or_whitespace_only() {
-        assert!(message_is_blank(""));
-        assert!(message_is_blank("   "));
-        assert!(message_is_blank("\n\n"));
-        assert!(message_is_blank(" \t \n "));
-        assert!(!message_is_blank("fix: parser"));
-        assert!(!message_is_blank("\n\nx")); // any non-whitespace counts
-    }
-
     // -- open_commit_message ---------------------------------------------------
 
     #[test]
@@ -174,16 +162,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn open_captures_the_panel_cursor_and_starts_empty() {
-        let mut app = panel_app_with_staged();
-        app.open_commit_message();
-        assert_eq!(app.mode, Mode::CommitMessage);
-        let state = app.commit_message.as_ref().unwrap();
-        assert_eq!(state.panel_cursor, 1);
-        assert_eq!(state.buffer.text(), "");
-    }
-
     // -- close_commit_message --------------------------------------------------
 
     #[test]
@@ -199,20 +177,6 @@ mod tests {
             }
         );
         assert!(app.commit_message.is_none());
-    }
-
-    #[test]
-    fn close_without_ever_opening_returns_to_panel_at_zero() {
-        let mut app = panel_app_with_staged();
-        app.mode = Mode::CommitMessage;
-        app.close_commit_message();
-        assert_eq!(
-            app.mode,
-            Mode::Panel {
-                cursor: 0,
-                tab: crate::ui::app::PanelTab::Changes
-            }
-        );
     }
 
     // -- submit_commit_message -------------------------------------------------

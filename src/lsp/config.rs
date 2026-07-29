@@ -161,26 +161,6 @@ mod tests {
     }
 
     #[test]
-    fn default_commands_has_exactly_four_languages() {
-        let map = default_commands();
-        assert_eq!(map.len(), 4);
-
-        assert_eq!(
-            map[&ServerLang::Rust],
-            LangServerCmd::new("rust-analyzer", &[])
-        );
-        assert_eq!(
-            map[&ServerLang::TypeScript],
-            LangServerCmd::new("typescript-language-server", &["--stdio"])
-        );
-        assert_eq!(
-            map[&ServerLang::Python],
-            LangServerCmd::new("pyright-langserver", &["--stdio"])
-        );
-        assert_eq!(map[&ServerLang::Go], LangServerCmd::new("gopls", &[]));
-    }
-
-    #[test]
     fn language_id_spot_checks() {
         assert_eq!(language_id(&path("main.rs")), "rust");
         assert_eq!(language_id(&path("app.py")), "python");

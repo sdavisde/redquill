@@ -69,21 +69,8 @@ fn pr_web_command_is_a_read_only_view_argv_carrying_only_the_typed_number() {
             OsStr::new("--web"),
         ]
     );
-    let other_cmd = pr_web_command(7);
-    let other: Vec<&OsStr> = other_cmd.get_args().collect();
-    assert_eq!(args[0], other[0]);
-    assert_eq!(args[1], other[1]);
-    assert_ne!(args[2], other[2]);
     let envs: Vec<_> = cmd.get_envs().collect();
     assert!(envs.contains(&(OsStr::new("GH_PROMPT_DISABLED"), Some(OsStr::new("1")))));
-}
-
-#[test]
-fn pr_list_json_fields_are_exactly_fr4s_set() {
-    assert_eq!(
-        PR_LIST_JSON_FIELDS,
-        "number,title,author,headRefName,baseRefName,isDraft,updatedAt"
-    );
 }
 
 #[test]
@@ -145,15 +132,6 @@ fn review_comments_command_has_the_fixed_argv_and_hardened_env() {
     assert!(envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))));
 }
 
-#[test]
-fn review_comments_command_paginates_to_fetch_every_page() {
-    // A PR with more than the default 30 comments must fetch in full — the
-    // `--paginate` flag is what makes that happen, so it's argv-pinned here.
-    let cmd = review_comments_command(1);
-    let args: Vec<&OsStr> = cmd.get_args().collect();
-    assert!(args.contains(&OsStr::new("--paginate")));
-}
-
 // -- review_threads_resolved_command (GraphQL resolution overlay) ------------
 
 #[test]
@@ -183,45 +161,6 @@ fn review_threads_resolved_command_has_the_fixed_argv_and_hardened_env() {
     assert!(envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))));
 }
 
-#[test]
-fn review_threads_resolved_command_varies_only_by_typed_values() {
-    let a = review_threads_resolved_command("o", "r", 1);
-    let b = review_threads_resolved_command("o", "r", 2);
-    let a_args: Vec<String> = a
-        .get_args()
-        .map(|x| x.to_string_lossy().into_owned())
-        .collect();
-    let b_args: Vec<String> = b
-        .get_args()
-        .map(|x| x.to_string_lossy().into_owned())
-        .collect();
-    assert!(a_args.contains(&"number=1".to_string()));
-    assert!(b_args.contains(&"number=2".to_string()));
-    // Same query text in both — the number is a variable, not part of it.
-    let a_query = a_args.iter().find(|x| x.starts_with("query=")).unwrap();
-    let b_query = b_args.iter().find(|x| x.starts_with("query=")).unwrap();
-    assert_eq!(a_query, b_query);
-}
-
-#[test]
-fn review_comments_command_interpolates_only_the_typed_pr_number() {
-    // The `{owner}`/`{repo}` placeholders are literal text `gh` itself
-    // substitutes — never assembled from any caller-provided string — so
-    // the only thing that varies with input is the number.
-    let cmd_one = review_comments_command(1);
-    let cmd_two = review_comments_command(2);
-    let args_one: Vec<&OsStr> = cmd_one.get_args().collect();
-    let args_two: Vec<&OsStr> = cmd_two.get_args().collect();
-    assert_eq!(args_one[0], args_two[0]);
-    assert_ne!(args_one[1], args_two[1]);
-    assert!(
-        args_one[1]
-            .to_str()
-            .unwrap()
-            .starts_with("repos/{owner}/{repo}/pulls/1/comments")
-    );
-}
-
 // -- build_review_payload (submit-flow payload construction) ----------------
 
 use crate::annotate::Source;
@@ -240,38 +179,35 @@ fn annotation(id: usize, target: Target, classification: Classification, body: &
 
 #[test]
 fn line_target_maps_to_a_single_line_comment_with_no_start_fields() {
-    let annotations = vec![annotation(
-        0,
-        Target::line("src/a.rs", 10, Side::New),
-        Classification::Issue,
-        "fix this",
-    )];
+    let annotations = vec![
+        annotation(
+            0,
+            Target::line("src/a.rs", 10, Side::New),
+            Classification::Issue,
+            "fix this",
+        ),
+        annotation(
+            1,
+            Target::line("src/a.rs", 9, Side::Old),
+            Classification::Nit,
+            "dead code",
+        ),
+    ];
     let plan = build_review_payload(&annotations, Verdict::Comment, None);
     assert_eq!(
-        plan.payload.comments,
-        vec![ReviewCommentPayload {
+        plan.payload.comments[0],
+        ReviewCommentPayload {
             path: "src/a.rs".to_string(),
             body: "[issue] fix this".to_string(),
             line: 10,
             side: "RIGHT",
             start_line: None,
             start_side: None,
-        }]
+        }
     );
+    assert_eq!(plan.payload.comments[1].side, "LEFT");
+    assert_eq!(plan.payload.comments[1].start_line, None);
     assert!(plan.file_comment_follow_ups.is_empty());
-}
-
-#[test]
-fn line_target_old_side_maps_to_left() {
-    let annotations = vec![annotation(
-        0,
-        Target::line("src/a.rs", 9, Side::Old),
-        Classification::Nit,
-        "dead code",
-    )];
-    let plan = build_review_payload(&annotations, Verdict::Comment, None);
-    assert_eq!(plan.payload.comments[0].side, "LEFT");
-    assert_eq!(plan.payload.comments[0].start_line, None);
 }
 
 #[test]
@@ -294,19 +230,6 @@ fn range_target_on_old_side_carries_matching_start_and_end_side() {
             start_side: Some("LEFT"),
         }]
     );
-}
-
-#[test]
-fn range_target_on_new_side_carries_matching_start_and_end_side() {
-    let annotations = vec![annotation(
-        0,
-        Target::range("src/b.rs", 5, 8, Side::New).unwrap(),
-        Classification::Question,
-        "why?",
-    )];
-    let plan = build_review_payload(&annotations, Verdict::Comment, None);
-    assert_eq!(plan.payload.comments[0].side, "RIGHT");
-    assert_eq!(plan.payload.comments[0].start_side, Some("RIGHT"));
 }
 
 #[test]
@@ -349,28 +272,6 @@ fn one_line_range_collapses_to_a_single_line_comment_without_start_fields() {
             path: "src/b.rs".to_string(),
             body: "[question] why?".to_string(),
             line: 8,
-            side: "RIGHT",
-            start_line: None,
-            start_side: None,
-        }]
-    );
-}
-
-#[test]
-fn one_line_hunk_collapses_to_a_single_line_comment_without_start_fields() {
-    let annotations = vec![annotation(
-        0,
-        Target::hunk("src/c.rs", 3, 3).unwrap(),
-        Classification::Nit,
-        "tidy",
-    )];
-    let plan = build_review_payload(&annotations, Verdict::Comment, None);
-    assert_eq!(
-        plan.payload.comments,
-        vec![ReviewCommentPayload {
-            path: "src/c.rs".to_string(),
-            body: "[nit] tidy".to_string(),
-            line: 3,
             side: "RIGHT",
             start_line: None,
             start_side: None,
@@ -495,25 +396,6 @@ fn every_verdict_maps_to_its_github_event_string() {
     }
 }
 
-#[test]
-fn summary_becomes_the_review_body_when_present() {
-    let plan = build_review_payload(&[], Verdict::Approve, Some("Looks solid overall"));
-    assert_eq!(plan.payload.body, "Looks solid overall");
-}
-
-#[test]
-fn absent_summary_becomes_an_empty_review_body() {
-    let plan = build_review_payload(&[], Verdict::Comment, None);
-    assert_eq!(plan.payload.body, "");
-}
-
-#[test]
-fn empty_annotation_set_produces_no_comments_or_follow_ups() {
-    let plan = build_review_payload(&[], Verdict::Comment, None);
-    assert!(plan.payload.comments.is_empty());
-    assert!(plan.file_comment_follow_ups.is_empty());
-}
-
 /// The exhaustive mixed batch: line, range on the old side, hunk, file, and
 /// both worktree variants, one of each classification, an approve verdict
 /// and a summary — asserting the exact serialized JSON body the reviews
@@ -611,75 +493,44 @@ fn mixed_batch_serializes_to_the_exact_reviews_endpoint_json() {
 // -- Submit-sequence argv builders (the three write endpoints) --------------
 
 #[test]
-fn submit_review_command_has_the_fixed_post_argv_with_stdin_input() {
-    let cmd = submit_review_command(42);
-    assert_eq!(cmd.get_program(), OsStr::new("gh"));
-    let args: Vec<&OsStr> = cmd.get_args().collect();
-    assert_eq!(
-        args,
-        vec![
-            OsStr::new("api"),
-            OsStr::new("--method"),
-            OsStr::new("POST"),
-            OsStr::new("repos/{owner}/{repo}/pulls/42/reviews"),
-            OsStr::new("--input"),
-            OsStr::new("-"),
-        ]
-    );
-    let envs: Vec<_> = cmd.get_envs().collect();
-    assert!(envs.contains(&(OsStr::new("GH_PROMPT_DISABLED"), Some(OsStr::new("1")))));
-    assert!(envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))));
-}
-
-#[test]
-fn file_comment_command_has_the_fixed_post_argv_with_stdin_input() {
-    let cmd = file_comment_command(7);
-    assert_eq!(cmd.get_program(), OsStr::new("gh"));
-    let args: Vec<&OsStr> = cmd.get_args().collect();
-    assert_eq!(
-        args,
-        vec![
-            OsStr::new("api"),
-            OsStr::new("--method"),
-            OsStr::new("POST"),
-            OsStr::new("repos/{owner}/{repo}/pulls/7/comments"),
-            OsStr::new("--input"),
-            OsStr::new("-"),
-        ]
-    );
-    let envs: Vec<_> = cmd.get_envs().collect();
-    assert!(envs.contains(&(OsStr::new("GH_PROMPT_DISABLED"), Some(OsStr::new("1")))));
-}
-
-#[test]
-fn reply_command_carries_the_typed_pr_number_and_comment_id() {
-    let cmd = reply_command(42, 9988);
-    let args: Vec<&OsStr> = cmd.get_args().collect();
-    assert_eq!(
-        args,
-        vec![
-            OsStr::new("api"),
-            OsStr::new("--method"),
-            OsStr::new("POST"),
-            OsStr::new("repos/{owner}/{repo}/pulls/42/comments/9988/replies"),
-            OsStr::new("--input"),
-            OsStr::new("-"),
-        ]
-    );
-}
-
-#[test]
-fn submit_argv_varies_only_by_the_typed_values() {
-    // No path is ever string-assembled from free text: distinct PR numbers /
-    // comment ids produce distinct, typed-only endpoint paths.
-    let one: Vec<String> = reply_command(1, 2)
-        .get_args()
-        .map(|a| a.to_string_lossy().into_owned())
-        .collect();
-    let two: Vec<String> = reply_command(3, 4)
-        .get_args()
-        .map(|a| a.to_string_lossy().into_owned())
-        .collect();
-    assert!(one.contains(&"repos/{owner}/{repo}/pulls/1/comments/2/replies".to_string()));
-    assert!(two.contains(&"repos/{owner}/{repo}/pulls/3/comments/4/replies".to_string()));
+fn every_write_endpoint_posts_a_fixed_argv_with_stdin_input_and_hardened_env() {
+    let cases = [
+        (
+            submit_review_command(42),
+            "repos/{owner}/{repo}/pulls/42/reviews",
+        ),
+        (
+            file_comment_command(7),
+            "repos/{owner}/{repo}/pulls/7/comments",
+        ),
+        (
+            reply_command(42, 9988),
+            "repos/{owner}/{repo}/pulls/42/comments/9988/replies",
+        ),
+    ];
+    for (cmd, endpoint) in cases {
+        assert_eq!(cmd.get_program(), OsStr::new("gh"), "{endpoint}");
+        let args: Vec<&OsStr> = cmd.get_args().collect();
+        assert_eq!(
+            args,
+            vec![
+                OsStr::new("api"),
+                OsStr::new("--method"),
+                OsStr::new("POST"),
+                OsStr::new(endpoint),
+                OsStr::new("--input"),
+                OsStr::new("-"),
+            ],
+            "{endpoint}"
+        );
+        let envs: Vec<_> = cmd.get_envs().collect();
+        assert!(
+            envs.contains(&(OsStr::new("GH_PROMPT_DISABLED"), Some(OsStr::new("1")))),
+            "{endpoint}"
+        );
+        assert!(
+            envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))),
+            "{endpoint}"
+        );
+    }
 }

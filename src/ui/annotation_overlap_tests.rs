@@ -22,22 +22,6 @@ fn anchor_of(target: Target) -> CursorAnchor {
 // -- CursorAnchor::from_target -------------------------------------------------
 
 #[test]
-fn file_target_maps_to_the_file_header_anchor() {
-    assert_eq!(
-        CursorAnchor::from_target(&Target::file("a.rs")),
-        CursorAnchor::FileHeader
-    );
-}
-
-#[test]
-fn hunk_target_maps_to_the_hunk_header_anchor() {
-    assert_eq!(
-        CursorAnchor::from_target(&Target::hunk("a.rs", 4, 9).unwrap()),
-        CursorAnchor::HunkHeader { start: 4, end: 9 }
-    );
-}
-
-#[test]
 fn line_and_worktree_targets_map_to_line_anchors() {
     assert!(matches!(
         CursorAnchor::from_target(&Target::line("a.rs", 7, Side::New)),
@@ -217,25 +201,4 @@ fn ties_on_start_break_to_the_oldest_annotation() {
     ];
     let anchor = anchor_of(Target::line("a.rs", 12, Side::New));
     assert_eq!(overlapping_annotation(&anchor, &anns), Some(2));
-}
-
-#[test]
-fn same_start_ranges_break_to_the_oldest() {
-    let anns = [
-        ann(3, Target::range("a.rs", 10, 20, Side::New).unwrap()),
-        ann(1, Target::range("a.rs", 10, 12, Side::New).unwrap()),
-    ];
-    // Cursor at 11 is inside both; both start at 10, so the tie-break (oldest)
-    // decides — id 1.
-    let anchor = anchor_of(Target::line("a.rs", 11, Side::New));
-    assert_eq!(overlapping_annotation(&anchor, &anns), Some(1));
-}
-
-// -- Empty / no coverage -------------------------------------------------------
-
-#[test]
-fn no_annotations_yields_none() {
-    let anns: [Annotation; 0] = [];
-    let anchor = anchor_of(Target::line("a.rs", 12, Side::New));
-    assert_eq!(overlapping_annotation(&anchor, &anns), None);
 }

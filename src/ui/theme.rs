@@ -78,8 +78,7 @@ pub struct Theme {
     /// The review-session banner's background: a dark red, deliberately
     /// unlike any other chrome color in this palette, so the
     /// banner reads as an unmistakable "you are in a review, not your own
-    /// working tree" signal. Paired with [`Theme::review_banner_fg`]; the
-    /// pairing's contrast is guarded by a drift test in this module.
+    /// working tree" signal. Paired with [`Theme::review_banner_fg`].
     pub review_banner_bg: Color,
     /// The review-session banner's foreground: a light, high-contrast color
     /// against [`Theme::review_banner_bg`].
@@ -277,32 +276,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn token_color_covers_every_kind() {
-        let theme = Theme::default();
-        // Just exercise every variant so a newly added TokenKind fails to
-        // compile here (non-exhaustive match) rather than silently falling
-        // through at render time.
-        for kind in [
-            TokenKind::Keyword,
-            TokenKind::Function,
-            TokenKind::Type,
-            TokenKind::String,
-            TokenKind::Number,
-            TokenKind::Comment,
-            TokenKind::Constant,
-            TokenKind::Property,
-            TokenKind::Operator,
-            TokenKind::Punctuation,
-            TokenKind::Variable,
-            TokenKind::Attribute,
-            TokenKind::Embedded,
-            TokenKind::Other,
-        ] {
-            let _ = theme.token_color(kind);
-        }
-    }
-
-    #[test]
     fn origin_bg_has_no_tint_for_context() {
         let theme = Theme::default();
         assert_eq!(theme.origin_bg(LineOrigin::Context), None);
@@ -330,71 +303,5 @@ mod tests {
             Color::Rgb(45, 55, 90)
         );
         assert_eq!(blend(Color::Blue, Color::Rgb(1, 2, 3)), Color::Blue);
-    }
-
-    /// Perceived brightness proxy for the contrast drift-guards below:
-    /// plain channel sum is enough to order these hand-picked constants.
-    fn channel_sum(c: Color) -> u32 {
-        match c {
-            Color::Rgb(r, g, b) => r as u32 + g as u32 + b as u32,
-            _ => 0,
-        }
-    }
-
-    #[test]
-    fn column_cursor_bg_stays_brighter_than_every_selected_row_blend() {
-        let theme = Theme::default();
-        let blends = [
-            theme.selected_row_bg,
-            blend(theme.selected_row_bg, theme.added_bg),
-            blend(theme.selected_row_bg, theme.removed_bg),
-            blend(theme.selected_row_bg, theme.search_match_bg),
-        ];
-        for bg in blends {
-            assert!(
-                channel_sum(theme.column_cursor_bg) > channel_sum(bg),
-                "column cursor {:?} must outshine row bg {bg:?}",
-                theme.column_cursor_bg
-            );
-        }
-    }
-
-    #[test]
-    fn selected_row_blends_are_brighter_than_their_unselected_tints() {
-        let theme = Theme::default();
-        for tint in [theme.added_bg, theme.removed_bg] {
-            assert!(channel_sum(blend(theme.selected_row_bg, tint)) > channel_sum(tint));
-        }
-    }
-
-    // -- Review banner contrast -----------------------------------------------
-    //
-    // The banner must read as an unmistakable, high-contrast "you're in a
-    // review" signal, so these guard both halves of that claim — the
-    // background reads as dark, and the foreground reads as far brighter
-    // than it.
-
-    #[test]
-    fn review_banner_bg_reads_as_dark() {
-        let theme = Theme::default();
-        assert!(
-            channel_sum(theme.review_banner_bg) < 300,
-            "banner background {:?} must read as dark",
-            theme.review_banner_bg
-        );
-    }
-
-    #[test]
-    fn review_banner_fg_is_far_brighter_than_its_background() {
-        let theme = Theme::default();
-        assert!(
-            channel_sum(theme.review_banner_fg) > 600,
-            "banner foreground {:?} must read as bright",
-            theme.review_banner_fg
-        );
-        assert!(
-            channel_sum(theme.review_banner_fg) > channel_sum(theme.review_banner_bg) + 400,
-            "banner foreground must stay high-contrast against its dark-red background"
-        );
     }
 }

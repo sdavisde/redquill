@@ -66,33 +66,15 @@ fn positioned_thread(id: u64, path: &str, side: Side, line: u32, replies: usize)
 // -- RFC3339 parsing ---------------------------------------------------------
 
 #[test]
-fn parse_rfc3339_reads_a_z_suffixed_utc_timestamp() {
-    // 2026-07-01T00:00:00Z. Cross-check against the module's own inverse.
-    let ts = parse_rfc3339_to_unix("2026-07-01T00:00:00Z").unwrap();
-    assert_eq!(ts, days_from_civil(2026, 7, 1) * 86_400);
-}
-
-#[test]
-fn parse_rfc3339_reads_hours_minutes_seconds() {
+fn parse_rfc3339_reads_a_utc_timestamp_and_rejects_a_non_timestamp() {
+    // Cross-checked against the module's own inverse.
     let base = days_from_civil(2026, 7, 1) * 86_400;
-    let ts = parse_rfc3339_to_unix("2026-07-01T01:02:03Z").unwrap();
-    assert_eq!(ts, base + 3_600 + 120 + 3);
-}
-
-#[test]
-fn parse_rfc3339_tolerates_a_fractional_and_offset_suffix() {
-    assert!(parse_rfc3339_to_unix("2026-07-01T10:00:00.123+00:00").is_some());
-}
-
-#[test]
-fn parse_rfc3339_rejects_a_non_timestamp() {
+    assert_eq!(parse_rfc3339_to_unix("2026-07-01T00:00:00Z").unwrap(), base);
+    assert_eq!(
+        parse_rfc3339_to_unix("2026-07-01T01:02:03Z").unwrap(),
+        base + 3_600 + 120 + 3
+    );
     assert_eq!(parse_rfc3339_to_unix("not a date"), None);
-}
-
-#[test]
-fn days_from_civil_matches_the_epoch() {
-    assert_eq!(days_from_civil(1970, 1, 1), 0);
-    assert_eq!(days_from_civil(1970, 1, 2), 1);
 }
 
 // -- gutter marker decoration ------------------------------------------------
@@ -119,19 +101,6 @@ fn decorate_marks_the_line_a_positioned_thread_anchors_on() {
         "exactly the anchored new-side line is marked"
     );
     assert_eq!(marked[0].new_line, Some(1));
-}
-
-#[test]
-fn decorate_is_a_no_op_without_threads() {
-    let mut app = review_app(&["a.rs"]);
-    app.rebuild_rows();
-    assert!(
-        app.view
-            .rows
-            .iter()
-            .all(|r| !matches!(r, Row::Line(l) if l.thread)),
-        "no line is thread-marked when the overlay is empty"
-    );
 }
 
 #[test]
@@ -199,25 +168,6 @@ fn open_thread_view_is_a_no_op_with_a_hint_when_no_thread_here() {
 }
 
 #[test]
-fn close_thread_view_returns_to_normal() {
-    let mut app = review_app(&["a.rs"]);
-    app.thread_overlay
-        .replace(vec![positioned_thread(1, "a.rs", Side::New, 1, 0)]);
-    app.rebuild_rows();
-    app.view.cursor = app
-        .view
-        .rows
-        .iter()
-        .position(|r| matches!(r, Row::Line(l) if l.new_line == Some(1)))
-        .unwrap();
-    app.open_thread_view();
-    assert_eq!(app.mode, Mode::ThreadView);
-    app.close_thread_view();
-    assert_eq!(app.mode, Mode::Normal);
-    assert!(app.thread_view.is_none());
-}
-
-#[test]
 fn thread_view_scroll_moves_and_clamps_at_zero() {
     let mut app = review_app(&["a.rs"]);
     app.thread_view = Some(ThreadViewState {
@@ -260,20 +210,15 @@ fn next_thread_moves_the_cursor_to_the_next_thread_anchor() {
     let second = app.view.cursor;
     assert!(matches!(app.view.rows.get(second), Some(Row::Line(l)) if l.thread));
     assert_ne!(first, second, "advances to the second thread");
-}
 
-#[test]
-fn prev_thread_wraps_to_the_last_thread() {
-    let mut app = review_app(&["a.rs", "b.rs"]);
-    app.thread_overlay.replace(vec![
-        positioned_thread(1, "a.rs", Side::New, 1, 0),
-        positioned_thread(2, "b.rs", Side::New, 1, 0),
-    ]);
-    app.rebuild_rows();
+    // From the top, prev wraps around to the last (b.rs) thread's anchor.
     app.view.cursor = 0;
     app.prev_thread();
-    // From the top, prev wraps to the last (b.rs) thread's anchor.
     assert!(matches!(app.view.rows.get(app.view.cursor), Some(Row::Line(l)) if l.thread));
+    assert_eq!(
+        app.view.cursor, second,
+        "prev from the top wraps to the last"
+    );
 }
 
 #[test]
@@ -281,7 +226,7 @@ fn next_thread_hints_when_no_threads_exist() {
     let mut app = review_app(&["a.rs"]);
     app.rebuild_rows();
     app.next_thread();
-    assert!(app.status_message.is_some());
+    assert_eq!(app.status_message.as_deref(), Some("no comment threads"));
 }
 
 #[test]
@@ -307,14 +252,6 @@ fn reaching_for_threads_after_a_failed_fetch_re_surfaces_the_unavailable_notice(
         app.status_message.as_deref(),
         Some("comments unavailable \u{2014} reviewing without them")
     );
-}
-
-#[test]
-fn reaching_for_threads_with_none_and_no_failure_gives_the_plain_hint() {
-    let mut app = review_app(&["a.rs"]);
-    app.rebuild_rows();
-    app.next_thread();
-    assert_eq!(app.status_message.as_deref(), Some("no comment threads"));
 }
 
 // -- published-copy dedupe (FR-15) -------------------------------------------

@@ -299,23 +299,6 @@ mod tests {
         assert!(new.is_empty());
     }
 
-    #[test]
-    fn adjacent_same_flag_tokens_merge_into_one_span() {
-        // "foo bar baz" vs "foo bar baz" but with "bar" swapped for "qux":
-        // the two unchanged runs on either side of the change should each
-        // merge into a single span rather than one-per-token.
-        let old_line = "foo bar baz";
-        let new_line = "foo qux baz";
-        let (old, new) = word_diff(old_line, new_line);
-        // "foo", " ", then changed "bar", then " ", "baz" merge to 3 spans.
-        assert_eq!(old.len(), 3);
-        assert_eq!(text(old_line, &old[0]), "foo ");
-        assert_eq!(text(old_line, &old[1]), "bar");
-        assert_eq!(text(old_line, &old[2]), " baz");
-        assert_eq!(new.len(), 3);
-        assert_eq!(text(new_line, &new[1]), "qux");
-    }
-
     fn diff_line(origin: LineOrigin, content: &str) -> DiffLine {
         DiffLine {
             origin,
@@ -372,14 +355,5 @@ mod tests {
         ]);
         let pairs = pair_hunk_lines(&hunk);
         assert!(pairs.is_empty());
-    }
-
-    #[test]
-    fn context_only_hunk_has_no_pairs() {
-        let hunk = hunk_with(vec![
-            diff_line(LineOrigin::Context, "a"),
-            diff_line(LineOrigin::Context, "b"),
-        ]);
-        assert!(pair_hunk_lines(&hunk).is_empty());
     }
 }

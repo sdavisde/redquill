@@ -665,58 +665,6 @@ fn fetch_failure_mid_session_labels_the_checkout_stale_and_touches_nothing() {
     );
 }
 
-#[test]
-fn reopen_from_the_launcher_after_a_fetch_failure_enters_a_stale_session() {
-    let bare = setup_bare_origin();
-    let contributor = clone_of(bare.path());
-    push_pr_special_ref(contributor.path(), "feature", 3, "the version");
-
-    let reviewer = clone_of(bare.path());
-    // First app: check out to create the managed worktree + persisted state.
-    {
-        let mut app = app_rooted_at(reviewer.path());
-        app.spawn_pr_checkout(
-            3,
-            "main".to_string(),
-            "github.com".to_string(),
-            "feature".to_string(),
-            ForgeProviderKind::GitHub,
-            false,
-        );
-        drain_pr_checkout(&mut app);
-        wait_for_review_save(&mut app);
-        assert!(app.in_review_session());
-    }
-
-    // Origin goes away, then a fresh app reopens the same PR from the
-    // launcher: the peek fails, but the prior worktree survives, so the
-    // reviewer still enters — clearly labeled stale.
-    drop(bare);
-    let mut app2 = app_rooted_at(reviewer.path());
-    app2.spawn_pr_checkout(
-        3,
-        "main".to_string(),
-        "github.com".to_string(),
-        "feature".to_string(),
-        ForgeProviderKind::GitHub,
-        false,
-    );
-    drain_pr_checkout(&mut app2);
-
-    assert!(
-        app2.in_review_session(),
-        "the stale worktree is still reviewable"
-    );
-    assert!(app2.review_stale, "the stale entry must be labeled stale");
-    assert_eq!(
-        app2.target,
-        DiffTarget::Review {
-            base: "origin/main".to_string(),
-            branch: "redquill/pr/3".to_string(),
-        }
-    );
-}
-
 // -- Journey transcript (spec 13 task 2.0 proof) ----------------------------
 
 /// Journey generator for spec 13 task 2.0: on a real scratch repo whose

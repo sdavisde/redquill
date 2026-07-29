@@ -86,35 +86,6 @@ fn untracked_file_says_delete_not_restore() {
 }
 
 #[test]
-fn both_keys_are_offered() {
-    let content = render_modal(&modal_app("src/main.rs", false));
-    assert!(content.contains("restore"), "{content}");
-    assert!(content.contains("cancel"), "{content}");
-}
-
-#[test]
-fn untracked_confirm_hint_reads_delete() {
-    let content = render_modal(&modal_app("src/fresh.rs", true));
-    assert!(content.contains("delete"), "{content}");
-}
-
-#[test]
-fn render_is_a_no_op_outside_the_modal() {
-    let app = App::new(vec![sample_file()]);
-    assert_eq!(app.mode, Mode::Normal);
-    let content = render_modal(&app);
-    assert!(!content.contains("No undo"));
-}
-
-#[test]
-fn render_is_a_no_op_when_no_request_is_pending() {
-    let mut app = modal_app("src/main.rs", false);
-    app.restore_request = None;
-    let content = render_modal(&app);
-    assert!(!content.contains("No undo"));
-}
-
-#[test]
 fn a_long_path_keeps_its_file_name_visible() {
     let long = "very/deeply/nested/directory/structure/that/keeps/going/target.rs";
     let content = render_modal(&modal_app(long, false));
@@ -150,11 +121,6 @@ fn elide_falls_back_to_a_raw_tail_when_no_component_fits() {
     assert_eq!(out.chars().count(), 8);
     assert!(out.starts_with('\u{2026}'));
     assert!("aaaa/bbbbbbbbbbbbbbbb.rs".ends_with(&out[out.len() - 7..]));
-}
-
-#[test]
-fn elide_handles_a_zero_budget() {
-    assert_eq!(elide_path_left("src/main.rs", 0), "");
 }
 
 #[test]

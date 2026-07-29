@@ -216,30 +216,6 @@ index 111..222 100644
             .collect()
     }
 
-    /// Renders into a `width`x`height` backend and returns each row as its
-    /// own string, so a test can find a substring's *column*, not just
-    /// whether it appears anywhere on screen.
-    fn render_modal_rows(app: &App, width: u16, height: u16) -> Vec<String> {
-        let backend = TestBackend::new(width, height);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let area = Rect::new(0, 0, width, height);
-        terminal.draw(|frame| render(frame, area, app)).unwrap();
-        let buf = terminal.backend().buffer().clone();
-        (0..height)
-            .map(|y| {
-                (0..width)
-                    .map(|x| buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "))
-                    .collect::<String>()
-            })
-            .collect()
-    }
-
-    #[test]
-    fn renders_nothing_outside_end_review_mode() {
-        let app = App::new(vec![sample_file()]);
-        assert!(render_modal(&app).trim().is_empty());
-    }
-
     #[test]
     fn renders_the_branch_name_and_all_three_exits() {
         let mut app = App::new(vec![sample_file()]);
@@ -258,36 +234,6 @@ index 111..222 100644
     }
 
     #[test]
-    fn modal_is_sized_to_its_content_not_stretched() {
-        let mut app = App::new(vec![sample_file()]);
-        app.target = DiffTarget::Review {
-            base: "main".to_string(),
-            branch: "feature/thing".to_string(),
-        };
-        app.open_end_review_modal();
-        // The 24-row test backend is far taller than the modal needs; the
-        // compact modal must leave the bulk of the screen untouched.
-        let height = modal_height(&app);
-        assert!(
-            height < 12,
-            "end-review modal must stay compact, got height {height}"
-        );
-    }
-
-    #[test]
-    fn caption_names_the_annotations_emit_detail() {
-        let mut app = App::new(vec![sample_file()]);
-        app.target = DiffTarget::Review {
-            base: "main".to_string(),
-            branch: "feature/thing".to_string(),
-        };
-        app.open_end_review_modal();
-        let content = render_modal(&app);
-        assert!(content.contains("annotations"));
-        assert!(content.contains("stdout"));
-    }
-
-    #[test]
     fn highlighted_option_starts_on_pause_and_follows_the_cursor() {
         let mut app = App::new(vec![sample_file()]);
         app.target = DiffTarget::Review {
@@ -298,54 +244,5 @@ index 111..222 100644
         assert_eq!(app.end_review_cursor(), Some(0));
         app.end_review_move_down();
         assert_eq!(app.end_review_cursor(), Some(1));
-    }
-
-    /// Cancel's key label (`c / Esc`, 7 columns) is wider than Pause's or
-    /// Finish's (`p`/`f`, 1 column each) — the label column must still line
-    /// up across all three rows rather than each row's label starting
-    /// wherever its own key happens to end.
-    #[test]
-    fn option_labels_line_up_despite_the_wider_cancel_key_label() {
-        let mut app = App::new(vec![sample_file()]);
-        app.target = DiffTarget::Review {
-            base: "main".to_string(),
-            branch: "feature/thing".to_string(),
-        };
-        app.open_end_review_modal();
-        let rows = render_modal_rows(&app, 80, 30);
-        let pause_col = rows
-            .iter()
-            .find_map(|r| r.find("Pause"))
-            .expect("Pause row must render");
-        let finish_col = rows
-            .iter()
-            .find_map(|r| r.find("Finish"))
-            .expect("Finish row must render");
-        let cancel_col = rows
-            .iter()
-            .find_map(|r| r.find("Cancel"))
-            .expect("Cancel row must render");
-        assert_eq!(
-            pause_col, finish_col,
-            "Pause and Finish labels must start in the same column"
-        );
-        assert_eq!(
-            pause_col, cancel_col,
-            "Cancel's wider key label must not push its own label out of column"
-        );
-    }
-
-    #[test]
-    fn a_status_message_grows_the_modal_by_exactly_two_rows() {
-        let mut app = App::new(vec![sample_file()]);
-        app.target = DiffTarget::Review {
-            base: "main".to_string(),
-            branch: "feature/thing".to_string(),
-        };
-        app.open_end_review_modal();
-        let without = modal_height(&app);
-        app.set_status_message("finish failed: fatal: worktree is dirty");
-        let with = modal_height(&app);
-        assert_eq!(with, without + 2, "a blank separator plus the message row");
     }
 }

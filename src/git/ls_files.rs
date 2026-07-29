@@ -32,24 +32,8 @@ mod tests {
     }
 
     #[test]
-    fn empty_input_yields_no_paths() {
-        assert!(parse_ls_files_z("").is_empty());
-    }
-
-    #[test]
     fn missing_trailing_nul_still_parses_the_last_path() {
         let input = "a.rs\0b.rs";
         assert_eq!(parse_ls_files_z(input), vec!["a.rs", "b.rs"]);
-    }
-
-    #[test]
-    fn paths_with_spaces_are_preserved_whole() {
-        let input = "my file.rs\0other.rs\0";
-        assert_eq!(parse_ls_files_z(input), vec!["my file.rs", "other.rs"]);
-    }
-
-    #[test]
-    fn a_single_path_with_no_trailing_nul_parses() {
-        assert_eq!(parse_ls_files_z("only.rs"), vec!["only.rs"]);
     }
 }

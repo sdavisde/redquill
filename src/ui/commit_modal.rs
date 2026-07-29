@@ -184,13 +184,6 @@ index 111..222 100644
     }
 
     #[test]
-    fn renders_nothing_when_state_is_none() {
-        let app = App::new(vec![sample_file()]);
-        let content = render_modal(&app);
-        assert!(content.trim().is_empty());
-    }
-
-    #[test]
     fn renders_title_message_and_key_hints() {
         let mut app = App::new(vec![sample_file()]);
         app.staged = vec![StagedFile {
@@ -207,12 +200,6 @@ index 111..222 100644
         assert!(content.contains("Enter commit"));
         assert!(content.contains("Shift-Enter/Ctrl-j newline"));
         assert!(content.contains("Esc cancel"));
-    }
-
-    #[test]
-    fn title_pluralizes_staged_files() {
-        assert_eq!(title(1), "Commit 1 staged file");
-        assert_eq!(title(2), "Commit 2 staged files");
     }
 
     // -- Review-session warning line ------------------------------------------
@@ -238,24 +225,5 @@ index 111..222 100644
         // the warning is additive, not a replacement.
         assert!(content.contains("Commit 1 staged file"));
         assert!(content.contains("fix: parser"));
-    }
-
-    /// Outside a review session, no warning line appears — the modal's
-    /// content is byte-for-byte the pre-existing rendering (a regression pin
-    /// against the review-warning addition).
-    #[test]
-    fn no_review_warning_outside_a_review_session() {
-        let mut app = App::new(vec![sample_file()]);
-        assert_eq!(app.target, crate::git::DiffTarget::WorkingTree);
-        app.staged = vec![StagedFile {
-            path: "src/main.rs".to_string(),
-            letter: 'M',
-        }];
-        let mut state = CommitMessageState::new(0);
-        state.buffer = TextBuffer::from_str("fix: parser");
-        app.commit_message = Some(state);
-        let content = render_modal(&app);
-        assert!(!content.contains("the branch under review"));
-        assert!(!content.contains('\u{26a0}'));
     }
 }

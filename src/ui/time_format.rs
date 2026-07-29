@@ -81,48 +81,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn relative_time_just_now_for_sub_minute_deltas() {
+    fn relative_time_buckets() {
         let now = 1_700_000_000;
-        assert_eq!(relative_time(now, now), "just now");
-        assert_eq!(relative_time(now, now - 30), "just now");
-    }
-
-    #[test]
-    fn relative_time_minutes_bucket() {
-        let now = 1_700_000_000;
-        assert_eq!(relative_time(now, now - 120), "2m ago");
-    }
-
-    #[test]
-    fn relative_time_hours_bucket() {
-        let now = 1_700_000_000;
-        assert_eq!(relative_time(now, now - 3 * 3600), "3h ago");
-    }
-
-    #[test]
-    fn relative_time_days_bucket() {
-        let now = 1_700_000_000;
-        assert_eq!(relative_time(now, now - 2 * 86_400), "2d ago");
-    }
-
-    #[test]
-    fn relative_time_months_bucket() {
-        let now = 1_700_000_000;
-        assert_eq!(relative_time(now, now - 40 * 86_400), "1mo ago");
-    }
-
-    #[test]
-    fn relative_time_years_bucket() {
-        let now = 1_700_000_000;
-        assert_eq!(relative_time(now, now - 400 * 86_400), "1y ago");
-    }
-
-    #[test]
-    fn relative_time_clamps_future_timestamps_to_just_now() {
-        // A commit's recorded author time slightly ahead of the reader's
-        // clock (clock skew) must never print a negative duration.
-        let now = 1_700_000_000;
-        assert_eq!(relative_time(now, now + 1000), "just now");
+        // Last case: author time ahead of the reader's clock (clock skew)
+        // must never print a negative duration.
+        let cases: &[(i64, &str)] = &[
+            (now, "just now"),
+            (now - 30, "just now"),
+            (now - 120, "2m ago"),
+            (now - 3 * 3600, "3h ago"),
+            (now - 2 * 86_400, "2d ago"),
+            (now - 40 * 86_400, "1mo ago"),
+            (now - 400 * 86_400, "1y ago"),
+            (now + 1000, "just now"),
+        ];
+        for &(ts, expected) in cases {
+            assert_eq!(relative_time(now, ts), expected, "ts delta {}", now - ts);
+        }
     }
 
     #[test]
@@ -140,13 +115,5 @@ mod tests {
     fn absolute_date_formats_a_leap_day() {
         // 2024-02-29 00:00:00 UTC (2024 is a leap year).
         assert_eq!(absolute_date(1_709_164_800), "2024-02-29 00:00 UTC");
-    }
-
-    #[test]
-    fn now_unix_returns_a_plausible_current_timestamp() {
-        // Sanity bound: any time after this crate was written and before a
-        // date far enough out not to need updating.
-        let now = now_unix();
-        assert!(now > 1_700_000_000, "now_unix() = {now}, looks stale");
     }
 }

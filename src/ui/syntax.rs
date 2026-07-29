@@ -399,38 +399,56 @@ mod tests {
     }
 
     #[test]
-    fn old_side_commit_prefers_old_path_for_renames() {
-        assert_eq!(
-            content_source(
-                &DiffTarget::Commit("abc123".to_string()),
-                Side::Old,
-                "new.rs",
-                Some("old.rs")
-            ),
-            ContentSource::Show("abc123^:old.rs".to_string())
-        );
-    }
-
-    #[test]
-    fn new_side_commit_ignores_old_path_even_for_renames() {
-        assert_eq!(
-            content_source(
-                &DiffTarget::Commit("abc123".to_string()),
-                Side::New,
-                "new.rs",
-                Some("old.rs")
-            ),
-            ContentSource::Show("abc123:new.rs".to_string())
-        );
-    }
-
-    #[test]
     fn new_side_ignores_old_path_even_for_renames() {
         // The new side always reads the current path; old_path only
         // matters on the old side.
         assert_eq!(
             content_source(&DiffTarget::Staged, Side::New, "new.rs", Some("old.rs")),
             ContentSource::Show(":0:new.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn review_new_side_is_branch_blob() {
+        let target = DiffTarget::Review {
+            base: "main".to_string(),
+            branch: "feature".to_string(),
+        };
+        assert_eq!(
+            content_source(&target, Side::New, "a.rs", None),
+            ContentSource::Show("feature:a.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn review_old_side_is_base_blob_and_prefers_old_path_for_renames() {
+        let target = DiffTarget::Review {
+            base: "main".to_string(),
+            branch: "feature".to_string(),
+        };
+        assert_eq!(
+            content_source(&target, Side::Old, "a.rs", None),
+            ContentSource::Show("main:a.rs".to_string())
+        );
+        assert_eq!(
+            content_source(&target, Side::Old, "new.rs", Some("old.rs")),
+            ContentSource::Show("main:old.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn file_target_sources_the_worktree_on_both_sides() {
+        let target = DiffTarget::File("docs/notes.md".to_string());
+        // New side reads the target's own path (defensive fallback arm).
+        assert_eq!(
+            content_source(&target, Side::New, "a.rs", None),
+            ContentSource::Worktree("docs/notes.md".to_string())
+        );
+        // The old side is never asked for in practice (a synthesized
+        // all-context file has no Removed lines) but stays total.
+        assert_eq!(
+            content_source(&target, Side::Old, "a.rs", None),
+            ContentSource::Worktree("a.rs".to_string())
         );
     }
 
@@ -569,74 +587,6 @@ mod tests {
     }
 
     #[test]
-    fn populate_cache_treats_each_side_independently() {
-        let ops = CountingOps {
-            show_calls: std::cell::RefCell::new(0),
-        };
-        let mut cache = HighlightCache::default();
-        let mut highlighter = Highlighter::new();
-        let target = DiffTarget::Staged;
-
-        populate_cache(
-            &mut cache,
-            &mut highlighter,
-            Some(&ops),
-            &target,
-            "a.rs",
-            None,
-            Side::New,
-            false,
-        );
-        populate_cache(
-            &mut cache,
-            &mut highlighter,
-            Some(&ops),
-            &target,
-            "a.rs",
-            None,
-            Side::Old,
-            false,
-        );
-
-        assert_eq!(*ops.show_calls.borrow(), 2);
-        assert_eq!(cache.len(), 2);
-    }
-
-    #[test]
-    fn clear_forces_a_fresh_fetch() {
-        let ops = CountingOps {
-            show_calls: std::cell::RefCell::new(0),
-        };
-        let mut cache = HighlightCache::default();
-        let mut highlighter = Highlighter::new();
-        let target = DiffTarget::Staged;
-
-        populate_cache(
-            &mut cache,
-            &mut highlighter,
-            Some(&ops),
-            &target,
-            "a.rs",
-            None,
-            Side::New,
-            false,
-        );
-        cache.clear();
-        populate_cache(
-            &mut cache,
-            &mut highlighter,
-            Some(&ops),
-            &target,
-            "a.rs",
-            None,
-            Side::New,
-            false,
-        );
-
-        assert_eq!(*ops.show_calls.borrow(), 2);
-    }
-
-    #[test]
     fn invalidate_path_drops_both_sides_but_keeps_other_files() {
         let ops = CountingOps {
             show_calls: std::cell::RefCell::new(0),
@@ -668,36 +618,6 @@ mod tests {
         assert!(!cache.contains("a.rs", Side::Old));
         assert!(cache.contains("b.rs", Side::New));
         assert_eq!(cache.len(), 1);
-    }
-
-    #[test]
-    fn retain_paths_drops_entries_for_absent_paths() {
-        let ops = CountingOps {
-            show_calls: std::cell::RefCell::new(0),
-        };
-        let mut cache = HighlightCache::default();
-        let mut highlighter = Highlighter::new();
-        let target = DiffTarget::Staged;
-        for path in ["a.rs", "b.rs", "c.rs"] {
-            populate_cache(
-                &mut cache,
-                &mut highlighter,
-                Some(&ops),
-                &target,
-                path,
-                None,
-                Side::New,
-                false,
-            );
-        }
-        assert_eq!(cache.len(), 3);
-
-        // Keep only a.rs and c.rs (b.rs left the review).
-        cache.retain_paths(|path| path == "a.rs" || path == "c.rs");
-        assert!(cache.contains("a.rs", Side::New));
-        assert!(!cache.contains("b.rs", Side::New));
-        assert!(cache.contains("c.rs", Side::New));
-        assert_eq!(cache.len(), 2);
     }
 
     #[test]

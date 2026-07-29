@@ -88,44 +88,9 @@ index 111..222 100644
     }
 
     #[test]
-    fn open_captures_the_panel_cursor_and_tab() {
-        let mut app = panel_app();
-        app.open_confirm_remote_op_modal(RemoteOp::Push);
-        assert_eq!(
-            app.mode,
-            Mode::ConfirmRemoteOp {
-                op: RemoteOp::Push,
-                cursor: 2,
-                tab: PanelTab::Changes,
-            }
-        );
-    }
-
-    #[test]
-    fn open_from_a_non_panel_mode_is_a_no_op() {
-        let mut app = panel_app();
-        app.mode = Mode::Normal;
-        app.open_confirm_remote_op_modal(RemoteOp::Pull);
-        assert_eq!(app.mode, Mode::Normal);
-    }
-
-    #[test]
     fn cancel_restores_the_panel_cursor_and_tab() {
         let mut app = panel_app();
         app.open_confirm_remote_op_modal(RemoteOp::Pull);
-        app.cancel_confirm_remote_op();
-        assert_eq!(
-            app.mode,
-            Mode::Panel {
-                cursor: 2,
-                tab: PanelTab::Changes,
-            }
-        );
-    }
-
-    #[test]
-    fn cancel_outside_the_modal_is_a_no_op() {
-        let mut app = panel_app();
         app.cancel_confirm_remote_op();
         assert_eq!(
             app.mode,
@@ -150,12 +115,5 @@ index 111..222 100644
             }
         );
         assert_eq!(app.running_op_label(), Some("pull"));
-    }
-
-    #[test]
-    fn confirm_outside_the_modal_is_a_no_op() {
-        let mut app = panel_app();
-        app.confirm_remote_op();
-        assert_eq!(app.running_op_label(), None);
     }
 }

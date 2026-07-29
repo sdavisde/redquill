@@ -6,7 +6,7 @@
 //! repo.
 //!
 //! This lives beside the other real-git, real-dispatch tests in `src/ui`
-//! (e.g. `capture_task_04_smoke_transcript` in `mod_tests.rs`) rather than in
+//! (e.g. `commit_integration_tests.rs`) rather than in
 //! the top-level `tests/` directory: `dispatch_key`, `draw`, and the
 //! switcher's modal key handler are crate-internal by design (the modal
 //! bypasses the public `Action`/`Keymap` surface entirely, same as

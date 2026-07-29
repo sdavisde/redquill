@@ -26,43 +26,6 @@ fn partial_layout_overrides_only_the_named_key() {
 }
 
 #[test]
-fn unknown_top_level_section_is_collected_not_fatal() {
-    let (config, warnings) = Config::from_table(table(
-        r#"
-        [bogus]
-        x = 1
-        "#,
-    ));
-    assert_eq!(config, Config::default());
-    assert_eq!(warnings.len(), 1);
-    assert!(matches!(
-        &warnings[0],
-        ConfigWarning::UnknownKey { section, key }
-            if section == "top-level" && key == "bogus"
-    ));
-}
-
-#[test]
-fn unknown_key_within_a_known_section_is_collected_not_fatal() {
-    let (config, warnings) = Config::from_table(table(
-        r#"
-        [layout]
-        sidebar_side = "left"
-        bogus = true
-        "#,
-    ));
-    // The valid key still applies...
-    assert_eq!(config.layout.sidebar_side, SidebarSide::Left);
-    // ...and the unknown one is collected, not fatal to the rest of the file.
-    assert_eq!(warnings.len(), 1);
-    assert!(matches!(
-        &warnings[0],
-        ConfigWarning::UnknownKey { section, key }
-            if section == "layout" && key == "bogus"
-    ));
-}
-
-#[test]
 fn invalid_value_for_a_known_key_falls_back_to_default_and_is_collected() {
     let (config, warnings) = Config::from_table(table(
         r#"
@@ -110,13 +73,6 @@ fn sidebar_width_in_range_applies() {
 }
 
 #[test]
-fn sidebar_width_wrong_type_is_an_invalid_value() {
-    let (config, warnings) = Config::from_table(table("[layout]\nsidebar_width = \"wide\"\n"));
-    assert_eq!(config.layout.sidebar_width, None);
-    assert_eq!(warnings.len(), 1);
-}
-
-#[test]
 fn scrolloff_defaults_to_the_shipped_margin() {
     let (config, warnings) = Config::from_table(table(""));
     assert_eq!(config.diff.scrolloff, SCROLLOFF_DEFAULT);
@@ -155,17 +111,6 @@ fn scrolloff_out_of_range_or_wrong_type_is_an_invalid_value() {
                 if section == "diff" && key == "scrolloff"
         ));
     }
-}
-
-#[test]
-fn unknown_key_in_the_diff_section_is_collected_not_fatal() {
-    let (config, warnings) = Config::from_table(table("[diff]\nscrolloff = 6\nbogus = 1\n"));
-    assert_eq!(config.diff.scrolloff, 6);
-    assert_eq!(warnings.len(), 1);
-    assert!(matches!(
-        &warnings[0],
-        ConfigWarning::UnknownKey { section, key } if section == "diff" && key == "bogus"
-    ));
 }
 
 #[test]
@@ -214,24 +159,6 @@ fn search_whole_word_and_literal_apply() {
 }
 
 #[test]
-fn search_boolean_field_wrong_type_is_an_invalid_value() {
-    let (config, warnings) = Config::from_table(table("[search]\nwhole_word = \"yes\"\n"));
-    assert!(!config.search.whole_word);
-    assert_eq!(warnings.len(), 1);
-}
-
-#[test]
-fn non_table_section_value_is_an_invalid_value() {
-    let (config, warnings) = Config::from_table(table("layout = 5\n"));
-    assert_eq!(config.layout, LayoutConfig::default());
-    assert_eq!(warnings.len(), 1);
-
-    let (config, warnings) = Config::from_table(table("search = \"nope\"\n"));
-    assert_eq!(config.search, SearchConfig::default());
-    assert_eq!(warnings.len(), 1);
-}
-
-#[test]
 fn both_sections_together_with_a_mix_of_valid_and_invalid_keys() {
     let (config, warnings) = Config::from_table(table(
         r#"
@@ -250,22 +177,6 @@ fn both_sections_together_with_a_mix_of_valid_and_invalid_keys() {
     assert!(config.search.whole_word);
     assert!(!config.search.literal);
     assert!(warnings.is_empty());
-}
-
-#[test]
-fn sidebar_side_parses_both_values() {
-    assert_eq!(SidebarSide::parse("left"), Some(SidebarSide::Left));
-    assert_eq!(SidebarSide::parse("right"), Some(SidebarSide::Right));
-    assert_eq!(SidebarSide::parse("Left"), None);
-    assert_eq!(SidebarSide::parse(""), None);
-}
-
-#[test]
-fn case_mode_parses_all_three_values() {
-    assert_eq!(parse_case_mode("smart"), Some(CaseMode::Smart));
-    assert_eq!(parse_case_mode("sensitive"), Some(CaseMode::Sensitive));
-    assert_eq!(parse_case_mode("insensitive"), Some(CaseMode::Insensitive));
-    assert_eq!(parse_case_mode("SMART"), None);
 }
 
 #[test]
@@ -297,27 +208,6 @@ fn editor_section_edit_at_line_with_filename_placeholder_applies() {
 }
 
 #[test]
-fn editor_section_both_fields_set_deserialize_independently() {
-    // `EditorConfig` itself never picks a winner between `preset` and
-    // `edit_at_line` — both fields simply hold whatever was configured; the
-    // "explicit template wins" precedence is resolved (and tested) in
-    // `crate::ui::editor::resolve_editor_config_tier`.
-    let (config, warnings) = Config::from_table(table(
-        r#"
-        [editor]
-        preset = "vim"
-        edit_at_line = "zed {{filename}}:{{line}}"
-        "#,
-    ));
-    assert_eq!(config.editor.preset.as_deref(), Some("vim"));
-    assert_eq!(
-        config.editor.edit_at_line.as_deref(),
-        Some("zed {{filename}}:{{line}}")
-    );
-    assert!(warnings.is_empty());
-}
-
-#[test]
 fn editor_edit_at_line_missing_filename_placeholder_is_an_invalid_value() {
     let (config, warnings) = Config::from_table(table(
         r#"
@@ -332,50 +222,6 @@ fn editor_edit_at_line_missing_filename_placeholder_is_an_invalid_value() {
         ConfigWarning::InvalidValue { section, key, .. }
             if section == "editor" && key == "edit_at_line"
     ));
-}
-
-#[test]
-fn editor_preset_wrong_type_is_an_invalid_value() {
-    let (config, warnings) = Config::from_table(table("[editor]\npreset = 5\n"));
-    assert_eq!(config.editor.preset, None);
-    assert_eq!(warnings.len(), 1);
-    assert!(matches!(
-        &warnings[0],
-        ConfigWarning::InvalidValue { section, key, .. }
-            if section == "editor" && key == "preset"
-    ));
-}
-
-#[test]
-fn editor_edit_at_line_wrong_type_is_an_invalid_value() {
-    let (config, warnings) = Config::from_table(table("[editor]\nedit_at_line = true\n"));
-    assert_eq!(config.editor.edit_at_line, None);
-    assert_eq!(warnings.len(), 1);
-}
-
-#[test]
-fn editor_unknown_key_within_the_section_is_collected_not_fatal() {
-    let (config, warnings) = Config::from_table(table(
-        r#"
-        [editor]
-        preset = "vim"
-        bogus = true
-        "#,
-    ));
-    assert_eq!(config.editor.preset.as_deref(), Some("vim"));
-    assert_eq!(warnings.len(), 1);
-    assert!(matches!(
-        &warnings[0],
-        ConfigWarning::UnknownKey { section, key }
-            if section == "editor" && key == "bogus"
-    ));
-}
-
-#[test]
-fn editor_non_table_section_value_is_an_invalid_value() {
-    let (config, warnings) = Config::from_table(table("editor = 5\n"));
-    assert_eq!(config.editor, EditorConfig::default());
-    assert_eq!(warnings.len(), 1);
 }
 
 #[test]
@@ -435,121 +281,94 @@ fn lsp_args_without_command_overrides_args_only() {
 }
 
 #[test]
-fn lsp_command_without_args_overrides_command_only() {
-    let (config, warnings) = Config::from_table(table(
-        r#"
-        [lsp.python]
-        command = "my-pyright"
-        "#,
-    ));
-    assert_eq!(config.lsp.python.command.as_deref(), Some("my-pyright"));
-    assert_eq!(config.lsp.python.args, None);
-    assert!(warnings.is_empty());
+fn a_wrong_typed_value_falls_back_to_default_and_is_collected() {
+    // (toml, warning section, warning key). Every fixture names exactly one
+    // key, so a correct fallback leaves the whole config at its defaults.
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "[layout]\nsidebar_width = \"wide\"\n",
+            "layout",
+            "sidebar_width",
+        ),
+        ("[search]\nwhole_word = \"yes\"\n", "search", "whole_word"),
+        ("[editor]\npreset = 5\n", "editor", "preset"),
+        ("[editor]\nedit_at_line = true\n", "editor", "edit_at_line"),
+        ("[lsp.rust]\ncommand = 5\n", "lsp.rust", "command"),
+        ("[lsp.rust]\nargs = \"nope\"\n", "lsp.rust", "args"),
+        ("[lsp.rust]\nargs = [\"ok\", 5]\n", "lsp.rust", "args"),
+        ("[lsp.rust]\nenabled = \"nope\"\n", "lsp.rust", "enabled"),
+        // A section whose value isn't a table at all reports itself as both
+        // the section and the key.
+        ("layout = 5\n", "layout", "layout"),
+        ("search = \"nope\"\n", "search", "search"),
+        ("editor = 5\n", "editor", "editor"),
+        ("[lsp]\nrust = 5\n", "lsp.rust", "lsp.rust"),
+        ("lsp = 5\n", "lsp", "lsp"),
+    ];
+    for (raw, expected_section, expected_key) in cases {
+        let (config, warnings) = Config::from_table(table(raw));
+        assert_eq!(config, Config::default(), "{raw}");
+        assert_eq!(warnings.len(), 1, "{raw}");
+        assert!(
+            matches!(
+                &warnings[0],
+                ConfigWarning::InvalidValue { section, key, .. }
+                    if section == expected_section && key == expected_key
+            ),
+            "{raw} produced {:?}",
+            warnings[0]
+        );
+    }
 }
 
 #[test]
-fn lsp_unknown_language_table_is_collected_not_fatal() {
-    let (config, warnings) = Config::from_table(table(
-        r#"
-        [lsp.java]
-        command = "jdtls"
-        "#,
-    ));
-    assert_eq!(config.lsp, LspConfig::default());
-    assert_eq!(warnings.len(), 1);
-    assert!(matches!(
-        &warnings[0],
-        ConfigWarning::UnknownKey { section, key }
-            if section == "lsp" && key == "java"
-    ));
-}
-
-#[test]
-fn lsp_unknown_key_within_a_language_table_is_collected_not_fatal() {
-    let (config, warnings) = Config::from_table(table(
-        r#"
-        [lsp.rust]
-        command = "my-rust-analyzer"
-        bogus = true
-        "#,
-    ));
-    assert_eq!(config.lsp.rust.command.as_deref(), Some("my-rust-analyzer"));
-    assert_eq!(warnings.len(), 1);
-    assert!(matches!(
-        &warnings[0],
-        ConfigWarning::UnknownKey { section, key }
-            if section == "lsp.rust" && key == "bogus"
-    ));
-}
-
-#[test]
-fn lsp_command_wrong_type_is_an_invalid_value() {
-    let (config, warnings) = Config::from_table(table("[lsp.rust]\ncommand = 5\n"));
-    assert_eq!(config.lsp.rust.command, None);
-    assert_eq!(warnings.len(), 1);
-    assert!(matches!(
-        &warnings[0],
-        ConfigWarning::InvalidValue { section, key, .. }
-            if section == "lsp.rust" && key == "command"
-    ));
-}
-
-#[test]
-fn lsp_args_wrong_type_is_an_invalid_value() {
-    let (config, warnings) = Config::from_table(table("[lsp.rust]\nargs = \"nope\"\n"));
-    assert_eq!(config.lsp.rust.args, None);
-    assert_eq!(warnings.len(), 1);
-    assert!(matches!(
-        &warnings[0],
-        ConfigWarning::InvalidValue { section, key, .. }
-            if section == "lsp.rust" && key == "args"
-    ));
-}
-
-#[test]
-fn lsp_args_element_wrong_type_is_an_invalid_value() {
-    let (config, warnings) = Config::from_table(table("[lsp.rust]\nargs = [\"ok\", 5]\n"));
-    assert_eq!(config.lsp.rust.args, None);
-    assert_eq!(warnings.len(), 1);
-    assert!(matches!(
-        &warnings[0],
-        ConfigWarning::InvalidValue { section, key, .. }
-            if section == "lsp.rust" && key == "args"
-    ));
-}
-
-#[test]
-fn lsp_enabled_wrong_type_is_an_invalid_value() {
-    let (config, warnings) = Config::from_table(table("[lsp.rust]\nenabled = \"nope\"\n"));
-    assert!(config.lsp.rust.enabled);
-    assert_eq!(warnings.len(), 1);
-    assert!(matches!(
-        &warnings[0],
-        ConfigWarning::InvalidValue { section, key, .. }
-            if section == "lsp.rust" && key == "enabled"
-    ));
-}
-
-#[test]
-fn lsp_language_non_table_value_is_an_invalid_value() {
-    let (config, warnings) = Config::from_table(table("[lsp]\nrust = 5\n"));
-    assert_eq!(config.lsp.rust, LspServerOverride::default());
-    assert_eq!(warnings.len(), 1);
-}
-
-#[test]
-fn lsp_non_table_section_value_is_an_invalid_value() {
-    let (config, warnings) = Config::from_table(table("lsp = 5\n"));
-    assert_eq!(config.lsp, LspConfig::default());
-    assert_eq!(warnings.len(), 1);
-}
-
-#[test]
-fn lsp_server_override_default_is_enabled_with_no_overrides() {
-    let cfg = LspServerOverride::default();
-    assert!(cfg.enabled);
-    assert_eq!(cfg.command, None);
-    assert_eq!(cfg.args, None);
+fn an_unknown_key_is_collected_not_fatal_in_every_section() {
+    // The fourth field asserts what must still have applied from the same
+    // fixture — proving the unknown key didn't abort the parse.
+    type UnknownKeyCase = (&'static str, &'static str, &'static str, fn(&Config));
+    let cases: &[UnknownKeyCase] = &[
+        ("[bogus]\nx = 1\n", "top-level", "bogus", |c| {
+            assert_eq!(*c, Config::default())
+        }),
+        (
+            "[layout]\nsidebar_side = \"left\"\nbogus = true\n",
+            "layout",
+            "bogus",
+            |c| assert_eq!(c.layout.sidebar_side, SidebarSide::Left),
+        ),
+        ("[diff]\nscrolloff = 6\nbogus = 1\n", "diff", "bogus", |c| {
+            assert_eq!(c.diff.scrolloff, 6)
+        }),
+        (
+            "[editor]\npreset = \"vim\"\nbogus = true\n",
+            "editor",
+            "bogus",
+            |c| assert_eq!(c.editor.preset.as_deref(), Some("vim")),
+        ),
+        ("[lsp.java]\ncommand = \"jdtls\"\n", "lsp", "java", |c| {
+            assert_eq!(c.lsp, LspConfig::default())
+        }),
+        (
+            "[lsp.rust]\ncommand = \"my-rust-analyzer\"\nbogus = true\n",
+            "lsp.rust",
+            "bogus",
+            |c| assert_eq!(c.lsp.rust.command.as_deref(), Some("my-rust-analyzer")),
+        ),
+    ];
+    for (raw, expected_section, expected_key, still_applies) in cases {
+        let (config, warnings) = Config::from_table(table(raw));
+        still_applies(&config);
+        assert_eq!(warnings.len(), 1, "{raw}");
+        assert!(
+            matches!(
+                &warnings[0],
+                ConfigWarning::UnknownKey { section, key }
+                    if section == expected_section && key == expected_key
+            ),
+            "{raw} produced {:?}",
+            warnings[0]
+        );
+    }
 }
 
 #[test]

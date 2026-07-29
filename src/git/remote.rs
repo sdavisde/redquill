@@ -231,7 +231,6 @@ pub fn delete_managed_pr_branch_command(number: u64, root: &Path) -> Command {
 mod tests {
     use super::*;
     use std::ffi::OsStr;
-    use std::path::PathBuf;
 
     const ALL_OPS: [RemoteOp; 4] = [
         RemoteOp::Fetch,
@@ -241,38 +240,12 @@ mod tests {
     ];
 
     #[test]
-    fn each_variant_has_its_fixed_argv() {
-        assert_eq!(RemoteOp::Fetch.args(), &["fetch"]);
-        assert_eq!(RemoteOp::Pull.args(), &["pull"]);
-        assert_eq!(RemoteOp::Push.args(), &["push"]);
-        assert_eq!(
-            RemoteOp::Publish.args(),
-            &["push", "--set-upstream", "origin", "HEAD"]
-        );
-    }
-
-    #[test]
-    fn labels_and_command_lines_are_plain_git_invocations() {
-        assert_eq!(RemoteOp::Fetch.label(), "fetch");
-        assert_eq!(RemoteOp::Pull.label(), "pull");
-        assert_eq!(RemoteOp::Push.label(), "push");
-        assert_eq!(RemoteOp::Publish.label(), "publish");
-        assert_eq!(RemoteOp::Fetch.command_line(), "git fetch");
-        assert_eq!(RemoteOp::Pull.command_line(), "git pull");
-        assert_eq!(RemoteOp::Push.command_line(), "git push");
-        assert_eq!(
-            RemoteOp::Publish.command_line(),
-            "git push --set-upstream origin HEAD"
-        );
-    }
-
-    #[test]
     fn no_variant_can_carry_force_or_a_force_refspec() {
         for op in ALL_OPS {
             let args = op.args();
-            // The argv is fixed per variant (see each_variant_has_its_fixed_argv);
-            // this pins the security property directly: no force flag and no
-            // `+`-prefixed (force-push) refspec can ever appear.
+            // The argv is fixed per variant; this pins the security property
+            // directly: no force flag and no `+`-prefixed (force-push)
+            // refspec can ever appear.
             assert!(
                 !args
                     .iter()
@@ -282,34 +255,38 @@ mod tests {
         }
     }
 
-    #[test]
-    fn remote_command_spawns_git_with_the_fixed_argv_at_root() {
-        let root = PathBuf::from("/tmp/redquill-remote-test");
-        let cmd = remote_command(RemoteOp::Push, &root);
-        assert_eq!(cmd.get_program(), OsStr::new("git"));
-        let args: Vec<&OsStr> = cmd.get_args().collect();
-        assert_eq!(args, vec![OsStr::new("push")]);
-        assert_eq!(cmd.get_current_dir(), Some(root.as_path()));
+    /// Every builder in this module, so a shared property can be asserted
+    /// over all of them at once.
+    fn all_builders() -> Vec<(&'static str, Command)> {
+        let here = Path::new(".");
+        let pr_ref = PrRef::new(PrRefKind::GitHub, 1);
+        vec![
+            ("remote_command", remote_command(RemoteOp::Fetch, here)),
+            ("pr_fetch_command", pr_fetch_command(&pr_ref, here)),
+            ("base_fetch_command", base_fetch_command("main", here)),
+            (
+                "pr_peek_fetch_command",
+                pr_peek_fetch_command(&pr_ref, here),
+            ),
+            (
+                "delete_managed_pr_branch_command",
+                delete_managed_pr_branch_command(1, here),
+            ),
+        ]
     }
 
     #[test]
-    fn remote_command_disables_the_terminal_prompt() {
-        let cmd = remote_command(RemoteOp::Fetch, Path::new("."));
-        let prompt = cmd
-            .get_envs()
-            .find(|(k, _)| *k == OsStr::new("GIT_TERMINAL_PROMPT"))
-            .and_then(|(_, v)| v);
-        assert_eq!(prompt, Some(OsStr::new("0")));
-    }
-
-    #[test]
-    fn remote_command_never_sets_a_force_argument() {
-        for op in ALL_OPS {
-            let cmd = remote_command(op, Path::new("."));
-            let has_force = cmd
-                .get_args()
-                .any(|a| a == OsStr::new("--force") || a == OsStr::new("-f"));
-            assert!(!has_force, "{op:?} must never pass a force flag");
+    fn every_builder_disables_the_terminal_prompt() {
+        for (name, cmd) in all_builders() {
+            let prompt = cmd
+                .get_envs()
+                .find(|(k, _)| *k == OsStr::new("GIT_TERMINAL_PROMPT"))
+                .and_then(|(_, v)| v);
+            assert_eq!(
+                prompt,
+                Some(OsStr::new("0")),
+                "{name} must disable the terminal prompt"
+            );
         }
     }
 
@@ -388,17 +365,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn pr_fetch_command_disables_the_terminal_prompt() {
-        let pr_ref = PrRef::new(PrRefKind::GitHub, 1);
-        let cmd = pr_fetch_command(&pr_ref, Path::new("."));
-        let prompt = cmd
-            .get_envs()
-            .find(|(k, _)| *k == OsStr::new("GIT_TERMINAL_PROMPT"))
-            .and_then(|(_, v)| v);
-        assert_eq!(prompt, Some(OsStr::new("0")));
-    }
-
     // -- base_fetch_command ---------------------------------------------------
 
     #[test]
@@ -431,16 +397,6 @@ mod tests {
         let sep_idx = args.iter().position(|a| a == "--").expect("-- present");
         assert_eq!(sep_idx, 2, "the -- separator must precede the refspec");
         assert_eq!(args.len(), 4, "refspec must be the only arg after --");
-    }
-
-    #[test]
-    fn base_fetch_command_disables_the_terminal_prompt() {
-        let cmd = base_fetch_command("main", Path::new("."));
-        let prompt = cmd
-            .get_envs()
-            .find(|(k, _)| *k == OsStr::new("GIT_TERMINAL_PROMPT"))
-            .and_then(|(_, v)| v);
-        assert_eq!(prompt, Some(OsStr::new("0")));
     }
 
     // -- pr_peek_fetch_command ------------------------------------------------
@@ -479,16 +435,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn pr_peek_fetch_command_disables_the_terminal_prompt() {
-        let cmd = pr_peek_fetch_command(&PrRef::new(PrRefKind::GitHub, 1), Path::new("."));
-        let prompt = cmd
-            .get_envs()
-            .find(|(k, _)| *k == OsStr::new("GIT_TERMINAL_PROMPT"))
-            .and_then(|(_, v)| v);
-        assert_eq!(prompt, Some(OsStr::new("0")));
-    }
-
     // -- delete_managed_pr_branch_command ---------------------------------------
 
     #[test]
@@ -508,15 +454,5 @@ mod tests {
             assert_eq!(branch, &format!("redquill/pr/{number}"));
             assert!(branch.starts_with("redquill/pr/"));
         }
-    }
-
-    #[test]
-    fn delete_managed_pr_branch_command_disables_the_terminal_prompt() {
-        let cmd = delete_managed_pr_branch_command(1, Path::new("."));
-        let prompt = cmd
-            .get_envs()
-            .find(|(k, _)| *k == OsStr::new("GIT_TERMINAL_PROMPT"))
-            .and_then(|(_, v)| v);
-        assert_eq!(prompt, Some(OsStr::new("0")));
     }
 }

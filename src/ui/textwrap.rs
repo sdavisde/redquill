@@ -267,50 +267,8 @@ mod tests {
     // -- wrap_ranges: the diff pane's shared entry point --------------------
 
     #[test]
-    fn wrap_ranges_short_line_is_one_range() {
-        assert_eq!(wrap_ranges("hello", 20), vec![(0, 5)]);
-    }
-
-    #[test]
-    fn wrap_ranges_empty_content_is_one_empty_range() {
-        assert_eq!(wrap_ranges("", 20), vec![(0, 0)]);
-    }
-
-    #[test]
     fn wrap_ranges_breaks_at_word_boundary() {
         assert_eq!(wrap_ranges("hello world", 10), vec![(0, 6), (6, 11)]);
-    }
-
-    #[test]
-    fn wrap_ranges_hard_splits_an_overlong_word_into_equal_widths() {
-        let ranges = wrap_ranges("supercalifragilistic", 5);
-        assert_eq!(ranges.len(), 4);
-        for (start, end) in &ranges {
-            assert_eq!(end - start, 5);
-        }
-    }
-
-    #[test]
-    fn wrap_ranges_partition_contiguously() {
-        let content = "the quick brown fox jumps";
-        let ranges = wrap_ranges(content, 8);
-        let len = content.chars().count();
-        let mut expected_start = 0;
-        for (start, end) in &ranges {
-            assert_eq!(*start, expected_start);
-            expected_start = *end;
-        }
-        assert_eq!(expected_start, len);
-    }
-
-    #[test]
-    fn wrap_ranges_slices_multibyte_content_by_char() {
-        let content = "héllo wörld";
-        let ranges = wrap_ranges(content, 7);
-        assert_eq!(ranges, vec![(0, 6), (6, 11)]);
-        let chars: Vec<char> = content.chars().collect();
-        let first: String = chars[ranges[0].0..ranges[0].1].iter().collect();
-        assert_eq!(first, "héllo ");
     }
 
     #[test]

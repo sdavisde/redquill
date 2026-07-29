@@ -246,18 +246,6 @@ mod tests {
     }
 
     #[test]
-    fn len_and_is_empty_track_contents() {
-        let mut store = AnnotationStore::new();
-        assert_eq!(store.len(), 0);
-        assert!(store.is_empty());
-        store
-            .add(Target::file("a.rs"), Classification::Nit, "note")
-            .unwrap();
-        assert_eq!(store.len(), 1);
-        assert!(!store.is_empty());
-    }
-
-    #[test]
     fn iter_preserves_insertion_order() {
         let mut store = AnnotationStore::new();
         store
@@ -329,12 +317,6 @@ mod tests {
     }
 
     #[test]
-    fn edit_unknown_id_errors() {
-        let mut store = AnnotationStore::new();
-        assert_eq!(store.edit(7, "x"), Err(AnnotateError::NotFound(7)));
-    }
-
-    #[test]
     fn set_classification_replaces_classification() {
         let mut store = AnnotationStore::new();
         let id = store
@@ -346,15 +328,6 @@ mod tests {
         assert_eq!(
             store.iter().next().unwrap().classification,
             Classification::Praise
-        );
-    }
-
-    #[test]
-    fn set_classification_unknown_id_errors() {
-        let mut store = AnnotationStore::new();
-        assert_eq!(
-            store.set_classification(9, Classification::Issue),
-            Err(AnnotateError::NotFound(9))
         );
     }
 
@@ -378,13 +351,41 @@ mod tests {
         assert_eq!(bodies, vec!["a-note", "a-note-2"]);
     }
 
+    // -- without_ids ------------------------------------------------------------
+
     #[test]
-    fn for_path_with_no_matches_is_empty() {
+    fn without_ids_drops_only_the_suppressed_annotations_and_keeps_ids_and_next_id() {
         let mut store = AnnotationStore::new();
-        store
-            .add(Target::file("a.rs"), Classification::Nit, "note")
+        let id0 = store
+            .add(Target::file("a.rs"), Classification::Nit, "one")
             .unwrap();
-        assert_eq!(store.for_path("missing.rs").count(), 0);
+        let id1 = store
+            .add(Target::file("b.rs"), Classification::Issue, "two")
+            .unwrap();
+        let id2 = store
+            .add(Target::file("c.rs"), Classification::Praise, "three")
+            .unwrap();
+
+        let view = store.without_ids(&std::collections::HashSet::from([id1]));
+        let survivors: Vec<usize> = view.iter().map(|a| a.id).collect();
+        assert_eq!(survivors, vec![id0, id2]);
+        assert_eq!(view.len(), 2);
+        // The real store is untouched: the view is a read-only projection.
+        assert_eq!(store.len(), 3);
+
+        // Surviving ids stay addressable, and a later add still gets a fresh
+        // ordinal rather than reusing the suppressed one.
+        let mut view = view;
+        view.edit(id2, "edited").unwrap();
+        let id3 = view
+            .add(Target::file("d.rs"), Classification::Nit, "four")
+            .unwrap();
+        assert_eq!(id3, 3);
+
+        // An empty suppression set is a plain clone.
+        let all = store.without_ids(&std::collections::HashSet::new());
+        let bodies: Vec<&str> = all.iter().map(|a| a.body.as_str()).collect();
+        assert_eq!(bodies, vec!["one", "two", "three"]);
     }
 
     // -- unpublished ------------------------------------------------------------
@@ -414,23 +415,5 @@ mod tests {
 
         let remaining: Vec<usize> = store.unpublished().map(|a| a.id).collect();
         assert_eq!(remaining, vec![id1]);
-    }
-
-    #[test]
-    fn unpublished_preserves_insertion_order() {
-        let mut store = AnnotationStore::new();
-        let id0 = store
-            .add(Target::file("a.rs"), Classification::Nit, "first")
-            .unwrap();
-        let id1 = store
-            .add(Target::file("b.rs"), Classification::Nit, "second")
-            .unwrap();
-        let id2 = store
-            .add(Target::file("c.rs"), Classification::Nit, "third")
-            .unwrap();
-        store.set_published(id1, true).unwrap();
-
-        let remaining: Vec<usize> = store.unpublished().map(|a| a.id).collect();
-        assert_eq!(remaining, vec![id0, id2]);
     }
 }

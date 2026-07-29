@@ -130,13 +130,34 @@ mod tests {
         assert_eq!(Lang::from_path("no_extension_at_all"), None);
     }
 
-    #[test]
-    fn all_contains_every_variant_exactly_once() {
-        // Guards against a variant being added without updating ALL.
-        assert_eq!(Lang::ALL.len(), 11);
-        let mut seen = std::collections::HashSet::new();
-        for lang in Lang::ALL {
-            assert!(seen.insert(format!("{lang:?}")), "duplicate: {lang:?}");
+    /// Exhaustive over `Lang`, so a newly added variant stops compilation
+    /// here until whoever added it comes through this test — which is the
+    /// prompt to add it to `ALL` as well. Nothing about `ALL` alone can
+    /// detect a missing variant at runtime.
+    fn ordinal(lang: Lang) -> usize {
+        match lang {
+            Lang::Rust => 0,
+            Lang::Python => 1,
+            Lang::JavaScript => 2,
+            Lang::TypeScript => 3,
+            Lang::Tsx => 4,
+            Lang::Go => 5,
+            Lang::Json => 6,
+            Lang::Toml => 7,
+            Lang::Markdown => 8,
+            Lang::Bash => 9,
+            Lang::Yaml => 10,
         }
+    }
+
+    #[test]
+    fn all_lists_each_variant_at_most_once_in_declaration_order() {
+        let ordinals: Vec<usize> = Lang::ALL.iter().copied().map(ordinal).collect();
+        // Strictly ascending is both the no-duplicates and the
+        // matches-declaration-order check.
+        assert!(
+            ordinals.windows(2).all(|w| w[0] < w[1]),
+            "ALL must list each variant at most once, in declaration order: {ordinals:?}"
+        );
     }
 }

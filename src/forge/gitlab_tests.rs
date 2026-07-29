@@ -93,16 +93,40 @@ fn parse_mr_list_json_handles_an_empty_list() {
 }
 
 #[test]
-fn parse_mr_list_json_rejects_malformed_json() {
-    let err = parse_mr_list_json("not json").unwrap_err();
-    assert!(matches!(err, ForgeError::Parse { cli: "glab", .. }));
-}
-
-#[test]
-fn parse_mr_list_json_rejects_a_row_missing_a_required_field() {
+fn every_parser_rejects_malformed_or_incomplete_payloads() {
     let missing_iid = r#"[{"title":"x","author":{"username":"o"},"source_branch":"h","target_branch":"b","updated_at":"t"}]"#;
-    let err = parse_mr_list_json(missing_iid).unwrap_err();
-    assert!(matches!(err, ForgeError::Parse { cli: "glab", .. }));
+    let cases = [
+        ("mr list: not json", parse_mr_list_json("not json")),
+        ("mr list: row missing iid", parse_mr_list_json(missing_iid)),
+    ];
+    for (label, result) in cases {
+        let err = result.expect_err(label);
+        assert!(
+            matches!(err, ForgeError::Parse { cli: "glab", .. }),
+            "{label}: {err:?}"
+        );
+    }
+
+    let detail_cases = [
+        ("mr detail: not json", parse_mr_detail_json("not json")),
+        (
+            "mr detail: missing diff_refs",
+            parse_mr_detail_json(r#"{"iid": 42}"#),
+        ),
+    ];
+    for (label, result) in detail_cases {
+        let err = result.expect_err(label);
+        assert!(
+            matches!(err, ForgeError::Parse { cli: "glab", .. }),
+            "{label}: {err:?}"
+        );
+    }
+
+    let err = parse_discussions_json("not json").expect_err("discussions: not json");
+    assert!(
+        matches!(err, ForgeError::Parse { cli: "glab", .. }),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -156,24 +180,8 @@ fn mr_web_command_is_a_read_only_view_argv_carrying_only_the_typed_iid() {
             OsStr::new("--web"),
         ]
     );
-    let other_cmd = mr_web_command(7);
-    let other: Vec<&OsStr> = other_cmd.get_args().collect();
-    assert_eq!(args[0], other[0]);
-    assert_eq!(args[1], other[1]);
-    assert_ne!(args[2], other[2]);
     let envs: Vec<_> = cmd.get_envs().collect();
     assert!(envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))));
-}
-
-#[test]
-fn mr_detail_command_interpolates_only_the_typed_iid() {
-    let one = mr_detail_command(1);
-    let two = mr_detail_command(2);
-    let args_one: Vec<&OsStr> = one.get_args().collect();
-    let args_two: Vec<&OsStr> = two.get_args().collect();
-    assert_eq!(args_one[0], args_two[0]);
-    assert_ne!(args_one[1], args_two[1]);
-    assert_eq!(args_one[1], OsStr::new("projects/:id/merge_requests/1"));
 }
 
 #[test]
@@ -188,18 +196,6 @@ fn parse_mr_detail_json_maps_the_fixture_including_diff_refs() {
             start_sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
         }
     );
-}
-
-#[test]
-fn parse_mr_detail_json_rejects_a_payload_missing_diff_refs() {
-    let err = parse_mr_detail_json(r#"{"iid": 42}"#).unwrap_err();
-    assert!(matches!(err, ForgeError::Parse { cli: "glab", .. }));
-}
-
-#[test]
-fn parse_mr_detail_json_rejects_malformed_json() {
-    let err = parse_mr_detail_json("not json").unwrap_err();
-    assert!(matches!(err, ForgeError::Parse { cli: "glab", .. }));
 }
 
 // -- discussions_command ------------------------------------------------------
@@ -219,19 +215,6 @@ fn discussions_command_has_the_fixed_argv_and_hardened_env() {
     );
     let envs: Vec<_> = cmd.get_envs().collect();
     assert!(envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))));
-}
-
-#[test]
-fn discussions_command_interpolates_only_the_typed_iid() {
-    let one = discussions_command(1);
-    let two = discussions_command(2);
-    let args_one: Vec<&OsStr> = one.get_args().collect();
-    let args_two: Vec<&OsStr> = two.get_args().collect();
-    assert_ne!(args_one[1], args_two[1]);
-    assert_eq!(
-        args_one[1],
-        OsStr::new("projects/:id/merge_requests/1/discussions")
-    );
 }
 
 // -- parse_discussions_json (position -> ThreadAnchor mapping) --------------
@@ -531,12 +514,6 @@ fn parse_discussions_json_handles_an_empty_array() {
 }
 
 #[test]
-fn parse_discussions_json_rejects_malformed_json() {
-    let err = parse_discussions_json("not json").unwrap_err();
-    assert!(matches!(err, ForgeError::Parse { cli: "glab", .. }));
-}
-
-#[test]
 fn a_discussion_with_no_position_at_all_is_skipped_rather_than_invented() {
     let json = r#"[{
       "id": "zzz",
@@ -582,92 +559,72 @@ fn diff_refs() -> DiffRefs {
 }
 
 #[test]
-fn added_new_side_line_builds_a_text_position_with_only_new_line() {
-    let pos = build_note_position(
-        &diff_refs(),
-        &NoteTarget::Line {
-            path: "src/a.rs".to_string(),
-            side: Side::New,
-            line: 42,
-            other_line: None,
-        },
-    );
-    assert_eq!(pos.position_type, "text");
-    assert_eq!(pos.new_line, Some(42));
-    assert_eq!(pos.old_line, None);
-    assert_eq!(pos.new_path, "src/a.rs");
-    assert_eq!(pos.old_path, "src/a.rs");
-    // The MR's diff refs are pinned onto every position.
-    assert_eq!(pos.base_sha, "base00");
-    assert_eq!(pos.start_sha, "start0");
-    assert_eq!(pos.head_sha, "head00");
-}
+fn line_targets_build_text_positions_naming_only_the_addressed_sides() {
+    // GitLab 500s on a context-line position naming only one side, so a
+    // counterpart line is carried through whichever side is addressed.
+    let cases = vec![
+        (
+            "added, new side only",
+            NoteTarget::Line {
+                path: "src/a.rs".to_string(),
+                side: Side::New,
+                line: 42,
+                other_line: None,
+            },
+            "src/a.rs",
+            Some(42),
+            None,
+        ),
+        (
+            "removed, old side only",
+            NoteTarget::Line {
+                path: "src/b.rs".to_string(),
+                side: Side::Old,
+                line: 17,
+                other_line: None,
+            },
+            "src/b.rs",
+            None,
+            Some(17),
+        ),
+        (
+            "context, addressed on the new side",
+            NoteTarget::Line {
+                path: "src/c.rs".to_string(),
+                side: Side::New,
+                line: 8,
+                other_line: Some(6),
+            },
+            "src/c.rs",
+            Some(8),
+            Some(6),
+        ),
+        (
+            "context, addressed on the old side",
+            NoteTarget::Line {
+                path: "src/c.rs".to_string(),
+                side: Side::Old,
+                line: 6,
+                other_line: Some(8),
+            },
+            "src/c.rs",
+            Some(8),
+            Some(6),
+        ),
+    ];
 
-#[test]
-fn removed_old_side_line_builds_a_text_position_with_only_old_line() {
-    let pos = build_note_position(
-        &diff_refs(),
-        &NoteTarget::Line {
-            path: "src/b.rs".to_string(),
-            side: Side::Old,
-            line: 17,
-            other_line: None,
-        },
-    );
-    assert_eq!(pos.position_type, "text");
-    assert_eq!(pos.new_line, None);
-    assert_eq!(pos.old_line, Some(17));
-}
-
-#[test]
-fn context_line_with_a_counterpart_builds_a_text_position_with_both_lines() {
-    // GitLab 500s on a context-line position naming only one side; the
-    // import fixture shows GitLab itself sending both for a context line.
-    let pos = build_note_position(
-        &diff_refs(),
-        &NoteTarget::Line {
-            path: "src/c.rs".to_string(),
-            side: Side::New,
-            line: 8,
-            other_line: Some(6),
-        },
-    );
-    assert_eq!(pos.position_type, "text");
-    assert_eq!(pos.new_line, Some(8));
-    assert_eq!(pos.old_line, Some(6));
-}
-
-#[test]
-fn context_line_position_serializes_both_lines_byte_exactly() {
-    let pos = build_note_position(
-        &diff_refs(),
-        &NoteTarget::Line {
-            path: "src/c.rs".to_string(),
-            side: Side::New,
-            line: 8,
-            other_line: Some(6),
-        },
-    );
-    let json = serde_json::to_string(&pos).unwrap();
-    assert_eq!(
-        json,
-        r#"{"base_sha":"base00","start_sha":"start0","head_sha":"head00","position_type":"text","new_path":"src/c.rs","old_path":"src/c.rs","new_line":8,"old_line":6}"#
-    );
-}
-
-#[test]
-fn old_side_context_line_with_a_counterpart_fills_new_line_from_it() {
-    let pos = build_note_position(
-        &diff_refs(),
-        &NoteTarget::Line {
-            path: "src/c.rs".to_string(),
-            side: Side::Old,
-            line: 6,
-            other_line: Some(8),
-        },
-    );
-    assert_eq!(pos.new_line, Some(8));
-    assert_eq!(pos.old_line, Some(6));
+    for (label, target, path, new_line, old_line) in cases {
+        let pos = build_note_position(&diff_refs(), &target);
+        assert_eq!(pos.position_type, "text", "{label}");
+        assert_eq!(pos.new_line, new_line, "{label}");
+        assert_eq!(pos.old_line, old_line, "{label}");
+        assert_eq!(pos.new_path, path, "{label}");
+        assert_eq!(pos.old_path, path, "{label}");
+        // The MR's diff refs are pinned onto every position.
+        assert_eq!(pos.base_sha, "base00", "{label}");
+        assert_eq!(pos.start_sha, "start0", "{label}");
+        assert_eq!(pos.head_sha, "head00", "{label}");
+    }
 }
 
 #[test]
@@ -984,24 +941,6 @@ fn resubmit_skips_already_created_drafts_and_bulk_publishes_the_whole_set() {
 }
 
 #[test]
-fn resubmit_with_only_precreated_drafts_still_bulk_publishes() {
-    let mut precreated = note(1, "a");
-    precreated.draft_created = true;
-    let batch = GitlabSubmitBatch {
-        summary: None,
-        summary_draft_created: false,
-        notes: vec![precreated],
-        replies: vec![],
-        approve: false,
-    };
-    let exec = FakeExec::default();
-    let report = run_gitlab_submit_sequence(&batch, &exec);
-    assert_eq!(exec.calls.borrow().clone(), vec![Call::BulkPublish]);
-    assert_eq!(report.published_annotation_ids, vec![1]);
-    assert!(report.review_submitted);
-}
-
-#[test]
 fn resubmit_skips_an_already_drafted_summary_and_reply() {
     let mut predrafted_reply = reply(5, "ddd", "agreed");
     predrafted_reply.draft_created = true;
@@ -1259,19 +1198,6 @@ fn discussion_and_reply_and_approve_commands_have_fixed_shapes() {
     assert_eq!(
         approve_args,
         vec![OsStr::new("mr"), OsStr::new("approve"), OsStr::new("3")]
-    );
-}
-
-#[test]
-fn draft_and_reply_argv_interpolate_only_the_typed_iid_and_discussion_id() {
-    let one = draft_note_command(1);
-    let two = draft_note_command(2);
-    let a: Vec<&OsStr> = one.get_args().collect();
-    let b: Vec<&OsStr> = two.get_args().collect();
-    assert_ne!(a[5], b[5]);
-    assert_eq!(
-        a[5],
-        OsStr::new("projects/:id/merge_requests/1/draft_notes")
     );
 }
 

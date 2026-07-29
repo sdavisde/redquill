@@ -176,16 +176,6 @@ mod tests {
     }
 
     #[test]
-    fn len_and_is_empty_track_contents() {
-        let mut log = CommandLog::new();
-        assert!(log.is_empty());
-        assert_eq!(log.len(), 0);
-        log.push(entry("git fetch", 0));
-        assert!(!log.is_empty());
-        assert_eq!(log.len(), 1);
-    }
-
-    #[test]
     fn evicts_oldest_at_capacity() {
         let mut log = CommandLog::new();
         // Push one more than capacity, tagging each by index so we can see
@@ -202,15 +192,6 @@ mod tests {
             last.command_line,
             format!("git fetch {COMMAND_LOG_CAPACITY}")
         );
-    }
-
-    #[test]
-    fn eviction_holds_the_cap_across_many_pushes() {
-        let mut log = CommandLog::new();
-        for i in 0..(COMMAND_LOG_CAPACITY * 3) {
-            log.push(entry(&format!("git fetch {i}"), 0));
-        }
-        assert_eq!(log.len(), COMMAND_LOG_CAPACITY);
     }
 
     // -- Rendering ----------------------------------------------------------

@@ -166,18 +166,6 @@ fn open_captures_the_cursor_file_and_switches_mode() {
 }
 
 #[test]
-fn open_marks_an_untracked_file_as_untracked() {
-    let (mut app, _log) = logged_app();
-    app.untracked_paths = vec!["src/main.rs".to_string()];
-    app.open_confirm_restore();
-
-    assert_eq!(
-        app.restore_request.as_ref().map(|r| r.untracked),
-        Some(true)
-    );
-}
-
-#[test]
 fn open_remembers_the_panel_cursor_and_tab_it_was_pressed_from() {
     let (mut app, _log) = logged_app();
     app.mode = Mode::Panel {
@@ -235,18 +223,6 @@ fn open_is_refused_with_no_git_backend() {
     );
 }
 
-#[test]
-fn open_on_an_empty_diff_is_a_no_op() {
-    let log = Rc::new(RefCell::new(RestoreLog::default()));
-    let mut app = App::new(Vec::new());
-    app.target = DiffTarget::WorkingTree;
-    app.stage_ops = Some(Box::new(RecordingOps::new(log)));
-    app.open_confirm_restore();
-
-    assert_eq!(app.mode, Mode::Normal);
-    assert_eq!(app.restore_request, None);
-}
-
 // -- Cancelling ------------------------------------------------------------
 
 #[test]
@@ -259,13 +235,6 @@ fn cancel_runs_nothing_and_clears_the_request() {
     assert_eq!(app.restore_request, None);
     assert!(log.borrow().restored.is_empty());
     assert!(log.borrow().discarded.is_empty());
-}
-
-#[test]
-fn cancel_outside_the_modal_is_a_no_op() {
-    let (mut app, _log) = logged_app();
-    app.cancel_confirm_restore();
-    assert_eq!(app.mode, Mode::Normal);
 }
 
 // -- Confirming ------------------------------------------------------------

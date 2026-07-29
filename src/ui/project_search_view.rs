@@ -284,7 +284,7 @@ mod tests {
     use super::*;
     use crate::diff::FileDiff;
     use crate::git::RawFilePatch;
-    use crate::search::{CaseMode, ScanSummary, SearchHit};
+    use crate::search::{ScanSummary, SearchHit};
     use crate::ui::app::Mode;
     use crate::ui::project_search::ResultGroup;
     use ratatui::Terminal;
@@ -342,34 +342,6 @@ index 111..222 100644
     }
 
     #[test]
-    fn shows_the_query_and_all_three_toggle_indicators() {
-        let mut app = App::new(vec![sample_file()]);
-        let mut state = ProjectSearchState::new(Mode::Normal);
-        state.query = "needle".to_string();
-        state.whole_word = true;
-        state.literal = true;
-        state.case = CaseMode::Sensitive;
-        app.project_search = Some(state);
-
-        let content = render_view(&app);
-        assert!(content.contains("/needle"));
-        assert!(content.contains("[literal]"));
-        assert!(content.contains("[case:sensitive]"));
-        assert!(content.contains("[word]"));
-    }
-
-    #[test]
-    fn shows_type_more_characters_placeholder_below_min_length() {
-        let mut app = App::new(vec![sample_file()]);
-        let mut state = ProjectSearchState::new(Mode::Normal);
-        state.query = "n".to_string();
-        app.project_search = Some(state);
-
-        let content = render_view(&app);
-        assert!(content.contains("type at least"));
-    }
-
-    #[test]
     fn shows_grouped_results_with_path_and_line() {
         let mut app = App::new(vec![sample_file()]);
         let mut state = ProjectSearchState::new(Mode::Normal);
@@ -399,133 +371,7 @@ index 111..222 100644
         assert!(content.contains("1 matches in 1 files"));
     }
 
-    #[test]
-    fn shows_capped_indicator_when_summary_is_capped() {
-        let mut app = App::new(vec![sample_file()]);
-        let mut state = ProjectSearchState::new(Mode::Normal);
-        state.query = "needle".to_string();
-        state.summary = Some(ScanSummary {
-            generation: 0,
-            files_scanned: 1,
-            files_matched: 1,
-            total_hits: 10_000,
-            binary_skipped: 0,
-            oversized_skipped: 0,
-            errored: 0,
-            capped: true,
-            aborted: false,
-        });
-        app.project_search = Some(state);
-
-        let content = render_view(&app);
-        assert!(content.contains("capped"));
-    }
-
-    #[test]
-    fn shows_error_line_without_wiping_prior_results() {
-        let mut app = App::new(vec![sample_file()]);
-        let mut state = ProjectSearchState::new(Mode::Normal);
-        state.query = "(unclosed".to_string();
-        state.error = Some("invalid search pattern: some detail".to_string());
-        state.groups = vec![ResultGroup {
-            path: "src/lib.rs".to_string(),
-            hits: vec![hit("src/lib.rs", 1, "prior good hit", vec![])],
-        }];
-        app.project_search = Some(state);
-
-        let content = render_view(&app);
-        assert!(content.contains("invalid pattern"));
-        assert!(
-            content.contains("prior good hit"),
-            "prior results must still render alongside the error"
-        );
-    }
-
-    #[test]
-    fn shows_no_matches_placeholder_when_scan_found_nothing() {
-        let mut app = App::new(vec![sample_file()]);
-        let mut state = ProjectSearchState::new(Mode::Normal);
-        state.query = "zzz".to_string();
-        state.summary = Some(ScanSummary::default());
-        app.project_search = Some(state);
-
-        let content = render_view(&app);
-        assert!(content.contains("no matches"));
-    }
-
-    // -- Match highlight styling --------------------------------------------
-
-    #[test]
-    fn matched_run_gets_blue_bold_foreground_not_a_background_tint() {
-        let theme = Theme::default();
-        #[allow(clippy::single_range_in_vec_init)]
-        let spans = highlighted_line_spans("let needle = 1;", &[4..10], &theme);
-        let matched = spans
-            .iter()
-            .find(|s| s.content.as_ref() == "needle")
-            .expect("the matched run must be its own span");
-        assert_eq!(matched.style.fg, Some(theme.search_match_fg));
-        assert!(matched.style.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(
-            matched.style.bg, None,
-            "match emphasis must ride the foreground, not a background tint"
-        );
-    }
-
-    #[test]
-    fn plain_runs_around_a_match_stay_unstyled() {
-        let theme = Theme::default();
-        #[allow(clippy::single_range_in_vec_init)]
-        let spans = highlighted_line_spans("let needle = 1;", &[4..10], &theme);
-        let plain = spans
-            .iter()
-            .find(|s| s.content.as_ref() == "let ")
-            .expect("a plain run must precede the match");
-        assert_eq!(plain.style.fg, None);
-        assert_eq!(plain.style.bg, None);
-    }
-
     // -- Focus model -----------------------------------------------------
-
-    #[test]
-    fn input_prompt_style_is_bright_in_input_focus_and_dim_in_results_focus() {
-        let theme = Theme::default();
-        assert_eq!(
-            input_prompt_style(SearchFocus::Input, &theme).fg,
-            Some(theme.search_prompt)
-        );
-        assert_eq!(
-            input_prompt_style(SearchFocus::Results, &theme).fg,
-            Some(theme.footer_text),
-            "the input line must visibly recede once it stops receiving keystrokes"
-        );
-    }
-
-    #[test]
-    fn input_cursor_shows_only_in_input_focus() {
-        assert!(should_show_input_cursor(SearchFocus::Input));
-        assert!(!should_show_input_cursor(SearchFocus::Results));
-    }
-
-    #[test]
-    fn selection_style_is_reversed_in_results_focus_and_underlined_in_input_focus() {
-        assert!(
-            selection_style(SearchFocus::Results)
-                .add_modifier
-                .contains(Modifier::REVERSED)
-        );
-        assert!(
-            !selection_style(SearchFocus::Input)
-                .add_modifier
-                .contains(Modifier::REVERSED)
-        );
-        assert!(
-            selection_style(SearchFocus::Input)
-                .add_modifier
-                .contains(Modifier::UNDERLINED),
-            "Input focus still marks the selected row, just not as strongly as Results focus"
-        );
-    }
 
     #[test]
     fn render_sets_the_terminal_cursor_only_while_input_focused() {

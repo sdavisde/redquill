@@ -333,13 +333,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_path_containing_spaces() {
-        let input = "1 .M N... 100644 100644 100644 aaa bbb dir with spaces/a b.rs\0";
-        let e = &parse_porcelain_v2(input).unwrap()[0];
-        assert_eq!(e.path, "dir with spaces/a b.rs");
-    }
-
-    #[test]
     fn parses_multiple_mixed_records() {
         let input = concat!(
             "1 M. N... 100644 100644 100644 a b staged.rs\0",

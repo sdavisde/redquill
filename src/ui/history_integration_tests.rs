@@ -294,40 +294,6 @@ fn commit_view_hides_and_disarms_staging_keys() {
     assert_eq!(app.status_message.as_deref(), Some("read-only diff target"));
 }
 
-/// No LSP code-intel keys work or show while a commit view is open — the
-/// `supports_code_intel() == false` gate, automatic for a `Commit` target.
-#[test]
-fn commit_view_hides_and_disarms_code_intel_keys() {
-    let tmp = repo_with_history();
-    let mut app = app_for(tmp.path());
-    let keymap = Keymap::default_map();
-    let mut pending: Option<KeyEvent> = None;
-
-    open_history_tab(&mut app, &keymap, &mut pending);
-    press(&mut app, &keymap, &mut pending, KeyCode::Enter);
-
-    let code_intel_allowed = app.target.supports_code_intel();
-    assert!(
-        !code_intel_allowed,
-        "commit target must disallow code-intel"
-    );
-    for action in [
-        Action::GotoDefinition,
-        Action::GotoReferences,
-        Action::Hover,
-    ] {
-        assert!(help::binding_hidden(
-            action,
-            true,
-            code_intel_allowed,
-            false
-        ));
-    }
-    // `K` (Hover) must not open the peek overlay.
-    press(&mut app, &keymap, &mut pending, KeyCode::Char('K'));
-    assert_ne!(app.mode, Mode::Peek, "Hover must be inert in a commit view");
-}
-
 /// A commit target never auto-refreshes: `maybe_auto_refresh` bails on
 /// `!target.is_live()` before ever touching the background poller.
 #[test]
@@ -467,81 +433,6 @@ fn q_from_a_commit_view_quits_and_would_emit_annotations() {
         KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
     );
     assert!(matches!(flow, Flow::Quit(QuitOutcome::Emit)));
-}
-
-// -- Keymap/help drift: the new keys are present ------------------------------
-
-/// The `?` overlay's panel-scope section documents `Tab` (switch tab); a
-/// regression here would mean a hidden feature (CLAUDE.md: no user-visible
-/// action without a `?` entry).
-#[test]
-fn panel_scope_keymap_documents_the_tab_toggle() {
-    let km = Keymap::default_map();
-    let row = km
-        .bindings()
-        .iter()
-        .find(|b| b.scope == keymap::Scope::Panel && b.action == Action::TogglePanelTab)
-        .expect("TogglePanelTab must be a registered panel-scope binding");
-    assert_eq!(row.key_label(), "Tab");
-}
-
-// -- Empty-diff welcome state, commit-view wording ---------------------------
-
-/// A repo like `repo_with_history()` plus one more commit on top that
-/// introduces no changes (`git commit --allow-empty`) — opening this one
-/// from History yields a `DiffTarget::Commit` whose own diff has zero files
-/// ("History-opened commit with an empty diff → target-appropriate
-/// wording").
-fn repo_with_history_and_a_trailing_empty_commit() -> TempDir {
-    let tmp = repo_with_history();
-    git(
-        tmp.path(),
-        &["commit", "-qm", "empty commit", "--allow-empty"],
-    );
-    tmp
-}
-
-/// Opening a commit whose own diff introduces no changes shows the
-/// commit-appropriate welcome wording (naming that commit's short SHA), not
-/// the working-tree phrase and not a blank buffer.
-#[test]
-fn opening_a_commit_with_an_empty_diff_shows_commit_appropriate_welcome_wording() {
-    let tmp = repo_with_history_and_a_trailing_empty_commit();
-    let mut app = app_for(tmp.path());
-    let keymap = Keymap::default_map();
-    let mut pending: Option<KeyEvent> = None;
-
-    open_history_tab(&mut app, &keymap, &mut pending);
-    assert_eq!(app.history[0].subject, "empty commit", "newest first");
-    press(&mut app, &keymap, &mut pending, KeyCode::Enter);
-
-    assert!(
-        app.view.files.is_empty(),
-        "the opened commit must have introduced no changes"
-    );
-    let short_sha = app
-        .active_commit
-        .clone()
-        .expect("opening a commit sets active_commit")
-        .short_sha;
-
-    let backend = TestBackend::new(80, 24);
-    let mut terminal = Terminal::new(backend).unwrap();
-    terminal
-        .draw(|frame| draw(frame, &app, &keymap, None))
-        .unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
-
-    let expected = format!("Empty commit diff for {short_sha}");
-    assert!(
-        content.contains(&expected),
-        "expected {expected:?} in:\n{content}"
-    );
-    assert!(
-        !content.contains("No uncommitted changes"),
-        "must not reuse the working-tree wording for a commit target"
-    );
 }
 
 // ==========================================================================

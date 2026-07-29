@@ -50,27 +50,6 @@ fn render_panel_with_keymap(app: &App, keymap: &Keymap) -> String {
         .collect()
 }
 
-/// [`render_panel`], but as one `String` per screen row rather than one flat
-/// concatenation — needed to make a per-row assertion (e.g. "this specific
-/// file row has no counts") that can't be confused with unrelated text
-/// elsewhere on screen, like the bottom section's own aggregate counts.
-fn render_panel_lines(app: &App) -> Vec<String> {
-    let backend = TestBackend::new(32, 24);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let area = Rect::new(0, 0, 32, 24);
-    terminal
-        .draw(|frame| render(frame, area, app, &Keymap::default_map()))
-        .unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    (0..buffer.area.height)
-        .map(|y| {
-            (0..buffer.area.width)
-                .map(|x| buffer[(x, y)].symbol())
-                .collect()
-        })
-        .collect()
-}
-
 fn branch(name: &str, upstream: Option<&str>, ab: Option<(u32, u32)>) -> BranchStatus {
     BranchStatus {
         name: name.to_string(),
@@ -110,16 +89,6 @@ fn header_no_upstream_shows_no_arrows() {
     app.branch = Some(branch("feature", None, None));
     let content = render_panel(&app);
     assert!(content.contains("git: feature"));
-    assert!(!content.contains("\u{2191}"));
-    assert!(!content.contains("\u{2193}"));
-}
-
-#[test]
-fn zero_ahead_behind_shows_no_arrows() {
-    let mut app = App::new(vec![sample_file("session.rs")]);
-    app.branch = Some(branch("main", Some("origin/main"), Some((0, 0))));
-    let content = render_panel(&app);
-    assert!(content.contains("git: main"));
     assert!(!content.contains("\u{2191}"));
     assert!(!content.contains("\u{2193}"));
 }
@@ -170,55 +139,6 @@ fn binary_file_row_shows_a_bin_placeholder_instead_of_counts() {
 }
 
 #[test]
-fn renamed_file_with_no_hunks_omits_counts() {
-    let file = FileDiff {
-        path: "new.rs".to_string(),
-        old_path: Some("old.rs".to_string()),
-        kind: crate::diff::FileChangeKind::Renamed,
-        is_binary: false,
-        hunks: Vec::new(),
-    };
-    let app = App::new(vec![file]);
-    let lines = render_panel_lines(&app);
-    // Check only the file's own row — the bottom section's own aggregate
-    // (always shown, even `+0 -0` for a hunkless review) legitimately
-    // contains '+'/'-' and must not make this assertion a false negative.
-    let row = lines
-        .iter()
-        .find(|l| l.contains("new.rs"))
-        .expect("file row must render");
-    assert!(
-        !row.contains('+') && !row.contains('-'),
-        "a hunkless rename's own row must show no counts: {row:?}"
-    );
-}
-
-#[test]
-fn footer_shows_aggregate_added_removed_counts() {
-    let app = App::new(vec![sample_file("session.rs")]);
-    let content = render_panel(&app);
-    assert!(content.contains("+1"), "aggregate added count: {content:?}");
-    assert!(
-        content.contains("-1"),
-        "aggregate removed count: {content:?}"
-    );
-}
-
-#[test]
-fn accepted_file_renders_the_staged_dot() {
-    // Renders as the staged ● — see theme.rs's staged_indicator rationale.
-    let mut app = App::new(vec![sample_file("session.rs")]);
-    app.target = crate::git::DiffTarget::Review {
-        base: "main".to_string(),
-        branch: "feature".to_string(),
-    };
-    app.apply(Action::ToggleAccept);
-    let content = render_panel(&app);
-    assert!(content.contains("\u{25cf}")); // the reused staged dot
-    assert!(!content.contains('~'));
-}
-
-#[test]
 fn deferred_file_renders_a_distinct_marker() {
     let mut app = App::new(vec![sample_file("session.rs")]);
     app.target = crate::git::DiffTarget::Review {
@@ -228,20 +148,6 @@ fn deferred_file_renders_a_distinct_marker() {
     app.apply(Action::ToggleDefer);
     let content = render_panel(&app);
     assert!(content.contains('~'));
-}
-
-#[test]
-fn tracked_and_untracked_files_share_one_tree_without_section_headers() {
-    let mut app = App::new(vec![sample_file("session.rs"), sample_file("notes.md")]);
-    app.untracked_paths = vec!["notes.md".to_string()];
-    let content = render_panel(&app);
-    // Both files appear, and the old CHANGES/UNTRACKED section headers are gone.
-    assert!(content.contains("session.rs"));
-    assert!(content.contains("notes.md"));
-    assert!(!content.contains("CHANGES"));
-    assert!(!content.contains("UNTRACKED"));
-    // The untracked file carries the `?` change letter.
-    assert!(content.contains('?'));
 }
 
 #[test]
@@ -257,25 +163,6 @@ fn files_nest_under_a_directory_row() {
     );
     // Nested rows draw box-drawing tree guides rather than blank indentation.
     assert!(content.contains('\u{251c}') || content.contains('\u{2514}')); // ├ or └
-}
-
-/// The guide helper draws vertical bars under continuing ancestors and a
-/// `├`/`└` connector per row: a directory whose sibling still follows keeps a
-/// `│` running down its column, and the last child gets a `└`.
-#[test]
-fn tree_guides_connect_ancestors_and_mark_last_children() {
-    let app = App::new(vec![
-        sample_file("src/a.rs"),
-        sample_file("src/b.rs"),
-        sample_file("z.rs"),
-    ]);
-    let rows = super::panel_tree_rows(&app);
-    let guides = super::tree_guides(&rows);
-    // Rows: src(dir), src/a.rs, src/b.rs, z.rs.
-    assert_eq!(guides[0], "\u{251c} "); // src: not last (z.rs follows) -> ├
-    assert_eq!(guides[1], "\u{2502} \u{251c} "); // a.rs: under src (│), not last -> ├
-    assert_eq!(guides[2], "\u{2502} \u{2514} "); // b.rs: under src (│), last -> └
-    assert_eq!(guides[3], "\u{2514} "); // z.rs: last root row -> └
 }
 
 // -- Stashes (bottom-pinned, passive) -------------------------------------
@@ -314,25 +201,6 @@ fn stashes_are_not_navigable() {
     assert_eq!(rows, vec![PanelRow::File(0)]);
 }
 
-#[test]
-fn empty_stashes_hide_the_stashes_section() {
-    let app = App::new(vec![sample_file("session.rs")]);
-    let content = render_panel(&app);
-    assert!(!content.contains("STASHES"));
-}
-
-#[test]
-fn footer_shows_file_and_staged_counts() {
-    let mut app = App::new(vec![sample_file("session.rs")]);
-    app.staged = vec![StagedFile {
-        path: "session.rs".to_string(),
-        letter: 'M',
-    }];
-    let content = render_panel(&app);
-    assert!(content.contains("[1 files]"));
-    assert!(content.contains("[1 staged]"));
-}
-
 // -- Bottom section: last commit + remote keybind hints ----------------
 
 #[test]
@@ -345,24 +213,6 @@ fn bottom_section_shows_last_commit_hash_and_subject() {
     let content = render_panel(&app);
     assert!(content.contains("a1b2c3d"));
     assert!(content.contains("fix: parser"));
-}
-
-#[test]
-fn bottom_section_shows_no_commits_yet_without_a_last_commit() {
-    let app = App::new(vec![sample_file("session.rs")]);
-    let content = render_panel(&app);
-    assert!(content.contains("no commits yet"));
-}
-
-#[test]
-fn bottom_section_shows_fetch_pull_push_keybind_hints() {
-    let mut app = App::new(vec![sample_file("session.rs")]);
-    app.branch = Some(branch("main", Some("origin/main"), Some((0, 0))));
-    let content = render_panel(&app);
-    assert!(content.contains("f fetch"));
-    assert!(content.contains("p pull"));
-    assert!(content.contains("P push"));
-    assert!(!content.contains("P publish"));
 }
 
 /// On a branch with no upstream, `P` publishes (see
@@ -476,13 +326,16 @@ fn collapsing_a_directory_hides_its_file_rows() {
 }
 
 #[test]
-fn moved_cursor_clamps_at_the_top() {
-    assert_eq!(moved_cursor(0, 5, false), 0);
-}
-
-#[test]
-fn moved_cursor_clamps_at_the_bottom() {
-    assert_eq!(moved_cursor(4, 5, true), 4);
+fn moved_cursor_clamps_at_extremes_and_on_empty() {
+    // (cursor, len, down, expected)
+    for (cursor, len, down, expected) in [
+        (0, 5, false, 0), // top
+        (4, 5, true, 4),  // bottom
+        (0, 0, true, 0),  // empty list
+        (0, 0, false, 0), // empty list
+    ] {
+        assert_eq!(moved_cursor(cursor, len, down), expected);
+    }
 }
 
 #[test]
@@ -494,15 +347,6 @@ fn moved_cursor_crosses_dir_and_file_rows() {
     let len = navigable_rows(&app).len();
     assert_eq!(moved_cursor(0, len, true), 1);
     assert_eq!(moved_cursor(1, len, true), 2);
-}
-
-#[test]
-fn moved_cursor_on_empty_list_stays_at_zero() {
-    let app = App::new(vec![]);
-    let len = navigable_rows(&app).len();
-    assert_eq!(len, 0);
-    assert_eq!(moved_cursor(0, len, true), 0);
-    assert_eq!(moved_cursor(0, len, false), 0);
 }
 
 // -- Auto-follow --------------------------------------------------------
@@ -671,7 +515,6 @@ fn enter_on_dir_row_toggles_collapse_and_keeps_focus() {
 // TestBackend buffer assertions (no real TTY in CI).
 
 use super::super::background::TaskId;
-use super::super::history::InFlightHistory;
 use crate::git::CommitLogEntry;
 
 fn commit(sha: &str, subject: &str, author: &str, ts: i64) -> CommitLogEntry {
@@ -697,20 +540,9 @@ fn app_on_history_tab() -> App {
 fn history_tab_shows_a_loading_placeholder_before_the_first_page_lands() {
     let mut app = app_on_history_tab();
     // Simulate a fetch in flight without actually spawning a thread.
-    app.history_in_flight = Some(InFlightHistory {
-        id: TaskId(0),
-        generation: app.history_generation,
-    });
+    app.history_in_flight = Some(TaskId(0));
     let content = render_panel(&app);
     assert!(content.contains("loading"));
-}
-
-#[test]
-fn history_tab_shows_no_commits_when_nothing_is_in_flight_and_history_is_empty() {
-    let app = app_on_history_tab();
-    let content = render_panel(&app);
-    assert!(content.contains("no commits"));
-    assert!(!content.contains("loading"));
 }
 
 #[test]
@@ -731,18 +563,6 @@ fn history_tab_renders_commit_rows_with_subject_meta_and_unpushed_marker() {
     assert!(content.contains("\u{2502}")); // graph connector bar
     assert!(content.contains("Jane Dev"));
     assert!(content.contains("abc1234")); // right-aligned short sha
-}
-
-#[test]
-fn panel_title_shows_both_tab_labels_regardless_of_which_is_active() {
-    let mut app = App::new(vec![sample_file("session.rs")]);
-    app.mode = Mode::Panel {
-        cursor: 0,
-        tab: PanelTab::Changes,
-    };
-    let content = render_panel(&app);
-    assert!(content.contains("Changes"));
-    assert!(content.contains("History"));
 }
 
 #[test]

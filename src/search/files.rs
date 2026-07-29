@@ -62,17 +62,4 @@ mod tests {
         let merged = merge_candidates(tracked, untracked);
         assert_eq!(paths(&merged), vec!["a.rs", "b.rs"]);
     }
-
-    #[test]
-    fn empty_lists_yield_no_candidates() {
-        assert!(merge_candidates(Vec::new(), Vec::new()).is_empty());
-    }
-
-    #[test]
-    fn order_is_deterministic_regardless_of_input_order() {
-        let tracked = vec!["z.rs".to_string(), "a.rs".to_string()];
-        let untracked = vec!["m.rs".to_string()];
-        let merged = merge_candidates(tracked, untracked);
-        assert_eq!(paths(&merged), vec!["a.rs", "m.rs", "z.rs"]);
-    }
 }

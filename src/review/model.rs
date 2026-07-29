@@ -23,7 +23,7 @@ pub enum ReviewStatus {
     /// SHA for this file has since changed (detected at load-time
     /// reconciliation — see [`super::reconcile::reconcile`]). Rendered
     /// un-collapsed with its own marker; a `Space` press re-accepts it at
-    /// the fresh SHA (see [`accept`]).
+    /// the fresh SHA (see [`toggle_accept`]).
     ChangedSinceAccepted,
 }
 
@@ -47,15 +47,6 @@ pub fn toggle_accept(status: ReviewStatus) -> ReviewStatus {
     }
 }
 
-/// Unconditionally marks `Accepted`, with no un-accept direction. Not used
-/// by either `Space` or `S` today (both drive the full [`toggle_accept`]
-/// toggle instead); reserved for re-accepting a file whose contents changed
-/// since acceptance, which must always accept forward rather than toggle
-/// back to `Unreviewed` on a repeated press.
-pub fn accept(_status: ReviewStatus) -> ReviewStatus {
-    ReviewStatus::Accepted
-}
-
 /// The `d` gesture: toggles the file between `Deferred` and everything
 /// else, exactly mirroring [`toggle_accept`]'s shape for the opposite
 /// status.
@@ -71,11 +62,6 @@ pub fn toggle_defer(status: ReviewStatus) -> ReviewStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn default_status_is_unreviewed() {
-        assert_eq!(ReviewStatus::default(), ReviewStatus::Unreviewed);
-    }
 
     // -- toggle_accept: exhaustive transition table --------------------------
 
@@ -111,27 +97,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn toggle_accept_is_a_true_toggle_round_trip() {
-        let accepted = toggle_accept(ReviewStatus::Unreviewed);
-        assert_eq!(accepted, ReviewStatus::Accepted);
-        assert_eq!(toggle_accept(accepted), ReviewStatus::Unreviewed);
-    }
-
-    // -- accept: unconditional -----------------------------------------------
-
-    #[test]
-    fn accept_is_unconditional_from_every_status() {
-        for status in [
-            ReviewStatus::Unreviewed,
-            ReviewStatus::Deferred,
-            ReviewStatus::Accepted,
-            ReviewStatus::ChangedSinceAccepted,
-        ] {
-            assert_eq!(accept(status), ReviewStatus::Accepted);
-        }
-    }
-
     // -- toggle_defer: exhaustive transition table ----------------------------
 
     #[test]
@@ -161,23 +126,5 @@ mod tests {
             toggle_defer(ReviewStatus::ChangedSinceAccepted),
             ReviewStatus::Deferred
         );
-    }
-
-    #[test]
-    fn toggle_defer_is_a_true_toggle_round_trip() {
-        let deferred = toggle_defer(ReviewStatus::Unreviewed);
-        assert_eq!(deferred, ReviewStatus::Deferred);
-        assert_eq!(toggle_defer(deferred), ReviewStatus::Unreviewed);
-    }
-
-    // -- accept/defer are mutually exclusive ---------------------------------
-
-    #[test]
-    fn accepting_a_deferred_file_then_deferring_it_again_round_trips() {
-        let deferred = toggle_defer(ReviewStatus::Unreviewed);
-        let accepted = toggle_accept(deferred);
-        assert_eq!(accepted, ReviewStatus::Accepted);
-        let deferred_again = toggle_defer(accepted);
-        assert_eq!(deferred_again, ReviewStatus::Deferred);
     }
 }

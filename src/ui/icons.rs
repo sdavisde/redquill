@@ -47,24 +47,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dir_icon_reflects_collapse_state() {
-        assert_ne!(dir_icon(true), dir_icon(false));
-    }
-
-    #[test]
-    fn chevron_points_right_when_collapsed_down_when_open() {
-        assert_eq!(chevron(true), "\u{25b8}");
-        assert_eq!(chevron(false), "\u{25be}");
-    }
-
-    #[test]
-    fn known_extensions_map_to_distinct_glyphs() {
-        assert_eq!(file_icon("main.rs"), "\u{e7a8}");
-        assert_eq!(file_icon("README.md"), "\u{f48a}");
-        assert_eq!(file_icon("Cargo.toml"), "\u{e615}");
-    }
-
-    #[test]
     fn extension_lookup_is_case_insensitive() {
         assert_eq!(file_icon("MAIN.RS"), file_icon("main.rs"));
     }

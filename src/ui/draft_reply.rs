@@ -248,10 +248,13 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_then_restore_round_trips_thread_id_and_body() {
+    fn snapshot_then_restore_round_trips_thread_id_body_and_both_flags() {
         let mut store = DraftReplyStore::new();
-        store.add(100, "agreed").unwrap();
+        let id0 = store.add(100, "agreed").unwrap();
         store.add(200, "why?").unwrap();
+        assert!(store.set_published(id0, true));
+        assert!(!store.set_published(999, true), "unknown ids report false");
+        store.set_draft_created(id0, true);
 
         let snap = store.snapshot();
         assert_eq!(snap.len(), 2);
@@ -261,11 +264,14 @@ mod tests {
         let mut restored = DraftReplyStore::new();
         let n = restored.restore(snap);
         assert_eq!(n, 2);
-        let pairs: Vec<(u64, &str)> = restored
+        let rows: Vec<(u64, &str, bool, bool)> = restored
             .iter()
-            .map(|r| (r.thread_id, r.body.as_str()))
+            .map(|r| (r.thread_id, r.body.as_str(), r.published, r.draft_created))
             .collect();
-        assert_eq!(pairs, vec![(100, "agreed"), (200, "why?")]);
+        assert_eq!(
+            rows,
+            vec![(100, "agreed", true, true), (200, "why?", false, false)]
+        );
     }
 
     #[test]
@@ -288,69 +294,6 @@ mod tests {
         assert_eq!(n, 1);
         assert_eq!(store.len(), 1);
         assert_eq!(store.iter().next().unwrap().body, "kept");
-    }
-
-    // -- published flag -------------------------------------------------------
-
-    #[test]
-    fn add_creates_an_unpublished_reply() {
-        let mut store = DraftReplyStore::new();
-        let id = store.add(1, "note").unwrap();
-        assert!(!store.get(id).unwrap().published);
-    }
-
-    #[test]
-    fn set_published_flips_the_flag_and_reports_unknown_ids() {
-        let mut store = DraftReplyStore::new();
-        let id = store.add(1, "note").unwrap();
-        assert!(store.set_published(id, true));
-        assert!(store.get(id).unwrap().published);
-        assert!(!store.set_published(999, true));
-    }
-
-    #[test]
-    fn unpublished_excludes_replies_marked_published() {
-        let mut store = DraftReplyStore::new();
-        let id0 = store.add(1, "sent already").unwrap();
-        let id1 = store.add(2, "still draft").unwrap();
-        store.set_published(id0, true);
-
-        let remaining: Vec<usize> = store.unpublished().map(|r| r.id).collect();
-        assert_eq!(remaining, vec![id1]);
-    }
-
-    #[test]
-    fn snapshot_and_restore_preserve_the_draft_created_flag() {
-        let mut store = DraftReplyStore::new();
-        let drafted = store.add(1, "draft exists").unwrap();
-        store.set_draft_created(drafted, true);
-        store.add(2, "no draft").unwrap();
-
-        let snap = store.snapshot();
-        assert!(snap[0].draft_created);
-        assert!(!snap[1].draft_created);
-
-        let mut restored = DraftReplyStore::new();
-        restored.restore(snap);
-        let flags: Vec<bool> = restored.iter().map(|r| r.draft_created).collect();
-        assert_eq!(flags, vec![true, false]);
-    }
-
-    #[test]
-    fn snapshot_and_restore_preserve_the_published_flag() {
-        let mut store = DraftReplyStore::new();
-        let id0 = store.add(1, "sent already").unwrap();
-        store.add(2, "still draft").unwrap();
-        store.set_published(id0, true);
-
-        let snap = store.snapshot();
-        assert!(snap[0].published);
-        assert!(!snap[1].published);
-
-        let mut restored = DraftReplyStore::new();
-        restored.restore(snap);
-        let flags: Vec<bool> = restored.iter().map(|r| r.published).collect();
-        assert_eq!(flags, vec![true, false]);
     }
 
     /// Draft replies live entirely outside the annotation store, so the

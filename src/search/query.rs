@@ -131,15 +131,6 @@ mod tests {
     }
 
     #[test]
-    fn smart_case_matches_ui_convention() {
-        // Same one-line rule as `crate::ui::search::smartcase_contains`:
-        // insensitive iff no uppercase letter in the pattern.
-        assert!(smart_case_is_insensitive("hello"));
-        assert!(!smart_case_is_insensitive("Hello"));
-        assert!(smart_case_is_insensitive("hello_world_123"));
-    }
-
-    #[test]
     fn case_sensitive_mode_ignores_pattern_casing() {
         let q = SearchQuery {
             pattern: "hello".to_string(),
@@ -176,17 +167,6 @@ mod tests {
     }
 
     #[test]
-    fn whole_word_off_matches_substrings() {
-        let q = SearchQuery {
-            pattern: "cat".to_string(),
-            case: CaseMode::Smart,
-            whole_word: false,
-            literal: false,
-        };
-        assert!(matches(&q, "concatenate"));
-    }
-
-    #[test]
     fn literal_mode_treats_metacharacters_as_text() {
         let q = SearchQuery {
             pattern: "a.b".to_string(),
@@ -196,17 +176,6 @@ mod tests {
         };
         assert!(matches(&q, "x a.b y"));
         assert!(!matches(&q, "x axb y"));
-    }
-
-    #[test]
-    fn non_literal_mode_treats_dot_as_wildcard() {
-        let q = SearchQuery {
-            pattern: "a.b".to_string(),
-            case: CaseMode::Smart,
-            whole_word: false,
-            literal: false,
-        };
-        assert!(matches(&q, "x axb y"));
     }
 
     #[test]

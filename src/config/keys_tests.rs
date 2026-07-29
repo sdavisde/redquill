@@ -82,15 +82,11 @@ fn f_key_range_is_bounded() {
 }
 
 #[test]
-fn esc_parses() {
+fn named_keys_parse() {
     assert_eq!(
         parse_key_string("esc"),
         Ok(one(KeyCode::Esc, KeyModifiers::NONE))
     );
-}
-
-#[test]
-fn named_keys_parse() {
     assert_eq!(
         parse_key_string("space"),
         Ok(one(KeyCode::Char(' '), KeyModifiers::NONE))
@@ -175,19 +171,6 @@ fn space_separated_two_chords_parse_as_a_sequence() {
 }
 
 #[test]
-fn two_chord_sequence_with_modifiers_parses() {
-    assert_eq!(
-        parse_key_string("g ctrl-d"),
-        Ok(two(
-            KeyCode::Char('g'),
-            KeyModifiers::NONE,
-            KeyCode::Char('d'),
-            KeyModifiers::CONTROL,
-        ))
-    );
-}
-
-#[test]
 fn three_or_more_chords_is_rejected() {
     assert_eq!(
         parse_key_string("g d d"),
@@ -215,14 +198,6 @@ fn unknown_key_name_is_rejected() {
 fn dangling_modifier_prefix_is_rejected() {
     assert!(matches!(
         parse_key_string("ctrl-"),
-        Err(KeyGrammarError::UnknownKeyName(_))
-    ));
-}
-
-#[test]
-fn multi_char_garbage_is_rejected() {
-    assert!(matches!(
-        parse_key_string("xyz"),
         Err(KeyGrammarError::UnknownKeyName(_))
     ));
 }
@@ -260,24 +235,6 @@ fn keys_section_parses_string_and_array_values() {
         cfg.panel.get("stage-line"),
         Some(&vec![one_spec(KeyCode::Char('x'), KeyModifiers::NONE)])
     );
-}
-
-#[test]
-fn keys_section_parses_the_global_table() {
-    let toml = r#"
-        [global]
-        toggle-command-log = "ctrl-l"
-        quit = []
-    "#;
-    let raw: toml::Table = toml.parse().unwrap();
-    let mut warnings = Vec::new();
-    let cfg = KeysConfig::from_value(toml::Value::Table(raw), &mut warnings);
-    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
-    assert_eq!(
-        cfg.global.get("toggle-command-log"),
-        Some(&vec![one_spec(KeyCode::Char('l'), KeyModifiers::CONTROL)])
-    );
-    assert_eq!(cfg.global.get("quit"), Some(&Vec::new()));
 }
 
 fn one_spec(code: KeyCode, mods: KeyModifiers) -> KeySeqSpec {

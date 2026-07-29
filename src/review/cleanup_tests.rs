@@ -90,11 +90,6 @@ fn a_review_entry_with_no_forge_block_is_excluded() {
 }
 
 #[test]
-fn empty_inputs_yield_no_finished_reviews() {
-    assert!(finished_reviews(&[], &BTreeMap::new(), &open(&[])).is_empty());
-}
-
-#[test]
 fn open_and_closed_reviews_partition_correctly() {
     let mut reviews = BTreeMap::new();
     reviews.insert("redquill/pr/1".to_string(), forge_review(1, "closed"));

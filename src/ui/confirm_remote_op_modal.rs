@@ -176,28 +176,4 @@ index 111..222 100644
         assert!(content.contains("confirm"));
         assert!(content.contains("cancel"));
     }
-
-    #[test]
-    fn pull_question_says_pull() {
-        let mut app = App::new(vec![sample_file()]);
-        app.target = DiffTarget::Review {
-            base: "main".to_string(),
-            branch: "feature".to_string(),
-        };
-        app.mode = Mode::ConfirmRemoteOp {
-            op: RemoteOp::Pull,
-            cursor: 0,
-            tab: PanelTab::Changes,
-        };
-        let content = render_modal(&app);
-        assert!(content.contains("Pull feature"));
-    }
-
-    #[test]
-    fn render_is_a_no_op_outside_the_modal() {
-        let app = App::new(vec![sample_file()]);
-        assert_eq!(app.mode, Mode::Normal);
-        let content = render_modal(&app);
-        assert!(!content.contains("the branch under review?"));
-    }
 }

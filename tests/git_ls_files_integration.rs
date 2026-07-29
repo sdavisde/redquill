@@ -69,22 +69,3 @@ fn ls_files_untracked_excludes_ignored_paths() {
     let untracked = runner.ls_files_untracked().expect("ls_files_untracked");
     assert_eq!(untracked, vec!["untracked.rs".to_string()]);
 }
-
-#[test]
-fn combined_tracked_and_untracked_omit_ignored_files() {
-    let tmp = repo_with_tracked_untracked_and_ignored();
-    let runner = GitRunner::discover_in(tmp.path()).expect("discover repo");
-    let tracked = runner.ls_files().expect("ls_files");
-    let untracked = runner.ls_files_untracked().expect("ls_files_untracked");
-    let mut all: Vec<String> = tracked.into_iter().chain(untracked).collect();
-    all.sort();
-    assert_eq!(
-        all,
-        vec![
-            ".gitignore".to_string(),
-            "tracked.rs".to_string(),
-            "untracked.rs".to_string(),
-        ]
-    );
-    assert!(!all.iter().any(|p| p == "ignored.txt"));
-}

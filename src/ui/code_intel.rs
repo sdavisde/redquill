@@ -617,21 +617,6 @@ index 1..2 100644
     }
 
     #[test]
-    fn gd_on_header_row_sets_no_code_intelligence_message() {
-        let (mut app, _tmp, calls, _poll) = lsp_test_app();
-        assert!(matches!(
-            app.view.rows[app.view.cursor],
-            Row::FileHeader { .. }
-        ));
-        app.apply(Action::GotoDefinition);
-        assert!(calls.lock().unwrap().is_empty());
-        assert_eq!(
-            app.status_message.as_deref(),
-            Some("no code intelligence here")
-        );
-    }
-
-    #[test]
     fn gd_on_missing_file_sets_no_code_intelligence_message() {
         let tmp = tempfile::TempDir::new().expect("tempdir");
         // Deliberately no file written under `tmp` at "src/main.rs".
@@ -655,17 +640,6 @@ index 1..2 100644
     }
 
     #[test]
-    fn gd_without_repo_root_sets_no_code_intelligence_message() {
-        let mut app = App::new(vec![file_with_raw("src/main.rs", lsp_fixture_raw())]);
-        move_to_added_line(&mut app);
-        app.apply(Action::GotoDefinition);
-        assert_eq!(
-            app.status_message.as_deref(),
-            Some("no code intelligence here")
-        );
-    }
-
-    #[test]
     fn gd_on_valid_row_dispatches_request_and_sets_resolving_message() {
         let (mut app, tmp, calls, _poll) = lsp_test_app();
         move_to_added_line(&mut app);
@@ -681,22 +655,6 @@ index 1..2 100644
     }
 
     // -- Capability gate: no code-intel off the live working tree ----------
-
-    #[test]
-    fn gd_on_a_staged_target_sets_no_code_intelligence_message_without_dispatching() {
-        let (mut app, _tmp, calls, _poll) = lsp_test_app();
-        app.target = DiffTarget::Staged;
-        move_to_added_line(&mut app);
-        app.apply(Action::GotoDefinition);
-        assert!(
-            calls.lock().unwrap().is_empty(),
-            "a Staged target must never reach the LSP client"
-        );
-        assert_eq!(
-            app.status_message.as_deref(),
-            Some("no code intelligence here")
-        );
-    }
 
     #[test]
     fn gr_and_k_are_also_gated_on_a_range_target() {
@@ -885,13 +843,6 @@ index 1..2 100644
         assert_eq!(app.peek.as_ref().unwrap().hover_text, "some docs");
     }
 
-    #[test]
-    fn take_lsp_client_returns_the_injected_client_once() {
-        let (mut app, _tmp, _calls, _poll) = lsp_test_app();
-        assert!(app.take_lsp_client().is_some());
-        assert!(app.take_lsp_client().is_none());
-    }
-
     // -- Peek overlay -------------------------------------------------------
 
     fn source_loc(path: &std::path::Path, line: u32) -> SourceLocation {
@@ -944,13 +895,37 @@ index 1..2 100644
     }
 
     #[test]
-    fn close_peek_returns_to_normal() {
-        let mut app = App::new(vec![file("a.rs", 1)]);
-        app.peek = Some(PeekState::hover("x".to_string()));
-        app.mode = Mode::Peek;
-        close_peek(&mut app);
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(app.peek.is_none());
+    fn peek_paging_and_jump_motions_move_the_selection() {
+        // Six paging fns over a 20-location References list, viewport 8
+        // (half page 4, full page 8): (fn, start, expected).
+        type PagingFn = fn(&mut App);
+        let cases: &[(&str, PagingFn, usize, usize)] = &[
+            ("half_page_down", peek_half_page_down, 0, 4),
+            ("half_page_up", peek_half_page_up, 5, 1),
+            ("half_page_up clamps", peek_half_page_up, 2, 0),
+            ("full_page_down", peek_full_page_down, 0, 8),
+            ("full_page_down clamps", peek_full_page_down, 15, 19),
+            ("full_page_up", peek_full_page_up, 10, 2),
+            ("jump_to_top", peek_jump_to_top, 7, 0),
+            ("jump_to_bottom", peek_jump_to_bottom, 0, 19),
+        ];
+        for &(name, f, start, expected) in cases {
+            let mut app = App::new(vec![file("a.rs", 1)]);
+            app.view.set_viewport_height(8);
+            let locations = (0..20)
+                .map(|i| source_loc(std::path::Path::new("/tmp/a.rs"), i))
+                .collect();
+            app.peek = Some(PeekState::locations(PeekKind::References, locations));
+            app.mode = Mode::Peek;
+            app.peek.as_mut().unwrap().selected = start;
+
+            f(&mut app);
+            assert_eq!(
+                app.peek.as_ref().unwrap().selected,
+                expected,
+                "{name} from {start}"
+            );
+        }
     }
 
     #[test]

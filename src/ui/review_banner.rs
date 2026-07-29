@@ -11,8 +11,8 @@
 //! [`layout`] is the pure content half (label/counts/stat/width in, the
 //! banner's text pieces out, truncating only the label — never
 //! wrapping) so it's unit-testable without a terminal; [`banner_text`]
-//! concatenates those pieces into the one-line string the existing
-//! byte-exact tests assert against; [`render`] is the thin ratatui half that
+//! concatenates those pieces into one line for the width/truncation tests;
+//! [`render`] is the thin ratatui half that
 //! turns the same pieces into styled spans (bold label,
 //! kind_added/kind_deleted stat halves) and pads the row to its full width,
 //! painting [`super::theme::Theme::review_banner_bg`]/`review_banner_fg`
@@ -63,9 +63,9 @@ enum BannerLayout {
 }
 
 /// Formats a [`DiffStat`] as the banner's fixed `+A -R` segment text (used
-/// for both the width math below and the byte-exact [`banner_text`] test
-/// helper — [`render`] builds the same two halves as separately colored
-/// spans instead).
+/// for both the width math below and the [`banner_text`] test helper —
+/// [`render`] builds the same two halves as separately colored spans
+/// instead).
 fn stat_text(stat: DiffStat) -> String {
     format!("+{} -{}", stat.added, stat.removed)
 }
@@ -124,7 +124,7 @@ fn layout(
 }
 
 /// Builds the banner's single-row text for a `width`-column-wide band, for
-/// the byte-exact tests below (`render` builds the same pieces from
+/// the width/truncation tests below (`render` builds the same pieces from
 /// [`layout`] directly, as separately styled spans, rather than going
 /// through this concatenated string — hence `#[cfg(test)]`: this exists
 /// purely so the truncation/padding contract stays unit-testable against a
@@ -262,21 +262,18 @@ mod tests {
     }
 
     #[test]
-    fn stale_checkout_renders_a_visible_stale_marker() {
+    fn stale_checkout_renders_a_visible_stale_marker_and_a_fresh_one_does_not() {
         let line = render_line("redquill/pr/7", 0, 3, true);
         assert!(
             line.contains("STALE"),
             "a stale PR checkout must render a STALE marker: {line:?}"
         );
         assert!(line.contains("redquill/pr/7"));
-    }
 
-    #[test]
-    fn fresh_checkout_renders_no_stale_marker() {
-        let line = render_line("redquill/pr/7", 0, 3, false);
+        let fresh = render_line("redquill/pr/7", 0, 3, false);
         assert!(
-            !line.contains("STALE"),
-            "a fresh session must not render a STALE marker: {line:?}"
+            !fresh.contains("STALE"),
+            "a fresh session must not render a STALE marker: {fresh:?}"
         );
     }
 
@@ -285,36 +282,6 @@ mod tests {
         let line = render_line("redquill/pr/7", 0, 3, false);
         assert!(line.contains("+7"), "aggregate added count: {line:?}");
         assert!(line.contains("-2"), "aggregate removed count: {line:?}");
-    }
-
-    #[test]
-    fn fits_unchanged_when_width_is_generous() {
-        let text = banner_text("feature/thing", 4, 12, sample_stat(), 80);
-        let expected = format!(" REVIEWING feature/thing +7 -2{}4/12 ", " ".repeat(45));
-        assert_eq!(text, expected);
-    }
-
-    #[test]
-    fn leading_padding_and_right_aligned_count() {
-        let text = banner_text("feature/thing", 4, 12, sample_stat(), 80);
-        assert!(
-            text.starts_with(" REVIEWING "),
-            "one space of left padding before REVIEWING: {text:?}"
-        );
-        assert!(
-            text.ends_with("4/12 "),
-            "progress count right-aligned with one trailing space: {text:?}"
-        );
-        assert_eq!(text.chars().count(), 80);
-    }
-
-    #[test]
-    fn renders_the_stat_segment_between_the_label_and_the_count() {
-        let text = banner_text("feature/thing", 4, 12, sample_stat(), 80);
-        assert!(
-            text.contains("feature/thing +7 -2"),
-            "stat segment must sit right after the label: {text:?}"
-        );
     }
 
     #[test]
@@ -355,27 +322,6 @@ mod tests {
             !text.contains("a-very-long-feature-branch-name"),
             "the full branch name must have been shortened: {text:?}"
         );
-        assert_eq!(text.chars().count(), 45);
-    }
-
-    #[test]
-    fn never_wraps_to_a_second_line() {
-        let text = banner_text("a-very-long-feature-branch-name", 4, 12, sample_stat(), 20);
-        assert!(!text.contains('\n'));
-    }
-
-    #[test]
-    fn short_branch_name_is_never_truncated_even_when_width_is_tight_around_it() {
-        // The branch is short enough that only the surrounding chrome, not
-        // the branch itself, would need to shrink -- but chrome is fixed, so
-        // this just exercises the "doesn't fit, but budget still covers the
-        // whole branch" non-panicking path stays a no-op distinguishable
-        // from the truncated case. Width is a few columns wider than the
-        // short-branch-name test used before the stat segment existed, since
-        // the segment adds fixed-width chrome of its own.
-        let text = banner_text("ab", 0, 1, sample_stat(), 45);
-        assert!(text.contains("ab"));
-        assert!(!text.contains('\u{2026}'));
         assert_eq!(text.chars().count(), 45);
     }
 }

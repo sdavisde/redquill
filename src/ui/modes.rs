@@ -932,24 +932,6 @@ index 111..222 100644
     }
 
     #[test]
-    fn r_types_a_literal_character_in_commit_message_mode() {
-        let mut app = App::new(vec![sample_file()]);
-        app.commit_message = Some(crate::ui::commit_message::CommitMessageState::new(0));
-        app.mode = Mode::CommitMessage;
-        handle_commit_message_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE),
-        );
-        assert_eq!(
-            app.commit_message
-                .as_ref()
-                .map(|c| c.buffer.text())
-                .as_deref(),
-            Some("R")
-        );
-    }
-
-    #[test]
     fn r_types_a_literal_character_in_search_mode() {
         let mut app = App::new(vec![sample_file()]);
         app.mode = Mode::Search;

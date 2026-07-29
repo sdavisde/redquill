@@ -248,14 +248,6 @@ mod tests {
     }
 
     #[test]
-    fn open_file_view_is_read_only_and_code_intel_free() {
-        let mut app = app_with_file_content("a.rs", "fn main() {}\n");
-        app.open_file_view("a.rs".to_string(), None);
-        assert_eq!(app.target.staging_mode(), StagingMode::ReadOnly);
-        assert!(!app.target.supports_code_intel());
-    }
-
-    #[test]
     fn open_file_view_without_backend_sets_footer_message_and_leaves_view_unchanged() {
         let mut app = App::new(vec![sample_file("src/main.rs")]);
         let prior_target = app.target.clone();

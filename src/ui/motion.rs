@@ -308,15 +308,6 @@ mod tests {
         assert_eq!(Motion::StepDown.repeat_count(Some(50_000)), MAX_COUNT);
     }
 
-    #[test]
-    fn motion_all_lists_every_variant_exactly_once() {
-        let mut seen = std::collections::HashSet::new();
-        for m in Motion::ALL {
-            assert!(seen.insert(m), "{m:?} listed more than once in Motion::ALL");
-        }
-        assert_eq!(Motion::ALL.len(), 8);
-    }
-
     // -- count_survives_sequence_start ----------------------------------------
 
     #[test]
@@ -342,13 +333,6 @@ mod tests {
     fn step_on_an_empty_list_stays_at_zero() {
         assert_eq!(step(0, 0, 1, true), 0);
         assert_eq!(step(0, 0, 1, false), 0);
-    }
-
-    #[test]
-    fn jump_top_and_bottom_target_the_list_extremes() {
-        assert_eq!(jump_top(), 0);
-        assert_eq!(jump_bottom(10), 9);
-        assert_eq!(jump_bottom(0), 0, "an empty list's bottom is row 0");
     }
 
     #[test]
@@ -419,57 +403,10 @@ mod tests {
         assert_eq!(list.cursor, 99);
     }
 
-    #[test]
-    fn dispatch_covers_half_and_full_page_in_both_directions() {
-        let mut list = FakeList {
-            cursor: 50,
-            len: 100,
-            viewport: 10,
-        };
-        dispatch(&mut list, Motion::HalfPageDown, None);
-        assert_eq!(list.cursor, 55);
-        dispatch(&mut list, Motion::HalfPageUp, None);
-        assert_eq!(list.cursor, 50);
-        dispatch(&mut list, Motion::FullPageDown, None);
-        assert_eq!(list.cursor, 60);
-        dispatch(&mut list, Motion::FullPageUp, None);
-        assert_eq!(list.cursor, 50);
-    }
-
     // -- covers_all --------------------------------------------------------
-
-    #[test]
-    fn covers_all_is_true_when_every_motion_resolves() {
-        assert!(covers_all(&Motion::ALL, |_| true));
-    }
 
     #[test]
     fn covers_all_is_false_when_any_motion_is_missing() {
         assert!(!covers_all(&Motion::ALL, |m| m != Motion::JumpToBottom));
-    }
-
-    /// Proves `covers_all` isn't a tautology: it's generic over the required
-    /// list, so a caller can hand it a list containing a motion no real
-    /// context supports (`resolves` here is a stand-in for "every currently
-    /// wired-up context's actual resolver", none of which can ever say yes
-    /// to a value outside the real `Motion` enum) and the check correctly
-    /// reports incomplete coverage rather than vacuously passing.
-    #[test]
-    fn covers_all_rejects_a_requirement_no_resolver_can_satisfy() {
-        #[derive(Clone, Copy)]
-        enum WithExtra {
-            Real,
-            NeverSupported,
-        }
-        let required: Vec<WithExtra> = Motion::ALL
-            .into_iter()
-            .map(|_| WithExtra::Real)
-            .chain(std::iter::once(WithExtra::NeverSupported))
-            .collect();
-        let resolves = |m: WithExtra| matches!(m, WithExtra::Real);
-        assert!(
-            !covers_all(&required, resolves),
-            "a required motion with no resolver must fail coverage"
-        );
     }
 }

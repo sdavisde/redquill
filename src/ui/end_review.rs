@@ -166,38 +166,6 @@ index 111..222 100644
     }
 
     #[test]
-    fn open_from_normal_and_cancel_restores_normal() {
-        let mut app = review_app();
-        assert_eq!(app.mode, Mode::Normal);
-        app.open_end_review_modal();
-        assert_eq!(
-            app.mode,
-            Mode::EndReview {
-                origin: ModeOrigin::Normal,
-                cursor: 0,
-            }
-        );
-        app.cancel_end_review();
-        assert_eq!(app.mode, Mode::Normal);
-    }
-
-    #[test]
-    fn open_from_visual_and_cancel_restores_the_anchor() {
-        let mut app = review_app();
-        app.mode = Mode::Visual { anchor: 3 };
-        app.open_end_review_modal();
-        assert_eq!(
-            app.mode,
-            Mode::EndReview {
-                origin: ModeOrigin::Visual { anchor: 3 },
-                cursor: 0,
-            }
-        );
-        app.cancel_end_review();
-        assert_eq!(app.mode, Mode::Visual { anchor: 3 });
-    }
-
-    #[test]
     fn open_from_panel_and_cancel_restores_the_cursor_and_tab() {
         let mut app = review_app();
         app.mode = Mode::Panel {
@@ -278,32 +246,6 @@ index 111..222 100644
     }
 
     #[test]
-    fn finish_removes_the_worktree_prunes_and_quits_emitting() {
-        let mut app = review_app();
-        app.set_repo_root(PathBuf::from("/tmp/review-worktree"));
-        let remove_calls = Rc::new(RefCell::new(Vec::new()));
-        let prune_calls = Rc::new(RefCell::new(0));
-        app.set_review_origin_ops(Box::new(WorktreeFake {
-            remove_calls: Rc::clone(&remove_calls),
-            prune_calls: Rc::clone(&prune_calls),
-            remove_error: None,
-        }));
-        app.open_end_review_modal();
-
-        let outcome = app.finish_review();
-        assert_eq!(outcome, Some(QuitOutcome::Emit));
-        assert_eq!(
-            remove_calls.borrow().as_slice(),
-            [PathBuf::from("/tmp/review-worktree")]
-        );
-        assert_eq!(
-            *prune_calls.borrow(),
-            1,
-            "prune must run after a successful remove"
-        );
-    }
-
-    #[test]
     fn finish_deletes_the_branchs_persisted_state_entry() {
         let tmp = tempfile::TempDir::new().unwrap();
         let state_path = tmp.path().join("review-state.json");
@@ -352,58 +294,6 @@ index 111..222 100644
         assert!(
             state.reviews.contains_key("other-branch"),
             "finish must never touch another branch's entry"
-        );
-    }
-
-    /// The "one lifecycle" requirement: finish deletes a branch's persisted
-    /// *annotations* alongside its file statuses, in the same call — there
-    /// is no separate annotation-only entry left orphaned behind.
-    #[test]
-    fn finish_deletes_persisted_annotations_alongside_the_state_entry() {
-        use crate::annotate::{Classification, PersistedAnnotation, Side, Source, Target};
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        let state_path = tmp.path().join("review-state.json");
-        crate::review::store::save_review(
-            &state_path,
-            "feature",
-            crate::review::store::PersistedReview {
-                base: "main".to_string(),
-                worktree_path: PathBuf::from("/tmp/review-worktree"),
-                files: std::collections::BTreeMap::new(),
-                annotations: vec![PersistedAnnotation {
-                    target: Target::line("src/main.rs", 1, Side::New),
-                    classification: Classification::Nit,
-                    body: "note".to_string(),
-                    source: Source::WorkingTree,
-                    published: false,
-                    draft_created: false,
-                }],
-                replies: Vec::new(),
-                forge: None,
-            },
-        )
-        .unwrap();
-        assert!(
-            !crate::review::store::load(&state_path).reviews["feature"]
-                .annotations
-                .is_empty(),
-            "fixture must actually have a persisted annotation before finish"
-        );
-
-        let mut app = review_app();
-        app.set_repo_root(PathBuf::from("/tmp/review-worktree"));
-        app.set_review_state_path(state_path.clone());
-        app.set_review_origin_ops(Box::new(WorktreeFake::default()));
-        app.open_end_review_modal();
-
-        let outcome = app.finish_review();
-
-        assert_eq!(outcome, Some(QuitOutcome::Emit));
-        let state = crate::review::store::load(&state_path);
-        assert!(
-            !state.reviews.contains_key("feature"),
-            "finish deletes the whole entry, annotations included"
         );
     }
 

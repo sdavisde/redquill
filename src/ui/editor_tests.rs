@@ -47,13 +47,6 @@ fn empty_editor_string_falls_back_to_nvim() {
     assert_eq!(args, vec!["+1".to_string(), "f.rs".to_string()]);
 }
 
-#[test]
-fn whitespace_only_editor_string_falls_back_to_nvim() {
-    let (program, args) = build_editor_command("   ", Path::new("f.rs"), 1);
-    assert_eq!(program, "nvim");
-    assert_eq!(args, vec!["+1".to_string(), "f.rs".to_string()]);
-}
-
 // --- `build_from_template` (the config template engine) ---
 
 #[test]
@@ -111,111 +104,50 @@ fn template_empty_string_is_rejected() {
     assert_eq!(build_from_template("", Path::new("f.rs"), 1), None);
 }
 
-// --- preset table — one test per preset, exact argv ---
+// --- preset table — every preset, exact argv ---
 
+/// Every built-in preset expands to the exact argv its editor's CLI expects.
+/// The row set is checked against `PRESETS` itself, so a new preset without a
+/// row here fails rather than going unverified.
 #[test]
-fn preset_vim_expands_correctly() {
-    let template = preset_template("vim").expect("known preset");
-    let (program, args) =
-        build_from_template(template, Path::new("src/lib.rs"), 42).expect("valid template");
-    assert_eq!(program, "vim");
-    assert_eq!(args, vec!["+42".to_string(), "src/lib.rs".to_string()]);
-}
+fn every_preset_expands_to_its_editors_exact_argv() {
+    // (preset name, expected program, expected args)
+    let expected: &[(&str, &str, &[&str])] = &[
+        ("vim", "vim", &["+42", "src/lib.rs"]),
+        ("nvim", "nvim", &["+42", "src/lib.rs"]),
+        ("helix", "hx", &["src/lib.rs:42"]),
+        ("vscode", "code", &["--goto", "src/lib.rs:42"]),
+        ("vscodium", "codium", &["--goto", "src/lib.rs:42"]),
+        ("zed", "zed", &["src/lib.rs:42"]),
+        ("emacs", "emacs", &["+42", "src/lib.rs"]),
+        ("nano", "nano", &["+42", "src/lib.rs"]),
+        ("micro", "micro", &["src/lib.rs:42"]),
+        ("sublime", "subl", &["src/lib.rs:42"]),
+        ("kakoune", "kak", &["+42", "src/lib.rs"]),
+    ];
 
-#[test]
-fn preset_nvim_expands_correctly() {
-    let template = preset_template("nvim").expect("known preset");
-    let (program, args) =
-        build_from_template(template, Path::new("src/lib.rs"), 42).expect("valid template");
-    assert_eq!(program, "nvim");
-    assert_eq!(args, vec!["+42".to_string(), "src/lib.rs".to_string()]);
-}
-
-#[test]
-fn preset_helix_expands_correctly() {
-    let template = preset_template("helix").expect("known preset");
-    let (program, args) =
-        build_from_template(template, Path::new("src/lib.rs"), 42).expect("valid template");
-    assert_eq!(program, "hx");
-    assert_eq!(args, vec!["src/lib.rs:42".to_string()]);
-}
-
-#[test]
-fn preset_vscode_expands_correctly() {
-    let template = preset_template("vscode").expect("known preset");
-    let (program, args) =
-        build_from_template(template, Path::new("src/lib.rs"), 42).expect("valid template");
-    assert_eq!(program, "code");
+    let covered: Vec<&str> = expected.iter().map(|(name, ..)| *name).collect();
+    let declared: Vec<&str> = PRESETS.iter().map(|(name, _)| *name).collect();
     assert_eq!(
-        args,
-        vec!["--goto".to_string(), "src/lib.rs:42".to_string()]
+        covered, declared,
+        "every preset in PRESETS needs a row here, in table order"
     );
-}
 
-#[test]
-fn preset_vscodium_expands_correctly() {
-    let template = preset_template("vscodium").expect("known preset");
-    let (program, args) =
-        build_from_template(template, Path::new("src/lib.rs"), 42).expect("valid template");
-    assert_eq!(program, "codium");
-    assert_eq!(
-        args,
-        vec!["--goto".to_string(), "src/lib.rs:42".to_string()]
-    );
-}
-
-#[test]
-fn preset_zed_expands_correctly() {
-    let template = preset_template("zed").expect("known preset");
-    let (program, args) =
-        build_from_template(template, Path::new("src/lib.rs"), 42).expect("valid template");
-    assert_eq!(program, "zed");
-    assert_eq!(args, vec!["src/lib.rs:42".to_string()]);
-}
-
-#[test]
-fn preset_emacs_expands_correctly() {
-    let template = preset_template("emacs").expect("known preset");
-    let (program, args) =
-        build_from_template(template, Path::new("src/lib.rs"), 42).expect("valid template");
-    assert_eq!(program, "emacs");
-    assert_eq!(args, vec!["+42".to_string(), "src/lib.rs".to_string()]);
-}
-
-#[test]
-fn preset_nano_expands_correctly() {
-    let template = preset_template("nano").expect("known preset");
-    let (program, args) =
-        build_from_template(template, Path::new("src/lib.rs"), 42).expect("valid template");
-    assert_eq!(program, "nano");
-    assert_eq!(args, vec!["+42".to_string(), "src/lib.rs".to_string()]);
-}
-
-#[test]
-fn preset_micro_expands_correctly() {
-    let template = preset_template("micro").expect("known preset");
-    let (program, args) =
-        build_from_template(template, Path::new("src/lib.rs"), 42).expect("valid template");
-    assert_eq!(program, "micro");
-    assert_eq!(args, vec!["src/lib.rs:42".to_string()]);
-}
-
-#[test]
-fn preset_sublime_expands_correctly() {
-    let template = preset_template("sublime").expect("known preset");
-    let (program, args) =
-        build_from_template(template, Path::new("src/lib.rs"), 42).expect("valid template");
-    assert_eq!(program, "subl");
-    assert_eq!(args, vec!["src/lib.rs:42".to_string()]);
-}
-
-#[test]
-fn preset_kakoune_expands_correctly() {
-    let template = preset_template("kakoune").expect("known preset");
-    let (program, args) =
-        build_from_template(template, Path::new("src/lib.rs"), 42).expect("valid template");
-    assert_eq!(program, "kak");
-    assert_eq!(args, vec!["+42".to_string(), "src/lib.rs".to_string()]);
+    for (name, program, args) in expected {
+        let template = preset_template(name).expect("known preset");
+        assert!(
+            template.contains("{{filename}}"),
+            "preset {name} must place the file"
+        );
+        let (got_program, got_args) =
+            build_from_template(template, Path::new("src/lib.rs"), 42).expect("valid template");
+        assert_eq!(got_program, *program, "preset {name} program");
+        assert_eq!(
+            got_args,
+            args.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+            "preset {name} args"
+        );
+    }
 }
 
 #[test]
@@ -280,15 +212,5 @@ fn unknown_preset_name_is_reported_not_silently_dropped() {
     assert_eq!(
         resolve_editor_config_tier(&cfg),
         EditorConfigTier::UnknownPreset("emacs-but-misspelled".to_string())
-    );
-}
-
-// --- `EditorLaunch` ---
-
-#[test]
-fn editor_launch_default_matches_todays_nvim_fallback() {
-    assert_eq!(
-        EditorLaunch::default(),
-        EditorLaunch::Command("nvim".to_string())
     );
 }

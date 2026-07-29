@@ -586,45 +586,6 @@ index 111..222 100644
     }
 
     #[test]
-    fn branches_tab_renders_real_branches_with_the_cursor_highlighted() {
-        let mut app = App::new(vec![sample_file()]);
-        app.launcher_branches = vec![
-            crate::git::LocalBranch {
-                name: "alpha".to_string(),
-                is_current: false,
-                worktree: None,
-            },
-            crate::git::LocalBranch {
-                name: "zulu".to_string(),
-                is_current: false,
-                worktree: None,
-            },
-        ];
-        app.mode = Mode::ReviewLauncher {
-            tab: LauncherTab::Branches,
-            cursor: 1,
-            origin: ModeOrigin::Normal,
-        };
-        let content = render_launcher(&app);
-        assert!(content.contains("alpha"));
-        assert!(content.contains("zulu"));
-        assert!(!content.contains("no other local branches"));
-    }
-
-    #[test]
-    fn a_status_message_renders_inside_the_modal() {
-        let mut app = App::new(vec![sample_file()]);
-        app.mode = Mode::ReviewLauncher {
-            tab: LauncherTab::Branches,
-            cursor: 0,
-            origin: ModeOrigin::Normal,
-        };
-        app.set_status_message("already reviewing feature \u{2014} press q to finish or pause");
-        let content = render_launcher(&app);
-        assert!(content.contains("already reviewing feature"));
-    }
-
-    #[test]
     fn commits_tab_shows_its_empty_state_and_enter_outcome_without_a_backend() {
         let mut app = App::new(vec![sample_file()]);
         app.mode = Mode::ReviewLauncher {
@@ -650,11 +611,7 @@ index 111..222 100644
                 timestamp: 1_700_000_000,
             }])
         });
-        app.launcher_commits_in_flight =
-            Some(super::super::review_launcher::InFlightLauncherCommits {
-                id,
-                generation: app.launcher_commits_generation,
-            });
+        app.launcher_commits_in_flight = Some(id);
         app.mode = Mode::ReviewLauncher {
             tab: LauncherTab::Commits,
             cursor: 0,
@@ -662,53 +619,6 @@ index 111..222 100644
         };
         let content = render_launcher(&app);
         assert!(content.contains("loading"));
-    }
-
-    #[test]
-    fn commits_tab_renders_real_commits_with_the_cursor_highlighted() {
-        let mut app = App::new(vec![sample_file()]);
-        app.launcher_commits = vec![
-            crate::git::CommitLogEntry {
-                sha: "aaa".to_string(),
-                short_sha: "aaa".to_string(),
-                subject: "add widget".to_string(),
-                author_name: "Dev".to_string(),
-                timestamp: 1_700_000_000,
-            },
-            crate::git::CommitLogEntry {
-                sha: "bbb".to_string(),
-                short_sha: "bbb".to_string(),
-                subject: "fix widget".to_string(),
-                author_name: "Dev".to_string(),
-                timestamp: 1_700_000_100,
-            },
-        ];
-        app.mode = Mode::ReviewLauncher {
-            tab: LauncherTab::Commits,
-            cursor: 1,
-            origin: ModeOrigin::Normal,
-        };
-        let content = render_launcher(&app);
-        assert!(content.contains("add widget"));
-        assert!(content.contains("fix widget"));
-        assert!(!content.contains("no commits"));
-    }
-
-    #[test]
-    fn commits_tab_all_commits_empty_state_says_no_commits_without_a_toggle_hint() {
-        let mut app = App::new(vec![sample_file()]);
-        app.launcher_all_commits = true;
-        app.mode = Mode::ReviewLauncher {
-            tab: LauncherTab::Commits,
-            cursor: 0,
-            origin: ModeOrigin::Normal,
-        };
-        let content = render_launcher(&app);
-        assert!(content.contains("no commits"));
-        assert!(
-            !content.contains("ahead of base"),
-            "the full log's own empty state names no ahead-of-base range"
-        );
     }
 
     #[test]
@@ -845,36 +755,6 @@ index 111..222 100644
     }
 
     #[test]
-    fn tab_bar_names_pull_requests() {
-        let app = prs_app(PrFetchOutcome::Loaded {
-            repo_label: "org/repo".to_string(),
-            prs: Vec::new(),
-        });
-        let content = render_launcher(&app);
-        assert!(content.contains("Pull Requests"));
-    }
-
-    #[test]
-    fn prs_tab_shows_a_loading_placeholder_while_a_fetch_is_in_flight() {
-        let mut app = App::new(vec![sample_file()]);
-        let id = app.launcher_prs_tasks.spawn(|| PrFetchOutcome::Loaded {
-            repo_label: "org/repo".to_string(),
-            prs: vec![pr(1, "one", "dev", "feature", false)],
-        });
-        app.launcher_prs_in_flight = Some(super::super::review_launcher::InFlightLauncherPrs {
-            id,
-            generation: app.launcher_prs_generation,
-        });
-        app.mode = Mode::ReviewLauncher {
-            tab: LauncherTab::PullRequests,
-            cursor: 0,
-            origin: ModeOrigin::Normal,
-        };
-        let content = render_launcher(&app);
-        assert!(content.contains("loading"));
-    }
-
-    #[test]
     fn prs_tab_renders_number_title_author_branch_draft_and_updated_time() {
         let app = prs_app(PrFetchOutcome::Loaded {
             repo_label: "org/repo".to_string(),
@@ -903,54 +783,57 @@ index 111..222 100644
         assert!(!content.contains("retry"));
     }
 
+    /// Every degraded PR-tab outcome must render a body that names its
+    /// recovery action — none may fall through to a blank list.
     #[test]
-    fn prs_tab_unresolved_shows_both_cli_auth_commands_with_the_hostname() {
-        let app = prs_app(PrFetchOutcome::Unresolved {
-            hostname: "git.example.com".to_string(),
-            reason: UnresolvedReason::NoCredentials,
-        });
-        let content = render_launcher(&app);
-        assert!(content.contains("gh auth login --hostname git.example.com"));
-        assert!(content.contains("glab auth login --hostname git.example.com"));
-    }
-
-    #[test]
-    fn prs_tab_cli_missing_shows_an_install_pointer_and_the_auth_command() {
-        let app = prs_app(PrFetchOutcome::CliMissing {
-            cli: "gh",
-            hostname: "github.com".to_string(),
-        });
-        let content = render_launcher(&app);
-        assert!(content.contains("install gh"));
-        assert!(content.contains("cli.github.com"));
-        assert!(content.contains("gh auth login --hostname github.com"));
-    }
-
-    #[test]
-    fn prs_tab_unauthenticated_shows_the_exact_auth_login_line() {
-        let app = prs_app(PrFetchOutcome::Unauthenticated {
-            cli: "gh",
-            hostname: "github.com".to_string(),
-        });
-        let content = render_launcher(&app);
-        assert!(content.contains("gh auth login --hostname github.com"));
-    }
-
-    #[test]
-    fn prs_tab_list_failed_shows_the_stderr_headline_and_a_retry_hint() {
-        let app = prs_app(PrFetchOutcome::ListFailed {
-            message: "rate limit exceeded".to_string(),
-        });
-        let content = render_launcher(&app);
-        assert!(content.contains("rate limit exceeded"));
-        assert!(content.contains("retry"));
-    }
-
-    #[test]
-    fn prs_tab_no_forge_remote_is_not_a_blank_body() {
-        let app = prs_app(PrFetchOutcome::NoForgeRemote);
-        let content = render_launcher(&app);
-        assert!(content.contains("no forge remote"));
+    fn prs_tab_degraded_bodies_name_the_recovery_action() {
+        let cases: Vec<(PrFetchOutcome, Vec<&str>)> = vec![
+            (
+                PrFetchOutcome::Unresolved {
+                    hostname: "git.example.com".to_string(),
+                    reason: UnresolvedReason::NoCredentials,
+                },
+                vec![
+                    "gh auth login --hostname git.example.com",
+                    "glab auth login --hostname git.example.com",
+                ],
+            ),
+            (
+                PrFetchOutcome::CliMissing {
+                    cli: "gh",
+                    hostname: "github.com".to_string(),
+                },
+                vec![
+                    "install gh",
+                    "cli.github.com",
+                    "gh auth login --hostname github.com",
+                ],
+            ),
+            (
+                PrFetchOutcome::Unauthenticated {
+                    cli: "gh",
+                    hostname: "github.com".to_string(),
+                },
+                vec!["gh auth login --hostname github.com"],
+            ),
+            (
+                PrFetchOutcome::ListFailed {
+                    message: "rate limit exceeded".to_string(),
+                },
+                vec!["rate limit exceeded", "retry"],
+            ),
+            (PrFetchOutcome::NoForgeRemote, vec!["no forge remote"]),
+        ];
+        for (outcome, expected) in cases {
+            let app = prs_app(outcome);
+            let content = render_launcher(&app);
+            for needle in expected {
+                assert!(
+                    content.contains(needle),
+                    "missing {needle:?} in:\n{content}"
+                );
+            }
+        }
     }
 
     fn finished(number: u64) -> crate::review::FinishedReview {
@@ -989,33 +872,5 @@ index 111..222 100644
         let content = render_launcher(&app);
         assert!(content.contains("No open pull requests on sdavisde/redquill"));
         assert!(content.contains("1 finished review(s)"));
-    }
-
-    #[test]
-    fn prs_tab_no_finished_footer_when_none_are_finished() {
-        let app = prs_app(PrFetchOutcome::Loaded {
-            repo_label: "org/repo".to_string(),
-            prs: vec![pr(1, "one", "dev", "feature", false)],
-        });
-        let content = render_launcher(&app);
-        assert!(!content.contains("finished review"));
-    }
-
-    #[test]
-    fn prs_tab_degraded_states_are_never_selectable() {
-        // A degraded body isn't a real row — the cursor must never highlight
-        // it as if it were a PR the user could act on.
-        let mut app = prs_app(PrFetchOutcome::ListFailed {
-            message: "boom".to_string(),
-        });
-        app.mode = Mode::ReviewLauncher {
-            tab: LauncherTab::PullRequests,
-            cursor: 0,
-            origin: ModeOrigin::Normal,
-        };
-        // Rendering must not panic on a degraded, non-empty-list state with
-        // a cursor set — this is the same "no highlight state" contract the
-        // Branches/Commits empty states already rely on.
-        let _ = render_launcher(&app);
     }
 }

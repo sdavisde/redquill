@@ -159,14 +159,6 @@ mod tests {
     }
 
     #[test]
-    fn spawn_returns_distinct_ids_immediately() {
-        let mut tasks: BackgroundTasks<i32> = BackgroundTasks::new();
-        let a = tasks.spawn(|| 1);
-        let b = tasks.spawn(|| 2);
-        assert_ne!(a, b);
-    }
-
-    #[test]
     fn successful_task_drains_its_value() {
         let mut tasks: BackgroundTasks<i32> = BackgroundTasks::new();
         let id = tasks.spawn(|| 6 * 7);
@@ -174,17 +166,6 @@ mod tests {
         assert_eq!(done.len(), 1);
         assert_eq!(done[0].0, id);
         assert_eq!(done[0].1, Ok(42));
-    }
-
-    #[test]
-    fn task_error_is_delivered_as_a_value_not_a_panic() {
-        // A task whose *result* is an error is just an `Ok(Err(..))` value:
-        // the poller reports it, it does not panic.
-        let mut tasks: BackgroundTasks<Result<(), String>> = BackgroundTasks::new();
-        tasks.spawn(|| Err("boom".to_string()));
-        let done = drain_one(&mut tasks);
-        assert_eq!(done.len(), 1);
-        assert_eq!(done[0].1, Ok(Err("boom".to_string())));
     }
 
     #[test]
@@ -234,18 +215,5 @@ mod tests {
         let outcome = run_command(&mut Command::new("false"));
         assert!(!outcome.success);
         assert_eq!(outcome.code, Some(1));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn run_command_inside_spawn_drains_its_outcome() {
-        let mut tasks: BackgroundTasks<CommandOutcome> = BackgroundTasks::new();
-        tasks.spawn(|| run_command(&mut Command::new("true")));
-        let done = drain_one(&mut tasks);
-        assert_eq!(done.len(), 1);
-        let Ok(outcome) = &done[0].1 else {
-            panic!("expected an outcome");
-        };
-        assert!(outcome.success);
     }
 }

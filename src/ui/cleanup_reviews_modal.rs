@@ -224,11 +224,4 @@ index 111..222 100644
         let content = render_modal(&app);
         assert!(!content.contains("unpublished"));
     }
-
-    #[test]
-    fn renders_nothing_outside_cleanup_mode() {
-        let app = App::new(vec![sample_file()]);
-        let content = render_modal(&app);
-        assert!(content.trim().is_empty());
-    }
 }

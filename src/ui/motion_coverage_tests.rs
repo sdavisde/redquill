@@ -4,9 +4,8 @@
 //! main [`Keymap`] for diff/panel scope, [`modal_keys`]'s tables for the
 //! rest), not a hand-maintained checklist that could quietly drift from the
 //! actual bindings. [`motion::covers_all`] is the one generic checker every
-//! context's coverage assertion below reuses; the final test in this module
-//! proves that checker isn't a tautology by feeding it a real context's
-//! resolver with one motion deliberately withheld and confirming it fails.
+//! context's coverage assertion below reuses; its negative case (a withheld
+//! motion fails the check) is proven in `motion`'s own test module.
 
 use super::keymap::{Action, Keymap, Scope};
 use super::modal_keys::{
@@ -297,20 +296,5 @@ fn every_consuming_context_covers_the_full_motion_set() {
     assert!(
         motion::covers_all(&Motion::ALL, launcher_resolves),
         "Review launcher (Branches/Commits tabs) is missing a motion"
-    );
-}
-
-/// Negative proof this suite's checks have teeth: wrapping a real context's
-/// resolver (peek's) to withhold exactly one motion — as if a future change
-/// forgot to wire it up — must make the identical `covers_all` check the
-/// test above uses for every real context fail. If this ever passed, the
-/// positive assertions above would be worthless (they'd pass no matter what
-/// was actually bound).
-#[test]
-fn covers_all_would_catch_a_context_missing_one_motion() {
-    let missing_jump_to_bottom = |m: Motion| m != Motion::JumpToBottom && peek_resolves(m);
-    assert!(
-        !motion::covers_all(&Motion::ALL, missing_jump_to_bottom),
-        "a context missing JumpToBottom must fail the coverage check"
     );
 }

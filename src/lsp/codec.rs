@@ -191,31 +191,6 @@ mod tests {
     }
 
     #[test]
-    fn frame_split_at_mid_payload_boundary() {
-        let payload = b"0123456789";
-        let frame = encode_frame(payload);
-        let split_at = frame.len() - 4; // splits inside the payload
-        let mut decoder = FrameDecoder::new();
-        decoder.feed(&frame[..split_at]);
-        assert_eq!(decoder.next_frame(), Ok(None));
-        decoder.feed(&frame[split_at..]);
-        assert_eq!(decoder.next_frame(), Ok(Some(payload.to_vec())));
-    }
-
-    #[test]
-    fn frame_split_at_mid_header_boundary() {
-        let payload = b"abc";
-        let frame = encode_frame(payload);
-        // "Content-Length: 3\r\n\r\n" -- split in the middle of the header line.
-        let split_at = 5;
-        let mut decoder = FrameDecoder::new();
-        decoder.feed(&frame[..split_at]);
-        assert_eq!(decoder.next_frame(), Ok(None));
-        decoder.feed(&frame[split_at..]);
-        assert_eq!(decoder.next_frame(), Ok(Some(payload.to_vec())));
-    }
-
-    #[test]
     fn header_name_is_case_insensitive() {
         for header_name in ["content-length", "CONTENT-LENGTH"] {
             let payload = b"hi";

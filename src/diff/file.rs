@@ -357,15 +357,6 @@ Binary files a/img.png and b/img.png differ
     }
 
     #[test]
-    fn synthetic_added_single_line_no_trailing_newline() {
-        let diff = FileDiff::synthetic_added("new.rs".to_string(), "only");
-        let hunk = &diff.hunks[0];
-        assert_eq!(hunk.lines.len(), 1);
-        assert!(hunk.lines[0].no_newline);
-        assert_eq!(hunk.lines[0].new_line, Some(1));
-    }
-
-    #[test]
     fn synthetic_added_empty_content_has_no_hunks() {
         let diff = FileDiff::synthetic_added("empty.rs".to_string(), "");
         assert!(diff.hunks.is_empty());

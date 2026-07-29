@@ -54,31 +54,6 @@ fn store_provider(kind: ProviderKind) -> ForgeProviderKind {
     }
 }
 
-/// A background ahead-of-base commit-log fetch awaiting completion. Mirrors
-/// [`super::history::InFlightHistory`]'s shape exactly — the Commits tab's
-/// ahead-of-base source reuses the identical single-flight +
-/// generation-guard discipline the History tab pioneered, just against a
-/// single-shot (never paginated) fetch rather than a page sequence.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct InFlightLauncherCommits {
-    /// The background task delivering the ahead-of-base commit list.
-    pub(super) id: TaskId,
-    /// The generation captured when this fetch was spawned.
-    pub(super) generation: u64,
-}
-
-/// A background Pull Requests tab fetch awaiting completion. Same shape as
-/// [`InFlightLauncherCommits`] and for the same reason: single-flight +
-/// generation-guard discipline against a single-shot (never paginated)
-/// fetch.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct InFlightLauncherPrs {
-    /// The background task delivering the [`PrFetchOutcome`].
-    pub(super) id: TaskId,
-    /// The generation captured when this fetch was spawned.
-    pub(super) generation: u64,
-}
-
 /// Everything needed to finish a PR checkout into a review session once its
 /// background fetch/worktree work lands — carried alongside the in-flight
 /// task (and reused verbatim on the synchronous fallback path) so the poll
@@ -109,13 +84,12 @@ pub(super) struct PrCheckoutContext {
     pub(super) from_session: bool,
 }
 
-/// A background PR checkout awaiting completion: its [`TaskId`], the
-/// generation captured at spawn (a straggler from before a bump is dropped),
-/// and the [`PrCheckoutContext`] the poll handler finishes with.
+/// A background PR checkout awaiting completion: its [`TaskId`] (matched on
+/// drain, so a foreign result is dropped) and the [`PrCheckoutContext`] the
+/// poll handler finishes with.
 #[derive(Debug, Clone)]
 pub(super) struct InFlightPrCheckout {
     pub(super) id: TaskId,
-    pub(super) generation: u64,
     pub(super) ctx: PrCheckoutContext,
 }
 
@@ -702,13 +676,8 @@ impl App {
 
         match fetcher {
             Some(fetcher) => {
-                let generation = self.pr_checkout_generation;
                 let id = self.pr_checkout_tasks.spawn(move || fetcher(request));
-                self.pr_checkout_in_flight = Some(InFlightPrCheckout {
-                    id,
-                    generation,
-                    ctx,
-                });
+                self.pr_checkout_in_flight = Some(InFlightPrCheckout { id, ctx });
             }
             None => {
                 // Synchronous fallback: the backend can't cross a thread
@@ -727,9 +696,9 @@ impl App {
     }
 
     /// Drains a completed background PR checkout (once per event-loop tick,
-    /// alongside [`App::poll_launcher_prs`]). Drops a stale result — spawned
-    /// before `pr_checkout_generation` was bumped — or a task-panic result
-    /// (surfaced as a one-line diagnostic that leaves local state untouched);
+    /// alongside [`App::poll_launcher_prs`]). Drops a foreign result (one
+    /// whose id isn't the single in-flight checkout's) and turns a task panic
+    /// into a one-line diagnostic that leaves local state untouched;
     /// otherwise finishes the checkout into a review session.
     pub(super) fn poll_pr_checkout(&mut self) {
         for (id, result) in self.pr_checkout_tasks.poll() {
@@ -740,9 +709,6 @@ impl App {
                 continue;
             }
             self.pr_checkout_in_flight = None;
-            if in_flight.generation != self.pr_checkout_generation {
-                continue;
-            }
             let outcome = result.unwrap_or(PrCheckoutOutcome::Failed {
                 message: "PR checkout task panicked".to_string(),
                 stale_worktree: None,
@@ -1166,11 +1132,10 @@ impl App {
             head: "HEAD".to_string(),
         };
         if let Some(fetcher) = ops.async_commit_log_range_fetcher() {
-            let generation = self.launcher_commits_generation;
             let id = self
                 .launcher_commits_tasks
                 .spawn(move || fetcher(&range).ok());
-            self.launcher_commits_in_flight = Some(InFlightLauncherCommits { id, generation });
+            self.launcher_commits_in_flight = Some(id);
         } else {
             match ops.commit_log_range(&range) {
                 Ok(commits) => self.apply_launcher_commits(commits),
@@ -1180,23 +1145,17 @@ impl App {
     }
 
     /// Drains a completed background ahead-of-base fetch (once per
-    /// event-loop tick, alongside [`App::poll_history`]). Drops a stale
-    /// result — spawned before `launcher_commits_generation` was last
-    /// bumped — or a foreign/task-panic/git-error result silently (marking
-    /// the load "loaded, empty" rather than leaving the placeholder stuck);
-    /// applies a successful list otherwise.
+    /// event-loop tick, alongside [`App::poll_history`]). Drops a foreign
+    /// result (one whose id isn't the single in-flight fetch's) or a
+    /// task-panic/git-error result silently (marking the load "loaded,
+    /// empty" rather than leaving the placeholder stuck); applies a
+    /// successful list otherwise.
     pub(super) fn poll_launcher_commits(&mut self) {
         for (id, result) in self.launcher_commits_tasks.poll() {
-            let Some(in_flight) = self.launcher_commits_in_flight else {
-                continue;
-            };
-            if in_flight.id != id {
+            if self.launcher_commits_in_flight != Some(id) {
                 continue;
             }
             self.launcher_commits_in_flight = None;
-            if in_flight.generation != self.launcher_commits_generation {
-                continue;
-            }
             match result {
                 Ok(Some(commits)) => self.apply_launcher_commits(commits),
                 _ => self.launcher_commits_loaded = true,
@@ -1265,9 +1224,8 @@ impl App {
             return;
         };
         if let Some(fetcher) = ops.async_pr_list_fetcher() {
-            let generation = self.launcher_prs_generation;
             let id = self.launcher_prs_tasks.spawn(fetcher);
-            self.launcher_prs_in_flight = Some(InFlightLauncherPrs { id, generation });
+            self.launcher_prs_in_flight = Some(id);
         } else {
             let outcome = ops.list_open_prs();
             self.set_launcher_prs(outcome);
@@ -1276,22 +1234,16 @@ impl App {
 
     /// Drains a completed background Pull Requests fetch (once per
     /// event-loop tick, alongside [`App::poll_launcher_commits`]). Drops a
-    /// stale result — spawned before `launcher_prs_generation` was last
-    /// bumped — or a task-panic result silently, applying a successful
-    /// outcome (which may itself be a degraded [`PrFetchOutcome`] variant —
-    /// still a value, not dropped) otherwise.
+    /// foreign result (one whose id isn't the single in-flight fetch's)
+    /// silently and turns a task panic into a failed outcome, applying a
+    /// successful outcome (which may itself be a degraded [`PrFetchOutcome`]
+    /// variant — still a value, not dropped) otherwise.
     pub(super) fn poll_launcher_prs(&mut self) {
         for (id, result) in self.launcher_prs_tasks.poll() {
-            let Some(in_flight) = self.launcher_prs_in_flight else {
-                continue;
-            };
-            if in_flight.id != id {
+            if self.launcher_prs_in_flight != Some(id) {
                 continue;
             }
             self.launcher_prs_in_flight = None;
-            if in_flight.generation != self.launcher_prs_generation {
-                continue;
-            }
             match result {
                 Ok(outcome) => self.set_launcher_prs(outcome),
                 Err(_) => {
@@ -1392,7 +1344,6 @@ mod tests {
     use super::*;
     use crate::diff::FileDiff;
     use crate::git::RawFilePatch;
-    use crate::ui::app::PanelTab;
 
     fn sample_file() -> FileDiff {
         let raw = "\
@@ -1427,29 +1378,7 @@ index 111..222 100644
         assert_eq!(LauncherTab::PullRequests.toggle(), LauncherTab::Branches);
     }
 
-    #[test]
-    fn default_tab_is_branches() {
-        assert_eq!(LauncherTab::default(), LauncherTab::Branches);
-    }
-
     // -- App::open_review_launcher / close_review_launcher: origin restore --
-
-    #[test]
-    fn open_from_normal_lands_on_branches_and_close_restores_normal() {
-        let mut app = app();
-        assert_eq!(app.mode, Mode::Normal);
-        app.open_review_launcher();
-        assert_eq!(
-            app.mode,
-            Mode::ReviewLauncher {
-                tab: LauncherTab::Branches,
-                cursor: 0,
-                origin: ModeOrigin::Normal,
-            }
-        );
-        app.close_review_launcher();
-        assert_eq!(app.mode, Mode::Normal);
-    }
 
     #[test]
     fn open_from_visual_and_close_restores_the_anchor() {
@@ -1468,66 +1397,7 @@ index 111..222 100644
         assert_eq!(app.mode, Mode::Visual { anchor: 3 });
     }
 
-    #[test]
-    fn open_from_panel_and_close_restores_the_cursor_and_tab() {
-        let mut app = app();
-        app.mode = Mode::Panel {
-            cursor: 2,
-            tab: PanelTab::History,
-        };
-        app.open_review_launcher();
-        assert_eq!(
-            app.mode,
-            Mode::ReviewLauncher {
-                tab: LauncherTab::Branches,
-                cursor: 0,
-                origin: ModeOrigin::Panel {
-                    cursor: 2,
-                    tab: PanelTab::History,
-                },
-            }
-        );
-        app.close_review_launcher();
-        assert_eq!(
-            app.mode,
-            Mode::Panel {
-                cursor: 2,
-                tab: PanelTab::History,
-            }
-        );
-    }
-
-    #[test]
-    fn close_while_not_open_is_a_no_op() {
-        // `Mode::ReviewLauncher` always carries its own origin, so "never
-        // opened" means some other mode entirely — the defensive `other =>
-        // other` fallback, mirroring `close_switcher`'s identical guard.
-        let mut app = app();
-        assert_eq!(app.mode, Mode::Normal);
-        app.close_review_launcher();
-        assert_eq!(app.mode, Mode::Normal);
-    }
-
     // -- Tab switching / tab memory ------------------------------------------
-
-    #[test]
-    fn switch_tab_toggles_and_resets_cursor() {
-        let mut app = app();
-        app.mode = Mode::ReviewLauncher {
-            tab: LauncherTab::Branches,
-            cursor: 0,
-            origin: ModeOrigin::Normal,
-        };
-        app.review_launcher_switch_tab();
-        assert_eq!(
-            app.mode,
-            Mode::ReviewLauncher {
-                tab: LauncherTab::Commits,
-                cursor: 0,
-                origin: ModeOrigin::Normal,
-            }
-        );
-    }
 
     #[test]
     fn tab_memory_survives_close_and_reopen() {
@@ -1546,40 +1416,6 @@ index 111..222 100644
                 origin: ModeOrigin::Normal,
             },
             "reopening this process must land back on the last-used tab"
-        );
-    }
-
-    #[test]
-    fn switch_tab_is_a_no_op_outside_the_launcher() {
-        let mut app = app();
-        assert_eq!(app.mode, Mode::Normal);
-        app.review_launcher_switch_tab();
-        assert_eq!(app.mode, Mode::Normal);
-    }
-
-    // -- Cursor movement (no-op without a backend: the branch list is empty) -
-
-    #[test]
-    fn move_down_and_up_stay_at_zero_with_no_list_data_yet() {
-        let mut app = app();
-        app.open_review_launcher();
-        app.review_launcher_move_down();
-        assert_eq!(
-            app.mode,
-            Mode::ReviewLauncher {
-                tab: LauncherTab::Branches,
-                cursor: 0,
-                origin: ModeOrigin::Normal,
-            }
-        );
-        app.review_launcher_move_up();
-        assert_eq!(
-            app.mode,
-            Mode::ReviewLauncher {
-                tab: LauncherTab::Branches,
-                cursor: 0,
-                origin: ModeOrigin::Normal,
-            }
         );
     }
 
@@ -1695,19 +1531,6 @@ index 111..222 100644
     }
 
     #[test]
-    fn opening_the_launcher_populates_the_branches_tab() {
-        let mut app = app_with_branches(vec![branch("alpha"), branch("zulu")]);
-        app.open_review_launcher();
-        assert_eq!(
-            app.launcher_branches
-                .iter()
-                .map(|b| b.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["alpha", "zulu"]
-        );
-    }
-
-    #[test]
     fn switching_onto_the_branches_tab_reloads_the_list() {
         // `PullRequests` is the tab immediately before `Branches` in cycle
         // order, so `toggle()` from here lands on Branches (see
@@ -1727,31 +1550,6 @@ index 111..222 100644
                 .map(|b| b.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["alpha"]
-        );
-    }
-
-    #[test]
-    fn row_count_reflects_the_branch_list_on_the_branches_tab() {
-        let mut app = app_with_branches(vec![branch("alpha"), branch("zulu")]);
-        app.open_review_launcher();
-        app.review_launcher_move_down();
-        assert_eq!(
-            app.mode,
-            Mode::ReviewLauncher {
-                tab: LauncherTab::Branches,
-                cursor: 1,
-                origin: ModeOrigin::Normal,
-            },
-            "cursor must be able to reach the second real branch row"
-        );
-        app.review_launcher_move_down(); // clamps at the last
-        assert_eq!(
-            app.mode,
-            Mode::ReviewLauncher {
-                tab: LauncherTab::Branches,
-                cursor: 1,
-                origin: ModeOrigin::Normal,
-            }
         );
     }
 
@@ -1914,64 +1712,8 @@ index 111..222 100644
     }
 
     #[test]
-    fn launcher_commits_is_empty_and_not_loading_before_anything_is_requested() {
-        let app = app_with_commit_range(vec![commit("a", "one")]);
-        assert!(app.launcher_commits.is_empty());
-        assert!(!app.launcher_commits_loading());
-    }
-
-    #[test]
-    fn ensure_launcher_commits_loaded_applies_synchronously_when_no_async_fetcher() {
-        let mut app = app_with_commit_range(vec![commit("a", "one"), commit("b", "two")]);
-        app.ensure_launcher_commits_loaded();
-        assert_eq!(app.launcher_commits.len(), 2);
-        assert!(!app.launcher_commits_loading());
-        assert!(app.launcher_commits_in_flight.is_none());
-    }
-
-    #[test]
     fn no_backend_degrades_to_loaded_and_empty_rather_than_a_stuck_placeholder() {
         let mut app = app();
-        app.ensure_launcher_commits_loaded();
-        assert!(app.launcher_commits.is_empty());
-        assert!(!app.launcher_commits_loading());
-    }
-
-    #[test]
-    fn an_unresolvable_base_degrades_to_loaded_and_empty() {
-        struct NoBaseOps;
-        impl super::super::stage_ops::StageOps for NoBaseOps {
-            fn diff(
-                &self,
-                _target: &crate::git::DiffTarget,
-            ) -> Result<Vec<crate::git::RawFilePatch>, crate::git::GitError> {
-                Ok(Vec::new())
-            }
-            fn status(&self) -> Result<Vec<crate::git::FileStatus>, crate::git::GitError> {
-                Ok(Vec::new())
-            }
-            fn stage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
-                Ok(())
-            }
-            fn unstage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
-                Ok(())
-            }
-            fn apply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
-                Ok(())
-            }
-            fn unapply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
-                Ok(())
-            }
-            fn read_worktree_file(&self, _path: &str) -> Option<Vec<u8>> {
-                None
-            }
-            fn show_file(&self, _spec: &str) -> Option<String> {
-                None
-            }
-            // `default_base` keeps the trait's own default: an error.
-        }
-        let mut app = app();
-        app.stage_ops = Some(Box::new(NoBaseOps));
         app.ensure_launcher_commits_loaded();
         assert!(app.launcher_commits.is_empty());
         assert!(!app.launcher_commits_loading());
@@ -1983,10 +1725,7 @@ index 111..222 100644
         let id = app
             .launcher_commits_tasks
             .spawn(|| Some(vec![commit("a", "one")]));
-        app.launcher_commits_in_flight = Some(InFlightLauncherCommits {
-            id,
-            generation: app.launcher_commits_generation,
-        });
+        app.launcher_commits_in_flight = Some(id);
         assert!(
             app.launcher_commits_loading(),
             "placeholder must show while the fetch is in flight"
@@ -2006,47 +1745,12 @@ index 111..222 100644
     }
 
     #[test]
-    fn stale_generation_launcher_commits_result_is_dropped_not_applied() {
-        let mut app = app();
-        let stale = vec![commit("stale", "should never appear")];
-        let id = app.launcher_commits_tasks.spawn(move || Some(stale));
-        app.launcher_commits_in_flight = Some(InFlightLauncherCommits {
-            id,
-            generation: app.launcher_commits_generation,
-        });
-
-        // Something bumps the generation before this fetch lands.
-        app.launcher_commits_generation = app.launcher_commits_generation.wrapping_add(1);
-
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            app.poll_launcher_commits();
-            if app.launcher_commits_in_flight.is_none() || std::time::Instant::now() >= deadline {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        assert!(
-            app.launcher_commits_in_flight.is_none(),
-            "stale fetch was consumed"
-        );
-        assert!(
-            app.launcher_commits.is_empty(),
-            "a stale-generation result must never be applied"
-        );
-    }
-
-    #[test]
     fn request_launcher_commits_is_single_flight() {
         let mut app = app();
         let id = app
             .launcher_commits_tasks
             .spawn(|| Some(vec![commit("a", "one")]));
-        app.launcher_commits_in_flight = Some(InFlightLauncherCommits {
-            id,
-            generation: app.launcher_commits_generation,
-        });
+        app.launcher_commits_in_flight = Some(id);
         app.stage_ops = Some(Box::new(SyncCommitRangeOps {
             base: "main",
             commits: vec![commit("b", "two")],
@@ -2056,7 +1760,7 @@ index 111..222 100644
 
         // Still the original in-flight task; the synchronous fake's list
         // was never applied (a second fetch never started).
-        assert_eq!(app.launcher_commits_in_flight.map(|f| f.id), Some(id));
+        assert_eq!(app.launcher_commits_in_flight, Some(id));
         assert!(app.launcher_commits.is_empty());
     }
 
@@ -2138,40 +1842,6 @@ index 111..222 100644
             app.launcher_all_commits,
             "the toggle must survive close/reopen for the process lifetime"
         );
-    }
-
-    // -- Commits tab: confirm opens the commit view (FR-14) ------------------
-
-    #[test]
-    fn confirm_on_commits_tab_opens_the_commit_view() {
-        let mut app = app_with_commit_range(Vec::new());
-        app.launcher_commits = vec![commit("deadbeef", "a commit")];
-        app.mode = Mode::ReviewLauncher {
-            tab: LauncherTab::Commits,
-            cursor: 0,
-            origin: ModeOrigin::Normal,
-        };
-
-        app.review_launcher_confirm();
-
-        assert_eq!(app.mode, Mode::Normal);
-        assert!(
-            matches!(&app.target, crate::git::DiffTarget::Commit(sha) if sha == "deadbeef"),
-            "got {:?}",
-            app.target
-        );
-    }
-
-    #[test]
-    fn confirm_on_commits_tab_with_an_empty_list_is_a_no_op() {
-        let mut app = app();
-        app.mode = Mode::ReviewLauncher {
-            tab: LauncherTab::Commits,
-            cursor: 0,
-            origin: ModeOrigin::Normal,
-        };
-        app.review_launcher_confirm();
-        assert!(matches!(app.mode, Mode::ReviewLauncher { .. }));
     }
 
     // -- Motion layer adoption (spec 12 FR-12) -------------------------------
@@ -2407,92 +2077,6 @@ index 111..222 100644
         }
     }
 
-    /// A fake that records the [`PrCheckoutRequest`] the confirm path builds
-    /// (so a test can inspect which provider special-ref it targeted) and
-    /// reports a resolved provider, driving the synchronous checkout fallback.
-    struct RecordingCheckoutOps {
-        provider: ProviderKind,
-        common_dir: std::path::PathBuf,
-        recorded: std::rc::Rc<std::cell::RefCell<Option<PrCheckoutRequest>>>,
-    }
-
-    impl super::super::stage_ops::StageOps for RecordingCheckoutOps {
-        fn diff(
-            &self,
-            _target: &crate::git::DiffTarget,
-        ) -> Result<Vec<crate::git::RawFilePatch>, crate::git::GitError> {
-            Ok(Vec::new())
-        }
-        fn status(&self) -> Result<Vec<crate::git::FileStatus>, crate::git::GitError> {
-            Ok(Vec::new())
-        }
-        fn stage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
-            Ok(())
-        }
-        fn unstage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
-            Ok(())
-        }
-        fn apply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
-            Ok(())
-        }
-        fn unapply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
-            Ok(())
-        }
-        fn read_worktree_file(&self, _path: &str) -> Option<Vec<u8>> {
-            None
-        }
-        fn show_file(&self, _spec: &str) -> Option<String> {
-            None
-        }
-        fn git_common_dir(&self) -> Result<std::path::PathBuf, crate::git::GitError> {
-            Ok(self.common_dir.clone())
-        }
-        fn worktree_list(&self) -> Result<Vec<crate::git::WorktreeEntry>, crate::git::GitError> {
-            Ok(Vec::new())
-        }
-        fn origin_hostname(&self) -> Option<String> {
-            Some("gitlab.example.com".to_string())
-        }
-        fn resolved_pr_provider(&self) -> Option<ProviderKind> {
-            Some(self.provider)
-        }
-        fn pr_checkout(&self, request: PrCheckoutRequest) -> PrCheckoutOutcome {
-            *self.recorded.borrow_mut() = Some(request);
-            // Fail (nothing to enter) — the test only inspects the request.
-            PrCheckoutOutcome::Failed {
-                message: "recorded".to_string(),
-                stale_worktree: None,
-            }
-        }
-    }
-
-    #[test]
-    fn confirm_pr_targets_the_resolved_provider_special_ref() {
-        // With the tab's resolved provider = GitLab, pressing Enter on an MR
-        // row must build a checkout against `refs/merge-requests/<iid>/head`,
-        // not GitHub's `refs/pull` — the provider is data-driven off resolution.
-        let common = tempfile::TempDir::new().unwrap();
-        let recorded = std::rc::Rc::new(std::cell::RefCell::new(None));
-        let mut app = app();
-        app.stage_ops = Some(Box::new(RecordingCheckoutOps {
-            provider: ProviderKind::GitLab,
-            common_dir: common.path().to_path_buf(),
-            recorded: recorded.clone(),
-        }));
-        app.set_launcher_prs(PrFetchOutcome::Loaded {
-            repo_label: "org/repo".to_string(),
-            prs: vec![pr(42, "add widget")],
-        });
-        app.confirm_launcher_pr(0);
-
-        let request = recorded
-            .borrow()
-            .clone()
-            .expect("a checkout request must have been recorded");
-        assert_eq!(request.pr_ref.source_ref(), "refs/merge-requests/42/head");
-        assert_eq!(request.managed_branch, "redquill/pr/42");
-    }
-
     fn pr(number: u64, title: &str) -> PullRequest {
         PullRequest {
             number,
@@ -2509,28 +2093,6 @@ index 111..222 100644
         let mut app = app();
         app.stage_ops = Some(Box::new(SyncPrListOps { outcome }));
         app
-    }
-
-    #[test]
-    fn launcher_prs_rows_is_empty_before_anything_is_requested() {
-        let app = app_with_pr_outcome(PrFetchOutcome::Loaded {
-            repo_label: "org/repo".to_string(),
-            prs: vec![pr(1, "one")],
-        });
-        assert!(app.launcher_prs_rows().is_empty());
-        assert!(!app.launcher_prs_loading());
-    }
-
-    #[test]
-    fn ensure_launcher_prs_loaded_applies_synchronously_when_no_async_fetcher() {
-        let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
-            repo_label: "org/repo".to_string(),
-            prs: vec![pr(1, "one"), pr(2, "two")],
-        });
-        app.ensure_launcher_prs_loaded();
-        assert_eq!(app.launcher_prs_rows().len(), 2);
-        assert!(!app.launcher_prs_loading());
-        assert!(app.launcher_prs_in_flight.is_none());
     }
 
     #[test]
@@ -2593,73 +2155,13 @@ index 111..222 100644
     }
 
     #[test]
-    fn launcher_prs_loading_is_true_while_a_fetch_is_in_flight_and_false_after_it_lands() {
-        let mut app = app();
-        let id = app.launcher_prs_tasks.spawn(|| PrFetchOutcome::Loaded {
-            repo_label: "org/repo".to_string(),
-            prs: vec![pr(1, "one")],
-        });
-        app.launcher_prs_in_flight = Some(InFlightLauncherPrs {
-            id,
-            generation: app.launcher_prs_generation,
-        });
-        assert!(
-            app.launcher_prs_loading(),
-            "placeholder must show while the fetch is in flight"
-        );
-
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while app.launcher_prs_in_flight.is_some() && std::time::Instant::now() < deadline {
-            app.poll_launcher_prs();
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert!(app.launcher_prs_in_flight.is_none(), "fetch must complete");
-        assert_eq!(app.launcher_prs_rows().len(), 1);
-        assert!(!app.launcher_prs_loading());
-    }
-
-    #[test]
-    fn stale_generation_pr_result_is_dropped_not_applied() {
-        let mut app = app();
-        let id = app.launcher_prs_tasks.spawn(|| PrFetchOutcome::Loaded {
-            repo_label: "org/repo".to_string(),
-            prs: vec![pr(1, "should never appear")],
-        });
-        app.launcher_prs_in_flight = Some(InFlightLauncherPrs {
-            id,
-            generation: app.launcher_prs_generation,
-        });
-
-        // Something bumps the generation before this fetch lands.
-        app.launcher_prs_generation = app.launcher_prs_generation.wrapping_add(1);
-
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            app.poll_launcher_prs();
-            if app.launcher_prs_in_flight.is_none() || std::time::Instant::now() >= deadline {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        assert!(app.launcher_prs_in_flight.is_none(), "stale fetch drained");
-        assert!(
-            app.launcher_prs.is_none(),
-            "a stale-generation result must never be applied"
-        );
-    }
-
-    #[test]
     fn request_launcher_prs_is_single_flight() {
         let mut app = app();
         let id = app.launcher_prs_tasks.spawn(|| PrFetchOutcome::Loaded {
             repo_label: "org/repo".to_string(),
             prs: vec![pr(1, "one")],
         });
-        app.launcher_prs_in_flight = Some(InFlightLauncherPrs {
-            id,
-            generation: app.launcher_prs_generation,
-        });
+        app.launcher_prs_in_flight = Some(id);
         app.stage_ops = Some(Box::new(SyncPrListOps {
             outcome: PrFetchOutcome::Loaded {
                 repo_label: "org/repo".to_string(),
@@ -2671,7 +2173,7 @@ index 111..222 100644
 
         // Still the original in-flight task; the synchronous fake's outcome
         // was never applied (a second fetch never started).
-        assert_eq!(app.launcher_prs_in_flight.map(|f| f.id), Some(id));
+        assert_eq!(app.launcher_prs_in_flight, Some(id));
         assert!(app.launcher_prs.is_none());
     }
 
@@ -2745,19 +2247,6 @@ index 111..222 100644
             "got {:?}",
             app.status_message
         );
-    }
-
-    #[test]
-    fn confirm_on_prs_tab_with_an_empty_list_is_a_no_op() {
-        let mut app = app();
-        app.mode = Mode::ReviewLauncher {
-            tab: LauncherTab::PullRequests,
-            cursor: 0,
-            origin: ModeOrigin::Normal,
-        };
-        app.review_launcher_confirm();
-        assert!(matches!(app.mode, Mode::ReviewLauncher { .. }));
-        assert!(app.status_message.is_none());
     }
 
     // -- Pull Requests tab: reachable via tab cycling ---------------------

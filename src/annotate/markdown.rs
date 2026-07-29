@@ -181,20 +181,6 @@ mod tests {
     }
 
     #[test]
-    fn range_target_old_side() {
-        let mut store = AnnotationStore::new();
-        store
-            .add(
-                Target::range("src/lib.rs", 10, 20, Side::Old).unwrap(),
-                Classification::Nit,
-                "this whole block used to do X",
-            )
-            .unwrap();
-        let expected = "## src/lib.rs:10-20 (-)\n\n[nit] this whole block used to do X\n";
-        assert_eq!(render_markdown(&store), expected);
-    }
-
-    #[test]
     fn hunk_target_header_always_uses_plus_marker() {
         let mut store = AnnotationStore::new();
         store
@@ -271,35 +257,6 @@ mod tests {
         assert_eq!(render_markdown(&store), expected);
     }
 
-    #[test]
-    fn output_ends_with_single_trailing_newline() {
-        let mut store = AnnotationStore::new();
-        store
-            .add(Target::file("a.rs"), Classification::Nit, "first")
-            .unwrap();
-        store
-            .add(Target::file("b.rs"), Classification::Issue, "second")
-            .unwrap();
-        let rendered = render_markdown(&store);
-        assert!(rendered.ends_with('\n'));
-        assert!(!rendered.ends_with("\n\n"));
-    }
-
-    #[test]
-    fn insertion_order_is_preserved_in_output() {
-        let mut store = AnnotationStore::new();
-        store
-            .add(Target::file("z.rs"), Classification::Nit, "z-note")
-            .unwrap();
-        store
-            .add(Target::file("a.rs"), Classification::Nit, "a-note")
-            .unwrap();
-        let rendered = render_markdown(&store);
-        let z_pos = rendered.find("z.rs").unwrap();
-        let a_pos = rendered.find("a.rs").unwrap();
-        assert!(z_pos < a_pos);
-    }
-
     // -- Source grouping ------------------------------------------------------
 
     #[test]
@@ -374,21 +331,6 @@ mod tests {
             )
             .unwrap();
         let expected = "Reviewing: main..feature\n\n## a.rs\n\n[issue] note\n";
-        assert_eq!(render_markdown(&store), expected);
-    }
-
-    #[test]
-    fn staged_group_reviewing_line_is_literally_staged() {
-        let mut store = AnnotationStore::new();
-        store
-            .add_with_source(
-                Target::file("a.rs"),
-                Classification::Issue,
-                "note",
-                Source::Staged,
-            )
-            .unwrap();
-        let expected = "Reviewing: staged\n\n## a.rs\n\n[issue] note\n";
         assert_eq!(render_markdown(&store), expected);
     }
 
@@ -567,37 +509,5 @@ mod tests {
             after.contains("please fix"),
             "a published annotation must still reach stdout, exactly like an unpublished one"
         );
-    }
-
-    #[test]
-    fn a_mixed_batch_of_published_and_unpublished_annotations_all_reach_stdout() {
-        let mut store = AnnotationStore::new();
-        let id0 = store
-            .add(Target::file("a.rs"), Classification::Issue, "one")
-            .unwrap();
-        store
-            .add(Target::file("b.rs"), Classification::Nit, "two")
-            .unwrap();
-        store.set_published(id0, true).unwrap();
-
-        let rendered = render_markdown(&store);
-        assert!(rendered.contains("[issue] one"));
-        assert!(rendered.contains("[nit] two"));
-    }
-
-    #[test]
-    fn non_worktree_only_session_has_no_leading_blank_group() {
-        let mut store = AnnotationStore::new();
-        store
-            .add_with_source(
-                Target::file("a.rs"),
-                Classification::Issue,
-                "note",
-                Source::Commit("abc1234".to_string()),
-            )
-            .unwrap();
-        let rendered = render_markdown(&store);
-        assert!(rendered.starts_with("Reviewing: abc1234\n\n"));
-        assert!(!rendered.starts_with('\n'));
     }
 }

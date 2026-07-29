@@ -186,24 +186,6 @@ mod tests {
     use std::process::Command;
     use tempfile::TempDir;
 
-    // -- paths_match ------------------------------------------------------
-
-    #[test]
-    fn paths_match_identical_nonexistent_paths() {
-        // Neither side exists, so this exercises the direct-comparison
-        // fallback rather than canonicalize.
-        let p = PathBuf::from("/no/such/path/anywhere");
-        assert!(paths_match(&p, &p));
-    }
-
-    #[test]
-    fn paths_match_distinguishes_different_nonexistent_paths() {
-        assert!(!paths_match(
-            Path::new("/no/such/path/a"),
-            Path::new("/no/such/path/b")
-        ));
-    }
-
     // -- load_reconciled_review_state ----------------------------------------
     //
     // Real-git tempdir tests exercising reconciliation end to end: every

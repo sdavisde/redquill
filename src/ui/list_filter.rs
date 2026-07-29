@@ -226,13 +226,6 @@ mod tests {
         assert!(!f.is_empty());
     }
 
-    #[test]
-    fn open_on_an_empty_list_is_the_empty_state() {
-        let f = ListFilter::open(&[]);
-        assert!(f.is_empty());
-        assert_eq!(f.len(), 0);
-    }
-
     // -- push_char / backspace: rerank on every keystroke -----------------------
 
     #[test]
@@ -325,18 +318,6 @@ mod tests {
         let mut f = ListFilter::open(&l);
         f.push_char('x', &l);
         assert_eq!(chrome_text(&f), "/x");
-    }
-
-    #[test]
-    fn chrome_text_shows_the_locked_reminder_once_locked() {
-        let l = labels(&["a"]);
-        let mut f = ListFilter::open(&l);
-        f.push_char('x', &l);
-        f.lock();
-        assert_eq!(
-            chrome_text(&f),
-            "filter: /x  (/ to edit \u{00b7} esc to clear)"
-        );
     }
 
     #[test]

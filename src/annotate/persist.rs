@@ -314,6 +314,10 @@ mod tests {
             !entry.published,
             "an annotation with no published key must default to unpublished"
         );
+        assert!(
+            !entry.draft_created,
+            "an annotation with no draft_created key must default to no staged draft"
+        );
     }
 
     #[test]
@@ -362,17 +366,6 @@ mod tests {
         restore_all(&mut restored, snap);
         let flags: Vec<bool> = restored.iter().map(|a| a.draft_created).collect();
         assert_eq!(flags, vec![true, false]);
-    }
-
-    #[test]
-    fn record_without_a_draft_created_key_defaults_to_false() {
-        let json = r#"{
-            "target": {"kind": "file", "path": "a.rs"},
-            "classification": "nit",
-            "body": "note"
-        }"#;
-        let entry: PersistedAnnotation = serde_json::from_str(json).unwrap();
-        assert!(!entry.draft_created);
     }
 
     #[test]
