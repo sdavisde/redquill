@@ -536,6 +536,11 @@ pub struct App {
     /// separate from `launcher_commits_tasks` so their results are drained
     /// independently (see [`App::poll_launcher_prs`]).
     pub(super) launcher_prs_tasks: BackgroundTasks<PrFetchOutcome>,
+    /// How the Pull Requests fetch currently in flight should report itself
+    /// when it lands (see [`super::review_launcher::PrListReport`]) — set by
+    /// whichever path requested it, consumed by the one point every listing
+    /// resolves through. Back to `Silent` whenever nothing is pending.
+    pub(super) launcher_prs_report: super::review_launcher::PrListReport,
     /// Managed PR/MR reviews whose PR is no longer open — recomputed (never
     /// per frame) each time the Pull Requests list resolves, from the managed
     /// `redquill/pr/*` branches, the persisted reviews, and the just-fetched
@@ -876,6 +881,7 @@ impl App {
             launcher_prs: None,
             launcher_prs_in_flight: None,
             launcher_prs_tasks: BackgroundTasks::new(),
+            launcher_prs_report: super::review_launcher::PrListReport::Silent,
             launcher_finished_reviews: Vec::new(),
             cleanup_reviews: Vec::new(),
             restore_request: None,

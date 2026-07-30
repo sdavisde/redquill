@@ -737,9 +737,9 @@ pub(super) fn handle_switcher_key(app: &mut App, key: KeyEvent) {
 /// prefixes — spec 12 FR-12) moves the cursor, `/` filters the active tab
 /// (spec 12 FR-12), `Enter` confirms the highlighted row — starts a branch
 /// review on the Branches tab, opens a read-only commit view on the Commits
-/// tab — `Esc` closes the modal back to the mode `R` was pressed from, and
-/// `a` toggles the Commits tab between its ahead-of-base list and the full
-/// recent-HEAD log.
+/// tab — `Esc` closes the modal back to the mode `R` was pressed from, `a`
+/// toggles the Commits tab between its ahead-of-base list and the full
+/// recent-HEAD log, and `r` re-fetches the Pull Requests tab's listing.
 pub(super) fn handle_review_launcher_key(app: &mut App, key: KeyEvent) {
     if intercept_filter(app, key, &LAUNCHER_FILTER_HOOKS) {
         return;
@@ -774,6 +774,7 @@ pub(super) fn handle_review_launcher_key(app: &mut App, key: KeyEvent) {
         LauncherAction::Close => app.close_review_launcher(),
         LauncherAction::ToggleAllCommits => app.review_launcher_toggle_all_commits(),
         LauncherAction::Cleanup => app.open_cleanup_reviews(),
+        LauncherAction::Refresh => app.review_launcher_refresh_prs(),
     }
 }
 

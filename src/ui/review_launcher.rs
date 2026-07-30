@@ -15,7 +15,10 @@
 //! read-only single-commit view on `Enter` via
 //! [`App::confirm_launcher_commit`]. The Pull Requests tab lists open PRs
 //! from whichever forge `origin` resolves to (async, through
-//! [`super::stage_ops::StageOps::async_pr_list_fetcher`]); `Enter` checks the
+//! [`super::stage_ops::StageOps::async_pr_list_fetcher`]) — re-fetched every
+//! time the tab becomes visible and on demand with `r`, since a listing
+//! cached for the process lifetime would hide any PR opened after startup
+//! (see [`App::ensure_launcher_prs_fresh`]); `Enter` checks the
 //! highlighted PR out into a managed worktree and starts a review session via
 //! [`App::confirm_launcher_pr`], the same weight as the Branches tab. All
 //! three tabs share the shared motion layer (spec 12
@@ -44,6 +47,24 @@ use super::review_session::{
     resolve_review_state_path, review_worktree_path, worktree_registered,
 };
 use super::stage_ops::{PrCheckoutOutcome, PrCheckoutRequest, PrFetchOutcome, StageOps};
+
+/// How a landed Pull Requests listing reports itself on the status line.
+/// Carried on `App::launcher_prs_report` for the duration of one fetch: the
+/// fetch's *reason* is what decides whether its result is worth a word, and
+/// only the requesting path knows that reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum PrListReport {
+    /// A first load or a retry after a degraded outcome: the tab body itself
+    /// (a listing, an empty state, a degraded prescription) is the feedback.
+    #[default]
+    Silent,
+    /// A refresh behind an already-visible listing (the tab became visible
+    /// again): worth a word only when it actually found a new PR.
+    OnlyIfNew,
+    /// The explicit on-demand refresh (`r`): always says what it found, so
+    /// pressing the key is never mistaken for a no-op.
+    Always,
+}
 
 /// Maps a freshly-resolved [`ProviderKind`] onto the persisted
 /// [`ForgeProviderKind`] a review session carries — the two are the same
@@ -160,7 +181,7 @@ impl App {
         match tab {
             LauncherTab::Branches => self.load_launcher_branches(),
             LauncherTab::Commits => self.ensure_launcher_commits_source_loaded(),
-            LauncherTab::PullRequests => self.ensure_launcher_prs_loaded(),
+            LauncherTab::PullRequests => self.ensure_launcher_prs_fresh(),
         }
     }
 
@@ -197,7 +218,7 @@ impl App {
         match new_tab {
             LauncherTab::Branches => self.load_launcher_branches(),
             LauncherTab::Commits => self.ensure_launcher_commits_source_loaded(),
-            LauncherTab::PullRequests => self.ensure_launcher_prs_loaded(),
+            LauncherTab::PullRequests => self.ensure_launcher_prs_fresh(),
         }
     }
 
@@ -1200,28 +1221,48 @@ impl App {
         }
     }
 
-    /// Whether the tab's first fetch (or a retry after a degraded outcome —
-    /// see [`App::ensure_launcher_prs_loaded`]) is still in flight — drives
-    /// the tab's loading placeholder, mirroring
-    /// [`App::launcher_commits_loading`].
+    /// Whether the tab's *first* fetch is still in flight — drives the tab's
+    /// loading placeholder, mirroring [`App::launcher_commits_loading`].
+    /// Deliberately false once anything has resolved: a retry after a
+    /// degraded outcome and a refresh behind a visible listing (see
+    /// [`App::ensure_launcher_prs_fresh`]) both keep the current body on
+    /// screen until the new result lands, rather than blanking it.
     pub(super) fn launcher_prs_loading(&self) -> bool {
         self.launcher_prs.is_none() && self.launcher_prs_in_flight.is_some()
     }
 
-    /// Kicks off the Pull Requests fetch if nothing usable is showing and
-    /// nothing is already in flight. Unlike
-    /// [`App::ensure_launcher_commits_loaded`]'s strict load-once gate, only
-    /// a successful [`PrFetchOutcome::Loaded`] is sticky here: a degraded
-    /// outcome (no remote, unresolved provider, missing/unauthenticated
-    /// CLI, a failed list call) is *not* cached as final, so leaving the
-    /// tab and coming back — the "retry" every degraded body's hint line
-    /// promises — genuinely re-attempts the fetch rather than replaying a
-    /// stale failure forever.
-    pub(super) fn ensure_launcher_prs_loaded(&mut self) {
-        let needs_fetch = !matches!(self.launcher_prs, Some(PrFetchOutcome::Loaded { .. }));
-        if needs_fetch && self.launcher_prs_in_flight.is_none() {
-            self.request_launcher_prs();
+    /// Kicks off a Pull Requests fetch every time the tab becomes visible
+    /// (launcher open, tab switch) unless one is already in flight. Nothing
+    /// about the tab is cached for the process lifetime: a degraded outcome
+    /// (no remote, unresolved provider, missing/unauthenticated CLI, a failed
+    /// list call) is retried — the "retry" every degraded body's hint line
+    /// promises — and a successful listing is refreshed *behind* itself,
+    /// since a PR opened after the last fetch would otherwise stay invisible
+    /// until the next process. The visible listing keeps rendering until the
+    /// new one lands (only a first fetch shows the loading placeholder — see
+    /// [`App::launcher_prs_loading`]), and a refresh-behind only speaks up if
+    /// it found something new; the explicit `r` refresh
+    /// ([`App::review_launcher_refresh_prs`]) is the loud version of the same
+    /// path.
+    pub(super) fn ensure_launcher_prs_fresh(&mut self) {
+        let report = if matches!(self.launcher_prs, Some(PrFetchOutcome::Loaded { .. })) {
+            PrListReport::OnlyIfNew
+        } else {
+            PrListReport::Silent
+        };
+        self.request_launcher_prs(report);
+    }
+
+    /// The Pull Requests tab's on-demand refresh (`r`): re-fetches the
+    /// listing even when a successful one is already showing, and always
+    /// reports what landed. A no-op unless the launcher is on that tab, and
+    /// single-flight — holding `r` down can't stack fetches, the one already
+    /// in flight just finishes (its own reporting unchanged).
+    pub(super) fn review_launcher_refresh_prs(&mut self) {
+        if !self.launcher_on_prs_tab() {
+            return;
         }
+        self.request_launcher_prs(PrListReport::Always);
     }
 
     /// Requests the Pull Requests listing: hands off to the async fetcher
@@ -1230,11 +1271,14 @@ impl App {
     /// when the backend supports one, falling back to a synchronous call
     /// for backends that can't cross a thread boundary (test fakes,
     /// git-less contexts), matching every other lazy-load path's fallback
-    /// shape.
-    fn request_launcher_prs(&mut self) {
+    /// shape. Single-flight: a fetch already in flight keeps both its task
+    /// and its `report` — a later request neither stacks a second fetch nor
+    /// relabels the pending one.
+    fn request_launcher_prs(&mut self, report: PrListReport) {
         if self.launcher_prs_in_flight.is_some() {
             return;
         }
+        self.launcher_prs_report = report;
         let Some(ops) = self.stage_ops.as_deref() else {
             self.set_launcher_prs(PrFetchOutcome::NoForgeRemote);
             return;
@@ -1271,13 +1315,109 @@ impl App {
         }
     }
 
-    /// Stores a resolved [`PrFetchOutcome`] as the tab's current state and
-    /// recomputes the finished-review set from it — the single point every
-    /// PR-list resolution routes through, so the footer count and the cleanup
-    /// candidates can never lag the listing they were derived from.
+    /// Stores a resolved [`PrFetchOutcome`] as the tab's current state — the
+    /// single point every PR-list resolution routes through, first load and
+    /// refresh alike. Recomputes the finished-review set from it (so the
+    /// footer count and the cleanup candidates can never lag the listing they
+    /// were derived from), re-points the tab's cursor and `/` filter at the
+    /// new listing, and reports what landed if the fetch's
+    /// [`PrListReport`] asked for it. A degraded outcome replaces the listing
+    /// exactly as it does on a first load — the prescription body, with its
+    /// own retry hint, is the feedback there.
     fn set_launcher_prs(&mut self, outcome: PrFetchOutcome) {
+        let report = std::mem::take(&mut self.launcher_prs_report);
+        let previous: Vec<u64> = self
+            .launcher_prs_rows()
+            .iter()
+            .map(|pr| pr.number)
+            .collect();
+        let selected = self.launcher_selected_pr_number();
+        // A fetch can land after the user has moved on (a listing takes a
+        // forge CLI round-trip): apply it either way, but only speak up while
+        // the tab it describes is still on screen.
+        let showing = self.launcher_on_prs_tab();
         self.launcher_prs = Some(outcome);
         self.recompute_launcher_finished_reviews();
+        self.reapply_launcher_prs_view(selected);
+        if showing
+            && let Some(outcome) = self.launcher_prs.as_ref()
+            && let Some(message) = launcher_refresh_status(report, &previous, outcome)
+        {
+            self.set_status_message(message);
+        }
+    }
+
+    /// Whether the launcher is open on the Pull Requests tab — the one
+    /// question the tab's cursor/filter repair and its status reporting both
+    /// ask, so they can't answer it differently.
+    fn launcher_on_prs_tab(&self) -> bool {
+        matches!(
+            self.mode,
+            Mode::ReviewLauncher {
+                tab: LauncherTab::PullRequests,
+                ..
+            }
+        )
+    }
+
+    /// The PR number the launcher's cursor is currently on, or `None` when
+    /// the launcher isn't showing that tab or the cursor isn't over a real
+    /// row — the anchor a landing listing restores the cursor to, so a PR
+    /// appearing above the selection doesn't shift the selection with it.
+    fn launcher_selected_pr_number(&self) -> Option<u64> {
+        let Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor,
+            ..
+        } = self.mode
+        else {
+            return None;
+        };
+        let index = self.review_launcher_real_index(cursor)?;
+        self.launcher_prs_rows().get(index).map(|pr| pr.number)
+    }
+
+    /// Re-points the Pull Requests tab's `/` filter and cursor at a
+    /// just-applied listing: the filter reranks against the new labels (a
+    /// locked query keeps narrowing instead of indexing rows that no longer
+    /// exist), and the cursor returns to `selected`'s PR, clamping to the
+    /// last row when that PR is gone from the new listing. Only touches
+    /// either while the launcher is actually showing that tab — `App`'s
+    /// filter field is shared across tabs, so reranking it against PR labels
+    /// while the user is looking at Branches would corrupt it.
+    fn reapply_launcher_prs_view(&mut self, selected: Option<u64>) {
+        if !self.launcher_on_prs_tab() {
+            return;
+        }
+        if self.launcher_filter.is_some() {
+            let labels = self.review_launcher_filter_labels();
+            if let Some(filter) = self.launcher_filter.as_mut() {
+                filter.refresh(&labels);
+            }
+        }
+        let target = selected.and_then(|number| self.launcher_prs_cursor_for(number));
+        let count = self.review_launcher_row_count();
+        if let Mode::ReviewLauncher { cursor, .. } = &mut self.mode {
+            *cursor = match target {
+                Some(position) => position,
+                None => (*cursor).min(count.saturating_sub(1)),
+            };
+        }
+    }
+
+    /// Where PR `number` sits in the Pull Requests tab's current view: a
+    /// position within the active filter's filtered rows, or a raw row index
+    /// when no filter is active. `None` when the listing doesn't carry that
+    /// PR, or a filter is active and hides it.
+    fn launcher_prs_cursor_for(&self, number: u64) -> Option<usize> {
+        let raw = self
+            .launcher_prs_rows()
+            .iter()
+            .position(|pr| pr.number == number)?;
+        match &self.launcher_filter {
+            Some(filter) => filter.indices().iter().position(|&i| i == raw),
+            None => Some(raw),
+        }
     }
 
     /// Recomputes [`App::launcher_finished_reviews`] from the just-resolved
@@ -1315,6 +1455,36 @@ impl App {
         };
         let reviews = crate::review::store::load(&state_path).reviews;
         self.launcher_finished_reviews = crate::review::finished_reviews(&managed, &reviews, &open);
+    }
+}
+
+/// The status line a landed Pull Requests listing reports, or `None` when it
+/// lands silently. Only a successful listing ever reports: a degraded outcome
+/// replaces the body with its own prescription, and adding a status line on
+/// top of that would say less than the body already does. "New" is by PR
+/// number against `previous` (the numbers that were showing) — so a refresh
+/// from a state that had no listing at all counts everything it finds as new,
+/// which is exactly what the user sees happen.
+fn launcher_refresh_status(
+    report: PrListReport,
+    previous: &[u64],
+    outcome: &PrFetchOutcome,
+) -> Option<String> {
+    if report == PrListReport::Silent {
+        return None;
+    }
+    let PrFetchOutcome::Loaded { prs, .. } = outcome else {
+        return None;
+    };
+    let new = prs
+        .iter()
+        .filter(|pr| !previous.contains(&pr.number))
+        .count();
+    match (report, new) {
+        (PrListReport::Silent, _) | (PrListReport::OnlyIfNew, 0) => None,
+        (_, 0) => Some("refreshed \u{2014} no new pull requests".to_string()),
+        (_, 1) => Some("refreshed \u{2014} 1 new pull request".to_string()),
+        (_, n) => Some(format!("refreshed \u{2014} {n} new pull requests")),
     }
 }
 
@@ -2114,7 +2284,7 @@ index 111..222 100644
     #[test]
     fn no_backend_degrades_to_no_forge_remote_rather_than_a_stuck_placeholder() {
         let mut app = app();
-        app.ensure_launcher_prs_loaded();
+        app.ensure_launcher_prs_fresh();
         assert_eq!(app.launcher_prs, Some(PrFetchOutcome::NoForgeRemote));
         assert!(!app.launcher_prs_loading());
     }
@@ -2124,7 +2294,7 @@ index 111..222 100644
         let mut app = app_with_pr_outcome(PrFetchOutcome::ListFailed {
             message: "boom".to_string(),
         });
-        app.ensure_launcher_prs_loaded();
+        app.ensure_launcher_prs_fresh();
         assert_eq!(
             app.launcher_prs,
             Some(PrFetchOutcome::ListFailed {
@@ -2140,34 +2310,399 @@ index 111..222 100644
                 prs: vec![pr(1, "one")],
             },
         }));
-        app.ensure_launcher_prs_loaded();
+        app.ensure_launcher_prs_fresh();
         assert_eq!(app.launcher_prs_rows().len(), 1, "the retry must have run");
     }
 
+    /// A successful listing is *not* cached for the process lifetime: making
+    /// the tab visible again re-fetches behind it, so a PR opened after
+    /// startup shows up without a restart.
     #[test]
-    fn a_loaded_outcome_is_sticky_a_second_ensure_call_never_refetches() {
+    fn a_loaded_listing_is_refreshed_behind_itself_when_the_tab_becomes_visible() {
         let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
             repo_label: "org/repo".to_string(),
             prs: vec![pr(1, "one")],
         });
-        app.ensure_launcher_prs_loaded();
+        app.ensure_launcher_prs_fresh();
         assert_eq!(app.launcher_prs_rows().len(), 1);
 
-        // A fake that would now report something different — proving a
-        // second `ensure` call is a true no-op once loaded, not just
-        // coincidentally identical output.
+        // A fake reporting a newly-opened PR.
         app.stage_ops = Some(Box::new(SyncPrListOps {
             outcome: PrFetchOutcome::Loaded {
                 repo_label: "org/repo".to_string(),
                 prs: vec![pr(1, "one"), pr(2, "two")],
             },
         }));
-        app.ensure_launcher_prs_loaded();
+        app.ensure_launcher_prs_fresh();
+        assert_eq!(app.launcher_prs_rows().len(), 2);
+    }
+
+    /// Reopening the launcher onto a remembered Pull Requests tab refreshes
+    /// behind the cached listing (the wiring is per-entry-point, so opening
+    /// needs its own coverage alongside `switching_onto_the_prs_tab_...`),
+    /// and reports what it found without being asked.
+    #[test]
+    fn reopening_the_launcher_on_the_prs_tab_refreshes_behind_the_cached_listing() {
+        let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(1, "one")],
+        });
+        app.last_launcher_tab = LauncherTab::PullRequests;
+        app.open_review_launcher();
+        assert_eq!(app.launcher_prs_rows().len(), 1);
+        app.close_review_launcher();
+
+        app.stage_ops = Some(Box::new(SyncPrListOps {
+            outcome: PrFetchOutcome::Loaded {
+                repo_label: "org/repo".to_string(),
+                prs: vec![pr(2, "two"), pr(1, "one")],
+            },
+        }));
+        app.open_review_launcher();
+
+        assert_eq!(app.launcher_prs_rows().len(), 2);
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("refreshed \u{2014} 1 new pull request")
+        );
+    }
+
+    /// A refresh-behind that finds nothing new stays quiet — the reopen path
+    /// must not narrate every launcher open.
+    #[test]
+    fn a_refresh_behind_that_finds_nothing_new_says_nothing() {
+        let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(1, "one")],
+        });
+        app.last_launcher_tab = LauncherTab::PullRequests;
+        app.open_review_launcher();
+        app.ensure_launcher_prs_fresh();
+        assert!(app.status_message.is_none(), "{:?}", app.status_message);
+    }
+
+    // -- Pull Requests tab: the `r` refresh -------------------------------
+
+    /// `r` re-fetches a listing that already resolved successfully (the
+    /// whole point: the tab used to cache one for the process lifetime) and
+    /// always reports what landed.
+    #[test]
+    fn refresh_refetches_a_loaded_listing_and_reports_the_new_count() {
+        let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(1, "one")],
+        });
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.ensure_launcher_prs_fresh();
+        app.status_message = None;
+
+        app.stage_ops = Some(Box::new(SyncPrListOps {
+            outcome: PrFetchOutcome::Loaded {
+                repo_label: "org/repo".to_string(),
+                prs: vec![pr(1, "one"), pr(2, "two"), pr(3, "three")],
+            },
+        }));
+        app.review_launcher_refresh_prs();
+
+        assert_eq!(app.launcher_prs_rows().len(), 3);
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("refreshed \u{2014} 2 new pull requests")
+        );
+    }
+
+    /// `r` while a fetch is already in flight must not stack a second one —
+    /// the guard `ensure_launcher_prs_fresh` relies on has to cover the
+    /// explicit path too.
+    #[test]
+    fn refresh_is_single_flight_while_a_fetch_is_pending() {
+        let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(1, "one")],
+        });
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.ensure_launcher_prs_fresh();
+        let id = app.launcher_prs_tasks.spawn(|| PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(9, "pending")],
+        });
+        app.launcher_prs_in_flight = Some(id);
+        app.stage_ops = Some(Box::new(SyncPrListOps {
+            outcome: PrFetchOutcome::Loaded {
+                repo_label: "org/repo".to_string(),
+                prs: vec![pr(1, "one"), pr(2, "two")],
+            },
+        }));
+
+        app.review_launcher_refresh_prs();
+
+        assert_eq!(
+            app.launcher_prs_in_flight,
+            Some(id),
+            "the pending fetch must still be the only one"
+        );
         assert_eq!(
             app.launcher_prs_rows().len(),
             1,
-            "a successful load must be sticky"
+            "the second fetch never ran, so the listing is untouched"
         );
+    }
+
+    /// `r` on the tabs it isn't scoped to is inert — no fetch, no status.
+    #[test]
+    fn refresh_does_nothing_on_the_branches_and_commits_tabs() {
+        for tab in [LauncherTab::Branches, LauncherTab::Commits] {
+            let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+                repo_label: "org/repo".to_string(),
+                prs: vec![pr(1, "one")],
+            });
+            app.mode = Mode::ReviewLauncher {
+                tab,
+                cursor: 0,
+                origin: ModeOrigin::Normal,
+            };
+
+            app.review_launcher_refresh_prs();
+
+            assert!(
+                app.launcher_prs.is_none(),
+                "{tab:?}: `r` must not fetch the PR listing"
+            );
+            assert!(app.status_message.is_none(), "{tab:?}: and must stay quiet");
+        }
+    }
+
+    /// A refresh keeps the current listing on screen until the new one lands
+    /// — the loading placeholder belongs to the first fetch only.
+    #[test]
+    fn a_pending_refresh_keeps_the_visible_listing_and_no_placeholder() {
+        let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(1, "one")],
+        });
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.ensure_launcher_prs_fresh();
+        let id = app.launcher_prs_tasks.spawn(|| PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(1, "one"), pr(2, "two")],
+        });
+        app.launcher_prs_in_flight = Some(id);
+
+        assert!(!app.launcher_prs_loading(), "no placeholder mid-refresh");
+        assert_eq!(app.launcher_prs_rows().len(), 1, "old rows stay visible");
+    }
+
+    /// A refresh that lands after the user left the tab still applies (the
+    /// listing is state, not a notification) but doesn't narrate into the
+    /// footer of whatever they're looking at now.
+    #[test]
+    fn a_refresh_landing_after_the_user_left_the_tab_applies_quietly() {
+        let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(1, "one")],
+        });
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.ensure_launcher_prs_fresh();
+        app.status_message = None;
+
+        let id = app.launcher_prs_tasks.spawn(|| PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(1, "one"), pr(2, "two")],
+        });
+        app.launcher_prs_in_flight = Some(id);
+        app.launcher_prs_report = PrListReport::Always;
+        app.close_review_launcher();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.launcher_prs_in_flight.is_some() && std::time::Instant::now() < deadline {
+            app.poll_launcher_prs();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        assert_eq!(app.launcher_prs_rows().len(), 2, "the result still applies");
+        assert!(app.status_message.is_none(), "{:?}", app.status_message);
+    }
+
+    /// The cursor follows the PR it was on, not its row number: a PR opened
+    /// since the last fetch lands above the selection and would otherwise
+    /// silently shift it onto a different PR.
+    #[test]
+    fn a_landed_refresh_keeps_the_cursor_on_the_same_pr_by_number() {
+        let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(20, "beta"), pr(10, "alpha")],
+        });
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.ensure_launcher_prs_fresh();
+        app.review_launcher_move_down(); // onto #10
+        assert_eq!(app.launcher_prs_rows()[1].number, 10);
+
+        app.stage_ops = Some(Box::new(SyncPrListOps {
+            outcome: PrFetchOutcome::Loaded {
+                repo_label: "org/repo".to_string(),
+                prs: vec![pr(30, "gamma"), pr(20, "beta"), pr(10, "alpha")],
+            },
+        }));
+        app.review_launcher_refresh_prs();
+
+        let selected = app.review_launcher_selected_index().unwrap();
+        assert_eq!(
+            app.launcher_prs_rows()[selected].number,
+            10,
+            "the cursor must still be on #10, now one row further down"
+        );
+    }
+
+    /// When the selected PR is gone from the new listing (merged/closed
+    /// between fetches) the cursor clamps into range rather than pointing
+    /// past the end.
+    #[test]
+    fn a_landed_refresh_clamps_the_cursor_when_the_selected_pr_vanished() {
+        let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(10, "alpha"), pr(20, "beta"), pr(30, "gamma")],
+        });
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 2,
+            origin: ModeOrigin::Normal,
+        };
+        app.ensure_launcher_prs_fresh();
+
+        app.stage_ops = Some(Box::new(SyncPrListOps {
+            outcome: PrFetchOutcome::Loaded {
+                repo_label: "org/repo".to_string(),
+                prs: vec![pr(10, "alpha")],
+            },
+        }));
+        app.review_launcher_refresh_prs();
+
+        assert_eq!(app.review_launcher_selected_index(), Some(0));
+    }
+
+    /// An active `/` filter survives a landed refresh: the query is kept and
+    /// reranked against the new listing (a stale filter would index rows
+    /// that no longer exist), and the cursor still points at the same PR
+    /// within the filtered view.
+    #[test]
+    fn a_landed_refresh_preserves_an_active_filter_and_its_selection() {
+        let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(10, "alpha"), pr(20, "beta")],
+        });
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.ensure_launcher_prs_fresh();
+        app.review_launcher_enter_filter();
+        for c in "beta".chars() {
+            app.review_launcher_filter_push_char(c);
+        }
+        app.review_launcher_lock_filter();
+        assert_eq!(app.review_launcher_selected_index(), Some(1), "on #20");
+
+        app.stage_ops = Some(Box::new(SyncPrListOps {
+            outcome: PrFetchOutcome::Loaded {
+                repo_label: "org/repo".to_string(),
+                prs: vec![pr(30, "gamma"), pr(10, "alpha"), pr(20, "beta")],
+            },
+        }));
+        app.review_launcher_refresh_prs();
+
+        let filter = app
+            .launcher_filter
+            .as_ref()
+            .expect("the filter must survive the refresh");
+        assert_eq!(filter.query(), "beta");
+        assert_eq!(filter.len(), 1, "reranked against the new listing");
+        let selected = app.review_launcher_selected_index().unwrap();
+        assert_eq!(app.launcher_prs_rows()[selected].number, 20);
+    }
+
+    // -- launcher_refresh_status ------------------------------------------
+
+    #[test]
+    fn refresh_status_reports_per_report_kind_and_new_count() {
+        let loaded = |numbers: &[u64]| PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: numbers.iter().map(|&n| pr(n, "t")).collect(),
+        };
+        let cases: Vec<(PrListReport, Vec<u64>, PrFetchOutcome, Option<&str>)> = vec![
+            // A first load never narrates itself.
+            (PrListReport::Silent, vec![], loaded(&[1, 2]), None),
+            // The explicit refresh always reports, new PRs or not.
+            (
+                PrListReport::Always,
+                vec![1],
+                loaded(&[1]),
+                Some("refreshed \u{2014} no new pull requests"),
+            ),
+            (
+                PrListReport::Always,
+                vec![1],
+                loaded(&[1, 2]),
+                Some("refreshed \u{2014} 1 new pull request"),
+            ),
+            (
+                PrListReport::Always,
+                vec![1],
+                loaded(&[1, 2, 3]),
+                Some("refreshed \u{2014} 2 new pull requests"),
+            ),
+            // A closed PR disappearing isn't "new" — the count is one-way.
+            (
+                PrListReport::Always,
+                vec![1, 2],
+                loaded(&[1]),
+                Some("refreshed \u{2014} no new pull requests"),
+            ),
+            // The refresh-behind only speaks when it found something.
+            (PrListReport::OnlyIfNew, vec![1], loaded(&[1]), None),
+            (
+                PrListReport::OnlyIfNew,
+                vec![1],
+                loaded(&[1, 2]),
+                Some("refreshed \u{2014} 1 new pull request"),
+            ),
+            // A degraded outcome's own body is the feedback; no status line.
+            (
+                PrListReport::Always,
+                vec![1],
+                PrFetchOutcome::ListFailed {
+                    message: "boom".to_string(),
+                },
+                None,
+            ),
+        ];
+        for (report, previous, outcome, expected) in cases {
+            assert_eq!(
+                launcher_refresh_status(report, &previous, &outcome).as_deref(),
+                expected,
+                "{report:?} over {previous:?} -> {outcome:?}"
+            );
+        }
     }
 
     #[test]
@@ -2185,7 +2720,7 @@ index 111..222 100644
             },
         }));
 
-        app.ensure_launcher_prs_loaded();
+        app.ensure_launcher_prs_fresh();
 
         // Still the original in-flight task; the synchronous fake's outcome
         // was never applied (a second fetch never started).
@@ -2213,7 +2748,7 @@ index 111..222 100644
             cursor: 0,
             origin: ModeOrigin::Normal,
         };
-        app.ensure_launcher_prs_loaded();
+        app.ensure_launcher_prs_fresh();
 
         app.review_launcher_confirm();
 
@@ -2247,7 +2782,7 @@ index 111..222 100644
             cursor: 0,
             origin: ModeOrigin::Normal,
         };
-        app.ensure_launcher_prs_loaded();
+        app.ensure_launcher_prs_fresh();
         app.target = DiffTarget::Review {
             base: "main".to_string(),
             branch: "feature".to_string(),
@@ -2304,7 +2839,7 @@ index 111..222 100644
             cursor: 0,
             origin: ModeOrigin::Normal,
         };
-        app.ensure_launcher_prs_loaded();
+        app.ensure_launcher_prs_fresh();
         assert_eq!(
             app.review_launcher_filter_labels(),
             vec!["#42 fix the thing".to_string()]

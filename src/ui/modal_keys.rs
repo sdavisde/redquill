@@ -1478,8 +1478,8 @@ pub(super) static CLEANUP_REVIEWS_KEYS: LazyLock<Vec<ModalBinding<CleanupReviews
 /// close — plus the shared motion set beyond plain step (spec 12 FR-12,
 /// half/full-page paging, jump-to-extremes — see [`SwitcherAction`]'s
 /// identical doc note on jump-to-top's single-`g` divergence), the `/`
-/// filter (spec 12 FR-12), and the one launcher-specific row
-/// (`ToggleAllCommits`).
+/// filter (spec 12 FR-12), and the launcher-specific rows
+/// (`ToggleAllCommits`, `Cleanup`, `Refresh`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LauncherAction {
     ToggleTab,
@@ -1505,6 +1505,11 @@ pub(super) enum LauncherAction {
     /// modal for reviews whose PR is no longer open (see
     /// [`super::app::App::open_cleanup_reviews`]).
     Cleanup,
+    /// The Pull Requests tab's on-demand list refresh — re-fetches the
+    /// listing even when one is already showing, so a PR opened since the
+    /// last fetch appears without restarting (see
+    /// [`super::app::App::review_launcher_refresh_prs`]).
+    Refresh,
 }
 
 pub(super) fn launcher_action_name(action: LauncherAction) -> &'static str {
@@ -1523,6 +1528,7 @@ pub(super) fn launcher_action_name(action: LauncherAction) -> &'static str {
         LauncherAction::Close => "close",
         LauncherAction::ToggleAllCommits => "toggle-all-commits",
         LauncherAction::Cleanup => "cleanup-finished-reviews",
+        LauncherAction::Refresh => "refresh",
     }
 }
 
@@ -1542,6 +1548,7 @@ pub(super) fn launcher_action_from_name(name: &str) -> Option<LauncherAction> {
         "close" => LauncherAction::Close,
         "toggle-all-commits" => LauncherAction::ToggleAllCommits,
         "cleanup-finished-reviews" => LauncherAction::Cleanup,
+        "refresh" => LauncherAction::Refresh,
         _ => return None,
     })
 }
@@ -1677,13 +1684,22 @@ pub(super) static REVIEW_LAUNCHER_KEYS: LazyLock<Vec<ModalBinding<LauncherAction
                     label: "clean up",
                 }),
             },
+            ModalBinding {
+                description: "Pull Requests tab: refresh the list",
+                keys: vec![ModalKey::plain(KeyCode::Char('r'))],
+                action: LauncherAction::Refresh,
+                footer: Some(FooterHint {
+                    rank: 8,
+                    label: "refresh",
+                }),
+            },
         ]
     });
 
 /// Which launcher tab a row's key only does something visible on; `None`
 /// means every tab. [`super::review_launcher_modal::hint_line`] reads this
-/// to keep `ToggleAllCommits`/`Cleanup` out of the footer strip on tabs
-/// where they'd be a truthful-but-pointless hint, without filtering by the
+/// to keep `ToggleAllCommits`/`Cleanup`/`Refresh` out of the footer strip on
+/// tabs where they'd be a truthful-but-pointless hint, without filtering by the
 /// hint's label text (the dispatch itself is unchanged — both keys still
 /// resolve everywhere, see `every_launcher_table_entry_drives_its_documented_action`).
 pub(super) fn launcher_action_tab_scope(
@@ -1692,7 +1708,7 @@ pub(super) fn launcher_action_tab_scope(
     use super::review_launcher::LauncherTab;
     match action {
         LauncherAction::ToggleAllCommits => Some(LauncherTab::Commits),
-        LauncherAction::Cleanup => Some(LauncherTab::PullRequests),
+        LauncherAction::Cleanup | LauncherAction::Refresh => Some(LauncherTab::PullRequests),
         _ => None,
     }
 }
@@ -3826,6 +3842,28 @@ index 111..222 100644
                         assert!(
                             matches!(app.mode, Mode::CleanupReviews { .. }),
                             "Launcher {label}: must open the cleanup modal"
+                        );
+                    }
+                    LauncherAction::Refresh => {
+                        // Only observable on the Pull Requests tab. Starting
+                        // from an already-loaded listing is what makes the
+                        // re-fetch visible: with no backend attached it
+                        // resolves to `NoForgeRemote`, which nothing but a
+                        // refresh of a loaded listing could have produced.
+                        app.mode = Mode::ReviewLauncher {
+                            tab: LauncherTab::PullRequests,
+                            cursor: 0,
+                            origin: crate::ui::app::ModeOrigin::Normal,
+                        };
+                        app.launcher_prs = Some(crate::ui::stage_ops::PrFetchOutcome::Loaded {
+                            repo_label: "org/repo".to_string(),
+                            prs: Vec::new(),
+                        });
+                        handle_review_launcher_key(&mut app, key.event());
+                        assert_eq!(
+                            app.launcher_prs,
+                            Some(crate::ui::stage_ops::PrFetchOutcome::NoForgeRemote),
+                            "Launcher {label}: must re-fetch the PR listing"
                         );
                     }
                 }
