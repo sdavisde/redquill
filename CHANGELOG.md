@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.21.0](https://github.com/sdavisde/redquill/compare/v0.20.1...v0.21.0) (2026-07-30)
+
+
+### Features
+
+* **config:** remappable thread, submit, result, and cleanup modal keys ([#51](https://github.com/sdavisde/redquill/issues/51)) ([039d119](https://github.com/sdavisde/redquill/commit/039d119cf51a0cd50d59984d5f06acd207002544))
+* **ui:** announce the GitHub fallback when the forge provider is unresolved ([#44](https://github.com/sdavisde/redquill/issues/44)) ([62f3853](https://github.com/sdavisde/redquill/commit/62f3853602b75f91e21832feae91efd2ecdb830c))
+* **ui:** bracket tab nav, deduped modal footers, leaner hint strips ([218c1bd](https://github.com/sdavisde/redquill/commit/218c1bd798c01c153a9696e3ce6ff4582aad4ad7))
+* **ui:** compose multi-line review summaries ([#48](https://github.com/sdavisde/redquill/issues/48)) ([b771d6a](https://github.com/sdavisde/redquill/commit/b771d6aaf27e2e250f96719d4c277a105db6d7e5))
+* **ui:** drop switch-tab hints from the footer strip ([d0e1fec](https://github.com/sdavisde/redquill/commit/d0e1fecaf563590cb01c5b4242c23cb50dbd0528))
+* **ui:** edit the review summary in place, with a visible cursor ([bb00e70](https://github.com/sdavisde/redquill/commit/bb00e702c88328e0becd700c7ad017eb116f4c90))
+* **ui:** make the submit modal scrollable with overflow indicators ([#46](https://github.com/sdavisde/redquill/issues/46)) ([96bb1ef](https://github.com/sdavisde/redquill/commit/96bb1ef05536443a497d72c1c17893935440d7b9))
+* **ui:** match PR filter against author and branch ([#42](https://github.com/sdavisde/redquill/issues/42)) ([8f7838b](https://github.com/sdavisde/redquill/commit/8f7838b4e87d1a9689bcaba9f37648d71017848d))
+* **ui:** name reply targets in the submit preview ([#47](https://github.com/sdavisde/redquill/issues/47)) ([b8614c5](https://github.com/sdavisde/redquill/commit/b8614c5d02b0bd62edaa502a8e574a2846e63006))
+* **ui:** per-entry selection in the finished-review cleanup ([#50](https://github.com/sdavisde/redquill/issues/50)) ([9d1bf50](https://github.com/sdavisde/redquill/commit/9d1bf504ad0c7201dc8e6391badd2ff8aacf43e2))
+* **ui:** PR description overlay in the picker and review session ([#45](https://github.com/sdavisde/redquill/issues/45)) ([452b498](https://github.com/sdavisde/redquill/commit/452b49819cae60276bf0df05ffe1be847142aadc))
+* **ui:** refresh the PR list on demand and on launcher reopen ([411f2a0](https://github.com/sdavisde/redquill/commit/411f2a0b4f393a31bc293fa780783c6f3a99d5ab))
+* **ui:** show a per-item result view when a submit partially fails ([#49](https://github.com/sdavisde/redquill/issues/49)) ([b10c547](https://github.com/sdavisde/redquill/commit/b10c547954d916f754b12189e9e081eb009480bd))
+* **ui:** show relative timestamps in PR picker rows ([aaad184](https://github.com/sdavisde/redquill/commit/aaad184fb09687a9c2da5ea80880bfb035d51df6))
+
+
+### Bug Fixes
+
+* **forge:** raise the GitHub PR list cap and surface truncation ([#43](https://github.com/sdavisde/redquill/issues/43)) ([7c0e4b8](https://github.com/sdavisde/redquill/commit/7c0e4b88d39d2eef768d931529f215fe582a5c77))
+* reduce duplication in ci pipeline ([458d133](https://github.com/sdavisde/redquill/commit/458d133141050521a1cad8f2af108f240c2c5fc7))
+* **ui:** clamp thread-view scrolling to content ([681b35c](https://github.com/sdavisde/redquill/commit/681b35cf6c8ff0c1d32c111151fddf50a23b3833))
+* **ui:** clamp thread-view scrolling to content ([d6fd071](https://github.com/sdavisde/redquill/commit/d6fd0712eb811731732db43261cf6651d57e1148))
+* **ui:** drop stub-era copy now that PR review is live ([bc52124](https://github.com/sdavisde/redquill/commit/bc52124dab17157cc1b29a738d56b03dc26f7326))
+* **ui:** drop stub-era copy now that PR review is live ([2f9b19a](https://github.com/sdavisde/redquill/commit/2f9b19aa805679ac5f8526e12f7fd51eab74febe))
+* **ui:** keep the PR title across manual refresh in review sessions ([f0ad09d](https://github.com/sdavisde/redquill/commit/f0ad09d7ec82da617abf76eb4aceebcf0ad38014))
+* **ui:** scope launcher footer hints to their tab and thread keys to review sessions ([318b91d](https://github.com/sdavisde/redquill/commit/318b91d29173e1796bc9a079e39105460d5b0070))
+* **ui:** scope launcher footer hints to their tab and thread keys to review sessions ([c519873](https://github.com/sdavisde/redquill/commit/c5198738aa0c5034e21ee7dbd49a20b09ff2d38d))
+
 ## [0.20.1](https://github.com/sdavisde/redquill/compare/v0.20.0...v0.20.1) (2026-07-30)
 
 
