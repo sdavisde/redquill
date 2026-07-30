@@ -229,6 +229,14 @@ pub enum Action {
     /// written to the forge. A no-op with a status hint outside a forge PR
     /// review session.
     OpenInBrowser,
+    /// `gi` in the diff view ("goto info"): opens the read-only PR/MR
+    /// description overlay for the PR under review (see
+    /// [`super::app::Mode::PrDescription`]). A status hint in a review session
+    /// with no forge PR behind it. `gi` was the only unbound, mnemonic `g`
+    /// chord left in this scope — `gd`/`gr` are code intelligence, `gt`/`gT`
+    /// thread jumps, `gp` the file finder, `g/` project search, `g<Space>` the
+    /// editor, `gg` jump-to-top, `gx` the browser.
+    OpenPrDescription,
 }
 
 /// The kebab-case config action-name for every [`Action`] variant (the
@@ -313,6 +321,7 @@ pub(crate) fn action_name(action: Action) -> &'static str {
         PrevThread => "prev-thread",
         SubmitForgeReview => "submit-forge-review",
         OpenInBrowser => "open-in-browser",
+        OpenPrDescription => "open-pr-description",
     }
 }
 
@@ -396,6 +405,7 @@ pub(crate) fn action_from_name(name: &str) -> Option<Action> {
         "prev-thread" => PrevThread,
         "submit-forge-review" => SubmitForgeReview,
         "open-in-browser" => OpenInBrowser,
+        "open-pr-description" => OpenPrDescription,
         _ => return None,
     })
 }
@@ -785,6 +795,15 @@ impl Keymap {
                     "Open the PR/MR in your browser",
                 )
                 .footer(9, "open PR"),
+                // Read the PR's own description in place. `gi` ("goto info")
+                // was free in this scope — see `Action::OpenPrDescription`
+                // for the full chord audit. Not footer-promoted: the strip is
+                // deliberately kept to muscle-memory basics.
+                d(
+                    KeySeq::two(Char('g'), none, Char('i'), none),
+                    OpenPrDescription,
+                    "Read the PR/MR description",
+                ),
                 d(
                     KeySeq::one(Char('a'), none),
                     ToggleList,
@@ -1819,7 +1838,7 @@ mod tests {
     // -- `completions_for`: pending-prefix completions -----------------------
 
     #[test]
-    fn completions_for_g_is_gg_gd_gr_gp_g_slash_thread_nav_and_gx() {
+    fn completions_for_g_is_gg_gd_gr_gp_g_slash_thread_nav_gx_and_gi() {
         let km = Keymap::default_map();
         let g = key(KeyCode::Char('g'), KeyModifiers::NONE);
         let mut actions: Vec<Action> = km
@@ -1838,6 +1857,7 @@ mod tests {
                 Action::OpenEditor,
                 Action::OpenFileFinder,
                 Action::OpenInBrowser,
+                Action::OpenPrDescription,
                 Action::OpenProjectSearch,
                 Action::PrevThread,
             ]

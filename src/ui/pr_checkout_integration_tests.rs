@@ -193,7 +193,7 @@ fn checkout_lands_in_a_pr_review_session_against_a_fork_style_head() {
         1,
         "main".to_string(),
         "github.com".to_string(),
-        "add a feature".to_string(),
+        Some("add a feature".to_string()),
         ForgeProviderKind::GitHub,
         false,
     );
@@ -276,7 +276,7 @@ fn gitlab_mr_checkout_lands_in_a_review_session_via_the_merge_requests_ref() {
         7,
         "main".to_string(),
         "gitlab.com".to_string(),
-        "add a feature".to_string(),
+        Some("add a feature".to_string()),
         ForgeProviderKind::GitLab,
         false,
     );
@@ -328,7 +328,7 @@ fn author_push_on_reopen_recreates_the_worktree_and_demotes_accepted_files() {
         1,
         "main".to_string(),
         "github.com".to_string(),
-        "the feature".to_string(),
+        Some("the feature".to_string()),
         ForgeProviderKind::GitHub,
         false,
     );
@@ -392,7 +392,7 @@ fn reopen_with_no_author_push_keeps_accepts_and_reports_no_change() {
         2,
         "main".to_string(),
         "github.com".to_string(),
-        "steady feature".to_string(),
+        Some("steady feature".to_string()),
         ForgeProviderKind::GitHub,
         false,
     );
@@ -407,6 +407,55 @@ fn reopen_with_no_author_push_keeps_accepts_and_reports_no_change() {
 
     assert_eq!(app.review_status("base.txt"), ReviewStatus::Accepted);
     assert!(!app.review_stale);
+}
+
+/// A manual refresh re-enters the same PR without re-listing it, so it has
+/// no freshly-read title to offer — it must keep the real title already
+/// stamped on the session rather than falling back to a bare "#N" (the
+/// regression: `manual_refresh` used to pass that placeholder straight
+/// through, clobbering both the in-memory banner and the persisted forge
+/// block).
+#[test]
+fn manual_refresh_keeps_the_real_pr_title() {
+    let bare = setup_bare_origin();
+    let contributor = clone_of(bare.path());
+    push_pr_special_ref(contributor.path(), "feature", 7, "only version");
+
+    let reviewer = clone_of(bare.path());
+    let mut app = app_rooted_at(reviewer.path());
+    app.spawn_pr_checkout(
+        7,
+        "main".to_string(),
+        "github.com".to_string(),
+        Some("a real title".to_string()),
+        ForgeProviderKind::GitHub,
+        false,
+    );
+    drain_pr_checkout(&mut app);
+    assert_eq!(app.review_forge.as_ref().unwrap().title, "a real title");
+    wait_for_review_save(&mut app);
+
+    app.manual_refresh();
+    drain_pr_checkout(&mut app);
+
+    assert_eq!(
+        app.review_forge.as_ref().unwrap().title,
+        "a real title",
+        "a manual refresh must not clobber the stored title with a placeholder"
+    );
+
+    wait_for_review_save(&mut app);
+    let state_path = app.review_state_path.clone().unwrap();
+    let persisted = store::load(&state_path);
+    let pf = persisted
+        .reviews
+        .get("redquill/pr/7")
+        .and_then(|r| r.forge.as_ref())
+        .expect("persisted forge block");
+    assert_eq!(
+        pf.title, "a real title",
+        "the persisted forge block must also keep the real title across a refresh"
+    );
 }
 
 // -- Re-entry idempotency (draft duplication regression) --------------------
@@ -445,7 +494,7 @@ fn manual_refresh_without_a_head_move_does_not_duplicate_drafts() {
         1,
         "main".to_string(),
         "github.com".to_string(),
-        "feature".to_string(),
+        Some("feature".to_string()),
         ForgeProviderKind::GitHub,
         false,
     );
@@ -498,7 +547,7 @@ fn head_move_refresh_demotes_but_does_not_duplicate_drafts() {
         1,
         "main".to_string(),
         "github.com".to_string(),
-        "feature".to_string(),
+        Some("feature".to_string()),
         ForgeProviderKind::GitHub,
         false,
     );
@@ -569,7 +618,7 @@ fn relaunch_and_reenter_is_idempotent_across_a_persist_cycle() {
             5,
             "main".to_string(),
             "github.com".to_string(),
-            "feature".to_string(),
+            Some("feature".to_string()),
             ForgeProviderKind::GitHub,
             false,
         );
@@ -592,7 +641,7 @@ fn relaunch_and_reenter_is_idempotent_across_a_persist_cycle() {
         5,
         "main".to_string(),
         "github.com".to_string(),
-        "feature".to_string(),
+        Some("feature".to_string()),
         ForgeProviderKind::GitHub,
         false,
     );
@@ -629,7 +678,7 @@ fn fetch_failure_mid_session_labels_the_checkout_stale_and_touches_nothing() {
         1,
         "main".to_string(),
         "github.com".to_string(),
-        "feature".to_string(),
+        Some("feature".to_string()),
         ForgeProviderKind::GitHub,
         false,
     );
@@ -807,7 +856,7 @@ fn first_checkout_offline_leaves_no_session_and_surfaces_a_diagnostic() {
         9,
         "main".to_string(),
         "github.com".to_string(),
-        "feature".to_string(),
+        Some("feature".to_string()),
         ForgeProviderKind::GitHub,
         false,
     );

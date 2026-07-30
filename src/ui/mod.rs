@@ -61,6 +61,8 @@ mod modes;
 mod motion;
 mod peek;
 mod peek_overlay;
+mod pr_description;
+mod pr_description_modal;
 mod project_search;
 mod project_search_view;
 mod refresh;
@@ -395,6 +397,7 @@ fn dispatch_key(
         Mode::EndReview { .. } => return modes::handle_end_review_key(app, key),
         Mode::ConfirmRemoteOp { .. } => modes::handle_confirm_remote_op_key(app, key),
         Mode::ThreadView => modes::handle_thread_view_key(app, key),
+        Mode::PrDescription { .. } => modes::handle_pr_description_key(app, key),
         Mode::SubmitForge => modes::handle_submit_forge_key(app, key),
         Mode::CleanupReviews { .. } => modes::handle_cleanup_reviews_key(app, key),
         Mode::ConfirmRestore { .. } => modes::handle_restore_key(app, key),
@@ -890,6 +893,9 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     if matches!(app.mode, Mode::ThreadView) {
         forge_threads::render(frame, area, app);
     }
+    if matches!(app.mode, Mode::PrDescription { .. }) {
+        pr_description_modal::render(frame, area, app);
+    }
     if matches!(app.mode, Mode::SubmitForge) {
         forge_submit::render(frame, area, app);
     }
@@ -1109,6 +1115,9 @@ fn event_loop(
         // Drain a completed `gx` browser open into the status line, same
         // cadence.
         app.poll_pr_web_open();
+        // Drain a completed PR description read into the per-number cache the
+        // description overlay renders from, same cadence.
+        app.poll_pr_detail();
         // Drain a completed background forge submit: mark published items,
         // persist, and report the outcome (or the mid-sequence split).
         app.poll_forge_submit();

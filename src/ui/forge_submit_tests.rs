@@ -631,7 +631,7 @@ fn render_modal(app: &App, width: u16, height: u16) -> String {
         .collect()
 }
 
-// -- reply preview target labels (ENG-174) -----------------------------------
+// -- reply preview target labels -----------------------------------
 
 #[test]
 fn a_reply_preview_renders_the_root_author_and_anchor_not_the_raw_id() {
