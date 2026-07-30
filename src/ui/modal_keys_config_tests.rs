@@ -390,7 +390,7 @@ fn remapping_a_thread_view_action_moves_the_key_and_its_displayed_label() {
 fn remapping_a_submit_forge_action_moves_the_key_and_its_displayed_label() {
     let keys = keys_with(
         "submit-forge",
-        "compose-summary",
+        "verdict-next",
         one(KeyCode::Char('y'), KeyModifiers::CONTROL),
     );
     let (effective, warnings) = effective_modal_keys(&keys);
@@ -400,21 +400,21 @@ fn remapping_a_submit_forge_action_moves_the_key_and_its_displayed_label() {
             &effective.submit_forge,
             KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL)
         ),
-        Some(modal_keys::SubmitForgeAction::ComposeSummary)
+        Some(modal_keys::SubmitForgeAction::VerdictNext)
     );
     assert_eq!(
         modal_keys::resolve(
             &effective.submit_forge,
-            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL)
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)
         ),
         None,
-        "the displaced default must no longer open the composer"
+        "the displaced default must no longer cycle the verdict"
     );
     let row = effective
         .submit_forge
         .iter()
-        .find(|b| b.action == modal_keys::SubmitForgeAction::ComposeSummary)
-        .expect("compose-summary row");
+        .find(|b| b.action == modal_keys::SubmitForgeAction::VerdictNext)
+        .expect("verdict-next row");
     assert_eq!(row.key_label(), "Ctrl-y");
 }
 

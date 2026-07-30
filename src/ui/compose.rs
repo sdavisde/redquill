@@ -17,10 +17,6 @@ pub enum ComposeKind {
     /// Submit adds to (or edits in) the draft-reply store; the modal renders a
     /// reply header rather than a target/classification title.
     Reply { thread_id: u64 },
-    /// The submit modal's review summary. Submit writes the text straight back
-    /// into the open submit state and returns to that modal — nothing reaches
-    /// any store, so a summary is never an annotation and never a reply.
-    ReviewSummary,
 }
 
 /// The Compose modal's state while open: what it's editing ([`ComposeKind`]),
@@ -40,8 +36,7 @@ pub struct ComposeState {
     /// `Some(id)` when editing an existing item (submit updates it in place);
     /// `None` when composing a new one (submit adds). In
     /// [`ComposeKind::Reply`] the id is the draft reply's id; otherwise it is
-    /// the annotation's id. Always `None` for
-    /// [`ComposeKind::ReviewSummary`], which has no store item to update.
+    /// the annotation's id.
     pub editing_id: Option<usize>,
 }
 
@@ -101,25 +96,11 @@ impl ComposeState {
         }
     }
 
-    /// Starts editing the submit modal's review summary, seeded with `body`
-    /// (the summary as it stands). The `target`/`classification` are inert
-    /// placeholders, as in reply mode — a review summary has no diff anchor
-    /// and no classification.
-    pub fn review_summary(body: &str) -> ComposeState {
-        ComposeState {
-            kind: ComposeKind::ReviewSummary,
-            target: Target::file(String::new()),
-            classification: Classification::Issue,
-            buffer: TextBuffer::from_str(body),
-            editing_id: None,
-        }
-    }
-
     /// The thread this compose replies to, or `None` for every other kind.
     pub fn thread_id(&self) -> Option<u64> {
         match self.kind {
             ComposeKind::Reply { thread_id } => Some(thread_id),
-            ComposeKind::Annotation | ComposeKind::ReviewSummary => None,
+            ComposeKind::Annotation => None,
         }
     }
 }

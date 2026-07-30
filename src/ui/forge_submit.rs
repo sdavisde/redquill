@@ -3,10 +3,11 @@
 //! forge PR only) opens [`Mode::SubmitForge`] — a grouped-by-file preview of
 //! every unpublished annotation and drafted reply, a capability-driven verdict
 //! picker, and an optional summary — and **nothing is sent until the reviewer
-//! confirms from here** (the spec's safety boundary). The summary takes a line
-//! typed straight into the modal, or a whole body written in the Compose editor
-//! (`Ctrl-e`, [`super::compose::ComposeKind::ReviewSummary`]), of which the
-//! field shows the first line and a count of the rest. On confirm the batch is
+//! confirms from here** (the spec's safety boundary). The summary is one
+//! editing surface, not two: a [`super::compose::TextBuffer`] in a pinned
+//! bottom field with a real terminal cursor, typed with the Compose modal's
+//! keymap (`Ctrl-j` newline, the same motion and delete keys), so there is no
+//! second editor to hand it off to. On confirm the batch is
 //! resolved on the render thread and handed to a background submit sequence
 //! (see [`crate::forge::run_submit_sequence`]) through the fake-able
 //! [`super::stage_ops::AsyncForgeSubmitter`] seam, single-flight so a second
@@ -22,7 +23,7 @@
 use std::cell::Cell;
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Flex, Layout, Rect};
+use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
@@ -36,6 +37,9 @@ use crate::review::store::ForgeProviderKind;
 
 use super::app::{App, Mode};
 use super::background::TaskId;
+use super::compose::TextBuffer;
+use super::modal_keys::BufferEditAction;
+use super::textwrap;
 use super::theme::Theme;
 
 /// A background submit run awaiting completion: its [`TaskId`] and the
@@ -56,12 +60,12 @@ pub(super) struct InFlightSubmit {
 pub(super) struct SubmitForgeState {
     pub(super) verdicts: Vec<Verdict>,
     pub(super) verdict_index: usize,
-    /// The review body, possibly multi-line: short ones are typed straight
-    /// into the modal, longer ones edited in Compose via `Ctrl-e`. Lives here
-    /// and nowhere else, so it lasts exactly as long as the modal does — a
-    /// `Ctrl-e` round-trip keeps it (the state stays open behind the editor),
-    /// an `Esc` close discards it, and a fresh open starts empty.
-    pub(super) summary: String,
+    /// The review body, edited in place in the modal's own summary field —
+    /// the same [`TextBuffer`] the Compose modal edits, so multi-line bodies
+    /// are typed here rather than handed to a second editor. Lives here and
+    /// nowhere else, so it lasts exactly as long as the modal does: an `Esc`
+    /// close discards it, and a fresh open starts empty.
+    pub(super) summary: TextBuffer,
     pub(super) target_line: String,
     /// An honest one-line disclosure of the provider's submit shape, shown
     /// above the batch when the provider stages a near-atomic draft batch
@@ -90,18 +94,12 @@ impl SubmitForgeState {
             .copied()
             .unwrap_or(Verdict::Comment)
     }
-
-    /// Whether the summary spans more than one line — the modal shows only its
-    /// first, so the in-modal push/pop editing gestures step aside for
-    /// `Ctrl-e` rather than mutate a line the reviewer can't see.
-    fn summary_is_multi_line(&self) -> bool {
-        self.summary.contains('\n')
-    }
 }
 
-/// The hint shown when a direct edit gesture lands on a multi-line summary,
-/// which only the editor can edit safely.
-const MULTI_LINE_SUMMARY_HINT: &str = "Ctrl-e to edit multi-line summary";
+/// How many rows the summary field grows to before it scrolls internally. The
+/// batch preview owns the rest of the modal, so a long body earns a few rows
+/// and then behaves like Compose does past its own viewport.
+const SUMMARY_MAX_ROWS: usize = 5;
 
 /// One frame's scroll geometry for the modal body: the clamped offset, the
 /// body's height, and how many rendered lines are hidden above and below it.
@@ -155,7 +153,7 @@ fn plural(n: usize) -> &'static str {
 pub(super) fn below_marker(hidden: u16) -> Option<String> {
     (hidden > 0).then(|| {
         format!(
-            "\u{25be} {hidden} more line{} \u{2014} \u{2193} to scroll",
+            "\u{25be} {hidden} more line{} \u{2014} PgDn to scroll",
             plural(usize::from(hidden))
         )
     })
@@ -171,23 +169,12 @@ pub(super) fn above_marker(hidden: u16) -> Option<String> {
     })
 }
 
-/// The summary's first line — the only one the modal shows, since the field is
-/// one line tall and the batch preview owns the vertical space.
-fn summary_first_line(summary: &str) -> &str {
-    summary.lines().next().unwrap_or("")
-}
-
-/// The suffix disclosing the summary lines the field doesn't show, or `None`
-/// for a summary that fits on its one line. The count is what stays hidden, so
-/// the whole body is never silently understated.
-fn summary_overflow_note(summary: &str) -> Option<String> {
-    let hidden = summary.lines().count().saturating_sub(1);
-    (hidden > 0).then(|| {
-        format!(
-            "({hidden} more line{} \u{2014} Ctrl-e to edit)",
-            plural(hidden)
-        )
-    })
+/// How tall the whole summary field is — its wrapped rows, held between one
+/// and [`SUMMARY_MAX_ROWS`], plus its two border rows. Pure, so the modal's
+/// vertical budget is unit-testable without a frame.
+pub(super) fn summary_field_height(wrapped_rows: usize) -> u16 {
+    let rows = wrapped_rows.clamp(1, SUMMARY_MAX_ROWS);
+    u16::try_from(rows + 2).unwrap_or(u16::MAX)
 }
 
 /// Splits `line` into rows no wider than `width`, preserving each character's
@@ -492,7 +479,7 @@ impl App {
         self.submit_forge = Some(SubmitForgeState {
             verdicts,
             verdict_index: 0,
-            summary: String::new(),
+            summary: TextBuffer::new(),
             target_line,
             disclosure,
             hint: None,
@@ -563,59 +550,21 @@ impl App {
         }
     }
 
-    /// Appends a typed character to the summary (the modal's free-text field).
-    /// Once the summary is multi-line the field is read-only — see
-    /// [`SubmitForgeState::summary_is_multi_line`] — and the keystroke leaves
-    /// the `Ctrl-e` hint instead.
+    /// Types a character into the summary field at its cursor.
     pub(super) fn submit_forge_insert_char(&mut self, c: char) {
         if let Some(state) = self.submit_forge.as_mut() {
-            if state.summary_is_multi_line() {
-                state.hint = Some(MULTI_LINE_SUMMARY_HINT.to_string());
-                return;
-            }
-            state.summary.push(c);
+            state.summary.insert_char(c);
             state.hint = None;
         }
     }
 
-    /// Deletes the last summary character, or hints toward `Ctrl-e` on a
-    /// multi-line summary (a pop from an off-screen line is invisible).
-    pub(super) fn submit_forge_delete_char(&mut self) {
+    /// Applies a resolved editing key to the summary buffer — the same action
+    /// set, and so the same behavior, the Compose modal gives the identical
+    /// key.
+    pub(super) fn submit_forge_edit_summary(&mut self, edit: BufferEditAction) {
         if let Some(state) = self.submit_forge.as_mut() {
-            if state.summary_is_multi_line() {
-                state.hint = Some(MULTI_LINE_SUMMARY_HINT.to_string());
-                return;
-            }
-            state.summary.pop();
+            edit.apply(&mut state.summary);
             state.hint = None;
-        }
-    }
-
-    /// `Ctrl-e`: hands the summary to the Compose editor, seeded with the text
-    /// as it stands, for full multi-line editing. The submit state is left
-    /// open behind the editor, so saving or cancelling comes straight back to
-    /// this modal with the batch and verdict untouched.
-    pub(super) fn open_summary_compose(&mut self) {
-        let Some(state) = self.submit_forge.as_ref() else {
-            return;
-        };
-        self.compose = Some(super::compose::ComposeState::review_summary(&state.summary));
-        self.mode = Mode::Compose;
-    }
-
-    /// Writes an edited summary back from Compose and returns to the submit
-    /// modal. An emptied buffer clears the summary — in the editor that is a
-    /// deliberate erase, not an abandoned draft. Defensive fallback to Normal
-    /// if the modal is somehow no longer open, since there'd be nowhere to
-    /// return to.
-    pub(super) fn save_review_summary(&mut self, body: &str) {
-        match self.submit_forge.as_mut() {
-            Some(state) => {
-                state.summary = body.trim().to_string();
-                state.hint = None;
-                self.mode = Mode::SubmitForge;
-            }
-            None => self.mode = Mode::Normal,
         }
     }
 
@@ -627,17 +576,13 @@ impl App {
             return;
         };
         let verdict = state.verdict();
-        let summary = state.summary.trim().to_string();
+        let summary = state.summary.text().trim().to_string();
         // GitHub rejects a request-changes review with no body; block the
         // confirm and keep the modal open with a hint rather than sending a
         // request the forge will 422.
         if verdict == Verdict::RequestChanges && summary.is_empty() {
             state.hint =
                 Some("Request changes needs a summary explaining what to change.".to_string());
-            // The hint is the last line of the content, so jumping to the
-            // bottom (the render clamps it) puts it on screen for a batch too
-            // tall to fit.
-            state.scroll.set(u16::MAX);
             return;
         }
         self.submit_forge = None;
@@ -860,10 +805,12 @@ pub(super) fn centered(area: Rect, width_pct: u16, height_pct: u16) -> Rect {
     area
 }
 
-/// Builds the modal's body, top to bottom: the target line and submit-shape
-/// disclosure, the verdict picker (selected verdict emphasized), the
-/// grouped-by-file batch preview with local-only and file-comment labels, the
-/// summary being typed, and a blocked-confirm validation hint. Split out from
+/// Builds the modal's scrollable body, top to bottom: the target line and
+/// submit-shape disclosure, the verdict picker (selected verdict emphasized),
+/// and the grouped-by-file batch preview with local-only and file-comment
+/// labels. The summary field and the validation hint are pinned below it by
+/// [`render`] rather than built here, so neither can scroll out of reach —
+/// the summary owns the terminal cursor. Split out from
 /// [`render`] so the rendered line count — what the scroll math clamps against
 /// — is a value the caller holds rather than a side effect of drawing.
 fn build_lines(
@@ -970,53 +917,79 @@ fn build_lines(
         }
     }
 
-    // Summary field: its first line, plus a dim count of the lines a
-    // multi-line summary keeps off screen.
-    lines.push(Line::from(String::new()));
-    let mut summary_spans = vec![Span::styled("Summary: ", Style::default().fg(theme.gutter))];
-    if state.summary.is_empty() {
-        summary_spans.push(Span::styled(
-            "(optional \u{2014} type, or Ctrl-e for multi-line)",
-            Style::default()
-                .fg(theme.gutter)
-                .add_modifier(Modifier::DIM),
-        ));
-    } else {
-        summary_spans.push(Span::styled(
-            summary_first_line(&state.summary).to_string(),
-            Style::default().fg(theme.annotation_text),
-        ));
-        if let Some(note) = summary_overflow_note(&state.summary) {
-            summary_spans.push(Span::styled(
-                format!("  {note}"),
-                Style::default()
-                    .fg(theme.gutter)
-                    .add_modifier(Modifier::DIM),
-            ));
-        }
-    }
-    lines.push(Line::from(summary_spans));
-
-    // A blocked-confirm validation hint (e.g. request-changes with no summary).
-    if let Some(hint) = &state.hint {
-        lines.push(Line::from(String::new()));
-        lines.push(Line::from(Span::styled(
-            hint.clone(),
-            Style::default()
-                .fg(theme.status_message)
-                .add_modifier(Modifier::BOLD),
-        )));
-    }
-
     lines
 }
 
+/// Draws the pinned summary field into `area`: a bordered box holding the
+/// buffer's wrapped rows (or a dim placeholder when it's empty), with the
+/// terminal cursor placed at the buffer's true wrapped position — the
+/// affordance that says the field is typeable. Same derived-scroll rule as
+/// Compose: no stored offset, the cursor row just stays on the last visible
+/// row once the body outgrows the box.
+fn render_summary_field(frame: &mut Frame, area: Rect, state: &SubmitForgeState, theme: &Theme) {
+    let required = state.verdict() == Verdict::RequestChanges;
+    let title = if required {
+        "Summary (required for request changes)"
+    } else {
+        "Summary (optional)"
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.help_key))
+        .title(title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let wrap_width = (inner.width as usize).max(1);
+    let wrapped = textwrap::layout(&state.summary.lines, wrap_width);
+    let (cursor_vrow, cursor_vcol) =
+        wrapped.cursor_position(state.summary.cursor_row, state.summary.cursor_col);
+    let visible = (inner.height as usize).max(1);
+    let scroll = cursor_vrow.saturating_sub(visible.saturating_sub(1));
+
+    let body: Vec<Line> = if state.summary.text().is_empty() {
+        vec![Line::from(Span::styled(
+            "Type your review summary here\u{2026}",
+            Style::default()
+                .fg(theme.gutter)
+                .add_modifier(Modifier::DIM),
+        ))]
+    } else {
+        wrapped
+            .rows
+            .iter()
+            .map(|r| {
+                Line::from(Span::styled(
+                    textwrap::row_str(&state.summary.lines[r.logical_line], r),
+                    Style::default().fg(theme.annotation_text),
+                ))
+            })
+            .collect()
+    };
+    frame.render_widget(
+        Paragraph::new(body).scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0)),
+        inner,
+    );
+
+    // The only clamp is the terminal reality that column == width has no cell.
+    let cursor_x = inner.x
+        + u16::try_from(cursor_vcol)
+            .unwrap_or(u16::MAX)
+            .min(inner.width.saturating_sub(1));
+    let cursor_y = inner.y
+        + u16::try_from(cursor_vrow.saturating_sub(scroll))
+            .unwrap_or(0)
+            .min(inner.height.saturating_sub(1));
+    frame.set_cursor_position(Position::new(cursor_x, cursor_y));
+}
+
 /// Renders the submit-review modal, centered over `area`. A no-op when the
-/// modal isn't open. Shows the batch (see [`build_lines`]) and an unmistakable
-/// nothing-sent-until-confirm footer. A batch taller than the modal scrolls
-/// (`Up`/`Down`, `PageUp`/`PageDown`) with a marker row naming how many lines
-/// are hidden in each direction, so nothing about what will be sent is clipped
-/// silently.
+/// modal isn't open. Shows the batch (see [`build_lines`]) above the pinned
+/// summary field, under an unmistakable nothing-sent-until-confirm footer. A
+/// batch taller than its region scrolls (`PageUp`/`PageDown`, `Ctrl-`arrow —
+/// the bare arrows belong to the summary cursor) with a marker row naming how
+/// many lines are hidden in each direction, so nothing about what will be sent
+/// is clipped silently.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let Some(state) = &app.submit_forge else {
         return;
@@ -1036,14 +1009,39 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title("Submit review \u{2014} nothing is sent until you confirm")
-        // Kept under the narrow modal's title width: the "type summary"
-        // affordance the scroll hint displaces is already spelled out by the
-        // summary field's own placeholder, and the page keys by the `?` help.
+        // Kept under the narrow modal's title width: the summary field carries
+        // its own newline hint on its own border, and the rest by the `?` help.
         .title_bottom(Line::from(
-            " Enter submit  Esc cancel  Tab/Shift-Tab verdict  \u{2191}\u{2193} scroll ",
+            " Enter submit  Esc cancel  Tab verdict  PgUp/PgDn scroll ",
         ));
-    let inner = block.inner(popup);
+    let outer_inner = block.inner(popup);
     frame.render_widget(block, popup);
+
+    // Bottom-up budget: the summary field grows with its content, the
+    // blocked-confirm hint takes a row when there is one, and the batch
+    // preview scrolls in whatever is left.
+    let summary_rows = textwrap::layout(&state.summary.lines, (outer_inner.width as usize).max(1))
+        .rows
+        .len();
+    let [inner, hint_area, summary_area] = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(u16::from(state.hint.is_some())),
+        Constraint::Length(summary_field_height(summary_rows)),
+    ])
+    .areas(outer_inner);
+
+    if let Some(hint) = &state.hint {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                hint.clone(),
+                Style::default()
+                    .fg(theme.status_message)
+                    .add_modifier(Modifier::BOLD),
+            ))),
+            hint_area,
+        );
+    }
+    render_summary_field(frame, summary_area, state, theme);
 
     let lines: Vec<Line> = build_lines(state, &preview, theme)
         .into_iter()

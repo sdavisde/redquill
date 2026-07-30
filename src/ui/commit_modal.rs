@@ -64,7 +64,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         return;
     };
 
-    let footer = " Enter commit  Shift-Enter/Ctrl-j newline  Esc cancel ";
+    let footer = " Enter commit  Esc cancel ";
     let warning = review_warning(app);
 
     // Soft-wrap against the modal's inner width (60% slice minus the two
@@ -168,8 +168,7 @@ index 111..222 100644
     }
 
     fn render_modal(app: &App) -> String {
-        // 100 wide so the 60%-width modal's footer (which now names the
-        // Shift-Enter/Ctrl-j newline keys) renders without truncation.
+        // 100 wide so the 60%-width modal's footer renders without truncation.
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         let area = Rect::new(0, 0, 100, 24);
@@ -198,7 +197,6 @@ index 111..222 100644
         assert!(content.contains("fix: parser"));
         assert!(content.contains("body line"));
         assert!(content.contains("Enter commit"));
-        assert!(content.contains("Shift-Enter/Ctrl-j newline"));
         assert!(content.contains("Esc cancel"));
     }
 

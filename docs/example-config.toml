@@ -523,12 +523,26 @@ literal = false
 # cancel = "esc"                       # Cancel — close this modal, send nothing
 # verdict-next = "tab"                 # Next verdict (comment / approve / request changes)
 # verdict-prev = "shift-tab"           # Previous verdict
-# scroll-down = "down"                 # Scroll the batch preview down
-# scroll-up = "up"                     # Scroll the batch preview up
 # page-down = "pagedown"               # Scroll the batch preview down a page
 # page-up = "pageup"                   # Scroll the batch preview up a page
-# delete-char = "backspace"            # Delete summary character
-# compose-summary = "ctrl-e"           # Edit the summary in the composer (multi-line)
+# scroll-down = "ctrl-down"            # Scroll the batch preview down
+# scroll-up = "ctrl-up"                # Scroll the batch preview up
+# The summary field is edited with the [keys.compose] keymap, remapped here:
+# newline = ["shift-enter", "ctrl-j"]   # Insert newline in the summary
+# move-left = "left"                   # Move cursor left
+# move-right = "right"                 # Move cursor right
+# move-up = "up"                       # Move cursor up
+# move-down = "down"                   # Move cursor down
+# word-left = ["ctrl-left", "alt-left", "alt-b"]    # Move word left
+# word-right = ["ctrl-right", "alt-right", "alt-f"]  # Move word right
+# line-start = ["home", "ctrl-a"]       # Move to line start
+# line-end = ["end", "ctrl-e"]          # Move to line end
+# doc-start = "ctrl-home"              # Move to summary start
+# doc-end = "ctrl-end"                 # Move to summary end
+# delete-back = "backspace"            # Delete character before the cursor
+# delete-forward = "delete"            # Delete character at the cursor
+# delete-word-back = ["ctrl-backspace", "alt-backspace", "ctrl-w", "ctrl-h"]  # Delete word before the cursor
+# delete-word-forward = ["ctrl-delete", "alt-d"]     # Delete word at the cursor
 #
 # [keys.submit-result]                 # Post-submit result view (shown when a submit stops early)
 # retry = "U"                          # Submit again — retry everything that didn't land

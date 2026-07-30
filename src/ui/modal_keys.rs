@@ -1338,13 +1338,18 @@ pub(super) static PR_DESCRIPTION_KEYS: LazyLock<Vec<ModalBinding<PrDescriptionAc
 
 /// What a control key does in the submit-review modal
 /// ([`super::app::Mode::SubmitForge`]): confirm the publish, cancel it, cycle
-/// the verdict picker, scroll the batch preview, delete a summary character, or
-/// hand the summary to the Compose editor for multi-line editing.
-/// Free-text like Compose/Search — every printable char extends the
+/// the verdict picker, scroll the batch preview, or edit the summary field.
+/// Free-text like Compose/Search — every printable char types into the
 /// summary (a hand-written fallback in
 /// [`super::modes::handle_submit_forge_key`], never remappable) — so this
-/// table documents only the control keys, and the scroll keys are deliberately
-/// the arrow/page keys rather than `j`/`k`, which belong to the summary.
+/// table documents only the control keys.
+///
+/// The summary is a real [`super::compose::TextBuffer`] with a visible cursor,
+/// so it carries [`BufferEditAction`] verbatim: the modal's typing keymap is
+/// the Compose modal's typing keymap, down to `Ctrl-j` for a newline. That
+/// leaves the arrow keys to the cursor, so the batch preview scrolls by
+/// `Ctrl-`arrow and the page keys instead.
+///
 /// Remappable through `[keys.submit-forge]`; because the table is consulted
 /// before the char-insert fallback, binding a bare printable key here takes
 /// that character away from summary typing (documented in
@@ -1369,11 +1374,8 @@ pub(super) enum SubmitForgeAction {
     PageDown,
     /// Scrolls the batch preview up a full viewport.
     PageUp,
-    /// Deletes the last summary character.
-    DeleteChar,
-    /// Opens the Compose editor on the summary, for multi-line editing (see
-    /// [`super::app::App::open_summary_compose`]).
-    ComposeSummary,
+    /// Edits the summary buffer, exactly as the same key would in Compose.
+    Edit(BufferEditAction),
 }
 
 pub(super) fn submit_forge_action_name(action: SubmitForgeAction) -> &'static str {
@@ -1386,8 +1388,7 @@ pub(super) fn submit_forge_action_name(action: SubmitForgeAction) -> &'static st
         SubmitForgeAction::ScrollUp => "scroll-up",
         SubmitForgeAction::PageDown => "page-down",
         SubmitForgeAction::PageUp => "page-up",
-        SubmitForgeAction::DeleteChar => "delete-char",
-        SubmitForgeAction::ComposeSummary => "compose-summary",
+        SubmitForgeAction::Edit(edit) => buffer_edit_action_name(edit),
     }
 }
 
@@ -1401,9 +1402,7 @@ pub(super) fn submit_forge_action_from_name(name: &str) -> Option<SubmitForgeAct
         "scroll-up" => SubmitForgeAction::ScrollUp,
         "page-down" => SubmitForgeAction::PageDown,
         "page-up" => SubmitForgeAction::PageUp,
-        "delete-char" => SubmitForgeAction::DeleteChar,
-        "compose-summary" => SubmitForgeAction::ComposeSummary,
-        _ => return None,
+        other => SubmitForgeAction::Edit(buffer_edit_action_from_name(other)?),
     })
 }
 
@@ -1411,8 +1410,8 @@ pub(super) fn submit_forge_action_from_name(name: &str) -> Option<SubmitForgeAct
 /// strip, and [`super::modes::handle_submit_forge_key`]'s dispatch. Defaults
 /// only — the effective table is this plus any `[keys.submit-forge]` config
 /// override (see `super::modal_keys_config`).
-pub(super) static SUBMIT_FORGE_KEYS: LazyLock<Vec<ModalBinding<SubmitForgeAction>>> =
-    LazyLock::new(|| {
+pub(super) static SUBMIT_FORGE_KEYS: LazyLock<Vec<ModalBinding<SubmitForgeAction>>> = LazyLock::new(
+    || {
         vec![
             ModalBinding {
                 description: "Submit the review (publishes to the forge)",
@@ -1448,25 +1447,13 @@ pub(super) static SUBMIT_FORGE_KEYS: LazyLock<Vec<ModalBinding<SubmitForgeAction
                 footer: None,
             },
             ModalBinding {
-                description: "Scroll the batch preview down",
-                keys: vec![ModalKey::plain(KeyCode::Down)],
-                action: SubmitForgeAction::ScrollDown,
+                description: "Scroll the batch preview down a page",
+                keys: vec![ModalKey::plain(KeyCode::PageDown)],
+                action: SubmitForgeAction::PageDown,
                 footer: Some(FooterHint {
                     rank: 4,
                     label: "scroll",
                 }),
-            },
-            ModalBinding {
-                description: "Scroll the batch preview up",
-                keys: vec![ModalKey::plain(KeyCode::Up)],
-                action: SubmitForgeAction::ScrollUp,
-                footer: None,
-            },
-            ModalBinding {
-                description: "Scroll the batch preview down a page",
-                keys: vec![ModalKey::plain(KeyCode::PageDown)],
-                action: SubmitForgeAction::PageDown,
-                footer: None,
             },
             ModalBinding {
                 description: "Scroll the batch preview up a page",
@@ -1475,22 +1462,137 @@ pub(super) static SUBMIT_FORGE_KEYS: LazyLock<Vec<ModalBinding<SubmitForgeAction
                 footer: None,
             },
             ModalBinding {
-                description: "Delete summary character",
-                keys: vec![ModalKey::plain(KeyCode::Backspace)],
-                action: SubmitForgeAction::DeleteChar,
+                description: "Scroll the batch preview down",
+                keys: vec![ModalKey::ctrl(KeyCode::Down)],
+                action: SubmitForgeAction::ScrollDown,
                 footer: None,
             },
             ModalBinding {
-                description: "Edit the summary in the composer (multi-line)",
-                keys: vec![ModalKey::ctrl(KeyCode::Char('e'))],
-                action: SubmitForgeAction::ComposeSummary,
-                footer: Some(FooterHint {
-                    rank: 5,
-                    label: "summary",
-                }),
+                description: "Scroll the batch preview up",
+                keys: vec![ModalKey::ctrl(KeyCode::Up)],
+                action: SubmitForgeAction::ScrollUp,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Insert newline in the summary (Shift-Enter needs a kitty-capable terminal)",
+                keys: vec![
+                    ModalKey::shift(KeyCode::Enter),
+                    ModalKey::ctrl(KeyCode::Char('j')),
+                ],
+                action: SubmitForgeAction::Edit(BufferEditAction::Newline),
+                // The summary field spells this out on its own border, right
+                // where the cursor is.
+                footer: None,
+            },
+            ModalBinding {
+                description: "Move cursor left",
+                keys: vec![ModalKey::plain(KeyCode::Left)],
+                action: SubmitForgeAction::Edit(BufferEditAction::MoveLeft),
+                footer: None,
+            },
+            ModalBinding {
+                description: "Move cursor right",
+                keys: vec![ModalKey::plain(KeyCode::Right)],
+                action: SubmitForgeAction::Edit(BufferEditAction::MoveRight),
+                footer: None,
+            },
+            ModalBinding {
+                description: "Move cursor up",
+                keys: vec![ModalKey::plain(KeyCode::Up)],
+                action: SubmitForgeAction::Edit(BufferEditAction::MoveUp),
+                footer: None,
+            },
+            ModalBinding {
+                description: "Move cursor down",
+                keys: vec![ModalKey::plain(KeyCode::Down)],
+                action: SubmitForgeAction::Edit(BufferEditAction::MoveDown),
+                footer: None,
+            },
+            ModalBinding {
+                description: "Move word left",
+                keys: vec![
+                    ModalKey::ctrl(KeyCode::Left),
+                    ModalKey::alt(KeyCode::Left),
+                    ModalKey::alt(KeyCode::Char('b')),
+                ],
+                action: SubmitForgeAction::Edit(BufferEditAction::WordLeft),
+                footer: None,
+            },
+            ModalBinding {
+                description: "Move word right",
+                keys: vec![
+                    ModalKey::ctrl(KeyCode::Right),
+                    ModalKey::alt(KeyCode::Right),
+                    ModalKey::alt(KeyCode::Char('f')),
+                ],
+                action: SubmitForgeAction::Edit(BufferEditAction::WordRight),
+                footer: None,
+            },
+            ModalBinding {
+                description: "Move to line start",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Home),
+                    ModalKey::ctrl(KeyCode::Char('a')),
+                ],
+                action: SubmitForgeAction::Edit(BufferEditAction::LineStart),
+                footer: None,
+            },
+            ModalBinding {
+                description: "Move to line end",
+                keys: vec![
+                    ModalKey::plain(KeyCode::End),
+                    ModalKey::ctrl(KeyCode::Char('e')),
+                ],
+                action: SubmitForgeAction::Edit(BufferEditAction::LineEnd),
+                footer: None,
+            },
+            ModalBinding {
+                description: "Move to summary start",
+                keys: vec![ModalKey::ctrl(KeyCode::Home)],
+                action: SubmitForgeAction::Edit(BufferEditAction::DocStart),
+                footer: None,
+            },
+            ModalBinding {
+                description: "Move to summary end",
+                keys: vec![ModalKey::ctrl(KeyCode::End)],
+                action: SubmitForgeAction::Edit(BufferEditAction::DocEnd),
+                footer: None,
+            },
+            ModalBinding {
+                description: "Delete character before the cursor",
+                keys: vec![ModalKey::plain(KeyCode::Backspace)],
+                action: SubmitForgeAction::Edit(BufferEditAction::DeleteBack),
+                footer: None,
+            },
+            ModalBinding {
+                description: "Delete character at the cursor",
+                keys: vec![ModalKey::plain(KeyCode::Delete)],
+                action: SubmitForgeAction::Edit(BufferEditAction::DeleteForward),
+                footer: None,
+            },
+            ModalBinding {
+                description: "Delete word before the cursor",
+                keys: vec![
+                    ModalKey::ctrl(KeyCode::Backspace),
+                    ModalKey::alt(KeyCode::Backspace),
+                    ModalKey::ctrl(KeyCode::Char('w')),
+                    ModalKey::ctrl(KeyCode::Char('h')),
+                ],
+                action: SubmitForgeAction::Edit(BufferEditAction::DeleteWordBack),
+                footer: None,
+            },
+            ModalBinding {
+                description: "Delete word at the cursor",
+                keys: vec![
+                    ModalKey::ctrl(KeyCode::Delete),
+                    ModalKey::alt(KeyCode::Char('d')),
+                ],
+                action: SubmitForgeAction::Edit(BufferEditAction::DeleteWordForward),
+                footer: None,
             },
         ]
-    });
+    },
+);
 
 // -- Post-submit result modal -------------------------------------------------
 

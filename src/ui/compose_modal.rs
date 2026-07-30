@@ -88,9 +88,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     // Reply mode renders a thread-anchored header (no classification, since a
-    // reply answers a thread rather than classifying a diff line), and summary
-    // mode names the review it belongs to; the ordinary annotation compose
-    // keeps its target/classification title.
+    // reply answers a thread rather than classifying a diff line); the
+    // ordinary annotation compose keeps its target/classification title.
     let (title, footer) = match compose.kind {
         ComposeKind::Reply { thread_id } => {
             let where_ = app
@@ -103,22 +102,15 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                     crate::forge::ThreadAnchor::File { path } => base_name(path).to_string(),
                 })
                 .unwrap_or_else(|| "thread".to_string());
-            (
-                format!("reply to {where_}"),
-                " Enter submit  Shift-Enter/Ctrl-j newline  Esc cancel ",
-            )
+            (format!("reply to {where_}"), " Enter submit  Esc cancel ")
         }
-        ComposeKind::ReviewSummary => (
-            "review summary".to_string(),
-            " Enter save  Shift-Enter/Ctrl-j newline  Esc cancel ",
-        ),
         ComposeKind::Annotation => (
             format!(
                 "{} — {}",
                 target_label(&compose.target),
                 compose.classification.label()
             ),
-            " Enter submit  Shift-Enter/Ctrl-j newline  Ctrl-t class  Esc cancel ",
+            " Enter submit  Ctrl-t class  Esc cancel ",
         ),
     };
 

@@ -11,8 +11,7 @@ use crate::git::{DiffTarget, RawFilePatch};
 use crate::review::store::{ForgeMetadata, ForgeProviderKind};
 
 use super::super::app::{App, Mode};
-use super::super::compose::ComposeKind;
-use super::super::modes::{handle_compose_key, handle_submit_forge_key};
+use super::super::modes::handle_submit_forge_key;
 use super::*;
 
 // -- fixtures ----------------------------------------------------------------
@@ -46,6 +45,36 @@ fn github_review_app(paths: &[&str]) -> App {
         last_head_sha: "deadbeef".to_string(),
         diff_refs: None,
     });
+    app
+}
+
+/// The open modal's summary as one string.
+fn summary_text(app: &App) -> String {
+    app.submit_forge
+        .as_ref()
+        .expect("modal open")
+        .summary
+        .text()
+}
+
+/// Types `text` into the open submit modal through its real keymap: `Ctrl-j`
+/// for each newline, a plain char for everything else.
+fn type_into_summary(app: &mut App, text: &str) {
+    for c in text.chars() {
+        let key = if c == '\n' {
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL)
+        } else {
+            KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+        };
+        handle_submit_forge_key(app, key);
+    }
+}
+
+/// A GitHub review with its submit modal open on `text` as the summary.
+fn app_with_summary(text: &str) -> App {
+    let mut app = github_review_app(&["src/a.rs"]);
+    app.open_submit_forge();
+    type_into_summary(&mut app, text);
     app
 }
 
@@ -606,9 +635,12 @@ fn typing_a_summary_clears_the_hint_and_lets_request_changes_confirm() {
     // Typing clears the hint, and backspace edits the same field back down.
     app.submit_forge_insert_char('x');
     app.submit_forge_insert_char('y');
-    assert_eq!(app.submit_forge.as_ref().unwrap().summary, "xy");
-    app.submit_forge_delete_char();
-    assert_eq!(app.submit_forge.as_ref().unwrap().summary, "x");
+    assert_eq!(summary_text(&app), "xy");
+    handle_submit_forge_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+    );
+    assert_eq!(summary_text(&app), "x");
     assert!(app.submit_forge.as_ref().unwrap().hint.is_none());
     // Now the confirm proceeds (closes the modal; no live backend so nothing
     // is actually sent).
@@ -767,7 +799,7 @@ fn overflow_markers_are_shown_only_for_the_clipped_direction() {
         "{below}"
     );
     assert!(
-        below.contains('\u{2193}'),
+        below.contains("PgDn"),
         "the marker must name the scroll key: {below}"
     );
     let above = above_marker(1).expect("clipped above is marked");
@@ -858,13 +890,24 @@ fn scroll_keys_move_the_preview_while_printable_keys_still_type_the_summary() {
     // Record a viewport so PageDown has a real page to move by.
     render_modal(&app, 90, 24);
 
-    // Down scrolls and leaves the summary alone.
-    handle_submit_forge_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    // Ctrl-Down scrolls and leaves the summary alone; a bare Down is the
+    // summary cursor's, so it moves nothing here.
+    handle_submit_forge_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::CONTROL),
+    );
     let state = app.submit_forge.as_ref().unwrap();
     assert_eq!(state.scroll.get(), 1);
     assert_eq!(
-        state.summary, "",
+        summary_text(&app),
+        "",
         "a scroll key must not type into the summary"
+    );
+    handle_submit_forge_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(
+        app.submit_forge.as_ref().unwrap().scroll.get(),
+        1,
+        "a bare arrow belongs to the summary cursor, not to the preview"
     );
 
     // `j`/`k` belong to the summary, not to the scroll — they must type.
@@ -876,11 +919,14 @@ fn scroll_keys_move_the_preview_while_printable_keys_still_type_the_summary() {
         &mut app,
         KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
     );
-    let state = app.submit_forge.as_ref().unwrap();
-    assert_eq!(state.summary, "jk");
-    assert_eq!(state.scroll.get(), 1, "typing must not move the preview");
+    assert_eq!(summary_text(&app), "jk");
+    assert_eq!(
+        app.submit_forge.as_ref().unwrap().scroll.get(),
+        1,
+        "typing must not move the preview"
+    );
 
-    // PageDown pages by the recorded viewport, Up steps back.
+    // PageDown pages by the recorded viewport, PageUp/Ctrl-Up step back.
     let page = app.submit_forge.as_ref().unwrap().viewport.get();
     assert!(page > 1, "the render must record a real viewport");
     handle_submit_forge_key(
@@ -890,12 +936,14 @@ fn scroll_keys_move_the_preview_while_printable_keys_still_type_the_summary() {
     assert_eq!(app.submit_forge.as_ref().unwrap().scroll.get(), 1 + page);
     handle_submit_forge_key(&mut app, KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
     assert_eq!(app.submit_forge.as_ref().unwrap().scroll.get(), 1);
-    handle_submit_forge_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    handle_submit_forge_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL));
     assert_eq!(app.submit_forge.as_ref().unwrap().scroll.get(), 0);
 }
 
+/// The hint is pinned below the scrolling preview, so a batch too tall to fit
+/// can't hide the reason a confirm did nothing.
 #[test]
-fn a_blocked_confirm_scrolls_its_hint_into_view_on_a_tall_batch() {
+fn a_blocked_confirm_shows_its_hint_on_a_tall_batch() {
     let mut app = app_with_many_annotations(40);
     app.open_submit_forge();
     render_modal(&app, 90, 24);
@@ -905,178 +953,74 @@ fn a_blocked_confirm_scrolls_its_hint_into_view_on_a_tall_batch() {
     app.submit_forge_confirm();
     assert_eq!(app.mode, Mode::SubmitForge);
 
-    // The hint is the last line of the content, so the modal must be showing
-    // its bottom for the reviewer to read why the confirm did nothing.
     let content = render_modal(&app, 90, 24);
-    assert!(
-        app.submit_forge.as_ref().unwrap().scroll.get() > 0,
-        "the hint's own line was off-screen and must be scrolled to"
-    );
     assert!(content.contains("needs a summary"), "hint not visible");
 }
 
-// -- multi-line review summary via the composer --------------------
+// -- the in-modal summary field ----------------------------------------------
 
-/// Types `text` into the open composer through its real keymap: `Ctrl-j` for
-/// each newline, a plain char for everything else.
-fn type_into_compose(app: &mut App, text: &str) {
-    for c in text.chars() {
-        let key = if c == '\n' {
-            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL)
-        } else {
-            KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
-        };
-        handle_compose_key(app, key);
-    }
-}
-
-/// Writes `text` as the open modal's summary the way a reviewer does: `Ctrl-e`
-/// into the composer, type, `Enter` to save. Assumes the summary starts empty.
-fn compose_summary(app: &mut App, text: &str) {
-    handle_submit_forge_key(
-        app,
-        KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
-    );
-    type_into_compose(app, text);
-    handle_compose_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-}
-
-/// A GitHub review with its submit modal open on `text` as the summary.
-fn app_with_summary(text: &str) -> App {
-    let mut app = github_review_app(&["src/a.rs"]);
-    app.open_submit_forge();
-    compose_summary(&mut app, text);
-    app
-}
-
+/// The summary is edited in place with Compose's keymap: `Ctrl-j` opens a new
+/// line, the motion and delete keys act on the buffer, and every line stays
+/// visible — no second editor, and nothing lands in a store.
 #[test]
-fn ctrl_e_composes_a_multi_line_summary_and_hands_it_back_to_the_modal() {
-    let mut app = github_review_app(&["src/a.rs"]);
-    app.open_submit_forge();
-    // A line typed straight into the modal seeds the editor.
-    for c in "one".chars() {
-        handle_submit_forge_key(
-            &mut app,
-            KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
-        );
-    }
+fn the_summary_field_edits_a_multi_line_body_in_place() {
+    let mut app = app_with_summary("one\ntwo\nthree");
+    assert_eq!(app.mode, Mode::SubmitForge, "no editor is ever opened");
+    assert!(app.compose.is_none());
+    assert_eq!(summary_text(&app), "one\ntwo\nthree");
 
+    // Compose's motion keys move this buffer's cursor: home, then a typed
+    // char lands at the start of the last line.
+    handle_submit_forge_key(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
     handle_submit_forge_key(
         &mut app,
-        KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::Char('*'), KeyModifiers::NONE),
     );
-    assert_eq!(app.mode, Mode::Compose);
-    let compose = app.compose.as_ref().expect("the composer opens");
-    assert_eq!(compose.kind, ComposeKind::ReviewSummary);
-    assert_eq!(
-        compose.buffer.text(),
-        "one",
-        "the editor is seeded with the summary so far"
-    );
+    assert_eq!(summary_text(&app), "one\ntwo\n*three");
 
-    type_into_compose(&mut app, "\ntwo\nthree");
-    handle_compose_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    // Up moves off the last line, so a backspace there eats a character of
+    // the middle line rather than the one just typed.
+    handle_submit_forge_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    handle_submit_forge_key(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+    handle_submit_forge_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+    );
+    assert_eq!(summary_text(&app), "one\ntw\n*three");
 
-    assert_eq!(
-        app.mode,
-        Mode::SubmitForge,
-        "saving returns to the submit modal, not to Normal"
-    );
-    assert!(app.compose.is_none());
-    assert_eq!(
-        app.submit_forge.as_ref().unwrap().summary,
-        "one\ntwo\nthree",
-        "every line survives the round trip"
-    );
     // A summary is neither an annotation nor a reply.
     assert_eq!(app.annotations.iter().count(), 0);
     assert!(app.replies.is_empty());
 }
 
+/// Every summary line is on screen, and the cursor sits in the field — the
+/// affordance that says it's typeable at all.
 #[test]
-fn cancelling_the_summary_composer_leaves_the_summary_untouched() {
-    let mut app = app_with_summary("keep\nme");
-    handle_submit_forge_key(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
-    );
-    type_into_compose(&mut app, "\nthrown away");
-    handle_compose_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-
-    assert_eq!(
-        app.mode,
-        Mode::SubmitForge,
-        "cancelling comes back to the submit modal"
-    );
-    assert!(app.compose.is_none());
-    assert_eq!(app.submit_forge.as_ref().unwrap().summary, "keep\nme");
-}
-
-#[test]
-fn the_summary_field_shows_its_first_line_and_counts_the_rest() {
-    let single = render_modal(&app_with_summary("only line"), 90, 24);
+fn the_summary_field_shows_every_line_and_holds_the_cursor() {
+    let app = app_with_summary("first\nsecond\nthird");
+    let mut terminal = Terminal::new(TestBackend::new(90, 24)).unwrap();
+    terminal
+        .draw(|f| crate::ui::forge_submit::render(f, f.area(), &app))
+        .unwrap();
+    let content = terminal.backend().to_string();
+    for line in ["first", "second", "third"] {
+        assert!(content.contains(line), "{line} is not shown: {content}");
+    }
     assert!(
-        single.contains("Summary: only line"),
-        "a one-line summary shows whole: {single}"
-    );
-    assert!(
-        !single.contains("Ctrl-e to edit"),
-        "nothing is hidden, so nothing is counted: {single}"
-    );
-
-    let two = render_modal(&app_with_summary("first\nsecond"), 90, 24);
-    assert!(
-        two.contains("first") && !two.contains("second"),
-        "only the first line is shown: {two}"
-    );
-    assert!(
-        two.contains("(1 more line \u{2014} Ctrl-e to edit)"),
-        "one hidden line reads singular: {two}"
-    );
-
-    let three = render_modal(&app_with_summary("first\nsecond\nthird"), 90, 24);
-    assert!(
-        three.contains("(2 more lines \u{2014} Ctrl-e to edit)"),
-        "the hidden lines are counted, not the total: {three}"
+        terminal.get_cursor_position().is_ok(),
+        "the field must place a terminal cursor"
     );
 }
 
 #[test]
-fn a_multi_line_summary_is_read_only_in_the_modal_and_points_at_ctrl_e() {
-    let mut app = app_with_summary("first\nsecond");
-
-    handle_submit_forge_key(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
-    );
-    let state = app.submit_forge.as_ref().unwrap();
-    assert_eq!(
-        state.summary, "first\nsecond",
-        "typing must not extend a line the field doesn't show"
-    );
+fn an_empty_summary_field_invites_typing() {
+    let mut app = github_review_app(&["src/a.rs"]);
+    app.open_submit_forge();
+    let content = render_modal(&app, 90, 24);
     assert!(
-        state.hint.as_deref().is_some_and(|h| h.contains("Ctrl-e")),
-        "the refusal must name the way in: {:?}",
-        state.hint
+        content.contains("Type your review summary here"),
+        "an empty field must say it takes text: {content}"
     );
-
-    handle_submit_forge_key(
-        &mut app,
-        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
-    );
-    let state = app.submit_forge.as_ref().unwrap();
-    assert_eq!(
-        state.summary, "first\nsecond",
-        "backspace must not eat an off-screen character either"
-    );
-    assert!(state.hint.is_some());
-
-    // And Ctrl-e still opens the editor from the refused state.
-    handle_submit_forge_key(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
-    );
-    assert_eq!(app.mode, Mode::Compose);
 }
 
 #[test]
@@ -1157,7 +1101,7 @@ fn the_summary_lives_with_the_modal_and_a_fresh_open_starts_empty() {
     app.close_submit_forge();
     app.open_submit_forge();
     assert_eq!(
-        app.submit_forge.as_ref().unwrap().summary,
+        summary_text(&app),
         "",
         "the summary belongs to the modal that was cancelled, not to the session"
     );
