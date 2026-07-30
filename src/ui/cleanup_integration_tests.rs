@@ -377,6 +377,86 @@ fn a_dirty_worktree_fails_that_entry_and_the_run_continues() {
     drop(bare);
 }
 
+// -- Partial selection (Space-deselected entries survive a confirm) ---------
+
+#[test]
+fn confirm_with_a_deselected_entry_deletes_only_the_selected_subset() {
+    let bare = setup_bare_origin();
+    let contributor = clone_of(bare.path());
+    push_pr_special_ref(contributor.path(), "feat1", 1, "one");
+    push_pr_special_ref(contributor.path(), "feat2", 2, "two");
+
+    let reviewer = clone_of(bare.path());
+    create_pr_checkout(reviewer.path(), 1);
+    create_pr_checkout(reviewer.path(), 2);
+
+    let mut app = origin_app_with_open_listing(reviewer.path(), &[]);
+    assert_eq!(app.launcher_finished_reviews.len(), 2);
+    app.open_cleanup_reviews();
+    assert_eq!(
+        app.cleanup_reviews_selected,
+        vec![true, true],
+        "both entries start selected"
+    );
+
+    // Deselect whichever row is #1 (the snapshot's entry order isn't a
+    // contract this test should pin to) and confirm.
+    let deselect_index = app
+        .cleanup_reviews
+        .iter()
+        .position(|e| e.number == 1)
+        .expect("PR #1 must be in the snapshot");
+    app.cleanup_reviews_selected[deselect_index] = false;
+    app.confirm_cleanup_reviews();
+
+    // #1 was deselected: its worktree, branch, and state entry all survive.
+    assert!(
+        branch_exists(reviewer.path(), "redquill/pr/1"),
+        "the deselected entry's branch must survive"
+    );
+    assert!(
+        worktree_list(reviewer.path()).contains("redquill/pr/1"),
+        "the deselected entry's worktree must survive"
+    );
+    assert!(
+        store::load(&state_path_of(reviewer.path()))
+            .reviews
+            .contains_key("redquill/pr/1"),
+        "the deselected entry's state entry must survive"
+    );
+    // #2 was selected: fully cleaned up.
+    assert!(
+        !branch_exists(reviewer.path(), "redquill/pr/2"),
+        "the selected entry must be cleaned up"
+    );
+    assert!(
+        !worktree_list(reviewer.path()).contains("redquill/pr/2"),
+        "the selected entry's worktree must be removed"
+    );
+    assert!(
+        !store::load(&state_path_of(reviewer.path()))
+            .reviews
+            .contains_key("redquill/pr/2"),
+        "the selected entry's state entry must be deleted"
+    );
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_some_and(|m| m.contains("cleaned up 1")),
+        "summary must report only the one deletion actually run: {:?}",
+        app.status_message
+    );
+    // The deselected review is still finished (still unmerged/not open), so
+    // it reappears in the recomputed set rather than vanishing silently.
+    assert_eq!(
+        app.launcher_finished_reviews.len(),
+        1,
+        "the deselected review must reappear in the finished set"
+    );
+    assert_eq!(app.launcher_finished_reviews[0].number, 1);
+    drop(bare);
+}
+
 // -- Journey transcript (spec 13 task 5.0 proof) -----------------------------
 
 /// Journey generator for spec 13 task 5.0: on a real scratch repo, checks out

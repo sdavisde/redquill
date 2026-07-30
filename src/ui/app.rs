@@ -180,8 +180,13 @@ pub enum Mode {
     /// Nothing is deleted until the reviewer confirms from here; `origin` is
     /// the launcher's own origin, threaded back through the reopened launcher
     /// on cancel/confirm. The enumerated snapshot lives in
-    /// [`App::cleanup_reviews`] (see [`super::cleanup_reviews`]).
-    CleanupReviews { origin: ModeOrigin },
+    /// [`App::cleanup_reviews`], per-entry selection (all checked by default)
+    /// in [`App::cleanup_reviews_selected`] (see [`super::cleanup_reviews`]).
+    /// `cursor` is the highlighted row `Space` toggles and `j`/`k`/arrows
+    /// move — kept inline rather than on `App` since [`Mode`] is `Copy` and a
+    /// `usize` costs nothing, unlike the snapshot `Vec`s (see
+    /// [`Mode::ConfirmRestore`]'s doc on that split).
+    CleanupReviews { origin: ModeOrigin, cursor: usize },
     /// The restore confirm modal (`restore-file`, `d`) is open: a binary gate
     /// naming the one file whose uncommitted changes are about to be thrown
     /// away. Nothing touches the repo until the reviewer confirms from here —
@@ -557,6 +562,11 @@ pub struct App {
     /// at open time so a background list refresh can't shift the rows out from
     /// under the confirmation. Empty while the modal is closed.
     pub(super) cleanup_reviews: Vec<crate::review::FinishedReview>,
+    /// Per-entry selection for [`App::cleanup_reviews`], same index, all
+    /// `true` at open (opt out rather than opt in). `Space` flips the entry
+    /// under `Mode::CleanupReviews`'s `cursor`; confirm deletes only the
+    /// `true` entries. Empty while the modal is closed.
+    pub(super) cleanup_reviews_selected: Vec<bool>,
     /// The file the restore confirm modal ([`Mode::ConfirmRestore`]) is
     /// asking about, frozen at open time so a background refresh can't shift
     /// which path a confirm lands on. `None` while the modal is closed — see
@@ -892,6 +902,7 @@ impl App {
             launcher_prs_tasks: BackgroundTasks::new(),
             launcher_finished_reviews: Vec::new(),
             cleanup_reviews: Vec::new(),
+            cleanup_reviews_selected: Vec::new(),
             restore_request: None,
             pr_checkout_in_flight: None,
             pr_checkout_tasks: BackgroundTasks::new(),
