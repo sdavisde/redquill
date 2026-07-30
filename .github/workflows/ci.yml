@@ -2,7 +2,15 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+# Branch pushes are covered by the pull_request event, so push is scoped to main
+# (merge commits) to avoid running the matrix twice for the same commit. Both
+# events report into the same required contexts, so nothing is lost.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
