@@ -302,7 +302,7 @@ fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 
             modal_hints(&modal_keys.thread_view),
         ),
         (
-            "PR description (gi in a PR review, d on the Pull Requests tab)",
+            "PR description (gi in a PR review, i on the Pull Requests tab)",
             modal_hints(&modal_keys.pr_description),
         ),
         (

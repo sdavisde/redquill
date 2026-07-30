@@ -1775,7 +1775,7 @@ pub(super) static REVIEW_LAUNCHER_KEYS: LazyLock<Vec<ModalBinding<LauncherAction
             },
             ModalBinding {
                 description: "Pull Requests tab: read the PR description",
-                keys: vec![ModalKey::plain(KeyCode::Char('d'))],
+                keys: vec![ModalKey::plain(KeyCode::Char('i'))],
                 action: LauncherAction::Details,
                 footer: Some(FooterHint {
                     rank: 9,

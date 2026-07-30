@@ -158,7 +158,7 @@ pub enum Mode {
     /// live in [`App::thread_view`].
     ThreadView,
     /// The read-only PR/MR description overlay is open (see
-    /// [`super::pr_description`]). Opened either with `d` on the Review
+    /// [`super::pr_description`]). Opened either with `i` on the Review
     /// launcher's Pull Requests tab or with `gi` inside a PR review session;
     /// `ret` is which of those to restore on close, captured at open time (the
     /// same origin-restore contract [`Mode::CleanupReviews`] carries, extended
