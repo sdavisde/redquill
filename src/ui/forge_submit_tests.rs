@@ -11,7 +11,8 @@ use crate::git::{DiffTarget, RawFilePatch};
 use crate::review::store::{ForgeMetadata, ForgeProviderKind};
 
 use super::super::app::{App, Mode};
-use super::super::modes::handle_submit_forge_key;
+use super::super::compose::ComposeKind;
+use super::super::modes::{handle_compose_key, handle_submit_forge_key};
 use super::*;
 
 // -- fixtures ----------------------------------------------------------------
@@ -874,6 +875,254 @@ fn a_blocked_confirm_scrolls_its_hint_into_view_on_a_tall_batch() {
         "the hint's own line was off-screen and must be scrolled to"
     );
     assert!(content.contains("needs a summary"), "hint not visible");
+}
+
+// -- multi-line review summary via the composer --------------------
+
+/// Types `text` into the open composer through its real keymap: `Ctrl-j` for
+/// each newline, a plain char for everything else.
+fn type_into_compose(app: &mut App, text: &str) {
+    for c in text.chars() {
+        let key = if c == '\n' {
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL)
+        } else {
+            KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+        };
+        handle_compose_key(app, key);
+    }
+}
+
+/// Writes `text` as the open modal's summary the way a reviewer does: `Ctrl-e`
+/// into the composer, type, `Enter` to save. Assumes the summary starts empty.
+fn compose_summary(app: &mut App, text: &str) {
+    handle_submit_forge_key(
+        app,
+        KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+    );
+    type_into_compose(app, text);
+    handle_compose_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+}
+
+/// A GitHub review with its submit modal open on `text` as the summary.
+fn app_with_summary(text: &str) -> App {
+    let mut app = github_review_app(&["src/a.rs"]);
+    app.open_submit_forge();
+    compose_summary(&mut app, text);
+    app
+}
+
+#[test]
+fn ctrl_e_composes_a_multi_line_summary_and_hands_it_back_to_the_modal() {
+    let mut app = github_review_app(&["src/a.rs"]);
+    app.open_submit_forge();
+    // A line typed straight into the modal seeds the editor.
+    for c in "one".chars() {
+        handle_submit_forge_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+        );
+    }
+
+    handle_submit_forge_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+    );
+    assert_eq!(app.mode, Mode::Compose);
+    let compose = app.compose.as_ref().expect("the composer opens");
+    assert_eq!(compose.kind, ComposeKind::ReviewSummary);
+    assert_eq!(
+        compose.buffer.text(),
+        "one",
+        "the editor is seeded with the summary so far"
+    );
+
+    type_into_compose(&mut app, "\ntwo\nthree");
+    handle_compose_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(
+        app.mode,
+        Mode::SubmitForge,
+        "saving returns to the submit modal, not to Normal"
+    );
+    assert!(app.compose.is_none());
+    assert_eq!(
+        app.submit_forge.as_ref().unwrap().summary,
+        "one\ntwo\nthree",
+        "every line survives the round trip"
+    );
+    // A summary is neither an annotation nor a reply.
+    assert_eq!(app.annotations.iter().count(), 0);
+    assert!(app.replies.is_empty());
+}
+
+#[test]
+fn cancelling_the_summary_composer_leaves_the_summary_untouched() {
+    let mut app = app_with_summary("keep\nme");
+    handle_submit_forge_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+    );
+    type_into_compose(&mut app, "\nthrown away");
+    handle_compose_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert_eq!(
+        app.mode,
+        Mode::SubmitForge,
+        "cancelling comes back to the submit modal"
+    );
+    assert!(app.compose.is_none());
+    assert_eq!(app.submit_forge.as_ref().unwrap().summary, "keep\nme");
+}
+
+#[test]
+fn the_summary_field_shows_its_first_line_and_counts_the_rest() {
+    let single = render_modal(&app_with_summary("only line"), 90, 24);
+    assert!(
+        single.contains("Summary: only line"),
+        "a one-line summary shows whole: {single}"
+    );
+    assert!(
+        !single.contains("Ctrl-e to edit"),
+        "nothing is hidden, so nothing is counted: {single}"
+    );
+
+    let two = render_modal(&app_with_summary("first\nsecond"), 90, 24);
+    assert!(
+        two.contains("first") && !two.contains("second"),
+        "only the first line is shown: {two}"
+    );
+    assert!(
+        two.contains("(1 more line \u{2014} Ctrl-e to edit)"),
+        "one hidden line reads singular: {two}"
+    );
+
+    let three = render_modal(&app_with_summary("first\nsecond\nthird"), 90, 24);
+    assert!(
+        three.contains("(2 more lines \u{2014} Ctrl-e to edit)"),
+        "the hidden lines are counted, not the total: {three}"
+    );
+}
+
+#[test]
+fn a_multi_line_summary_is_read_only_in_the_modal_and_points_at_ctrl_e() {
+    let mut app = app_with_summary("first\nsecond");
+
+    handle_submit_forge_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+    );
+    let state = app.submit_forge.as_ref().unwrap();
+    assert_eq!(
+        state.summary, "first\nsecond",
+        "typing must not extend a line the field doesn't show"
+    );
+    assert!(
+        state.hint.as_deref().is_some_and(|h| h.contains("Ctrl-e")),
+        "the refusal must name the way in: {:?}",
+        state.hint
+    );
+
+    handle_submit_forge_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+    );
+    let state = app.submit_forge.as_ref().unwrap();
+    assert_eq!(
+        state.summary, "first\nsecond",
+        "backspace must not eat an off-screen character either"
+    );
+    assert!(state.hint.is_some());
+
+    // And Ctrl-e still opens the editor from the refused state.
+    handle_submit_forge_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+    );
+    assert_eq!(app.mode, Mode::Compose);
+}
+
+#[test]
+fn request_changes_accepts_a_multi_line_summary() {
+    let mut app = app_with_summary("needs work\n\n- fix the parser\n- add a test");
+    app.submit_forge_verdict_next();
+    app.submit_forge_verdict_next();
+    assert_eq!(
+        app.submit_forge.as_ref().unwrap().verdict(),
+        Verdict::RequestChanges
+    );
+
+    app.submit_forge_confirm();
+    assert_eq!(
+        app.mode,
+        Mode::Normal,
+        "a multi-line body satisfies the needs-a-summary rule"
+    );
+    assert!(app.submit_forge.is_none(), "the confirm was not blocked");
+}
+
+/// A [`crate::forge::ForgeSubmitExecutor`] that records the review bodies it is
+/// handed. A fake — no `gh`/`glab` is ever run.
+#[derive(Default)]
+struct RecordingSubmitter {
+    bodies: std::cell::RefCell<Vec<String>>,
+}
+
+impl crate::forge::ForgeSubmitExecutor for RecordingSubmitter {
+    fn submit_review(
+        &self,
+        payload: &crate::forge::ReviewPayload,
+    ) -> Result<(), crate::forge::ForgeError> {
+        self.bodies.borrow_mut().push(payload.body.clone());
+        Ok(())
+    }
+
+    fn post_file_comment(&self, _path: &str, _body: &str) -> Result<(), crate::forge::ForgeError> {
+        Ok(())
+    }
+
+    fn post_reply(&self, _thread_id: u64, _body: &str) -> Result<(), crate::forge::ForgeError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn the_outgoing_review_payload_carries_every_summary_line() {
+    let summary = "needs work\n\n- fix the parser\n- add a test";
+    let mut app = github_review_app(&["src/a.rs"]);
+    app.annotations
+        .add(
+            Target::line("src/a.rs", 2, Side::New),
+            Classification::Issue,
+            "fix",
+        )
+        .unwrap();
+
+    let batch = app.build_submit_batch(Verdict::RequestChanges, Some(summary));
+    assert_eq!(
+        batch.plan.payload.body, summary,
+        "the summary crosses into the payload whole"
+    );
+
+    let fake = RecordingSubmitter::default();
+    let report = crate::forge::run_submit_sequence(&batch, &fake);
+    assert!(report.failure.is_none(), "{:?}", report.failure);
+    assert_eq!(
+        fake.bodies.borrow().as_slice(),
+        &[summary.to_string()],
+        "the submit sequence delivers every line, unsplit"
+    );
+}
+
+#[test]
+fn the_summary_lives_with_the_modal_and_a_fresh_open_starts_empty() {
+    let mut app = app_with_summary("first\nsecond");
+    app.close_submit_forge();
+    app.open_submit_forge();
+    assert_eq!(
+        app.submit_forge.as_ref().unwrap().summary,
+        "",
+        "the summary belongs to the modal that was cancelled, not to the session"
+    );
 }
 
 #[test]

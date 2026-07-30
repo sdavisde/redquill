@@ -5,12 +5,32 @@
 
 use crate::annotate::{Classification, Target};
 
-/// The Compose modal's state while open: the target being annotated, the
-/// currently selected classification (`Ctrl-t` cycles it), the text being
-/// edited, and — when editing an existing annotation rather than creating a
-/// new one — the id to write back to on submit.
+/// What a Compose session is editing, and therefore where its text goes on
+/// submit. One discriminant for all three so no combination of flags can
+/// describe a compose that is two things at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComposeKind {
+    /// An annotation on the state's target — the vast majority of opens.
+    /// Submit adds to (or edits in) the annotation store.
+    Annotation,
+    /// A reply to the imported PR thread whose root comment id is given.
+    /// Submit adds to (or edits in) the draft-reply store; the modal renders a
+    /// reply header rather than a target/classification title.
+    Reply { thread_id: u64 },
+    /// The submit modal's review summary. Submit writes the text straight back
+    /// into the open submit state and returns to that modal — nothing reaches
+    /// any store, so a summary is never an annotation and never a reply.
+    ReviewSummary,
+}
+
+/// The Compose modal's state while open: what it's editing ([`ComposeKind`]),
+/// the target being annotated, the currently selected classification (`Ctrl-t`
+/// cycles it), the text being edited, and — when editing an existing item
+/// rather than creating a new one — the id to write back to on submit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComposeState {
+    /// What this compose is editing, and where submit routes its text.
+    pub kind: ComposeKind,
     /// What the annotation being composed is attached to.
     pub target: Target,
     /// The annotation's current classification.
@@ -18,16 +38,11 @@ pub struct ComposeState {
     /// The body text being edited.
     pub buffer: TextBuffer,
     /// `Some(id)` when editing an existing item (submit updates it in place);
-    /// `None` when composing a new one (submit adds). In reply mode
-    /// ([`thread_id`](Self::thread_id) is `Some`) the id is the draft reply's
-    /// id; otherwise it is the annotation's id.
+    /// `None` when composing a new one (submit adds). In
+    /// [`ComposeKind::Reply`] the id is the draft reply's id; otherwise it is
+    /// the annotation's id. Always `None` for
+    /// [`ComposeKind::ReviewSummary`], which has no store item to update.
     pub editing_id: Option<usize>,
-    /// `Some(thread_root_id)` when this compose is drafting a reply to an
-    /// imported PR thread rather than an annotation — `submit_compose`
-    /// branches on it, and the modal renders a reply header instead of a
-    /// target/classification title. `None` for the ordinary annotation
-    /// compose (the vast majority of opens).
-    pub thread_id: Option<u64>,
 }
 
 impl ComposeState {
@@ -35,11 +50,11 @@ impl ComposeState {
     /// buffer and `Classification::Issue` as the default.
     pub fn new(target: Target) -> ComposeState {
         ComposeState {
+            kind: ComposeKind::Annotation,
             target,
             classification: Classification::Issue,
             buffer: TextBuffer::new(),
             editing_id: None,
-            thread_id: None,
         }
     }
 
@@ -52,11 +67,11 @@ impl ComposeState {
         body: &str,
     ) -> ComposeState {
         ComposeState {
+            kind: ComposeKind::Annotation,
             target,
             classification,
             buffer: TextBuffer::from_str(body),
             editing_id: Some(id),
-            thread_id: None,
         }
     }
 
@@ -66,11 +81,11 @@ impl ComposeState {
     /// carry harmless defaults the modal never renders.
     pub fn reply(thread_id: u64) -> ComposeState {
         ComposeState {
+            kind: ComposeKind::Reply { thread_id },
             target: Target::file(String::new()),
             classification: Classification::Issue,
             buffer: TextBuffer::new(),
             editing_id: None,
-            thread_id: Some(thread_id),
         }
     }
 
@@ -78,11 +93,33 @@ impl ComposeState {
     /// `thread_id`, pre-filled with its body.
     pub fn editing_reply(reply_id: usize, thread_id: u64, body: &str) -> ComposeState {
         ComposeState {
+            kind: ComposeKind::Reply { thread_id },
             target: Target::file(String::new()),
             classification: Classification::Issue,
             buffer: TextBuffer::from_str(body),
             editing_id: Some(reply_id),
-            thread_id: Some(thread_id),
+        }
+    }
+
+    /// Starts editing the submit modal's review summary, seeded with `body`
+    /// (the summary as it stands). The `target`/`classification` are inert
+    /// placeholders, as in reply mode — a review summary has no diff anchor
+    /// and no classification.
+    pub fn review_summary(body: &str) -> ComposeState {
+        ComposeState {
+            kind: ComposeKind::ReviewSummary,
+            target: Target::file(String::new()),
+            classification: Classification::Issue,
+            buffer: TextBuffer::from_str(body),
+            editing_id: None,
+        }
+    }
+
+    /// The thread this compose replies to, or `None` for every other kind.
+    pub fn thread_id(&self) -> Option<u64> {
+        match self.kind {
+            ComposeKind::Reply { thread_id } => Some(thread_id),
+            ComposeKind::Annotation | ComposeKind::ReviewSummary => None,
         }
     }
 }

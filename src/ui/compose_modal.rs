@@ -11,6 +11,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use crate::annotate::{Side, Target};
 
 use super::app::App;
+use super::compose::ComposeKind;
 use super::textwrap;
 
 /// The horizontal slice a 60%-wide modal occupies within `area` (full height,
@@ -87,10 +88,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     // Reply mode renders a thread-anchored header (no classification, since a
-    // reply answers a thread rather than classifying a diff line); the
-    // ordinary annotation compose keeps its target/classification title.
-    let (title, footer) = match compose.thread_id {
-        Some(thread_id) => {
+    // reply answers a thread rather than classifying a diff line), and summary
+    // mode names the review it belongs to; the ordinary annotation compose
+    // keeps its target/classification title.
+    let (title, footer) = match compose.kind {
+        ComposeKind::Reply { thread_id } => {
             let where_ = app
                 .thread_overlay
                 .find(thread_id)
@@ -106,7 +108,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 " Enter submit  Shift-Enter/Ctrl-j newline  Esc cancel ",
             )
         }
-        None => (
+        ComposeKind::ReviewSummary => (
+            "review summary".to_string(),
+            " Enter save  Shift-Enter/Ctrl-j newline  Esc cancel ",
+        ),
+        ComposeKind::Annotation => (
             format!(
                 "{} — {}",
                 target_label(&compose.target),

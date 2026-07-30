@@ -3,7 +3,10 @@
 //! forge PR only) opens [`Mode::SubmitForge`] — a grouped-by-file preview of
 //! every unpublished annotation and drafted reply, a capability-driven verdict
 //! picker, and an optional summary — and **nothing is sent until the reviewer
-//! confirms from here** (the spec's safety boundary). On confirm the batch is
+//! confirms from here** (the spec's safety boundary). The summary takes a line
+//! typed straight into the modal, or a whole body written in the Compose editor
+//! (`Ctrl-e`, [`super::compose::ComposeKind::ReviewSummary`]), of which the
+//! field shows the first line and a count of the rest. On confirm the batch is
 //! resolved on the render thread and handed to a background submit sequence
 //! (see [`crate::forge::run_submit_sequence`]) through the fake-able
 //! [`super::stage_ops::AsyncForgeSubmitter`] seam, single-flight so a second
@@ -53,6 +56,11 @@ pub(super) struct InFlightSubmit {
 pub(super) struct SubmitForgeState {
     pub(super) verdicts: Vec<Verdict>,
     pub(super) verdict_index: usize,
+    /// The review body, possibly multi-line: short ones are typed straight
+    /// into the modal, longer ones edited in Compose via `Ctrl-e`. Lives here
+    /// and nowhere else, so it lasts exactly as long as the modal does — a
+    /// `Ctrl-e` round-trip keeps it (the state stays open behind the editor),
+    /// an `Esc` close discards it, and a fresh open starts empty.
     pub(super) summary: String,
     pub(super) target_line: String,
     /// An honest one-line disclosure of the provider's submit shape, shown
@@ -82,7 +90,18 @@ impl SubmitForgeState {
             .copied()
             .unwrap_or(Verdict::Comment)
     }
+
+    /// Whether the summary spans more than one line — the modal shows only its
+    /// first, so the in-modal push/pop editing gestures step aside for
+    /// `Ctrl-e` rather than mutate a line the reviewer can't see.
+    fn summary_is_multi_line(&self) -> bool {
+        self.summary.contains('\n')
+    }
 }
+
+/// The hint shown when a direct edit gesture lands on a multi-line summary,
+/// which only the editor can edit safely.
+const MULTI_LINE_SUMMARY_HINT: &str = "Ctrl-e to edit multi-line summary";
 
 /// One frame's scroll geometry for the modal body: the clamped offset, the
 /// body's height, and how many rendered lines are hidden above and below it.
@@ -128,7 +147,7 @@ pub(super) fn resolve_scroll(total: u16, inner_height: u16, requested: u16) -> S
 }
 
 /// `s` when `n` isn't one, for the marker lines' line count.
-fn plural(n: u16) -> &'static str {
+fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
 
@@ -137,14 +156,38 @@ fn below_marker(hidden: u16) -> Option<String> {
     (hidden > 0).then(|| {
         format!(
             "\u{25be} {hidden} more line{} \u{2014} \u{2193} to scroll",
-            plural(hidden)
+            plural(usize::from(hidden))
         )
     })
 }
 
 /// The clipped-above marker, or `None` when the first line is on screen.
 fn above_marker(hidden: u16) -> Option<String> {
-    (hidden > 0).then(|| format!("\u{25b4} {hidden} more line{} above", plural(hidden)))
+    (hidden > 0).then(|| {
+        format!(
+            "\u{25b4} {hidden} more line{} above",
+            plural(usize::from(hidden))
+        )
+    })
+}
+
+/// The summary's first line — the only one the modal shows, since the field is
+/// one line tall and the batch preview owns the vertical space.
+fn summary_first_line(summary: &str) -> &str {
+    summary.lines().next().unwrap_or("")
+}
+
+/// The suffix disclosing the summary lines the field doesn't show, or `None`
+/// for a summary that fits on its one line. The count is what stays hidden, so
+/// the whole body is never silently understated.
+fn summary_overflow_note(summary: &str) -> Option<String> {
+    let hidden = summary.lines().count().saturating_sub(1);
+    (hidden > 0).then(|| {
+        format!(
+            "({hidden} more line{} \u{2014} Ctrl-e to edit)",
+            plural(hidden)
+        )
+    })
 }
 
 /// Splits `line` into rows no wider than `width`, preserving each character's
@@ -492,18 +535,58 @@ impl App {
     }
 
     /// Appends a typed character to the summary (the modal's free-text field).
+    /// Once the summary is multi-line the field is read-only — see
+    /// [`SubmitForgeState::summary_is_multi_line`] — and the keystroke leaves
+    /// the `Ctrl-e` hint instead.
     pub(super) fn submit_forge_insert_char(&mut self, c: char) {
         if let Some(state) = self.submit_forge.as_mut() {
+            if state.summary_is_multi_line() {
+                state.hint = Some(MULTI_LINE_SUMMARY_HINT.to_string());
+                return;
+            }
             state.summary.push(c);
             state.hint = None;
         }
     }
 
-    /// Deletes the last summary character.
+    /// Deletes the last summary character, or hints toward `Ctrl-e` on a
+    /// multi-line summary (a pop from an off-screen line is invisible).
     pub(super) fn submit_forge_delete_char(&mut self) {
         if let Some(state) = self.submit_forge.as_mut() {
+            if state.summary_is_multi_line() {
+                state.hint = Some(MULTI_LINE_SUMMARY_HINT.to_string());
+                return;
+            }
             state.summary.pop();
             state.hint = None;
+        }
+    }
+
+    /// `Ctrl-e`: hands the summary to the Compose editor, seeded with the text
+    /// as it stands, for full multi-line editing. The submit state is left
+    /// open behind the editor, so saving or cancelling comes straight back to
+    /// this modal with the batch and verdict untouched.
+    pub(super) fn open_summary_compose(&mut self) {
+        let Some(state) = self.submit_forge.as_ref() else {
+            return;
+        };
+        self.compose = Some(super::compose::ComposeState::review_summary(&state.summary));
+        self.mode = Mode::Compose;
+    }
+
+    /// Writes an edited summary back from Compose and returns to the submit
+    /// modal. An emptied buffer clears the summary — in the editor that is a
+    /// deliberate erase, not an abandoned draft. Defensive fallback to Normal
+    /// if the modal is somehow no longer open, since there'd be nowhere to
+    /// return to.
+    pub(super) fn save_review_summary(&mut self, body: &str) {
+        match self.submit_forge.as_mut() {
+            Some(state) => {
+                state.summary = body.trim().to_string();
+                state.hint = None;
+                self.mode = Mode::SubmitForge;
+            }
+            None => self.mode = Mode::Normal,
         }
     }
 
@@ -859,25 +942,32 @@ fn build_lines(
         }
     }
 
-    // Summary field.
+    // Summary field: its first line, plus a dim count of the lines a
+    // multi-line summary keeps off screen.
     lines.push(Line::from(String::new()));
-    let summary_display = if state.summary.is_empty() {
-        Span::styled(
-            "(optional summary \u{2014} type to add)",
+    let mut summary_spans = vec![Span::styled("Summary: ", Style::default().fg(theme.gutter))];
+    if state.summary.is_empty() {
+        summary_spans.push(Span::styled(
+            "(optional \u{2014} type, or Ctrl-e for multi-line)",
             Style::default()
                 .fg(theme.gutter)
                 .add_modifier(Modifier::DIM),
-        )
+        ));
     } else {
-        Span::styled(
-            state.summary.clone(),
+        summary_spans.push(Span::styled(
+            summary_first_line(&state.summary).to_string(),
             Style::default().fg(theme.annotation_text),
-        )
-    };
-    lines.push(Line::from(vec![
-        Span::styled("Summary: ", Style::default().fg(theme.gutter)),
-        summary_display,
-    ]));
+        ));
+        if let Some(note) = summary_overflow_note(&state.summary) {
+            summary_spans.push(Span::styled(
+                format!("  {note}"),
+                Style::default()
+                    .fg(theme.gutter)
+                    .add_modifier(Modifier::DIM),
+            ));
+        }
+    }
+    lines.push(Line::from(summary_spans));
 
     // A blocked-confirm validation hint (e.g. request-changes with no summary).
     if let Some(hint) = &state.hint {
