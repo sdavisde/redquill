@@ -5,17 +5,14 @@ on:
     branches:
       - main
 
-# Releases are fully automatic: release-please opens the release PR using a PAT
-# (not GITHUB_TOKEN), so CI runs on that PR, and auto-merge lands it as soon as
-# the required checks go green. That merge re-triggers this workflow with
-# release_created=true, which builds and publishes. No human step.
+# Releases are gated on a human merge: release-please opens the release PR and
+# keeps it updated, but nothing lands it automatically. Merging that PR yourself
+# re-triggers this workflow with release_created=true, which builds and
+# publishes. Deciding when to cut a version is the human step.
 #
-# The PAT is load-bearing in two places, and GITHUB_TOKEN cannot substitute for
-# either: events raised by GITHUB_TOKEN do not trigger workflow runs, so (a) the
-# release PR would never get the CI that branch protection on main requires, and
-# (b) auto-merge is attributed to whoever enabled it — if that were
-# github-actions[bot], the merge would not re-trigger this workflow and the
-# release would never build.
+# The PAT (not GITHUB_TOKEN) is load-bearing: events raised by GITHUB_TOKEN do
+# not trigger workflow runs, so the release PR would never get the CI that
+# branch protection on main requires, leaving it unmergeable.
 
 # Serialize runs so two merges landing close together cannot race to tag from a
 # stale main.
@@ -40,19 +37,6 @@ jobs:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-
-      # prs_created covers updates as well as creations, so pushing further
-      # releasable commits refreshes the PR and re-arms auto-merge.
-      - name: enable auto-merge on the release PR
-        if: ${{ steps.release.outputs.prs_created == 'true' }}
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
-          PR_JSON: ${{ steps.release.outputs.pr }}
-        run: |
-          set -euo pipefail
-          number="$(jq -r '.number' <<<"${PR_JSON}")"
-          echo "enabling auto-merge on PR #${number}"
-          gh pr merge --auto --squash --repo "$GITHUB_REPOSITORY" "${number}"
 
   build:
     needs: release-please

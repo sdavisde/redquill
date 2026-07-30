@@ -13,8 +13,8 @@ use thiserror::Error;
 
 use crate::diff::{DiffParseError, DiffStat, FileChangeKind, FileDiff, StatDisplay, stat_display};
 use crate::forge::{
-    self, CredentialChecker, ForgeError, GhCredentialChecker, GlabCredentialChecker, ProviderKind,
-    ProviderResolution, PullRequest, ResolutionCache, Thread, UnresolvedReason,
+    self, CredentialChecker, ForgeError, GhCredentialChecker, GlabCredentialChecker, PrDetail,
+    ProviderKind, ProviderResolution, PullRequest, ResolutionCache, Thread, UnresolvedReason,
 };
 use crate::git::{
     BranchStatus, ChangeKind, CommitLogEntry, CommitLogRange, CommitSummary, DiffTarget,
@@ -170,6 +170,13 @@ pub type AsyncPrCheckoutFetcher = Box<dyn Fn(PrCheckoutRequest) -> PrCheckoutOut
 /// surfaces "comments unavailable" on `Err`). Same cloned-`GitRunner`-handle
 /// indirection as the other `Async*` aliases.
 pub type AsyncThreadFetcher = Box<dyn Fn(u64) -> Result<Vec<Thread>, String> + Send>;
+
+/// A `Send` closure fetching one PR/MR's descriptive detail (body prose
+/// included) off the render thread, for the read-only PR description overlay.
+/// Takes the PR number and returns the detail or a one-line diagnostic (the
+/// overlay renders "description unavailable" on `Err`). Same cloned-handle
+/// indirection as the other `Async*` aliases.
+pub type AsyncPrDetailFetcher = Box<dyn Fn(u64) -> Result<PrDetail, String> + Send>;
 
 /// A `Send` closure handing one [`super::forge_open::WebTarget`]'s page to
 /// the platform's browser off the render thread. The target is captured at
@@ -440,6 +447,19 @@ pub trait StageOps {
         &self,
         _provider: crate::review::store::ForgeProviderKind,
     ) -> Option<AsyncThreadFetcher> {
+        None
+    }
+    /// A `Send` closure fetching one PR/MR's descriptive detail off the render
+    /// thread (see [`AsyncPrDetailFetcher`]), dispatched by `provider` to
+    /// `gh pr view --json` or `glab mr view -F json`. The default returns
+    /// `None`, keeping non-`Send` fakes (and git-less contexts) off the fetch
+    /// entirely — the overlay then reports the description unavailable rather
+    /// than hanging on a load that will never land; [`GitRunner`] overrides it
+    /// by cloning itself into the closure.
+    fn async_pr_detail_fetcher(
+        &self,
+        _provider: crate::review::store::ForgeProviderKind,
+    ) -> Option<AsyncPrDetailFetcher> {
         None
     }
     /// A `Send` closure opening `target`'s forge page in the browser off the
@@ -779,6 +799,19 @@ impl StageOps for GitRunner {
                     .and_then(|url| forge::parse_origin_repo_slug(&url));
                 forge::fetch_review_threads(slug.as_deref(), number).map_err(|e| e.to_string())
             }
+        }))
+    }
+
+    fn async_pr_detail_fetcher(
+        &self,
+        provider: crate::review::store::ForgeProviderKind,
+    ) -> Option<AsyncPrDetailFetcher> {
+        use crate::review::store::ForgeProviderKind;
+        // Both reads infer the repository/project from the working directory,
+        // so neither needs a slug — the PR number is the whole input.
+        Some(Box::new(move |number| match provider {
+            ForgeProviderKind::GitLab => forge::mr_description(number).map_err(|e| e.to_string()),
+            ForgeProviderKind::GitHub => forge::pr_detail(number).map_err(|e| e.to_string()),
         }))
     }
 

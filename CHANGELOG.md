@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.20.1](https://github.com/sdavisde/redquill/compare/v0.20.0...v0.20.1) (2026-07-30)
+
+
+### Bug Fixes
+
+* **ui:** keep file-row counts and status visible when the path is long ([dd56785](https://github.com/sdavisde/redquill/commit/dd5678590c8573ff96bb6b8cbde2dca9b0eaf51f))
+
+
+### Performance Improvements
+
+* **ui:** cache highlights per blob so switching views stops re-highlighting ([7230105](https://github.com/sdavisde/redquill/commit/72301050d16eb22ffb8a34ba29710bc10700f90b))
+* **ui:** highlight only what is on screen, not the whole review ([a73e627](https://github.com/sdavisde/redquill/commit/a73e627bb31ab3d4ab28161e884798c97371d64c))
+
 ## [0.20.0](https://github.com/sdavisde/redquill/compare/v0.19.0...v0.20.0) (2026-07-29)
 
 

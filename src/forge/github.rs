@@ -17,23 +17,39 @@ use super::submit::ForgeSubmitExecutor;
 use super::threads::{
     Thread, apply_resolved_states, parse_resolved_thread_states, parse_review_comments_json,
 };
-use super::{ForgeError, PullRequest, Verdict};
+use super::{ForgeError, PR_LIST_CAP, PrDetail, PullRequest, Verdict};
 
 /// The exact `--json` field list `gh pr list` is asked for — fixed at the
 /// listing's field set, never composed from caller input.
 pub const PR_LIST_JSON_FIELDS: &str =
     "number,title,author,headRefName,baseRefName,isDraft,updatedAt";
 
+/// The exact `--json` field list `gh pr view` is asked for: the listing's
+/// fields plus `body` (the description prose). Fixed, never composed from
+/// caller input; every name is a documented `gh pr view` JSON field.
+pub const PR_DETAIL_JSON_FIELDS: &str =
+    "number,title,author,baseRefName,headRefName,body,isDraft,updatedAt";
+
 /// How long a `gh pr list` invocation may run before it's treated as
 /// failed and killed. Generous relative to the credential-check timeout
 /// since this is a real network round trip, not a local auth-store read.
 const LIST_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Builds the fixed argv for `gh pr list --json <fields>`, with prompts
-/// disabled and color stripped from the (JSON, machine-read) output.
+/// Builds the fixed argv for `gh pr list --json <fields> --limit <cap>`,
+/// with prompts disabled and color stripped from the (JSON, machine-read)
+/// output. `--limit` matches [`super::PR_LIST_CAP`] (the same cap
+/// `gitlab::mr_list_command`'s `--per-page` requests) — without it, `gh`
+/// silently truncates to its own default of 30 with no indicator.
 pub fn pr_list_command() -> Command {
     let mut cmd = Command::new("gh");
-    cmd.args(["pr", "list", "--json", PR_LIST_JSON_FIELDS]);
+    cmd.args([
+        "pr",
+        "list",
+        "--json",
+        PR_LIST_JSON_FIELDS,
+        "--limit",
+        &PR_LIST_CAP.to_string(),
+    ]);
     harden(&mut cmd);
     cmd
 }
@@ -218,6 +234,98 @@ pub fn parse_pr_list_json(json: &str) -> Result<Vec<PullRequest>, ForgeError> {
             updated_at: r.updated_at,
         })
         .collect())
+}
+
+// -- PR detail (the description read) -----------------------------------------
+
+/// Builds the fixed argv for `gh pr view <number> --json <fields>`. The PR
+/// number is a `u64` end-to-end, so the argv's only variable part can't be
+/// anything but digits, and `gh` infers the repository from the working
+/// directory exactly as [`pr_list_command`] does. Read-only: `pr view` never
+/// writes to the PR.
+pub fn pr_detail_command(number: u64) -> Command {
+    let mut cmd = Command::new("gh");
+    cmd.args([
+        "pr",
+        "view",
+        &number.to_string(),
+        "--json",
+        PR_DETAIL_JSON_FIELDS,
+    ]);
+    harden(&mut cmd);
+    cmd
+}
+
+/// The raw shape of `gh pr view --json ...`'s JSON object. `body` is
+/// `#[serde(default)]` so a PR with no description — which `gh` renders as
+/// `""`, and which an older `gh` could omit outright — parses to an empty
+/// string rather than failing the whole read.
+#[derive(Debug, Deserialize)]
+struct RawPrDetail {
+    number: u64,
+    title: String,
+    author: RawAuthor,
+    #[serde(rename = "baseRefName")]
+    base_ref_name: String,
+    #[serde(rename = "headRefName")]
+    head_ref_name: String,
+    #[serde(default)]
+    body: String,
+    #[serde(rename = "isDraft")]
+    is_draft: bool,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
+}
+
+/// Parses `gh pr view --json ...`'s stdout into a [`PrDetail`]. Pure — no
+/// process involved — so it's exercised entirely by fixture tests built from
+/// captured-shape `gh` output.
+pub fn parse_pr_detail_json(json: &str) -> Result<PrDetail, ForgeError> {
+    let raw: RawPrDetail = serde_json::from_str(json).map_err(|e| ForgeError::Parse {
+        cli: "gh",
+        message: e.to_string(),
+    })?;
+    Ok(PrDetail {
+        number: raw.number,
+        title: raw.title,
+        author: raw.author.login,
+        base_ref: raw.base_ref_name,
+        head_ref: raw.head_ref_name,
+        body: raw.body,
+        is_draft: raw.is_draft,
+        updated_at: raw.updated_at,
+    })
+}
+
+/// Runs `gh pr view <number> --json ...` and returns the typed detail. Like
+/// [`list_open_prs`], the only function in this pair that spawns a process —
+/// kept thin and deliberately untested; [`parse_pr_detail_json`] carries the
+/// fixture coverage.
+pub fn pr_detail(number: u64) -> Result<PrDetail, ForgeError> {
+    let mut cmd = pr_detail_command(number);
+    let output = run_captured_with_timeout(&mut cmd, LIST_TIMEOUT).map_err(|source| {
+        if source.kind() == std::io::ErrorKind::NotFound {
+            ForgeError::CliNotFound { cli: "gh" }
+        } else {
+            ForgeError::Spawn { cli: "gh", source }
+        }
+    })?;
+
+    if !output.status.success() {
+        return Err(ForgeError::Command {
+            cli: "gh",
+            command: format!("pr view {number}"),
+            code: output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_string()),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
+    }
+
+    let json = String::from_utf8_lossy(&output.stdout);
+    parse_pr_detail_json(&json)
 }
 
 /// How long a `gh api` review-comments invocation may run before it's

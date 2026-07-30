@@ -13,8 +13,9 @@
 //!   `github` uses) into the same typed rows `github` produces; it isn't
 //!   wired behind the trait itself yet.
 //! - [`PullRequest`] — one row of a PR/MR listing.
-//! - [`PrDetail`] — a minimal stand-in for a richer shape later work
-//!   fleshes out; present now only so the trait surface compiles.
+//! - [`PrDetail`] — one PR/MR's descriptive detail, body prose included, read
+//!   on demand for the description overlay (`github::pr_detail` /
+//!   `gitlab::mr_description`).
 //! - [`Thread`] — an imported PR review-comment thread (root + ordered
 //!   replies, resolved/outdated state, diff anchor); see [`threads`] for
 //!   construction from GitHub's JSON shape and the read-only
@@ -40,20 +41,23 @@ pub use detect::{
     ProviderResolution, ResolutionCache, UnresolvedReason, resolve_provider,
 };
 pub use github::{
-    FileCommentFollowUp, GhSubmitExecutor, PR_LIST_JSON_FIELDS, ReviewCommentPayload,
-    ReviewPayload, ReviewSubmissionPlan, branch_web_command as gh_branch_web_command,
-    build_review_payload, commit_web_command, fetch_review_threads, file_comment_command,
-    list_open_prs, open_branch_in_browser as gh_open_branch_in_browser, open_commit_in_browser,
-    open_pr_in_browser, parse_pr_list_json, pr_list_command, pr_web_command, reply_command,
-    review_comments_command, review_threads_resolved_command, submit_review_command,
+    FileCommentFollowUp, GhSubmitExecutor, PR_DETAIL_JSON_FIELDS, PR_LIST_JSON_FIELDS,
+    ReviewCommentPayload, ReviewPayload, ReviewSubmissionPlan,
+    branch_web_command as gh_branch_web_command, build_review_payload, commit_web_command,
+    fetch_review_threads, file_comment_command, list_open_prs,
+    open_branch_in_browser as gh_open_branch_in_browser, open_commit_in_browser,
+    open_pr_in_browser, parse_pr_detail_json, parse_pr_list_json, pr_detail, pr_detail_command,
+    pr_list_command, pr_web_command, reply_command, review_comments_command,
+    review_threads_resolved_command, submit_review_command,
 };
 pub use gitlab::{
     DiffRefs, GitlabNote, GitlabReply, GitlabSubmitBatch, GitlabSubmitExecutor, GlabSubmitExecutor,
     MrDetail, NotePosition, NoteTarget, branch_web_command as glab_branch_web_command,
-    build_note_position, discussions_command, fetch_discussions, list_open_mrs, mr_detail,
-    mr_detail_command, mr_list_command, mr_web_command,
+    build_note_position, discussions_command, fetch_discussions, list_open_mrs, mr_description,
+    mr_description_command, mr_detail, mr_detail_command, mr_list_command, mr_web_command,
     open_branch_in_browser as glab_open_branch_in_browser, open_mr_in_browser,
-    parse_discussions_json, parse_mr_detail_json, parse_mr_list_json, run_gitlab_submit_sequence,
+    parse_discussions_json, parse_mr_description_json, parse_mr_detail_json, parse_mr_list_json,
+    run_gitlab_submit_sequence,
 };
 pub use remote_url::{Hostname, RemoteUrlError, parse_origin_hostname, parse_origin_repo_slug};
 pub use submit::{
@@ -65,6 +69,13 @@ pub use threads::{
 };
 
 use thiserror::Error;
+
+/// The page-size cap both providers' PR/MR listing commands request
+/// (`gh pr list --limit`, `glab mr list --per-page`) — defined once so the
+/// two argv builders and the launcher's truncation indicator can't drift.
+/// A listing landing at exactly this count is the only signal that rows
+/// beyond it exist: neither CLI reports a listing's true total.
+pub const PR_LIST_CAP: usize = 100;
 
 /// One PR/MR row as listed by a provider: enough to render a list and to
 /// target a checkout, nothing more.
@@ -86,12 +97,29 @@ pub struct PullRequest {
     pub updated_at: String,
 }
 
-/// One PR's full detail (base/head SHAs, diff refs, etc.). A minimal
-/// stand-in until PR checkout needs the richer shape — only `number` is
-/// populated today, but the method exists so the trait surface is real.
+/// One PR/MR's descriptive detail: everything a [`PullRequest`] row carries
+/// plus the `body` (GitHub) / `description` (GitLab) prose the author wrote.
+/// Read on demand for the description overlay, never as part of a listing —
+/// both providers charge an extra round trip for the body, and most rows are
+/// never opened.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PrDetail {
     pub number: u64,
+    pub title: String,
+    /// The author's login/username.
+    pub author: String,
+    /// The target/base branch name.
+    pub base_ref: String,
+    /// The source branch name.
+    pub head_ref: String,
+    /// The description prose, verbatim — line breaks preserved, no markdown
+    /// rendering at this layer. Empty when the author wrote none (both
+    /// providers can also omit the field entirely; that reads as empty too).
+    pub body: String,
+    pub is_draft: bool,
+    /// Provider-formatted timestamp string, verbatim — no local parsing or
+    /// timezone conversion happens at this layer.
+    pub updated_at: String,
 }
 
 /// A batch of comments/replies/verdict ready to publish as one review. A
