@@ -18,7 +18,7 @@
 //! drops a row whose action is scoped to a different tab (see
 //! [`hint_line`]/`super::modal_keys::launcher_action_tab_scope`), so the
 //! Commits-only `all commits` toggle and the Pull-Requests-only `clean up`
-//! cleanup only appear in the footer on their own tab.
+//! cleanup and `refresh` only appear in the footer on their own tab.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
@@ -684,6 +684,27 @@ index 111..222 100644
             !content.contains("clean up"),
             "Branches tab must not advertise the Pull-Requests-only cleanup:\n{content}"
         );
+    }
+
+    /// The `refresh` hint is Pull-Requests-only. Asserted against
+    /// [`hint_line`] rather than the rendered frame because it sits last in
+    /// the table, where the modal's border can truncate it — the scoping
+    /// decision is the contract, not whether it fits at a given width.
+    #[test]
+    fn the_refresh_hint_belongs_to_the_pull_requests_tab_only() {
+        let app = App::new(vec![sample_file()]);
+        for (tab, expected) in [
+            (LauncherTab::Branches, false),
+            (LauncherTab::Commits, false),
+            (LauncherTab::PullRequests, true),
+        ] {
+            let line = hint_line(&app.modal_keys.review_launcher, tab);
+            assert_eq!(
+                line.contains("refresh"),
+                expected,
+                "{tab:?} hint line: {line}"
+            );
+        }
     }
 
     /// The Commits tab's footer shows its own `all commits` hint but not the
