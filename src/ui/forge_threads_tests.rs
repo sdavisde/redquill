@@ -172,20 +172,91 @@ fn thread_view_scroll_moves_and_clamps_at_zero() {
     let mut app = review_app(&["a.rs"]);
     app.thread_view = Some(ThreadViewState {
         root_id: 1,
-        scroll: 0,
+        scroll: Cell::new(0),
     });
     app.mode = Mode::ThreadView;
     app.thread_view_scroll_down();
     app.thread_view_scroll_down();
-    assert_eq!(app.thread_view.as_ref().unwrap().scroll, 2);
+    assert_eq!(app.thread_view.as_ref().unwrap().scroll.get(), 2);
     app.thread_view_scroll_up();
-    assert_eq!(app.thread_view.as_ref().unwrap().scroll, 1);
+    assert_eq!(app.thread_view.as_ref().unwrap().scroll.get(), 1);
     app.thread_view_scroll_up();
     app.thread_view_scroll_up();
     assert_eq!(
-        app.thread_view.as_ref().unwrap().scroll,
+        app.thread_view.as_ref().unwrap().scroll.get(),
         0,
         "scroll-up saturates at zero"
+    );
+}
+
+#[test]
+fn thread_view_scroll_clamps_to_the_last_content_line_on_render() {
+    let mut app = review_app(&["a.rs"]);
+    // Ten replies makes the conversation much taller than the small frame
+    // rendered below, so holding `j` runs the content off the top of the
+    // viewport unless the offset is clamped against what actually rendered.
+    let replies: Vec<ThreadComment> = (1..=10u64)
+        .map(|i| comment(i + 1, "bob", "2026-07-19T10:00:00Z", &format!("reply {i}")))
+        .collect();
+    let thread = Thread {
+        id: 1,
+        anchor: ThreadAnchor::Position {
+            path: "a.rs".to_string(),
+            side: Side::New,
+            line: 1,
+        },
+        root: comment(1, "alice", "2026-07-19T09:00:00Z", "root comment"),
+        replies,
+        resolved: false,
+        outdated: false,
+        discussion_id: None,
+    };
+    app.apply_thread_fetch(Ok(vec![thread]));
+    app.open_thread_view();
+    assert_eq!(app.mode, Mode::ThreadView);
+
+    // Hold `j` far past the end of the conversation.
+    for _ in 0..500 {
+        app.thread_view_scroll_down();
+    }
+    // A short frame: its popup is well under the content's height, so the
+    // pre-fix defect (an unclamped offset) would scroll the whole
+    // conversation off-screen.
+    let _ = flatten(100, 20, |frame| super::render(frame, frame.area(), &app));
+
+    let clamped = app.thread_view.as_ref().unwrap().scroll.get();
+    assert!(
+        clamped < 500,
+        "render must clamp the runaway offset to the content height, got {clamped}"
+    );
+
+    // From the clamped bottom, one `k` must move the view up immediately —
+    // no dead presses needed to unwind a phantom offset.
+    app.thread_view_scroll_up();
+    assert_eq!(
+        app.thread_view.as_ref().unwrap().scroll.get(),
+        clamped - 1,
+        "k at the clamped bottom moves up by exactly one line"
+    );
+}
+
+#[test]
+fn thread_view_scroll_stays_at_zero_for_a_thread_shorter_than_the_viewport() {
+    let mut app = review_app(&["a.rs"]);
+    // Root + one short reply: comfortably fits the tall frame below.
+    let thread = positioned_thread(1, "a.rs", Side::New, 1, 1);
+    app.apply_thread_fetch(Ok(vec![thread]));
+    app.open_thread_view();
+
+    for _ in 0..5 {
+        app.thread_view_scroll_down();
+    }
+    let _ = flatten(100, 60, |frame| super::render(frame, frame.area(), &app));
+
+    assert_eq!(
+        app.thread_view.as_ref().unwrap().scroll.get(),
+        0,
+        "a thread shorter than the viewport never scrolls"
     );
 }
 
