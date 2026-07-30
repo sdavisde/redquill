@@ -35,6 +35,16 @@ impl FileChangeKind {
         }
     }
 
+    /// Whether this kind implies the file's content changed. A rename or
+    /// copy may carry hunks or be path-only; every other kind always
+    /// carries content.
+    pub fn is_content_change(self) -> bool {
+        matches!(
+            self,
+            FileChangeKind::Added | FileChangeKind::Deleted | FileChangeKind::Modified
+        )
+    }
+
     /// Derives the change kind from a raw patch's header text and metadata.
     fn from_raw(patch: &RawFilePatch) -> FileChangeKind {
         if patch.raw.contains("\nnew file mode ") {
