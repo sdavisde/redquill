@@ -19,7 +19,8 @@ use super::modal_keys::{
     self, AcceptedPanelAction, CleanupReviewsAction, CommitMessageAction, ComposeAction,
     ConfirmRemoteOpAction, EndReviewAction, FilterEditAction, FinderAction, LauncherAction,
     ListAction, PeekAction, ProjectSearchInputAction, ProjectSearchResultsAction, RestoreAction,
-    SearchAction, StagingAction, SubmitForgeAction, SwitcherAction, ThreadViewAction,
+    SearchAction, StagingAction, SubmitForgeAction, SubmitResultAction, SwitcherAction,
+    ThreadViewAction,
 };
 use super::motion;
 
@@ -614,6 +615,33 @@ pub(super) fn handle_submit_forge_key(app: &mut App, key: KeyEvent) {
         SubmitForgeAction::PageUp => app.submit_forge_page_up(),
         SubmitForgeAction::DeleteChar => app.submit_forge_delete_char(),
         SubmitForgeAction::ComposeSummary => app.open_summary_compose(),
+    }
+}
+
+/// Handles one key event while [`super::Mode::SubmitResult`] is active (the
+/// post-submit per-item result view): a read-only account, so only scroll,
+/// dismiss, and "submit again" — resolved against `app.modal_keys.submit_result`.
+/// See [`modal_keys::SUBMIT_RESULT_KEYS`]. Nothing here writes to the forge;
+/// Retry only reopens the submit modal, which keeps its own confirm gate.
+pub(super) fn handle_submit_result_key(app: &mut App, key: KeyEvent) {
+    let count = match intercept_motion_count(app, key) {
+        MotionIntercept::Handled => return,
+        MotionIntercept::Resolve(count) => count,
+    };
+    let Some(action) = modal_keys::resolve(&app.modal_keys.submit_result, key) else {
+        return;
+    };
+    match action {
+        SubmitResultAction::ScrollDown => {
+            apply_motion_n_times(count, || app.submit_result_scroll_down())
+        }
+        SubmitResultAction::ScrollUp => {
+            apply_motion_n_times(count, || app.submit_result_scroll_up())
+        }
+        SubmitResultAction::PageDown => app.submit_result_page_down(),
+        SubmitResultAction::PageUp => app.submit_result_page_up(),
+        SubmitResultAction::Dismiss => app.close_submit_result(),
+        SubmitResultAction::Retry => app.submit_result_retry(),
     }
 }
 

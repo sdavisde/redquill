@@ -861,8 +861,12 @@ impl StageOps for GitRunner {
                     None => match forge::mr_detail(number) {
                         Ok(detail) => detail.diff_refs,
                         Err(e) => {
+                            // Nothing was written, so every item in the batch
+                            // is unsent — recorded so the result view names
+                            // them instead of showing an empty list.
                             return forge::SubmitReport {
                                 failure: Some(forge::diagnose::submit_error_headline(&e)),
+                                attempt: batch.attempt(),
                                 ..forge::SubmitReport::default()
                             };
                         }

@@ -43,6 +43,7 @@ impl App {
             | Mode::ConfirmRemoteOp { .. }
             | Mode::ThreadView
             | Mode::SubmitForge
+            | Mode::SubmitResult { .. }
             | Mode::CleanupReviews { .. }
             | Mode::ConfirmRestore { .. } => {}
             Mode::Normal | Mode::Visual { .. } => {

@@ -242,7 +242,7 @@ fn modal_hints<A: Clone>(table: &[ModalBinding<A>]) -> Vec<(String, &'static str
 /// applies), so only one of the two ever documents itself here at a time,
 /// exactly like `Action::ToggleStage`/`Action::ToggleAccept`'s mutual
 /// exclusion in [`binding_hidden`].
-fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 18] {
+fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 19] {
     let staging_section = if review_session {
         (
             "Accepted files panel (s, review sessions)",
@@ -294,6 +294,10 @@ fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 
         (
             "Submit review (U, PR review session)",
             modal_hints(&modal_keys.submit_forge),
+        ),
+        (
+            "Submit result (after a stopped submit)",
+            modal_hints(&modal_keys.submit_result),
         ),
         (
             "Cleanup finished reviews (X, Pull Requests tab)",
@@ -1442,6 +1446,35 @@ mod tests {
                     "This context row {k:?} ({d:?}) for {origin:?} must also appear on All keys"
                 );
             }
+        }
+    }
+
+    /// The post-submit result modal's keys must be documented on "All keys".
+    /// [`modal_sections`] is a hand-written list, so dropping (or never
+    /// adding) its row would leave the modal's keys reachable but invisible in
+    /// `?` — the exact hidden-feature drift the CLAUDE.md rule forbids, and
+    /// one nothing else catches: the array length only pins the count, not
+    /// which tables are in it.
+    #[test]
+    fn the_submit_result_keys_are_documented_in_the_help_overlay() {
+        let keymap = Keymap::default_map();
+        let modal_keys = ModalKeymaps::default();
+        let rows = all_rows(&all_keys_sections(
+            keymap.bindings(),
+            &modal_keys,
+            true,
+            true,
+            true,
+            None,
+        ));
+        for binding in &modal_keys.submit_result {
+            let key = binding.key_label();
+            assert!(
+                rows.iter()
+                    .any(|(k, d)| *k == key && *d == binding.description),
+                "submit-result key {key:?} ({:?}) is missing from the help overlay",
+                binding.description
+            );
         }
     }
 }

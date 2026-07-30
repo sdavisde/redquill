@@ -162,6 +162,7 @@ pub(super) fn effective_modal_keys(
         confirm_remote_op: modal_keys::CONFIRM_REMOTE_OP_KEYS.clone(),
         thread_view: modal_keys::THREAD_VIEW_KEYS.clone(),
         submit_forge: modal_keys::SUBMIT_FORGE_KEYS.clone(),
+        submit_result: modal_keys::SUBMIT_RESULT_KEYS.clone(),
         cleanup_reviews: modal_keys::CLEANUP_REVIEWS_KEYS.clone(),
         restore: modal_keys::RESTORE_KEYS.clone(),
     };

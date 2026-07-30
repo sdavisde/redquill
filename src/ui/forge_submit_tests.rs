@@ -5,7 +5,7 @@ use ratatui::backend::TestBackend;
 use crate::annotate::{Classification, Side, Target};
 use crate::diff::FileDiff;
 use crate::forge::{
-    SubmitReport, Thread, ThreadAnchor, ThreadComment, ThreadOverlayStore, Verdict,
+    SubmitAttempt, SubmitReport, Thread, ThreadAnchor, ThreadComment, ThreadOverlayStore, Verdict,
 };
 use crate::git::{DiffTarget, RawFilePatch};
 use crate::review::store::{ForgeMetadata, ForgeProviderKind};
@@ -389,6 +389,7 @@ fn apply_outcome_marks_published_items_and_reports_a_clean_success() {
         failure: None,
         draft_annotation_ids: vec![],
         draft_reply_ids: vec![],
+        attempt: SubmitAttempt::default(),
         summary_draft_created: false,
     });
 
@@ -425,6 +426,7 @@ fn apply_outcome_on_mid_failure_reports_the_published_unpublished_split() {
         failure: Some("file boom".to_string()),
         draft_annotation_ids: vec![],
         draft_reply_ids: vec![],
+        attempt: SubmitAttempt::default(),
         summary_draft_created: false,
     });
 
@@ -463,6 +465,7 @@ fn apply_outcome_with_pending_drafts_reports_them_instead_of_calling_them_failed
         failure: Some("boom".to_string()),
         draft_annotation_ids: vec![a0],
         draft_reply_ids: vec![],
+        attempt: SubmitAttempt::default(),
         summary_draft_created: false,
     });
 
@@ -500,6 +503,7 @@ fn apply_outcome_records_pending_drafts_and_the_resubmit_batch_skips_them() {
         failure: Some("boom".to_string()),
         draft_annotation_ids: vec![a0],
         draft_reply_ids: vec![r0],
+        attempt: SubmitAttempt::default(),
         summary_draft_created: true,
     });
 
@@ -554,6 +558,7 @@ fn apply_outcome_publishing_clears_draft_state() {
         failure: None,
         draft_annotation_ids: vec![],
         draft_reply_ids: vec![],
+        attempt: SubmitAttempt::default(),
         summary_draft_created: false,
     });
 

@@ -57,7 +57,8 @@ pub use gitlab::{
 };
 pub use remote_url::{Hostname, RemoteUrlError, parse_origin_hostname, parse_origin_repo_slug};
 pub use submit::{
-    ForgeSubmitExecutor, SubmitBatch, SubmitReplyItem, SubmitReport, run_submit_sequence,
+    ForgeSubmitExecutor, ItemOutcome, SubmitAttempt, SubmitBatch, SubmitReplyItem, SubmitReport,
+    run_submit_sequence,
 };
 pub use threads::{
     Thread, ThreadAnchor, ThreadComment, ThreadOverlayStore, apply_resolved_states,

@@ -164,6 +164,14 @@ pub enum Mode {
     /// confirms from here. Its selection/edit state lives in
     /// [`App::submit_forge`] (see [`super::forge_submit`]).
     SubmitForge,
+    /// The post-submit result modal is open (see
+    /// [`super::forge_submit_result`]): a read-only, per-item account of what a
+    /// stopped submit run published, left as a pending draft, or never sent.
+    /// Opened only when a run reports a failure, and asynchronously — the
+    /// report arrives on a background poll — so `origin` is whatever mode the
+    /// reviewer was in when it landed, restored exactly on dismiss. The outcome
+    /// snapshot lives in [`App::submit_result`].
+    SubmitResult { origin: ModeOrigin },
     /// The finished-review cleanup confirm modal (`cleanup-finished-reviews`,
     /// Pull Requests tab, opened by [`App::open_cleanup_reviews`]): enumerates
     /// every managed review whose PR is no longer open — number, title,
@@ -607,6 +615,12 @@ pub struct App {
     /// The submit-review modal's state, `Some` only while
     /// [`Mode::SubmitForge`] is active (see [`super::forge_submit`]).
     pub(super) submit_forge: Option<super::forge_submit::SubmitForgeState>,
+    /// The post-submit result modal's outcome snapshot, `Some` only while
+    /// [`Mode::SubmitResult`] is active (see [`super::forge_submit_result`]).
+    /// Built once from the arriving report rather than per frame: the stores it
+    /// labels items from keep changing, and the account must stay the one the
+    /// run reported.
+    pub(super) submit_result: Option<super::forge_submit_result::SubmitResultState>,
     /// The background poller the forge submit sequence runs through, separate
     /// from the other pollers so its result drains independently (see
     /// [`App::poll_forge_submit`]).
@@ -893,6 +907,7 @@ impl App {
             threads_unavailable: false,
             thread_view: None,
             submit_forge: None,
+            submit_result: None,
             forge_submit_tasks: BackgroundTasks::new(),
             forge_submit_in_flight: None,
             forge_submit_generation: 0,

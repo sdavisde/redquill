@@ -55,10 +55,62 @@ pub struct SubmitBatch {
     pub summary_draft_created: bool,
 }
 
+impl SubmitBatch {
+    /// What a run over this batch sets out to send, in send order: the atomic
+    /// review's comments, then the file-comment follow-ups, then the replies.
+    /// Recorded into the report so a stopped run can name the items it never
+    /// reached.
+    pub fn attempt(&self) -> SubmitAttempt {
+        let mut annotation_ids = self.plan.comment_annotation_ids.clone();
+        annotation_ids.extend(
+            self.plan
+                .file_comment_follow_ups
+                .iter()
+                .map(|f| f.annotation_id),
+        );
+        SubmitAttempt {
+            annotation_ids,
+            reply_ids: self.replies.iter().map(|r| r.reply_id).collect(),
+            review_post: self.include_review_post && self.plan.payload.carries_content(),
+        }
+    }
+}
+
+/// Every item one run set out to send, recorded by the sequence itself before
+/// it starts writing. Joined against the published/draft lists it makes each
+/// item's fate knowable — an id here and in neither list was never attempted —
+/// which is what lets a stopped run be reported item by item instead of as a
+/// bare count. Order is send order.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SubmitAttempt {
+    /// Annotation store ids this run meant to publish.
+    pub annotation_ids: Vec<usize>,
+    /// Reply store ids this run meant to publish.
+    pub reply_ids: Vec<usize>,
+    /// Whether the run meant to deliver the review itself (the verdict and
+    /// summary): GitHub's reviews POST, GitLab's summary note plus approve.
+    /// `false` for a batch that carries neither — a reply-only resume — so
+    /// nothing is reported unsent that was never owed.
+    pub review_post: bool,
+}
+
+/// Where one attempted item ended up, resolved by
+/// [`SubmitReport::annotation_outcomes`]/[`SubmitReport::reply_outcomes`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemOutcome {
+    /// Visible on the forge.
+    Published,
+    /// Staged server-side as a private GitLab draft, awaiting a publish.
+    PendingDraft,
+    /// Never attempted — the run stopped before reaching it.
+    NotSent,
+}
+
 /// What one submit run accomplished: which annotations and replies are now
 /// published (to mark locally and persist), whether the reviews POST is now
-/// done (so a resume skips it), and the one-line diagnostic when the run
-/// stopped early. `failure: None` means every item in the batch published.
+/// done (so a resume skips it), what the run set out to send in the first
+/// place, and the one-line diagnostic when the run stopped early.
+/// `failure: None` means every item in the batch published.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SubmitReport {
     /// Store ids of annotations published this run — the line/range/hunk
@@ -86,6 +138,59 @@ pub struct SubmitReport {
     /// Whether the summary/verdict body now exists as an unpublished GitLab
     /// draft — the id-less counterpart to the two draft lists.
     pub summary_draft_created: bool,
+    /// What this run set out to send, recorded by the sequence itself — the
+    /// other half of the per-item outcome (see [`SubmitAttempt`]).
+    pub attempt: SubmitAttempt,
+}
+
+impl SubmitReport {
+    /// Each attempted annotation's fate, in send order. `Published` wins over
+    /// `PendingDraft` for the same id (a published item's draft is consumed),
+    /// and an attempted id in neither list was never sent.
+    pub fn annotation_outcomes(&self) -> Vec<(usize, ItemOutcome)> {
+        outcomes(
+            &self.attempt.annotation_ids,
+            &self.published_annotation_ids,
+            &self.draft_annotation_ids,
+        )
+    }
+
+    /// Each attempted reply's fate, in send order — the reply counterpart to
+    /// [`SubmitReport::annotation_outcomes`].
+    pub fn reply_outcomes(&self) -> Vec<(usize, ItemOutcome)> {
+        outcomes(
+            &self.attempt.reply_ids,
+            &self.published_reply_ids,
+            &self.draft_reply_ids,
+        )
+    }
+
+    /// Whether the review itself (verdict + summary) was owed and did not
+    /// land. A run that never owed one reports `false`.
+    pub fn review_post_not_sent(&self) -> bool {
+        self.attempt.review_post && !self.review_submitted
+    }
+}
+
+/// Resolves each attempted id against the published and drafted lists.
+fn outcomes(
+    attempted: &[usize],
+    published: &[usize],
+    drafted: &[usize],
+) -> Vec<(usize, ItemOutcome)> {
+    attempted
+        .iter()
+        .map(|id| {
+            let outcome = if published.contains(id) {
+                ItemOutcome::Published
+            } else if drafted.contains(id) {
+                ItemOutcome::PendingDraft
+            } else {
+                ItemOutcome::NotSent
+            };
+            (*id, outcome)
+        })
+        .collect()
 }
 
 /// The three positioned GitHub write operations the driver sequences, behind
@@ -120,6 +225,7 @@ pub trait ForgeSubmitExecutor {
 pub fn run_submit_sequence(batch: &SubmitBatch, exec: &dyn ForgeSubmitExecutor) -> SubmitReport {
     let mut report = SubmitReport {
         review_submitted: !batch.include_review_post,
+        attempt: batch.attempt(),
         ..SubmitReport::default()
     };
 
