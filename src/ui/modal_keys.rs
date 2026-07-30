@@ -1680,6 +1680,23 @@ pub(super) static REVIEW_LAUNCHER_KEYS: LazyLock<Vec<ModalBinding<LauncherAction
         ]
     });
 
+/// Which launcher tab a row's key only does something visible on; `None`
+/// means every tab. [`super::review_launcher_modal::hint_line`] reads this
+/// to keep `ToggleAllCommits`/`Cleanup` out of the footer strip on tabs
+/// where they'd be a truthful-but-pointless hint, without filtering by the
+/// hint's label text (the dispatch itself is unchanged — both keys still
+/// resolve everywhere, see `every_launcher_table_entry_drives_its_documented_action`).
+pub(super) fn launcher_action_tab_scope(
+    action: LauncherAction,
+) -> Option<super::review_launcher::LauncherTab> {
+    use super::review_launcher::LauncherTab;
+    match action {
+        LauncherAction::ToggleAllCommits => Some(LauncherTab::Commits),
+        LauncherAction::Cleanup => Some(LauncherTab::PullRequests),
+        _ => None,
+    }
+}
+
 // -- Fuzzy file finder --------------------------------------------------------
 
 /// What a key does in the fuzzy file finder overlay. Free-text input

@@ -14,7 +14,11 @@
 //! (`app.modal_keys.review_launcher`) rather than a hardcoded string, so a
 //! `[keys.review-launcher]` remap shows up here with no extra wiring —
 //! including the Commits tab's empty-state line, which names whatever key
-//! the table currently binds to `toggle-all-commits`.
+//! the table currently binds to `toggle-all-commits`. The hint line also
+//! drops a row whose action is scoped to a different tab (see
+//! [`hint_line`]/`super::modal_keys::launcher_action_tab_scope`), so the
+//! Commits-only `all commits` toggle and the Pull-Requests-only `clean up`
+//! cleanup only appear in the footer on their own tab.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
@@ -27,7 +31,7 @@ use crate::git::{CommitLogEntry, LocalBranch};
 
 use super::app::App;
 use super::git_panel::history_item;
-use super::modal_keys::{LauncherAction, ModalBinding};
+use super::modal_keys::{self, LauncherAction, ModalBinding};
 use super::review_launcher::LauncherTab;
 use super::stage_ops::PrFetchOutcome;
 use super::theme::Theme;
@@ -367,12 +371,23 @@ fn prs_rows(
 /// table order. Mirrors `super::footer`'s "only footer-tagged rows get a
 /// hint" rule, but reads `app.modal_keys.review_launcher` directly rather
 /// than going through that module's merge helper, since this renders inside
-/// the modal's own border rather than the shared footer strip.
-fn hint_line(table: &[ModalBinding<LauncherAction>]) -> String {
+/// the modal's own border rather than the shared footer strip. Rows scoped
+/// to a different tab by [`modal_keys::launcher_action_tab_scope`] (the
+/// Commits-only `all commits` toggle, the Pull-Requests-only `clean up`)
+/// are dropped from `active_tab`'s hint line — the keys still work
+/// everywhere (unchanged dispatch), this only keeps the hint from
+/// advertising a key that does nothing visible on the tab you're looking
+/// at.
+fn hint_line(table: &[ModalBinding<LauncherAction>], active_tab: LauncherTab) -> String {
     table
         .iter()
         .filter_map(|b| {
             let hint = b.footer?;
+            if !modal_keys::launcher_action_tab_scope(b.action)
+                .is_none_or(|scope| scope == active_tab)
+            {
+                return None;
+            }
             let key = b.keys.first()?.label();
             Some(format!("{key} {}", hint.label))
         })
@@ -403,7 +418,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .title(tab_bar(tab, &app.theme))
         .title_bottom(Line::from(format!(
             " {} ",
-            hint_line(&app.modal_keys.review_launcher)
+            hint_line(&app.modal_keys.review_launcher, tab)
         )));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -632,6 +647,75 @@ index 111..222 100644
         assert!(content.contains("switch tab"));
         assert!(content.contains("confirm"));
         assert!(content.contains("close"));
+    }
+
+    /// `ToggleAllCommits`'s `all commits` hint is Commits-only and
+    /// `Cleanup`'s `clean up` hint is Pull-Requests-only — neither belongs on
+    /// the Branches tab's footer, which advertised both before this was
+    /// tab-scoped.
+    #[test]
+    fn branches_tab_footer_hides_both_tab_specific_hints() {
+        let mut app = App::new(vec![sample_file()]);
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::Branches,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        let content = render_launcher(&app);
+        assert!(
+            !content.contains("all commits"),
+            "Branches tab must not advertise the Commits-only toggle:\n{content}"
+        );
+        assert!(
+            !content.contains("clean up"),
+            "Branches tab must not advertise the Pull-Requests-only cleanup:\n{content}"
+        );
+    }
+
+    /// The Commits tab's footer shows its own `all commits` hint but not the
+    /// Pull Requests tab's `clean up` hint.
+    #[test]
+    fn commits_tab_footer_shows_only_its_own_tab_specific_hint() {
+        let mut app = App::new(vec![sample_file()]);
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::Commits,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        let content = render_launcher(&app);
+        assert!(
+            content.contains("all commits"),
+            "Commits tab must advertise its own toggle:\n{content}"
+        );
+        assert!(
+            !content.contains("clean up"),
+            "Commits tab must not advertise the Pull-Requests-only cleanup:\n{content}"
+        );
+    }
+
+    /// The Pull Requests tab's footer shows its own `clean up` hint but not
+    /// the Commits tab's `all commits` hint.
+    #[test]
+    fn pull_requests_tab_footer_shows_only_its_own_tab_specific_hint() {
+        let mut app = App::new(vec![sample_file()]);
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.launcher_prs = Some(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: Vec::new(),
+        });
+        let content = render_launcher(&app);
+        assert!(
+            content.contains("clean up"),
+            "Pull Requests tab must advertise its own cleanup:\n{content}"
+        );
+        assert!(
+            !content.contains("all commits"),
+            "Pull Requests tab must not advertise the Commits-only toggle:\n{content}"
+        );
     }
 
     // -- `/` filter chrome (spec 12 FR-12) ------------------------------------

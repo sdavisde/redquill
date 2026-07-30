@@ -179,6 +179,10 @@ fn key_line(key: &str, description: &str, key_width: usize, theme: &Theme) -> Li
 ///   session, so the two families of rows never both show for the same key
 ///   at once — which is also what lets `d restore` and `D defer` share a
 ///   footer rank: they are mutually exclusive by construction.
+/// - `OpenThread`/`NextThread`/`PrevThread` (`T`/`gt`/`gT`) ride the same
+///   `review_session` flag: imported forge comment threads only exist inside
+///   a review session, so outside one the keys are dead weight and are
+///   hidden rather than listed-but-inert.
 /// - `gx` doesn't ride `review_session` at all: it's gated on `web_target`,
 ///   `Some` in any view with a forge counterpart (a PR/MR review, a branch
 ///   review, a commit view — see [`super::app::App::web_target`]) and `None`
@@ -209,6 +213,9 @@ pub(super) fn binding_hidden(
                     | Action::AcceptFile
                     | Action::ToggleDefer
                     | Action::SubmitForgeReview
+                    | Action::OpenThread
+                    | Action::NextThread
+                    | Action::PrevThread
             ))
         || (web_target.is_none() && matches!(action, Action::OpenInBrowser))
 }
@@ -1042,6 +1049,24 @@ mod tests {
             Action::AcceptFile,
             Action::ToggleDefer,
         ] {
+            assert!(
+                binding_hidden(action, true, true, false, None),
+                "{action:?} must be hidden outside a review session"
+            );
+            assert!(
+                !binding_hidden(action, true, true, true, None),
+                "{action:?} must be shown during a review session"
+            );
+        }
+    }
+
+    /// `T`/`gt`/`gT` (open/next/prev comment thread) only make sense once a
+    /// review session has imported forge threads to jump between — mirrors
+    /// `review_actions_hidden_only_outside_a_review_session`'s precedent for
+    /// `U`'s equivalent gating.
+    #[test]
+    fn thread_actions_hidden_only_outside_a_review_session() {
+        for action in [Action::OpenThread, Action::NextThread, Action::PrevThread] {
             assert!(
                 binding_hidden(action, true, true, false, None),
                 "{action:?} must be hidden outside a review session"
