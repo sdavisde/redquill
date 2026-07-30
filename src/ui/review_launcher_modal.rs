@@ -35,7 +35,7 @@ use super::modal_keys::{self, LauncherAction, ModalBinding};
 use super::review_launcher::LauncherTab;
 use super::stage_ops::PrFetchOutcome;
 use super::theme::Theme;
-use super::time_format::now_unix;
+use super::time_format::{now_unix, parse_rfc3339_to_unix, relative_time};
 
 /// Centers a `width_pct`% x `height_pct`% rect inside `area` — the same
 /// two-axis `Flex::Center` sizing [`super::switcher_modal::centered`] uses.
@@ -189,12 +189,23 @@ fn cli_install_pointer(cli: &str) -> &'static str {
     }
 }
 
+/// The PR row's "updated" text: a relative label (`"2d ago"`, matching the
+/// Commits tab and the forge thread overlay) when `updated_at` parses as
+/// RFC 3339, or the raw provider string verbatim when it doesn't — a
+/// malformed/unexpected timestamp shape degrades to the same value already
+/// on screen today rather than blanking the field or panicking.
+fn pr_updated_display(now: i64, updated_at: &str) -> String {
+    parse_rfc3339_to_unix(updated_at)
+        .map(|ts| relative_time(now, ts))
+        .unwrap_or_else(|| updated_at.to_string())
+}
+
 /// One PR row: `#<number> <title>` as the primary line (matching
 /// [`branch_rows`]' plain-name weight), a right-aligned "draft" marker when
 /// applicable, and a secondary meta line (author, source branch, updated
 /// time) — draft and updated-time both visually secondary to number+title,
 /// mirroring [`history_item`]'s two-tier weight.
-fn pr_row(pr: &PullRequest, theme: &Theme, content_width: usize) -> ListItem<'static> {
+fn pr_row(pr: &PullRequest, now: i64, theme: &Theme, content_width: usize) -> ListItem<'static> {
     let mut primary = Line::from(vec![
         Span::styled(
             format!("#{} ", pr.number),
@@ -215,7 +226,9 @@ fn pr_row(pr: &PullRequest, theme: &Theme, content_width: usize) -> ListItem<'st
     }
     let meta = format!(
         "\u{2502} {} \u{b7} {} \u{b7} {}",
-        pr.author, pr.head_ref, pr.updated_at
+        pr.author,
+        pr.head_ref,
+        pr_updated_display(now, &pr.updated_at)
     );
     ListItem::new(vec![
         primary,
@@ -343,6 +356,7 @@ fn prs_rows(
             Style::default().fg(theme.footer_text),
         )))];
     };
+    let now = now_unix();
     let mut items = match outcome {
         PrFetchOutcome::Loaded { repo_label, prs } if prs.is_empty() => {
             vec![ListItem::new(prs_empty_state_line(repo_label, theme))]
@@ -350,7 +364,7 @@ fn prs_rows(
         PrFetchOutcome::Loaded { prs, .. } => order
             .iter()
             .filter_map(|&i| prs.get(i))
-            .map(|pr| pr_row(pr, theme, content_width))
+            .map(|pr| pr_row(pr, now, theme, content_width))
             .collect(),
         degraded => return vec![ListItem::new(prs_degraded_body_lines(degraded, theme))],
     };
@@ -849,7 +863,33 @@ index 111..222 100644
         assert!(content.contains("octocat"));
         assert!(content.contains("widgets-branch"));
         assert!(content.contains("draft"));
-        assert!(content.contains("2026-07-15T12:00:00Z"));
+        // Relative, not the raw ISO timestamp (see
+        // `pr_updated_display_relatives_a_valid_timestamp_and_falls_back_on_garbage`
+        // below for the exact bucketing) — a fixed past date always renders
+        // some "... ago" label, so this stays true no matter when the suite
+        // runs.
+        assert!(content.contains("ago"));
+        assert!(!content.contains("2026-07-15T12:00:00Z"));
+    }
+
+    #[test]
+    fn pr_updated_display_relatives_a_valid_timestamp_and_falls_back_on_garbage() {
+        let now = 1_700_000_000; // fixed instant, independent of wall clock
+        let cases: &[(&str, &str)] = &[
+            // Valid, recent: relative, not raw.
+            ("2023-11-14T22:13:20Z", "just now"),
+            // Valid, long past: relative, not raw — this is the case that
+            // would silently regress to printing the raw ISO string if
+            // someone dropped the parse step.
+            ("2022-11-14T22:13:20Z", "1y ago"),
+            // Unparseable: falls back to the raw string verbatim rather than
+            // panicking or blanking the field.
+            ("not-a-timestamp", "not-a-timestamp"),
+            ("", ""),
+        ];
+        for &(input, expected) in cases {
+            assert_eq!(pr_updated_display(now, input), expected, "input {input:?}");
+        }
     }
 
     #[test]

@@ -63,20 +63,6 @@ fn positioned_thread(id: u64, path: &str, side: Side, line: u32, replies: usize)
     }
 }
 
-// -- RFC3339 parsing ---------------------------------------------------------
-
-#[test]
-fn parse_rfc3339_reads_a_utc_timestamp_and_rejects_a_non_timestamp() {
-    // Cross-checked against the module's own inverse.
-    let base = days_from_civil(2026, 7, 1) * 86_400;
-    assert_eq!(parse_rfc3339_to_unix("2026-07-01T00:00:00Z").unwrap(), base);
-    assert_eq!(
-        parse_rfc3339_to_unix("2026-07-01T01:02:03Z").unwrap(),
-        base + 3_600 + 120 + 3
-    );
-    assert_eq!(parse_rfc3339_to_unix("not a date"), None);
-}
-
 // -- gutter marker decoration ------------------------------------------------
 
 #[test]
