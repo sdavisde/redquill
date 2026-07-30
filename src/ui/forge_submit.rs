@@ -25,7 +25,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::annotate::{Annotation, Classification, Target};
-use crate::forge::{Capabilities, SubmitBatch, SubmitReplyItem, SubmitReport, Verdict};
+use crate::forge::{
+    Capabilities, SubmitBatch, SubmitReplyItem, SubmitReport, ThreadAnchor, ThreadOverlayStore,
+    Verdict,
+};
 use crate::review::store::ForgeProviderKind;
 
 use super::app::{App, Mode};
@@ -286,12 +289,33 @@ pub(super) struct FileGroup {
     pub(super) items: Vec<AnnotationPreview>,
 }
 
-/// One drafted reply's preview row: which thread it answers and its body
-/// summary.
+/// Who and where a reply's thread is, resolved from the fetched thread
+/// overlay — `None` when the thread is no longer present there (e.g. a
+/// failed refresh dropped it), in which case the preview falls back to a
+/// bare thread id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ReplyTarget {
+    pub(super) author: String,
+    pub(super) anchor: String,
+}
+
+/// One drafted reply's preview row: which thread it answers, its resolved
+/// target (when still known), and its body summary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ReplyPreview {
     pub(super) thread_id: u64,
+    pub(super) target: Option<ReplyTarget>,
     pub(super) summary: String,
+}
+
+/// A thread's anchor as a display label — same conventions as
+/// [`super::forge_threads`]'s thread-overlay render: `path:line` for a still-
+/// live position, `path (file-level)` once the position is outdated.
+fn thread_anchor_label(anchor: &ThreadAnchor) -> String {
+    match anchor {
+        ThreadAnchor::Position { path, line, .. } => format!("{path}:{line}"),
+        ThreadAnchor::File { path } => format!("{path} (file-level)"),
+    }
 }
 
 /// The whole batch preview, grouped by file with replies listed separately
@@ -328,10 +352,13 @@ fn first_line(body: &str) -> String {
 
 /// Builds the grouped preview from the unpublished annotations and replies —
 /// annotations grouped by file in first-seen order, replies in insertion
-/// order. Pure; the caller passes the already-filtered unpublished sets.
+/// order. Pure; the caller passes the already-filtered unpublished sets and a
+/// thread overlay reference to resolve each reply's target (a read-only
+/// lookup, so the function stays pure and unit-testable without a modal).
 pub(super) fn build_preview<'a>(
     annotations: impl Iterator<Item = &'a Annotation>,
     replies: impl Iterator<Item = (u64, &'a str)>,
+    threads: &ThreadOverlayStore,
 ) -> SubmitPreview {
     let mut groups: Vec<FileGroup> = Vec::new();
     for annotation in annotations {
@@ -351,9 +378,16 @@ pub(super) fn build_preview<'a>(
         }
     }
     let replies = replies
-        .map(|(thread_id, body)| ReplyPreview {
-            thread_id,
-            summary: first_line(body),
+        .map(|(thread_id, body)| {
+            let target = threads.find(thread_id).map(|thread| ReplyTarget {
+                author: thread.root.author.clone(),
+                anchor: thread_anchor_label(&thread.anchor),
+            });
+            ReplyPreview {
+                thread_id,
+                target,
+                summary: first_line(body),
+            }
         })
         .collect();
     SubmitPreview { groups, replies }
@@ -809,8 +843,17 @@ fn build_lines(
                 .add_modifier(Modifier::BOLD),
         )));
         for reply in &preview.replies {
+            let label = match &reply.target {
+                Some(target) => format!(
+                    "to {} @ {} \u{2014} {}",
+                    target.author, target.anchor, reply.summary
+                ),
+                // The thread dropped out of the overlay (e.g. a failed
+                // refresh) — fall back to the id, the only thing still known.
+                None => format!("thread {}: {}", reply.thread_id, reply.summary),
+            };
             lines.push(Line::from(Span::styled(
-                format!("  \u{21b3} thread {}: {}", reply.thread_id, reply.summary),
+                format!("  \u{21b3} {label}"),
                 Style::default().fg(theme.annotation_text),
             )));
         }
@@ -869,6 +912,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         app.replies
             .unpublished()
             .map(|r| (r.thread_id, r.body.as_str())),
+        &app.thread_overlay,
     );
 
     let block = Block::default()
