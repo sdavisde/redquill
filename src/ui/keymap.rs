@@ -1049,8 +1049,7 @@ impl Keymap {
                     KeySeq::one(Tab, none),
                     TogglePanelTab,
                     "Switch Changes / History tab",
-                )
-                .footer(11, "tab"),
+                ),
                 // `[`/`]` are hunk motions in diff scope only, so the panel
                 // can lend them to tab switching without a collision.
                 p(

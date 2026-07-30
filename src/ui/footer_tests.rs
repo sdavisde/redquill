@@ -214,7 +214,7 @@ fn panel_mode_hints_match_the_curated_list_in_order() {
     assert_eq!(
         keys(&entries),
         vec![
-            "Enter", "Space", "S", "d", "f", "p", "P", "c", "`/Esc", "Tab", "s", "/", "?"
+            "Enter", "Space", "S", "d", "f", "p", "P", "c", "`/Esc", "s", "/", "?"
         ]
     );
     assert_eq!(
@@ -229,7 +229,6 @@ fn panel_mode_hints_match_the_curated_list_in_order() {
             "push",
             "commit",
             "close",
-            "tab",
             "staging panel",
             "search",
             "help"
@@ -249,7 +248,7 @@ fn panel_mode_hints_hide_stage_rows_on_a_read_only_target() {
     assert!(!labels(&entries).contains(&"stage file"));
     assert_eq!(
         keys(&entries),
-        vec!["Enter", "f", "p", "P", "c", "`/Esc", "Tab", "s", "/", "?"]
+        vec!["Enter", "f", "p", "P", "c", "`/Esc", "s", "/", "?"]
     );
 }
 
@@ -287,7 +286,7 @@ fn panel_mode_hints_hide_file_actions_on_the_history_tab() {
     let entries = panel_hints(&km, false, true, false, None, false);
     assert_eq!(
         keys(&entries),
-        vec!["Enter", "f", "p", "P", "c", "`/Esc", "Tab", "s", "/", "?"]
+        vec!["Enter", "f", "p", "P", "c", "`/Esc", "s", "/", "?"]
     );
     let review_entries = panel_hints(&km, false, false, true, None, false);
     let review_labels = labels(&review_entries);
@@ -337,22 +336,10 @@ fn list_mode_hints_have_no_help_entry() {
 fn switcher_mode_hints() {
     let entries = modal_hints(&SWITCHER_KEYS);
     // No "move" entry: `j`/`k` are standard vim motions, listed in `?` help
-    // but pruned from the strip. ToggleTab's label lists every bound key
-    // (computed from `ModalBinding::key_label`), including
-    // `Shift-Tab`/`Left`/`Right`/`[`/`]`.
-    assert_eq!(
-        labels(&entries),
-        vec!["switch tab", "switch", "filter", "close"]
-    );
-    assert_eq!(
-        keys(&entries),
-        vec![
-            "Tab / Shift-Tab / h / l / Left / Right / [ / ]",
-            "Enter",
-            "/",
-            "Esc"
-        ]
-    );
+    // but pruned from the strip. ToggleTab isn't promoted to the strip
+    // either — tab switching stays `?`-only.
+    assert_eq!(labels(&entries), vec!["switch", "filter", "close"]);
+    assert_eq!(keys(&entries), vec!["Enter", "/", "Esc"]);
 }
 
 fn flags() -> FooterFlags {
@@ -377,18 +364,14 @@ fn review_launcher_strip_shows_only_the_active_tabs_scoped_hints() {
     let modal_keys = ModalKeymaps::default();
     let km = Keymap::default_map();
     for (tab, expected) in [
-        (
-            LauncherTab::Branches,
-            vec!["switch tab", "confirm", "filter", "close"],
-        ),
+        (LauncherTab::Branches, vec!["confirm", "filter", "close"]),
         (
             LauncherTab::Commits,
-            vec!["switch tab", "confirm", "filter", "close", "all commits"],
+            vec!["confirm", "filter", "close", "all commits"],
         ),
         (
             LauncherTab::PullRequests,
             vec![
-                "switch tab",
                 "confirm",
                 "filter",
                 "close",
@@ -524,10 +507,7 @@ fn help_open_takes_precedence_over_the_mode_strip() {
         &km,
         &ModalKeymaps::default(),
     );
-    assert_eq!(
-        labels(&entries),
-        vec!["filter", "close", "next tab", "prev tab"]
-    );
+    assert_eq!(labels(&entries), vec!["filter", "close"]);
 }
 
 // -- Pending two-key prefix ------------------------------------------------

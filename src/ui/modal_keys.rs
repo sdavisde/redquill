@@ -859,10 +859,7 @@ pub(super) static SWITCHER_KEYS: LazyLock<Vec<ModalBinding<SwitcherAction>>> =
                     ModalKey::plain(KeyCode::Char(']')),
                 ],
                 action: SwitcherAction::ToggleTab,
-                footer: Some(FooterHint {
-                    rank: 1,
-                    label: "switch tab",
-                }),
+                footer: None,
             },
             ModalBinding {
                 description: "Move selection down",
@@ -2014,10 +2011,7 @@ pub(super) static REVIEW_LAUNCHER_KEYS: LazyLock<Vec<ModalBinding<LauncherAction
                     ModalKey::plain(KeyCode::Char(']')),
                 ],
                 action: LauncherAction::NextTab,
-                footer: Some(FooterHint {
-                    rank: 1,
-                    label: "switch tab",
-                }),
+                footer: None,
             },
             ModalBinding {
                 description: "Previous tab (Branches / Commits / Pull Requests)",
@@ -2028,8 +2022,8 @@ pub(super) static REVIEW_LAUNCHER_KEYS: LazyLock<Vec<ModalBinding<LauncherAction
                     ModalKey::plain(KeyCode::Char('[')),
                 ],
                 action: LauncherAction::PrevTab,
-                // Not tagged — NextTab's "switch tab" hint covers the
-                // gesture; the footer names one direction, `?` lists both.
+                // Tab switching isn't promoted to the footer strip; `?`
+                // lists both directions.
                 footer: None,
             },
             ModalBinding {
@@ -2709,10 +2703,7 @@ pub(super) static HELP_KEYS: LazyLock<Vec<ModalBinding<HelpAction>>> = LazyLock:
                 ModalKey::plain(KeyCode::Char(']')),
             ],
             action: HelpAction::NextTab,
-            footer: Some(FooterHint {
-                rank: 4,
-                label: "next tab",
-            }),
+            footer: None,
         },
         ModalBinding {
             description: "Previous tab (This context / All keys)",
@@ -2722,10 +2713,7 @@ pub(super) static HELP_KEYS: LazyLock<Vec<ModalBinding<HelpAction>>> = LazyLock:
                 ModalKey::plain(KeyCode::Char('[')),
             ],
             action: HelpAction::PrevTab,
-            footer: Some(FooterHint {
-                rank: 5,
-                label: "prev tab",
-            }),
+            footer: None,
         },
     ]
 });
