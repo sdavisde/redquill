@@ -108,6 +108,10 @@ pub(super) struct PrCheckoutContext {
     /// than from the launcher — governs whether the launcher is closed and
     /// whether a stale fallback re-roots or just relabels the live session.
     pub(super) from_session: bool,
+    /// Whether `provider` above is a GitHub fallback guess (no cached
+    /// resolution) rather than an actually-resolved provider — lets a fetch
+    /// failure name the assumption instead of a bare diagnostic.
+    pub(super) provider_assumed: bool,
 }
 
 /// A background PR checkout awaiting completion: its [`TaskId`] (matched on
@@ -590,20 +594,28 @@ impl App {
         // already resolved for this host (peeked, never re-resolved), so a
         // GitLab MR fetches its `refs/merge-requests/<iid>/head` and a GitHub
         // PR its `refs/pull/<n>/head`. A missing resolution (the list never
-        // ran) falls back to GitHub — the checkout then surfaces a fetch
-        // diagnostic rather than a wrong-provider guess taking hold.
+        // ran) falls back to GitHub — surfaced up front rather than left for
+        // a later fetch failure to explain.
         let host = self
             .stage_ops
             .as_deref()
             .and_then(|ops| ops.origin_hostname())
             .unwrap_or_default();
-        let provider = self
+        let resolved_provider = self
             .stage_ops
             .as_deref()
             .and_then(|ops| ops.resolved_pr_provider())
-            .map(store_provider)
-            .unwrap_or(ForgeProviderKind::GitHub);
-        self.set_status_message(format!("checking out #{number} \u{2026}"));
+            .map(store_provider);
+        let provider = resolved_provider.unwrap_or(ForgeProviderKind::GitHub);
+        if resolved_provider.is_none() {
+            self.pr_checkout_provider_assumed = true;
+            self.set_status_message(
+                "provider unresolved \u{2014} assuming GitHub (gh); if this is a GitLab remote, \
+                 check the origin URL or run glab auth login",
+            );
+        } else {
+            self.set_status_message(format!("checking out #{number} \u{2026}"));
+        }
         self.spawn_pr_checkout(number, base_ref, host, title, provider, false);
     }
 
@@ -696,6 +708,10 @@ impl App {
         };
         let (request, state_path, fetcher) = prepared;
 
+        // Consumed (and reset) here rather than read directly by the caller,
+        // so a stray leftover `true` can never attach to some later,
+        // unrelated checkout.
+        let provider_assumed = std::mem::take(&mut self.pr_checkout_provider_assumed);
         let ctx = PrCheckoutContext {
             number,
             provider,
@@ -706,6 +722,7 @@ impl App {
             state_path,
             origin_root,
             from_session,
+            provider_assumed,
         };
 
         match fetcher {
@@ -777,6 +794,9 @@ impl App {
                 message,
                 stale_worktree,
             } => {
+                // Read before any branch below can move `ctx` into
+                // `enter_pr_review`.
+                let provider_assumed = ctx.provider_assumed;
                 match stale_worktree {
                     Some(_) if ctx.from_session => {
                         // Already reviewing this worktree; just relabel it
@@ -801,7 +821,13 @@ impl App {
                         }
                     }
                     None => {
-                        self.set_status_message(format!("PR fetch failed: {message}"));
+                        if provider_assumed {
+                            self.set_status_message(format!(
+                                "PR fetch failed (assumed GitHub \u{2014} check origin URL if this is GitLab): {message}"
+                            ));
+                        } else {
+                            self.set_status_message(format!("PR fetch failed: {message}"));
+                        }
                         if !ctx.from_session {
                             self.close_review_launcher();
                         }
@@ -2231,8 +2257,12 @@ index 111..222 100644
     /// A minimal `StageOps` fake serving a fixed [`PrFetchOutcome`]
     /// synchronously (no `async_pr_list_fetcher`, so `request_launcher_prs`
     /// takes the synchronous fallback path) — mirrors `SyncCommitRangeOps`.
+    /// `resolved_provider` stands in for whatever a prior background list
+    /// resolution cached (`None`, the default, mirrors a resolution that
+    /// never ran or landed no single provider).
     struct SyncPrListOps {
         outcome: PrFetchOutcome,
+        resolved_provider: Option<ProviderKind>,
     }
 
     impl super::super::stage_ops::StageOps for SyncPrListOps {
@@ -2266,6 +2296,9 @@ index 111..222 100644
         fn list_open_prs(&self) -> PrFetchOutcome {
             self.outcome.clone()
         }
+        fn resolved_pr_provider(&self) -> Option<ProviderKind> {
+            self.resolved_provider
+        }
     }
 
     fn pr(number: u64, title: &str) -> PullRequest {
@@ -2286,7 +2319,10 @@ index 111..222 100644
 
     fn app_with_pr_outcome(outcome: PrFetchOutcome) -> App {
         let mut app = app();
-        app.stage_ops = Some(Box::new(SyncPrListOps { outcome }));
+        app.stage_ops = Some(Box::new(SyncPrListOps {
+            outcome,
+            resolved_provider: None,
+        }));
         app
     }
 
@@ -2318,6 +2354,7 @@ index 111..222 100644
                 repo_label: "org/repo".to_string(),
                 prs: vec![pr(1, "one")],
             },
+            resolved_provider: None,
         }));
         app.ensure_launcher_prs_fresh();
         assert_eq!(app.launcher_prs_rows().len(), 1, "the retry must have run");
@@ -2341,6 +2378,7 @@ index 111..222 100644
                 repo_label: "org/repo".to_string(),
                 prs: vec![pr(1, "one"), pr(2, "two")],
             },
+            resolved_provider: None,
         }));
         app.ensure_launcher_prs_fresh();
         assert_eq!(app.launcher_prs_rows().len(), 2);
@@ -2366,6 +2404,7 @@ index 111..222 100644
                 repo_label: "org/repo".to_string(),
                 prs: vec![pr(2, "two"), pr(1, "one")],
             },
+            resolved_provider: None,
         }));
         app.open_review_launcher();
 
@@ -2414,6 +2453,7 @@ index 111..222 100644
                 repo_label: "org/repo".to_string(),
                 prs: vec![pr(1, "one"), pr(2, "two"), pr(3, "three")],
             },
+            resolved_provider: None,
         }));
         app.review_launcher_refresh_prs();
 
@@ -2449,6 +2489,7 @@ index 111..222 100644
                 repo_label: "org/repo".to_string(),
                 prs: vec![pr(1, "one"), pr(2, "two")],
             },
+            resolved_provider: None,
         }));
 
         app.review_launcher_refresh_prs();
@@ -2571,6 +2612,7 @@ index 111..222 100644
                 repo_label: "org/repo".to_string(),
                 prs: vec![pr(30, "gamma"), pr(20, "beta"), pr(10, "alpha")],
             },
+            resolved_provider: None,
         }));
         app.review_launcher_refresh_prs();
 
@@ -2603,6 +2645,7 @@ index 111..222 100644
                 repo_label: "org/repo".to_string(),
                 prs: vec![pr(10, "alpha")],
             },
+            resolved_provider: None,
         }));
         app.review_launcher_refresh_prs();
 
@@ -2637,6 +2680,7 @@ index 111..222 100644
                 repo_label: "org/repo".to_string(),
                 prs: vec![pr(30, "gamma"), pr(10, "alpha"), pr(20, "beta")],
             },
+            resolved_provider: None,
         }));
         app.review_launcher_refresh_prs();
 
@@ -2727,6 +2771,7 @@ index 111..222 100644
                 repo_label: "org/repo".to_string(),
                 prs: vec![pr(2, "two")],
             },
+            resolved_provider: None,
         }));
 
         app.ensure_launcher_prs_fresh();
@@ -2775,6 +2820,184 @@ index 111..222 100644
             "a backend that can't resolve the worktree path must degrade to a \
              review-failed status, got {:?}",
             app.status_message
+        );
+    }
+
+    // -- Pull Requests tab: unresolved-provider fallback hint --------------
+
+    /// A `StageOps` fake that carries a PR checkout far enough to spawn its
+    /// background task (an in-flight `TaskId`) without touching any real
+    /// filesystem or process — enough to observe the status `Enter` sets at
+    /// dispatch time, before any background result is drained.
+    /// `resolved_provider` stands in for whatever a prior background list
+    /// resolution cached (`None` mirrors a resolution that never ran or
+    /// never landed a single provider).
+    struct AsyncCheckoutOps {
+        resolved_provider: Option<ProviderKind>,
+    }
+
+    impl super::super::stage_ops::StageOps for AsyncCheckoutOps {
+        fn diff(
+            &self,
+            _target: &crate::git::DiffTarget,
+        ) -> Result<Vec<crate::git::RawFilePatch>, crate::git::GitError> {
+            Ok(Vec::new())
+        }
+        fn status(&self) -> Result<Vec<crate::git::FileStatus>, crate::git::GitError> {
+            Ok(Vec::new())
+        }
+        fn stage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn unstage_file(&self, _path: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn apply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn unapply_cached(&self, _patch: &str) -> Result<(), crate::git::GitError> {
+            Ok(())
+        }
+        fn read_worktree_file(&self, _path: &str) -> Option<Vec<u8>> {
+            None
+        }
+        fn show_file(&self, _spec: &str) -> Option<String> {
+            None
+        }
+        fn git_common_dir(&self) -> Result<std::path::PathBuf, crate::git::GitError> {
+            // A synthetic, never-created path: `review_worktree_path` only
+            // joins onto it, and the worktree-exists check short-circuits on
+            // `Path::exists` before ever touching disk.
+            Ok(std::path::PathBuf::from(
+                "/fake-common-dir-provider-hint-test",
+            ))
+        }
+        fn async_pr_checkout_fetcher(
+            &self,
+        ) -> Option<super::super::stage_ops::AsyncPrCheckoutFetcher> {
+            // Spawned onto a background thread. Some tests assert the status
+            // set synchronously at dispatch time and never drain this at
+            // all; others drain it to check the eventual failure diagnostic,
+            // so the outcome is a deterministic, clearly-labeled failure
+            // rather than a placeholder.
+            Some(Box::new(|_request| PrCheckoutOutcome::Failed {
+                message: "boom".to_string(),
+                stale_worktree: None,
+            }))
+        }
+        fn resolved_pr_provider(&self) -> Option<ProviderKind> {
+            self.resolved_provider
+        }
+    }
+
+    /// An app with one PR listed on the Pull Requests tab, cursor on it,
+    /// backed by [`AsyncCheckoutOps`] so `Enter` reaches the background
+    /// dispatch without a real repository.
+    fn app_ready_to_checkout(resolved_provider: Option<ProviderKind>) -> App {
+        let mut app = app();
+        app.stage_ops = Some(Box::new(AsyncCheckoutOps { resolved_provider }));
+        app.launcher_prs = Some(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![pr(7, "add widgets")],
+        });
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app
+    }
+
+    /// ENG-171: no cached provider resolution (the PR list never ran, or a
+    /// fast `Enter` beat it) still lets the checkout proceed — as GitHub —
+    /// but must name that assumption up front rather than leaving a later
+    /// fetch failure as the only clue. This is the regression guard: if the
+    /// fallback goes silent again, this assertion is the one that catches it.
+    #[test]
+    fn confirm_on_prs_tab_announces_the_github_fallback_when_unresolved() {
+        let mut app = app_ready_to_checkout(None);
+
+        app.review_launcher_confirm();
+
+        assert!(
+            app.pr_checkout_in_flight.is_some(),
+            "the checkout must still proceed despite the unresolved provider"
+        );
+        assert!(
+            app.status_message
+                .as_deref()
+                .is_some_and(|m| m.contains("provider unresolved") && m.contains("GitHub")),
+            "must name the GitHub assumption, got {:?}",
+            app.status_message
+        );
+    }
+
+    /// The counterpart: a cached resolution (a background list already ran)
+    /// means no assumption is being made, so no fallback hint fires.
+    #[test]
+    fn confirm_on_prs_tab_stays_quiet_when_the_provider_is_already_resolved() {
+        let mut app = app_ready_to_checkout(Some(ProviderKind::GitHub));
+
+        app.review_launcher_confirm();
+
+        assert!(app.pr_checkout_in_flight.is_some());
+        assert!(
+            app.status_message
+                .as_deref()
+                .is_some_and(|m| !m.contains("provider unresolved")),
+            "a resolved provider must not surface the fallback hint, got {:?}",
+            app.status_message
+        );
+    }
+
+    /// ENG-171 follow-on: when the fallback engaged, the eventual fetch
+    /// failure also names the assumed provider — turning a bare "PR fetch
+    /// failed" into a diagnostic that explains why GitHub was tried at all.
+    #[test]
+    fn a_fetch_failure_after_the_fallback_names_the_assumed_provider() {
+        let mut app = app_ready_to_checkout(None);
+        app.review_launcher_confirm();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.pr_checkout_in_flight.is_some() && std::time::Instant::now() < deadline {
+            app.poll_pr_checkout();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        assert!(
+            app.pr_checkout_in_flight.is_none(),
+            "the fetch must have completed"
+        );
+        assert!(
+            app.status_message
+                .as_deref()
+                .is_some_and(|m| m.contains("assumed GitHub") && m.contains("boom")),
+            "the fetch-failure diagnostic must name the assumed provider, got {:?}",
+            app.status_message
+        );
+    }
+
+    /// The counterpart: a resolved provider means no assumption was made, so
+    /// the same fetch failure stays a bare diagnostic.
+    #[test]
+    fn a_fetch_failure_with_a_resolved_provider_stays_a_bare_diagnostic() {
+        let mut app = app_ready_to_checkout(Some(ProviderKind::GitHub));
+        app.review_launcher_confirm();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.pr_checkout_in_flight.is_some() && std::time::Instant::now() < deadline {
+            app.poll_pr_checkout();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        assert!(
+            app.pr_checkout_in_flight.is_none(),
+            "the fetch must have completed"
+        );
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("PR fetch failed: boom"),
+            "no assumption was made, so the diagnostic must stay bare"
         );
     }
 
