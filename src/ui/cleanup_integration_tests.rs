@@ -153,7 +153,7 @@ fn create_pr_checkout(reviewer: &Path, number: u64) {
         number,
         "main".to_string(),
         "github.com".to_string(),
-        format!("PR {number}"),
+        Some(format!("PR {number}")),
         ForgeProviderKind::GitHub,
         false,
     );

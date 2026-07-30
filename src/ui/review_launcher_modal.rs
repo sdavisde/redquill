@@ -14,7 +14,11 @@
 //! (`app.modal_keys.review_launcher`) rather than a hardcoded string, so a
 //! `[keys.review-launcher]` remap shows up here with no extra wiring —
 //! including the Commits tab's empty-state line, which names whatever key
-//! the table currently binds to `toggle-all-commits`.
+//! the table currently binds to `toggle-all-commits`. The hint line also
+//! drops a row whose action is scoped to a different tab (see
+//! [`hint_line`]/`super::modal_keys::launcher_action_tab_scope`), so the
+//! Commits-only `all commits` toggle and the Pull-Requests-only `clean up`
+//! cleanup and `refresh` only appear in the footer on their own tab.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
@@ -27,11 +31,11 @@ use crate::git::{CommitLogEntry, LocalBranch};
 
 use super::app::App;
 use super::git_panel::history_item;
-use super::modal_keys::{LauncherAction, ModalBinding};
+use super::modal_keys::{self, LauncherAction, ModalBinding};
 use super::review_launcher::LauncherTab;
 use super::stage_ops::PrFetchOutcome;
 use super::theme::Theme;
-use super::time_format::now_unix;
+use super::time_format::{now_unix, parse_rfc3339_to_unix, relative_time};
 
 /// Centers a `width_pct`% x `height_pct`% rect inside `area` — the same
 /// two-axis `Flex::Center` sizing [`super::switcher_modal::centered`] uses.
@@ -72,15 +76,14 @@ fn tab_bar(active: LauncherTab, theme: &Theme) -> Line<'static> {
 /// What `Enter` does on `tab` — shown as its own line so the tabs' differing
 /// weight (a lightweight read-only peek vs. starting a full worktree
 /// session) is unambiguous before the user presses it. The Pull Requests
-/// tab names its current, honest behavior — `Enter` is a stub until PR
-/// checkout lands (see [`super::app::App::confirm_launcher_pr`]) — rather
-/// than the eventual "start PR review" wording, so the hint never promises
-/// more than pressing the key actually does.
+/// tab names its real behavior: `Enter` checks the PR out into a managed
+/// worktree and starts a review session, the same weight as the Branches
+/// tab (see [`super::app::App::confirm_launcher_pr`]).
 fn enter_outcome_hint(tab: LauncherTab) -> &'static str {
     match tab {
         LauncherTab::Branches => "Enter: start branch review",
         LauncherTab::Commits => "Enter: review commit (read-only)",
-        LauncherTab::PullRequests => "Enter: PR review not yet available",
+        LauncherTab::PullRequests => "Enter: start PR review",
     }
 }
 
@@ -186,12 +189,23 @@ fn cli_install_pointer(cli: &str) -> &'static str {
     }
 }
 
+/// The PR row's "updated" text: a relative label (`"2d ago"`, matching the
+/// Commits tab and the forge thread overlay) when `updated_at` parses as
+/// RFC 3339, or the raw provider string verbatim when it doesn't — a
+/// malformed/unexpected timestamp shape degrades to the same value already
+/// on screen today rather than blanking the field or panicking.
+fn pr_updated_display(now: i64, updated_at: &str) -> String {
+    parse_rfc3339_to_unix(updated_at)
+        .map(|ts| relative_time(now, ts))
+        .unwrap_or_else(|| updated_at.to_string())
+}
+
 /// One PR row: `#<number> <title>` as the primary line (matching
 /// [`branch_rows`]' plain-name weight), a right-aligned "draft" marker when
 /// applicable, and a secondary meta line (author, source branch, updated
 /// time) — draft and updated-time both visually secondary to number+title,
 /// mirroring [`history_item`]'s two-tier weight.
-fn pr_row(pr: &PullRequest, theme: &Theme, content_width: usize) -> ListItem<'static> {
+fn pr_row(pr: &PullRequest, now: i64, theme: &Theme, content_width: usize) -> ListItem<'static> {
     let mut primary = Line::from(vec![
         Span::styled(
             format!("#{} ", pr.number),
@@ -212,7 +226,9 @@ fn pr_row(pr: &PullRequest, theme: &Theme, content_width: usize) -> ListItem<'st
     }
     let meta = format!(
         "\u{2502} {} \u{b7} {} \u{b7} {}",
-        pr.author, pr.head_ref, pr.updated_at
+        pr.author,
+        pr.head_ref,
+        pr_updated_display(now, &pr.updated_at)
     );
     ListItem::new(vec![
         primary,
@@ -290,6 +306,33 @@ fn cleanup_key_label(table: &[ModalBinding<LauncherAction>]) -> String {
         .unwrap_or_else(|| "X".to_string())
 }
 
+/// Whether a landed listing of `count` rows might be missing rows beyond
+/// the provider's fixed page cap ([`crate::forge::PR_LIST_CAP`]) — the only
+/// signal available, since neither `gh` nor `glab` reports a listing's true
+/// total, only the rows it actually returned. Pure so it's unit-testable
+/// without a render pass; called fresh from the just-applied listing on
+/// every render (first load and refresh alike), never cached in a
+/// separately-updated flag.
+fn prs_reached_cap(count: usize) -> bool {
+    count >= crate::forge::PR_LIST_CAP
+}
+
+/// The "showing first N open PRs" truncation note: appended below the
+/// listing whenever [`prs_reached_cap`] holds for the landed row count.
+/// Says "first N", never an exact total — a landing at the cap is
+/// indistinguishable from one that's merely equal to it, so the copy
+/// doesn't overclaim. Styled in the secondary `footer_text` tone, matching
+/// [`finished_reviews_footer_line`].
+fn truncated_listing_footer_line(theme: &Theme) -> Line<'static> {
+    Line::from(Span::styled(
+        format!(
+            "showing first {} open PRs \u{2014} narrow with /",
+            crate::forge::PR_LIST_CAP
+        ),
+        Style::default().fg(theme.footer_text),
+    ))
+}
+
 /// The "N finished review(s)" footer line: rendered whenever cleanup
 /// candidates exist (managed reviews whose PR is no longer open), alongside
 /// both a real listing and the zero-open-PRs empty state (FR-22). Names the
@@ -319,9 +362,11 @@ fn finished_reviews_footer_line(
 /// repo, or a degraded-state prescription — never a blank body. `order`
 /// restricts which PRs render and in what sequence (see [`commits_rows`]'s
 /// identical convention, spec 12 FR-12); loading/empty/degraded states take
-/// priority over `order`, same precedence as every other tab. When cleanup
-/// candidates exist, a non-selectable "N finished review(s)" footer line is
-/// appended below the listing or empty state (FR-22).
+/// priority over `order`, same precedence as every other tab. When the
+/// landed listing hit the provider's page cap ([`prs_reached_cap`]), a
+/// truncation note is appended below it. When cleanup candidates exist, a
+/// non-selectable "N finished review(s)" footer line is appended after
+/// that (FR-22).
 fn prs_rows(
     app: &App,
     order: &[usize],
@@ -340,6 +385,7 @@ fn prs_rows(
             Style::default().fg(theme.footer_text),
         )))];
     };
+    let now = now_unix();
     let mut items = match outcome {
         PrFetchOutcome::Loaded { repo_label, prs } if prs.is_empty() => {
             vec![ListItem::new(prs_empty_state_line(repo_label, theme))]
@@ -347,10 +393,15 @@ fn prs_rows(
         PrFetchOutcome::Loaded { prs, .. } => order
             .iter()
             .filter_map(|&i| prs.get(i))
-            .map(|pr| pr_row(pr, theme, content_width))
+            .map(|pr| pr_row(pr, now, theme, content_width))
             .collect(),
         degraded => return vec![ListItem::new(prs_degraded_body_lines(degraded, theme))],
     };
+    if let PrFetchOutcome::Loaded { prs, .. } = outcome
+        && prs_reached_cap(prs.len())
+    {
+        items.push(ListItem::new(truncated_listing_footer_line(theme)));
+    }
     let finished = app.launcher_finished_reviews.len();
     if finished > 0 {
         items.push(ListItem::new(finished_reviews_footer_line(
@@ -368,12 +419,23 @@ fn prs_rows(
 /// table order. Mirrors `super::footer`'s "only footer-tagged rows get a
 /// hint" rule, but reads `app.modal_keys.review_launcher` directly rather
 /// than going through that module's merge helper, since this renders inside
-/// the modal's own border rather than the shared footer strip.
-fn hint_line(table: &[ModalBinding<LauncherAction>]) -> String {
+/// the modal's own border rather than the shared footer strip. Rows scoped
+/// to a different tab by [`modal_keys::launcher_action_tab_scope`] (the
+/// Commits-only `all commits` toggle, the Pull-Requests-only `clean up`)
+/// are dropped from `active_tab`'s hint line — the keys still work
+/// everywhere (unchanged dispatch), this only keeps the hint from
+/// advertising a key that does nothing visible on the tab you're looking
+/// at.
+fn hint_line(table: &[ModalBinding<LauncherAction>], active_tab: LauncherTab) -> String {
     table
         .iter()
         .filter_map(|b| {
             let hint = b.footer?;
+            if !modal_keys::launcher_action_tab_scope(b.action)
+                .is_none_or(|scope| scope == active_tab)
+            {
+                return None;
+            }
             let key = b.keys.first()?.label();
             Some(format!("{key} {}", hint.label))
         })
@@ -404,7 +466,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .title(tab_bar(tab, &app.theme))
         .title_bottom(Line::from(format!(
             " {} ",
-            hint_line(&app.modal_keys.review_launcher)
+            hint_line(&app.modal_keys.review_launcher, tab)
         )));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -635,6 +697,96 @@ index 111..222 100644
         assert!(content.contains("close"));
     }
 
+    /// `ToggleAllCommits`'s `all commits` hint is Commits-only and
+    /// `Cleanup`'s `clean up` hint is Pull-Requests-only — neither belongs on
+    /// the Branches tab's footer, which advertised both before this was
+    /// tab-scoped.
+    #[test]
+    fn branches_tab_footer_hides_both_tab_specific_hints() {
+        let mut app = App::new(vec![sample_file()]);
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::Branches,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        let content = render_launcher(&app);
+        assert!(
+            !content.contains("all commits"),
+            "Branches tab must not advertise the Commits-only toggle:\n{content}"
+        );
+        assert!(
+            !content.contains("clean up"),
+            "Branches tab must not advertise the Pull-Requests-only cleanup:\n{content}"
+        );
+    }
+
+    /// The `refresh` hint is Pull-Requests-only. Asserted against
+    /// [`hint_line`] rather than the rendered frame because it sits last in
+    /// the table, where the modal's border can truncate it — the scoping
+    /// decision is the contract, not whether it fits at a given width.
+    #[test]
+    fn the_refresh_hint_belongs_to_the_pull_requests_tab_only() {
+        let app = App::new(vec![sample_file()]);
+        for (tab, expected) in [
+            (LauncherTab::Branches, false),
+            (LauncherTab::Commits, false),
+            (LauncherTab::PullRequests, true),
+        ] {
+            let line = hint_line(&app.modal_keys.review_launcher, tab);
+            assert_eq!(
+                line.contains("refresh"),
+                expected,
+                "{tab:?} hint line: {line}"
+            );
+        }
+    }
+
+    /// The Commits tab's footer shows its own `all commits` hint but not the
+    /// Pull Requests tab's `clean up` hint.
+    #[test]
+    fn commits_tab_footer_shows_only_its_own_tab_specific_hint() {
+        let mut app = App::new(vec![sample_file()]);
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::Commits,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        let content = render_launcher(&app);
+        assert!(
+            content.contains("all commits"),
+            "Commits tab must advertise its own toggle:\n{content}"
+        );
+        assert!(
+            !content.contains("clean up"),
+            "Commits tab must not advertise the Pull-Requests-only cleanup:\n{content}"
+        );
+    }
+
+    /// The Pull Requests tab's footer shows its own `clean up` hint but not
+    /// the Commits tab's `all commits` hint.
+    #[test]
+    fn pull_requests_tab_footer_shows_only_its_own_tab_specific_hint() {
+        let mut app = App::new(vec![sample_file()]);
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.launcher_prs = Some(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: Vec::new(),
+        });
+        let content = render_launcher(&app);
+        assert!(
+            content.contains("clean up"),
+            "Pull Requests tab must advertise its own cleanup:\n{content}"
+        );
+        assert!(
+            !content.contains("all commits"),
+            "Pull Requests tab must not advertise the Commits-only toggle:\n{content}"
+        );
+    }
+
     // -- `/` filter chrome (spec 12 FR-12) ------------------------------------
 
     fn two_branches() -> Vec<LocalBranch> {
@@ -766,7 +918,33 @@ index 111..222 100644
         assert!(content.contains("octocat"));
         assert!(content.contains("widgets-branch"));
         assert!(content.contains("draft"));
-        assert!(content.contains("2026-07-15T12:00:00Z"));
+        // Relative, not the raw ISO timestamp (see
+        // `pr_updated_display_relatives_a_valid_timestamp_and_falls_back_on_garbage`
+        // below for the exact bucketing) — a fixed past date always renders
+        // some "... ago" label, so this stays true no matter when the suite
+        // runs.
+        assert!(content.contains("ago"));
+        assert!(!content.contains("2026-07-15T12:00:00Z"));
+    }
+
+    #[test]
+    fn pr_updated_display_relatives_a_valid_timestamp_and_falls_back_on_garbage() {
+        let now = 1_700_000_000; // fixed instant, independent of wall clock
+        let cases: &[(&str, &str)] = &[
+            // Valid, recent: relative, not raw.
+            ("2023-11-14T22:13:20Z", "just now"),
+            // Valid, long past: relative, not raw — this is the case that
+            // would silently regress to printing the raw ISO string if
+            // someone dropped the parse step.
+            ("2022-11-14T22:13:20Z", "1y ago"),
+            // Unparseable: falls back to the raw string verbatim rather than
+            // panicking or blanking the field.
+            ("not-a-timestamp", "not-a-timestamp"),
+            ("", ""),
+        ];
+        for &(input, expected) in cases {
+            assert_eq!(pr_updated_display(now, input), expected, "input {input:?}");
+        }
     }
 
     #[test]
@@ -872,5 +1050,55 @@ index 111..222 100644
         let content = render_launcher(&app);
         assert!(content.contains("No open pull requests on sdavisde/redquill"));
         assert!(content.contains("1 finished review(s)"));
+    }
+
+    #[test]
+    fn prs_reached_cap_is_true_at_the_cap_and_false_one_below_it() {
+        let cap = crate::forge::PR_LIST_CAP;
+        assert!(!prs_reached_cap(cap - 1));
+        assert!(prs_reached_cap(cap));
+        assert!(prs_reached_cap(cap + 1));
+    }
+
+    fn prs_of_len(count: usize) -> Vec<PullRequest> {
+        (0..count as u64)
+            .map(|n| pr(n, "title", "dev", "branch", false))
+            .collect()
+    }
+
+    #[test]
+    fn prs_tab_shows_the_truncation_note_when_the_listing_hits_the_cap() {
+        let app = prs_app(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: prs_of_len(crate::forge::PR_LIST_CAP),
+        });
+        // Taller than `render_launcher`'s fixed 100x24: each PR row is two
+        // terminal lines ([`pr_row`]'s primary + meta line), so `PR_LIST_CAP`
+        // rows plus the appended truncation note need well over 200 lines of
+        // viewport to avoid scrolling off (the cursor sits on row 0, so
+        // ratatui doesn't auto-scroll to reveal it otherwise).
+        let backend = TestBackend::new(100, 400);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let area = Rect::new(0, 0, 100, 400);
+        terminal.draw(|frame| render(frame, area, &app)).unwrap();
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(content.contains("showing first 100 open PRs"));
+        assert!(content.contains("narrow with /"));
+    }
+
+    #[test]
+    fn prs_tab_omits_the_truncation_note_when_the_listing_is_below_the_cap() {
+        let app = prs_app(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: prs_of_len(crate::forge::PR_LIST_CAP - 1),
+        });
+        let content = render_launcher(&app);
+        assert!(!content.contains("showing first"));
     }
 }

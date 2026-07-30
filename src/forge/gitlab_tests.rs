@@ -217,6 +217,101 @@ fn parse_mr_detail_json_maps_the_fixture_including_diff_refs() {
     );
 }
 
+// -- mr_description_command / parse_mr_description_json -----------------------
+
+/// A captured-shape fixture matching `glab mr view <iid> -F json`'s
+/// documented output: GitLab's full `MergeRequest` resource (extras present,
+/// ignored by serde) with a multi-paragraph `description`.
+const FIXTURE_MR_DESCRIPTION: &str = r#"{
+  "id": 501,
+  "iid": 34,
+  "project_id": 7,
+  "title": "Add widget support",
+  "author": {
+    "id": 3,
+    "username": "octocat",
+    "name": "The Octocat"
+  },
+  "source_branch": "feature/widget",
+  "target_branch": "main",
+  "description": "Adds widgets.\n\n## Why\nBecause gizmos are not enough.",
+  "draft": false,
+  "work_in_progress": false,
+  "state": "opened",
+  "updated_at": "2026-07-18T12:34:56.000Z"
+}"#;
+
+#[test]
+fn mr_description_command_is_a_read_only_view_argv_carrying_only_the_typed_iid() {
+    let cmd = mr_description_command(34);
+    assert_eq!(cmd.get_program(), OsStr::new("glab"));
+    let args: Vec<&OsStr> = cmd.get_args().collect();
+    assert_eq!(
+        args,
+        vec![
+            OsStr::new("mr"),
+            OsStr::new("view"),
+            OsStr::new("34"),
+            OsStr::new("-F"),
+            OsStr::new("json"),
+        ]
+    );
+    // No `--web`: this read must never hand anything to a browser.
+    assert!(!args.iter().any(|a| *a == OsStr::new("--web")));
+    let envs: Vec<_> = cmd.get_envs().collect();
+    assert!(envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))));
+}
+
+#[test]
+fn parse_mr_description_json_maps_the_fixture_into_the_shared_detail_shape() {
+    let detail = parse_mr_description_json(FIXTURE_MR_DESCRIPTION).unwrap();
+    assert_eq!(detail.number, 34);
+    assert_eq!(detail.title, "Add widget support");
+    assert_eq!(detail.author, "octocat");
+    // `target_branch` is the base, `source_branch` the head — swapping them
+    // would render the merge direction backwards in the overlay's meta line.
+    assert_eq!(detail.base_ref, "main");
+    assert_eq!(detail.head_ref, "feature/widget");
+    assert!(!detail.is_draft);
+    assert_eq!(detail.updated_at, "2026-07-18T12:34:56.000Z");
+    assert_eq!(
+        detail.body,
+        "Adds widgets.\n\n## Why\nBecause gizmos are not enough."
+    );
+}
+
+/// GitLab sends `"description": null` for a description-less MR, and an
+/// older/trimmed payload can omit the key entirely; both must read as an
+/// empty body, and the older `work_in_progress` draft alias must still be
+/// honored here exactly as it is in the listing.
+#[test]
+fn parse_mr_description_json_reads_a_null_or_absent_description_as_empty() {
+    let cases = [
+        r#"{"iid":7,"title":"t","author":{"username":"o"},"source_branch":"h","target_branch":"b","description":null,"work_in_progress":true,"updated_at":"u"}"#,
+        r#"{"iid":7,"title":"t","author":{"username":"o"},"source_branch":"h","target_branch":"b","work_in_progress":true,"updated_at":"u"}"#,
+    ];
+    for json in cases {
+        let detail = parse_mr_description_json(json).unwrap_or_else(|e| panic!("{json}: {e}"));
+        assert_eq!(detail.number, 7);
+        assert!(detail.is_draft, "{json}");
+        assert!(detail.body.is_empty(), "{json}");
+    }
+}
+
+#[test]
+fn parse_mr_description_json_rejects_malformed_json_and_a_missing_required_field() {
+    for json in [
+        "not json",
+        r#"{"title":"t","author":{"username":"o"},"source_branch":"h","target_branch":"b","updated_at":"u"}"#,
+    ] {
+        let err = parse_mr_description_json(json).unwrap_err();
+        assert!(
+            matches!(err, ForgeError::Parse { cli: "glab", .. }),
+            "{json}: {err:?}"
+        );
+    }
+}
+
 // -- discussions_command ------------------------------------------------------
 
 #[test]
