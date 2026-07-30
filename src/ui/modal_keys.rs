@@ -1468,8 +1468,9 @@ pub(super) static CLEANUP_REVIEWS_KEYS: LazyLock<Vec<ModalBinding<CleanupReviews
 /// cycle through the Branches, Commits, and Pull Requests tabs, `j`/`k`/
 /// arrows move the active tab's cursor, `Enter` confirms the highlighted
 /// row — starts a branch review on the Branches tab, opens a read-only
-/// commit view on the Commits tab, names the highlighted PR in a status
-/// line on the Pull Requests tab (a stub until PR checkout lands) — `Esc`
+/// commit view on the Commits tab, checks out the highlighted PR into a
+/// managed worktree and starts a review session on the Pull Requests tab —
+/// `Esc`
 /// closes the modal and restores the mode `R` was pressed from, and `a`
 /// toggles the Commits tab's data source between ahead-of-base and the full
 /// recent-HEAD log. Same shape as
@@ -1552,7 +1553,7 @@ pub(super) static REVIEW_LAUNCHER_KEYS: LazyLock<Vec<ModalBinding<LauncherAction
     LazyLock::new(|| {
         vec![
             ModalBinding {
-                description: "Switch tab (Branches / Commits)",
+                description: "Switch tab (Branches / Commits / Pull Requests)",
                 keys: vec![
                     ModalKey::plain(KeyCode::Tab),
                     ModalKey::plain(KeyCode::BackTab),

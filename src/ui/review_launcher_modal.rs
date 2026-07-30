@@ -72,15 +72,14 @@ fn tab_bar(active: LauncherTab, theme: &Theme) -> Line<'static> {
 /// What `Enter` does on `tab` — shown as its own line so the tabs' differing
 /// weight (a lightweight read-only peek vs. starting a full worktree
 /// session) is unambiguous before the user presses it. The Pull Requests
-/// tab names its current, honest behavior — `Enter` is a stub until PR
-/// checkout lands (see [`super::app::App::confirm_launcher_pr`]) — rather
-/// than the eventual "start PR review" wording, so the hint never promises
-/// more than pressing the key actually does.
+/// tab names its real behavior: `Enter` checks the PR out into a managed
+/// worktree and starts a review session, the same weight as the Branches
+/// tab (see [`super::app::App::confirm_launcher_pr`]).
 fn enter_outcome_hint(tab: LauncherTab) -> &'static str {
     match tab {
         LauncherTab::Branches => "Enter: start branch review",
         LauncherTab::Commits => "Enter: review commit (read-only)",
-        LauncherTab::PullRequests => "Enter: PR review not yet available",
+        LauncherTab::PullRequests => "Enter: start PR review",
     }
 }
 
