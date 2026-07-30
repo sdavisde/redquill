@@ -157,6 +157,17 @@ pub enum Mode {
     /// `T` on a line/file that has a thread; the focused thread and scroll
     /// live in [`App::thread_view`].
     ThreadView,
+    /// The read-only PR/MR description overlay is open (see
+    /// [`super::pr_description`]). Opened either with `i` on the Review
+    /// launcher's Pull Requests tab or with `gi` inside a PR review session;
+    /// `ret` is which of those to restore on close, captured at open time (the
+    /// same origin-restore contract [`Mode::CleanupReviews`] carries, extended
+    /// to two possible origins). Which PR it shows, and its scroll offset,
+    /// live in [`App::pr_description`] — a `Cell`-based scroll pair can't ride
+    /// in a `Copy` mode payload.
+    PrDescription {
+        ret: super::pr_description::PrDescriptionReturn,
+    },
     /// The submit-review modal is open (`submit-forge-review`, PR review
     /// sessions only): a grouped batch preview of every unpublished comment
     /// and reply, a capability-driven verdict picker, and an optional
@@ -549,6 +560,11 @@ pub struct App {
     /// separate from `launcher_commits_tasks` so their results are drained
     /// independently (see [`App::poll_launcher_prs`]).
     pub(super) launcher_prs_tasks: BackgroundTasks<PrFetchOutcome>,
+    /// How the Pull Requests fetch currently in flight should report itself
+    /// when it lands (see [`super::review_launcher::PrListReport`]) — set by
+    /// whichever path requested it, consumed by the one point every listing
+    /// resolves through. Back to `Silent` whenever nothing is pending.
+    pub(super) launcher_prs_report: super::review_launcher::PrListReport,
     /// Managed PR/MR reviews whose PR is no longer open — recomputed (never
     /// per frame) each time the Pull Requests list resolves, from the managed
     /// `redquill/pr/*` branches, the persisted reviews, and the just-fetched
@@ -577,6 +593,12 @@ pub struct App {
     /// `Enter` or refresh can't stack a concurrent fetch/worktree op (see
     /// [`App::spawn_pr_checkout`]/[`App::poll_pr_checkout`]).
     pub(super) pr_checkout_in_flight: Option<super::review_launcher::InFlightPrCheckout>,
+    /// Set just before a launcher-initiated [`App::spawn_pr_checkout`] call
+    /// when no provider resolution was cached for the PR (the checkout falls
+    /// back to GitHub); consumed and reset inside that call so it never leaks
+    /// into an unrelated checkout. Lets the eventual fetch-failure diagnostic
+    /// name the assumption instead of surfacing a bare "PR fetch failed".
+    pub(super) pr_checkout_provider_assumed: bool,
     /// The background-task poller PR checkouts run through, separate from the
     /// PR-list poller so their results drain independently.
     pub(super) pr_checkout_tasks: BackgroundTasks<super::stage_ops::PrCheckoutOutcome>,
@@ -622,6 +644,25 @@ pub struct App {
     /// The expandable thread-view overlay's state, `Some` only while
     /// [`Mode::ThreadView`] is active (see [`super::forge_threads`]).
     pub(super) thread_view: Option<super::forge_threads::ThreadViewState>,
+    /// The PR description overlay's state (which PR, and its clamped scroll
+    /// offset), `Some` only while [`Mode::PrDescription`] is active (see
+    /// [`super::pr_description`]).
+    pub(super) pr_description: Option<super::pr_description::PrDescriptionState>,
+    /// Every PR/MR description read this process has resolved, keyed by PR
+    /// number and kept for the process lifetime — reopening a PR paints from
+    /// here with no second round trip, and a body is only ever looked up under
+    /// the number it was fetched for (see [`super::pr_description`]'s module
+    /// doc for the caching and degradation contracts).
+    pub(super) pr_details: HashMap<u64, super::pr_description::PrDetailOutcome>,
+    /// The background poller description reads run through, separate from the
+    /// other forge pollers so its result drains independently.
+    pub(super) pr_detail_tasks: BackgroundTasks<Result<crate::forge::PrDetail, String>>,
+    /// The single in-flight description read, if any (single-flight, mirroring
+    /// `thread_fetch_in_flight`).
+    pub(super) pr_detail_in_flight: Option<super::pr_description::InFlightPrDetailFetch>,
+    /// Bumped on every description read so a straggler spawned before the bump
+    /// is dropped on arrival (mirrors `thread_fetch_generation`).
+    pub(super) pr_detail_generation: u64,
     /// The submit-review modal's state, `Some` only while
     /// [`Mode::SubmitForge`] is active (see [`super::forge_submit`]).
     pub(super) submit_forge: Option<super::forge_submit::SubmitForgeState>,
@@ -900,11 +941,13 @@ impl App {
             launcher_prs: None,
             launcher_prs_in_flight: None,
             launcher_prs_tasks: BackgroundTasks::new(),
+            launcher_prs_report: super::review_launcher::PrListReport::Silent,
             launcher_finished_reviews: Vec::new(),
             cleanup_reviews: Vec::new(),
             cleanup_reviews_selected: Vec::new(),
             restore_request: None,
             pr_checkout_in_flight: None,
+            pr_checkout_provider_assumed: false,
             pr_checkout_tasks: BackgroundTasks::new(),
             review_forge: None,
             review_stale: false,
@@ -917,6 +960,11 @@ impl App {
             web_target_noun: "page",
             threads_unavailable: false,
             thread_view: None,
+            pr_description: None,
+            pr_details: HashMap::new(),
+            pr_detail_tasks: BackgroundTasks::new(),
+            pr_detail_in_flight: None,
+            pr_detail_generation: 0,
             submit_forge: None,
             submit_result: None,
             forge_submit_tasks: BackgroundTasks::new(),
@@ -1389,6 +1437,7 @@ impl App {
             Action::PrevThread => self.prev_thread(),
             Action::SubmitForgeReview => self.open_submit_forge(),
             Action::OpenInBrowser => self.open_in_browser(),
+            Action::OpenPrDescription => self.open_pr_description_in_session(),
             // `Quit`/`QuitDiscard` end the session; `OpenEditor` suspends the
             // TUI to spawn the configured editor. Both are intercepted by
             // `super::dispatch_key` before reaching here (see `Action::Quit`'s

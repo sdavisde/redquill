@@ -413,6 +413,8 @@ literal = false
 # enter-filter = "/"                   # Filter (fuzzy, narrows the active tab)
 # toggle-all-commits = "a"             # Commits tab: ahead-of-base <-> full recent-HEAD log
 # cleanup-finished-reviews = "X"       # Pull Requests tab: clean up finished reviews
+# refresh = "r"                        # Pull Requests tab: re-fetch the PR list
+# pr-details = "i"                     # Pull Requests tab: read the PR description
 # close = "esc"                        # Close
 #
 # [keys.help]                          # Help overlay scroll/close/filter-open keys

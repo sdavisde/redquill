@@ -490,7 +490,7 @@ fn pending_g_shows_every_g_completion_sorted_by_key() {
     let entries = pending_hints(&km, key(KeyCode::Char('g')), true, None);
     assert_eq!(
         keys(&entries),
-        vec!["g/", "gSpace", "gT", "gd", "gg", "gp", "gr", "gt"]
+        vec!["g/", "gSpace", "gT", "gd", "gg", "gi", "gp", "gr", "gt"]
     );
     assert_eq!(
         labels(&entries),
@@ -500,6 +500,7 @@ fn pending_g_shows_every_g_completion_sorted_by_key() {
             "prev thread",
             "definition",
             "top",
+            "description",
             "find file",
             "references",
             "next thread"
@@ -512,9 +513,12 @@ fn pending_g_drops_gd_and_gr_when_code_intel_is_disallowed() {
     let km = Keymap::default_map();
     let entries = pending_hints(&km, key(KeyCode::Char('g')), false, None);
     // `g/` (OpenProjectSearch), `g<Space>` (OpenEditor), `gg` (JumpToTop),
-    // `gp` (OpenFileFinder), and `gt`/`gT` (thread nav) aren't code-intel
-    // actions, so they survive; `gd`/`gr` don't.
-    assert_eq!(keys(&entries), vec!["g/", "gSpace", "gT", "gg", "gp", "gt"]);
+    // `gi` (OpenPrDescription), `gp` (OpenFileFinder), and `gt`/`gT` (thread
+    // nav) aren't code-intel actions, so they survive; `gd`/`gr` don't.
+    assert_eq!(
+        keys(&entries),
+        vec!["g/", "gSpace", "gT", "gg", "gi", "gp", "gt"]
+    );
     assert_eq!(
         labels(&entries),
         vec![
@@ -522,6 +526,7 @@ fn pending_g_drops_gd_and_gr_when_code_intel_is_disallowed() {
             "open editor",
             "prev thread",
             "top",
+            "description",
             "find file",
             "next thread"
         ]
@@ -550,7 +555,7 @@ fn pending_prefix_replaces_the_mode_strip_in_normal_and_visual() {
     );
     assert_eq!(
         keys(&normal),
-        vec!["g/", "gSpace", "gT", "gd", "gg", "gp", "gr", "gt"]
+        vec!["g/", "gSpace", "gT", "gd", "gg", "gi", "gp", "gr", "gt"]
     );
     let visual = build_hints(
         Mode::Visual { anchor: 0 },
@@ -570,7 +575,7 @@ fn pending_prefix_replaces_the_mode_strip_in_normal_and_visual() {
     );
     assert_eq!(
         keys(&visual),
-        vec!["g/", "gSpace", "gT", "gd", "gg", "gp", "gr", "gt"]
+        vec!["g/", "gSpace", "gT", "gd", "gg", "gi", "gp", "gr", "gt"]
     );
 }
 

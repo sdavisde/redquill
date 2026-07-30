@@ -201,6 +201,7 @@ pub(super) fn effective_modal_keys(
         end_review: modal_keys::END_REVIEW_KEYS.clone(),
         accepted_panel: modal_keys::ACCEPTED_PANEL_KEYS.clone(),
         confirm_remote_op: modal_keys::CONFIRM_REMOTE_OP_KEYS.clone(),
+        pr_description: modal_keys::PR_DESCRIPTION_KEYS.clone(),
         restore: modal_keys::RESTORE_KEYS.clone(),
     };
 

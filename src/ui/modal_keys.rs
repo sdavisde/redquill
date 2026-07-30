@@ -1260,6 +1260,80 @@ pub(super) static THREAD_VIEW_KEYS: LazyLock<Vec<ModalBinding<ThreadViewAction>>
         ]
     });
 
+// -- PR description overlay ---------------------------------------------------
+
+/// What a key does in the read-only PR description overlay
+/// ([`super::app::Mode::PrDescription`]): scroll the description, start the
+/// review on it (launcher context only — see [`PR_DESCRIPTION_KEYS`]), or
+/// close. Not config-remappable yet — see the module doc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PrDescriptionAction {
+    /// Scroll the description down one line (see
+    /// [`super::app::App::pr_description_scroll_down`]).
+    ScrollDown,
+    /// Scroll the description up one line.
+    ScrollUp,
+    /// Start the review on the PR being described — a no-op when the overlay
+    /// was opened from inside a review session, where the hint is also dropped
+    /// (see [`super::app::App::pr_description_confirm`]).
+    StartReview,
+    /// Close the overlay, returning to the launcher or the diff.
+    Close,
+}
+
+/// The description-overlay control keys (`j`/`k`/arrow scroll, `Enter` to
+/// start the review, `q`/`Esc` close), for the help overlay, footer strip, and
+/// [`super::modes::handle_pr_description_key`]'s dispatch. Mirrors
+/// [`THREAD_VIEW_KEYS`]' shape — the other read-only, scroll-and-close
+/// overlay.
+pub(super) static PR_DESCRIPTION_KEYS: LazyLock<Vec<ModalBinding<PrDescriptionAction>>> =
+    LazyLock::new(|| {
+        vec![
+            ModalBinding {
+                description: "Scroll description down",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('j')),
+                    ModalKey::plain(KeyCode::Down),
+                ],
+                action: PrDescriptionAction::ScrollDown,
+                footer: Some(FooterHint {
+                    rank: 1,
+                    label: "scroll",
+                }),
+            },
+            ModalBinding {
+                description: "Scroll description up",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('k')),
+                    ModalKey::plain(KeyCode::Up),
+                ],
+                action: PrDescriptionAction::ScrollUp,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Start the review on this PR (from the Pull Requests tab)",
+                keys: vec![ModalKey::plain(KeyCode::Enter)],
+                action: PrDescriptionAction::StartReview,
+                footer: Some(FooterHint {
+                    rank: 2,
+                    label: "start review",
+                }),
+            },
+            ModalBinding {
+                description: "Close the description overlay",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('q')),
+                    ModalKey::plain(KeyCode::Esc),
+                ],
+                action: PrDescriptionAction::Close,
+                footer: Some(FooterHint {
+                    rank: 3,
+                    label: "close",
+                }),
+            },
+        ]
+    });
+
 // -- Submit-review modal ------------------------------------------------------
 
 /// What a control key does in the submit-review modal
@@ -1756,8 +1830,9 @@ pub(super) static CLEANUP_REVIEWS_KEYS: LazyLock<Vec<ModalBinding<CleanupReviews
 /// cycle through the Branches, Commits, and Pull Requests tabs, `j`/`k`/
 /// arrows move the active tab's cursor, `Enter` confirms the highlighted
 /// row — starts a branch review on the Branches tab, opens a read-only
-/// commit view on the Commits tab, names the highlighted PR in a status
-/// line on the Pull Requests tab (a stub until PR checkout lands) — `Esc`
+/// commit view on the Commits tab, checks out the highlighted PR into a
+/// managed worktree and starts a review session on the Pull Requests tab —
+/// `Esc`
 /// closes the modal and restores the mode `R` was pressed from, and `a`
 /// toggles the Commits tab's data source between ahead-of-base and the full
 /// recent-HEAD log. Same shape as
@@ -1765,8 +1840,8 @@ pub(super) static CLEANUP_REVIEWS_KEYS: LazyLock<Vec<ModalBinding<CleanupReviews
 /// close — plus the shared motion set beyond plain step (spec 12 FR-12,
 /// half/full-page paging, jump-to-extremes — see [`SwitcherAction`]'s
 /// identical doc note on jump-to-top's single-`g` divergence), the `/`
-/// filter (spec 12 FR-12), and the one launcher-specific row
-/// (`ToggleAllCommits`).
+/// filter (spec 12 FR-12), and the launcher-specific rows
+/// (`ToggleAllCommits`, `Cleanup`, `Refresh`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LauncherAction {
     ToggleTab,
@@ -1792,6 +1867,15 @@ pub(super) enum LauncherAction {
     /// modal for reviews whose PR is no longer open (see
     /// [`super::app::App::open_cleanup_reviews`]).
     Cleanup,
+    /// The Pull Requests tab's on-demand list refresh — re-fetches the
+    /// listing even when one is already showing, so a PR opened since the
+    /// last fetch appears without restarting (see
+    /// [`super::app::App::review_launcher_refresh_prs`]).
+    Refresh,
+    /// The Pull Requests tab's read-only description overlay — opens what the
+    /// highlighted PR is about without starting a review (see
+    /// [`super::app::App::open_pr_description_from_launcher`]).
+    Details,
 }
 
 pub(super) fn launcher_action_name(action: LauncherAction) -> &'static str {
@@ -1810,6 +1894,8 @@ pub(super) fn launcher_action_name(action: LauncherAction) -> &'static str {
         LauncherAction::Close => "close",
         LauncherAction::ToggleAllCommits => "toggle-all-commits",
         LauncherAction::Cleanup => "cleanup-finished-reviews",
+        LauncherAction::Refresh => "refresh",
+        LauncherAction::Details => "pr-details",
     }
 }
 
@@ -1829,6 +1915,8 @@ pub(super) fn launcher_action_from_name(name: &str) -> Option<LauncherAction> {
         "close" => LauncherAction::Close,
         "toggle-all-commits" => LauncherAction::ToggleAllCommits,
         "cleanup-finished-reviews" => LauncherAction::Cleanup,
+        "refresh" => LauncherAction::Refresh,
+        "pr-details" => LauncherAction::Details,
         _ => return None,
     })
 }
@@ -1840,7 +1928,7 @@ pub(super) static REVIEW_LAUNCHER_KEYS: LazyLock<Vec<ModalBinding<LauncherAction
     LazyLock::new(|| {
         vec![
             ModalBinding {
-                description: "Switch tab (Branches / Commits)",
+                description: "Switch tab (Branches / Commits / Pull Requests)",
                 keys: vec![
                     ModalKey::plain(KeyCode::Tab),
                     ModalKey::plain(KeyCode::BackTab),
@@ -1964,8 +2052,45 @@ pub(super) static REVIEW_LAUNCHER_KEYS: LazyLock<Vec<ModalBinding<LauncherAction
                     label: "clean up",
                 }),
             },
+            ModalBinding {
+                description: "Pull Requests tab: refresh the list",
+                keys: vec![ModalKey::plain(KeyCode::Char('r'))],
+                action: LauncherAction::Refresh,
+                footer: Some(FooterHint {
+                    rank: 8,
+                    label: "refresh",
+                }),
+            },
+            ModalBinding {
+                description: "Pull Requests tab: read the PR description",
+                keys: vec![ModalKey::plain(KeyCode::Char('i'))],
+                action: LauncherAction::Details,
+                footer: Some(FooterHint {
+                    rank: 9,
+                    label: "description",
+                }),
+            },
         ]
     });
+
+/// Which launcher tab a row's key only does something visible on; `None`
+/// means every tab. [`super::review_launcher_modal::hint_line`] reads this
+/// to keep `ToggleAllCommits`/`Cleanup`/`Refresh` out of the footer strip on
+/// tabs where they'd be a truthful-but-pointless hint, without filtering by the
+/// hint's label text (the dispatch itself is unchanged — both keys still
+/// resolve everywhere, see `every_launcher_table_entry_drives_its_documented_action`).
+pub(super) fn launcher_action_tab_scope(
+    action: LauncherAction,
+) -> Option<super::review_launcher::LauncherTab> {
+    use super::review_launcher::LauncherTab;
+    match action {
+        LauncherAction::ToggleAllCommits => Some(LauncherTab::Commits),
+        LauncherAction::Cleanup | LauncherAction::Refresh | LauncherAction::Details => {
+            Some(LauncherTab::PullRequests)
+        }
+        _ => None,
+    }
+}
 
 // -- Fuzzy file finder --------------------------------------------------------
 
@@ -3162,6 +3287,9 @@ pub struct ModalKeymaps {
     pub(super) confirm_remote_op: Vec<ModalBinding<ConfirmRemoteOpAction>>,
     /// The imported-thread overlay (`[keys.thread-view]`).
     pub(super) thread_view: Vec<ModalBinding<ThreadViewAction>>,
+    /// The read-only PR description overlay. Not config-remappable yet — see
+    /// [`PR_DESCRIPTION_KEYS`].
+    pub(super) pr_description: Vec<ModalBinding<PrDescriptionAction>>,
     /// The submit-review modal (`[keys.submit-forge]`).
     pub(super) submit_forge: Vec<ModalBinding<SubmitForgeAction>>,
     /// The post-submit result modal (`[keys.submit-result]`).
@@ -3198,6 +3326,7 @@ impl Default for ModalKeymaps {
             confirm_remote_op: CONFIRM_REMOTE_OP_KEYS.clone(),
             restore: RESTORE_KEYS.clone(),
             thread_view: THREAD_VIEW_KEYS.clone(),
+            pr_description: PR_DESCRIPTION_KEYS.clone(),
             submit_forge: SUBMIT_FORGE_KEYS.clone(),
             submit_result: SUBMIT_RESULT_KEYS.clone(),
             cleanup_reviews: CLEANUP_REVIEWS_KEYS.clone(),
@@ -4122,6 +4251,54 @@ index 111..222 100644
                             "Launcher {label}: must open the cleanup modal"
                         );
                     }
+                    LauncherAction::Refresh => {
+                        // Only observable on the Pull Requests tab. Starting
+                        // from an already-loaded listing is what makes the
+                        // re-fetch visible: with no backend attached it
+                        // resolves to `NoForgeRemote`, which nothing but a
+                        // refresh of a loaded listing could have produced.
+                        app.mode = Mode::ReviewLauncher {
+                            tab: LauncherTab::PullRequests,
+                            cursor: 0,
+                            origin: crate::ui::app::ModeOrigin::Normal,
+                        };
+                        app.launcher_prs = Some(crate::ui::stage_ops::PrFetchOutcome::Loaded {
+                            repo_label: "org/repo".to_string(),
+                            prs: Vec::new(),
+                        });
+                        handle_review_launcher_key(&mut app, key.event());
+                        assert_eq!(
+                            app.launcher_prs,
+                            Some(crate::ui::stage_ops::PrFetchOutcome::NoForgeRemote),
+                            "Launcher {label}: must re-fetch the PR listing"
+                        );
+                    }
+                    LauncherAction::Details => {
+                        // Only observable on the Pull Requests tab with a real
+                        // row to describe — set both up first.
+                        app.mode = Mode::ReviewLauncher {
+                            tab: LauncherTab::PullRequests,
+                            cursor: 0,
+                            origin: crate::ui::app::ModeOrigin::Normal,
+                        };
+                        app.launcher_prs = Some(crate::ui::stage_ops::PrFetchOutcome::Loaded {
+                            repo_label: "org/repo".to_string(),
+                            prs: vec![crate::forge::PullRequest {
+                                number: 34,
+                                title: "t".to_string(),
+                                author: "dev".to_string(),
+                                head_ref: "feature".to_string(),
+                                base_ref: "main".to_string(),
+                                is_draft: false,
+                                updated_at: "2026-07-18T12:34:56Z".to_string(),
+                            }],
+                        });
+                        handle_review_launcher_key(&mut app, key.event());
+                        assert!(
+                            matches!(app.mode, Mode::PrDescription { .. }),
+                            "Launcher {label}: must open the description overlay"
+                        );
+                    }
                 }
             }
         }
@@ -4217,7 +4394,7 @@ index 111..222 100644
         let mut app = app();
         app.thread_view = Some(super::super::forge_threads::ThreadViewState {
             root_id: 1,
-            scroll: 0,
+            scroll: std::cell::Cell::new(0),
         });
         app.mode = Mode::ThreadView;
         app
@@ -4235,7 +4412,7 @@ index 111..222 100644
                     ThreadViewAction::ScrollDown => {
                         handle_thread_view_key(&mut app, key.event());
                         assert_eq!(
-                            app.thread_view.as_ref().map(|tv| tv.scroll),
+                            app.thread_view.as_ref().map(|tv| tv.scroll.get()),
                             Some(1),
                             "Thread view {label}: scroll-down advances the scroll offset"
                         );
@@ -4243,12 +4420,12 @@ index 111..222 100644
                     ThreadViewAction::ScrollUp => {
                         // Start one line down so scroll-up has an observable
                         // effect (the fixture opens at scroll 0).
-                        if let Some(tv) = app.thread_view.as_mut() {
-                            tv.scroll = 1;
+                        if let Some(tv) = app.thread_view.as_ref() {
+                            tv.scroll.set(1);
                         }
                         handle_thread_view_key(&mut app, key.event());
                         assert_eq!(
-                            app.thread_view.as_ref().map(|tv| tv.scroll),
+                            app.thread_view.as_ref().map(|tv| tv.scroll.get()),
                             Some(0),
                             "Thread view {label}: scroll-up retreats the scroll offset"
                         );
@@ -4278,6 +4455,84 @@ index 111..222 100644
                             "Thread view {label}: close returns to the diff"
                         );
                         assert!(app.thread_view.is_none());
+                    }
+                }
+            }
+        }
+    }
+
+    /// An `App` with the PR description overlay open, reached the way a user
+    /// reaches it — `d` on a launcher Pull Requests tab carrying one real row —
+    /// so the `StartReview` arm has a launcher to route back into (the one
+    /// context where that action does anything).
+    fn pr_description_app() -> App {
+        let mut app = app();
+        app.mode = Mode::ReviewLauncher {
+            tab: crate::ui::review_launcher::LauncherTab::PullRequests,
+            cursor: 0,
+            origin: crate::ui::app::ModeOrigin::Normal,
+        };
+        app.launcher_prs = Some(crate::ui::stage_ops::PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![crate::forge::PullRequest {
+                number: 34,
+                title: "t".to_string(),
+                author: "dev".to_string(),
+                head_ref: "feature".to_string(),
+                base_ref: "main".to_string(),
+                is_draft: false,
+                updated_at: "2026-07-18T12:34:56Z".to_string(),
+            }],
+        });
+        app.open_pr_description_from_launcher();
+        app
+    }
+
+    #[test]
+    fn every_pr_description_table_entry_drives_its_documented_action() {
+        use crate::ui::modes::handle_pr_description_key;
+
+        for binding in PR_DESCRIPTION_KEYS.iter() {
+            for key in &binding.keys {
+                let mut app = pr_description_app();
+                let label = binding.key_label();
+                match binding.action {
+                    PrDescriptionAction::ScrollDown => {
+                        handle_pr_description_key(&mut app, key.event());
+                        assert_eq!(
+                            app.pr_description.as_ref().map(|s| s.scroll.get()),
+                            Some(1),
+                            "PR description {label}: scroll-down advances the offset"
+                        );
+                    }
+                    PrDescriptionAction::ScrollUp => {
+                        // Start one line down so scroll-up has an observable
+                        // effect (the overlay opens at offset 0).
+                        if let Some(state) = app.pr_description.as_ref() {
+                            state.scroll.set(1);
+                        }
+                        handle_pr_description_key(&mut app, key.event());
+                        assert_eq!(
+                            app.pr_description.as_ref().map(|s| s.scroll.get()),
+                            Some(0),
+                            "PR description {label}: scroll-up retreats the offset"
+                        );
+                    }
+                    PrDescriptionAction::StartReview => {
+                        handle_pr_description_key(&mut app, key.event());
+                        assert!(
+                            matches!(app.mode, Mode::ReviewLauncher { .. }),
+                            "PR description {label}: must hand back to the launcher's confirm"
+                        );
+                        assert!(app.pr_description.is_none());
+                    }
+                    PrDescriptionAction::Close => {
+                        handle_pr_description_key(&mut app, key.event());
+                        assert!(
+                            matches!(app.mode, Mode::ReviewLauncher { .. }),
+                            "PR description {label}: close returns to the launcher it opened from"
+                        );
+                        assert!(app.pr_description.is_none());
                     }
                 }
             }

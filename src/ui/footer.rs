@@ -351,6 +351,7 @@ fn fallback_pending_label(action: Action) -> &'static str {
         Action::OpenEditor => "open editor",
         Action::NextThread => "next thread",
         Action::PrevThread => "prev thread",
+        Action::OpenPrDescription => "description",
         _ => "",
     }
 }
@@ -512,6 +513,7 @@ pub(super) fn build_hints(
         Mode::EndReview { .. } => modal_hints(&modal_keys.end_review),
         Mode::ConfirmRemoteOp { .. } => modal_hints(&modal_keys.confirm_remote_op),
         Mode::ThreadView => modal_hints(&modal_keys.thread_view),
+        Mode::PrDescription { .. } => modal_hints(&modal_keys.pr_description),
         Mode::SubmitForge => modal_hints(&modal_keys.submit_forge),
         Mode::SubmitResult { .. } => modal_hints(&modal_keys.submit_result),
         Mode::CleanupReviews { .. } => modal_hints(&modal_keys.cleanup_reviews),
