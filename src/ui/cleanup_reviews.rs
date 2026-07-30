@@ -1,7 +1,8 @@
 //! The finished-review cleanup modal's state transitions
 //! ([`super::app::Mode::CleanupReviews`]): opening it from the Pull Requests
-//! tab, cancelling back into the launcher, and — on confirm — deleting each
-//! finished review's managed worktree, branch, and persisted state entry.
+//! tab, moving/toggling its per-entry selection, cancelling back into the
+//! launcher, and — on confirm — deleting each *selected* finished review's
+//! managed worktree, branch, and persisted state entry.
 //!
 //! Modeled on [`super::end_review`]'s finish path, which this mirrors for the
 //! single-review case: the deletion runs synchronously on the render thread
@@ -11,7 +12,9 @@
 //! worktree), prunes, deletes the `redquill/pr/<n>` branch through the
 //! prefix-confined helper, and deletes the review's state entry — all
 //! per-entry, so one dirty or locked worktree fails just that entry and the
-//! run continues to the next, ending in a one-line outcome summary.
+//! run continues to the next, ending in a one-line outcome summary. Entries
+//! left unchecked are never touched — they simply reappear the next time the
+//! Pull Requests tab's finished set is recomputed.
 
 use crate::review::FinishedReview;
 
@@ -27,9 +30,10 @@ impl App {
     /// checkout is in flight (deletion mutates the same worktrees/branches
     /// those touch). On success it snapshots the finished set into
     /// [`App::cleanup_reviews`] (frozen so a background list refresh can't
-    /// shift the rows mid-confirmation) and switches to
-    /// [`Mode::CleanupReviews`], carrying the launcher's own origin so
-    /// cancel/confirm can reopen it exactly.
+    /// shift the rows mid-confirmation), marks every entry selected in
+    /// [`App::cleanup_reviews_selected`], and switches to
+    /// [`Mode::CleanupReviews`] with the cursor on the first row, carrying the
+    /// launcher's own origin so cancel/confirm can reopen it exactly.
     pub(super) fn open_cleanup_reviews(&mut self) {
         let Mode::ReviewLauncher {
             tab: LauncherTab::PullRequests,
@@ -54,7 +58,8 @@ impl App {
             return;
         }
         self.cleanup_reviews = self.launcher_finished_reviews.clone();
-        self.mode = Mode::CleanupReviews { origin };
+        self.cleanup_reviews_selected = vec![true; self.cleanup_reviews.len()];
+        self.mode = Mode::CleanupReviews { origin, cursor: 0 };
     }
 
     /// Closes the cleanup modal without deleting anything, reopening the
@@ -62,25 +67,80 @@ impl App {
     /// from. Declining mutates nothing on disk. A no-op outside
     /// [`Mode::CleanupReviews`].
     pub(super) fn cancel_cleanup_reviews(&mut self) {
-        let Mode::CleanupReviews { origin } = self.mode else {
+        let Mode::CleanupReviews { origin, .. } = self.mode else {
             return;
         };
         self.cleanup_reviews.clear();
+        self.cleanup_reviews_selected.clear();
         self.reopen_launcher_after_cleanup(origin);
     }
 
-    /// Confirms the cleanup: deletes every enumerated finished review's
-    /// worktree, branch, and state entry (see [`App::run_cleanup_deletions`]),
-    /// recomputes the finished set from the still-current listing (a cleanup
-    /// never changes which PRs are open, so no re-fetch is needed), reopens
-    /// the launcher, and surfaces the per-entry outcome summary. A no-op
-    /// outside [`Mode::CleanupReviews`].
-    pub(super) fn confirm_cleanup_reviews(&mut self) {
-        let Mode::CleanupReviews { origin } = self.mode else {
+    /// Moves the cleanup modal's highlighted row down one entry, clamped at
+    /// the last. A no-op outside [`Mode::CleanupReviews`] or on an empty list.
+    pub(super) fn cleanup_reviews_move_down(&mut self) {
+        self.cleanup_reviews_step(1, true);
+    }
+
+    /// Moves the cleanup modal's highlighted row up one entry, clamped at the
+    /// first. A no-op outside [`Mode::CleanupReviews`] or on an empty list.
+    pub(super) fn cleanup_reviews_move_up(&mut self) {
+        self.cleanup_reviews_step(1, false);
+    }
+
+    fn cleanup_reviews_step(&mut self, step: usize, down: bool) {
+        let len = self.cleanup_reviews.len();
+        if let Mode::CleanupReviews { cursor, .. } = &mut self.mode {
+            *cursor = super::motion::step(*cursor, len, step, down);
+        }
+    }
+
+    /// Toggles the highlighted entry's selection (`Space`). Every entry
+    /// starts selected at open, so this is how a reviewer opts one out of a
+    /// batch delete rather than opting individual ones in. A no-op outside
+    /// [`Mode::CleanupReviews`] or on an empty list.
+    pub(super) fn toggle_cleanup_review_selection(&mut self) {
+        let Mode::CleanupReviews { cursor, .. } = self.mode else {
             return;
         };
+        if let Some(slot) = self.cleanup_reviews_selected.get_mut(cursor) {
+            *slot = !*slot;
+        }
+    }
+
+    /// The number of entries currently checked — drives the modal's "N of M
+    /// selected" title and confirm hint.
+    pub(super) fn cleanup_reviews_selected_count(&self) -> usize {
+        self.cleanup_reviews_selected
+            .iter()
+            .filter(|&&selected| selected)
+            .count()
+    }
+
+    /// Confirms the cleanup: deletes every *selected* enumerated finished
+    /// review's worktree, branch, and state entry (see
+    /// [`App::run_cleanup_deletions`]), recomputes the finished set from the
+    /// still-current listing (a cleanup never changes which PRs are open, so
+    /// no re-fetch is needed), reopens the launcher, and surfaces the
+    /// per-entry outcome summary. With nothing selected this is a no-op — the
+    /// modal stays open exactly as it was, deleting nothing. Deselected
+    /// entries are simply dropped from the snapshot on confirm: they were
+    /// never touched, so they reappear the next time the finished set is
+    /// recomputed. A no-op outside [`Mode::CleanupReviews`].
+    pub(super) fn confirm_cleanup_reviews(&mut self) {
+        let Mode::CleanupReviews { origin, .. } = self.mode else {
+            return;
+        };
+        if self.cleanup_reviews_selected_count() == 0 {
+            return;
+        }
         let entries = std::mem::take(&mut self.cleanup_reviews);
-        let summary = self.run_cleanup_deletions(&entries);
+        let selected = std::mem::take(&mut self.cleanup_reviews_selected);
+        let chosen: Vec<FinishedReview> = entries
+            .into_iter()
+            .zip(selected)
+            .filter_map(|(entry, keep)| keep.then_some(entry))
+            .collect();
+        let summary = self.run_cleanup_deletions(&chosen);
         // The open-PR set is unchanged by a cleanup, so recomputing against
         // the already-loaded listing (now with the deleted branches/state
         // entries gone) is enough — no network round-trip.

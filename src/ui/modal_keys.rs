@@ -1627,14 +1627,26 @@ pub(super) static RESTORE_KEYS: LazyLock<Vec<ModalBinding<RestoreAction>>> = Laz
 
 /// What a key does in the finished-review cleanup confirm modal
 /// ([`super::app::Mode::CleanupReviews`], opened by `cleanup-finished-reviews`
-/// on the Pull Requests tab): a plain confirm/cancel gate over the enumerated
-/// finished reviews. Confirm deletes every listed review's worktree, branch,
-/// and state entry; cancel mutates nothing. Not config-remappable yet — see
-/// module doc.
+/// on the Pull Requests tab): `j`/`k`/arrows move the highlight, `Space`
+/// toggles the highlighted entry's selection (all checked by default), and
+/// confirm/cancel gate the batch. Confirm deletes only the *selected*
+/// reviews' worktree, branch, and state entry (a no-op with nothing
+/// selected); cancel mutates nothing. Not config-remappable yet — see module
+/// doc.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CleanupReviewsAction {
-    /// Deletes the enumerated finished reviews (see
-    /// [`super::app::App::confirm_cleanup_reviews`]).
+    /// Moves the highlight down one entry (see
+    /// [`super::app::App::cleanup_reviews_move_down`]).
+    MoveDown,
+    /// Moves the highlight up one entry (see
+    /// [`super::app::App::cleanup_reviews_move_up`]).
+    MoveUp,
+    /// Toggles the highlighted entry's selection (see
+    /// [`super::app::App::toggle_cleanup_review_selection`]).
+    Toggle,
+    /// Deletes every selected finished review (see
+    /// [`super::app::App::confirm_cleanup_reviews`]); a no-op with nothing
+    /// selected.
     Confirm,
     /// Closes the modal, deleting nothing (see
     /// [`super::app::App::cancel_cleanup_reviews`]).
@@ -1642,13 +1654,46 @@ pub(super) enum CleanupReviewsAction {
 }
 
 /// The cleanup confirm modal's key table, for the help overlay, footer strip,
-/// and [`super::modes::handle_cleanup_reviews_key`]'s dispatch. Mirrors
-/// [`CONFIRM_REMOTE_OP_KEYS`]' binary-gate shape.
+/// and [`super::modes::handle_cleanup_reviews_key`]'s dispatch. The
+/// confirm/cancel rows mirror [`CONFIRM_REMOTE_OP_KEYS`]' binary-gate shape;
+/// the move pair mirrors [`SWITCHER_KEYS`]' — only `MoveDown` carries the
+/// footer hint, since its label ("j / Down") already reads as a compound key
+/// display and merging `MoveUp`'s in would double the " / " separators.
 pub(super) static CLEANUP_REVIEWS_KEYS: LazyLock<Vec<ModalBinding<CleanupReviewsAction>>> =
     LazyLock::new(|| {
         vec![
             ModalBinding {
-                description: "Delete the finished reviews (worktree, branch, saved state)",
+                description: "Move the highlight down",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('j')),
+                    ModalKey::plain(KeyCode::Down),
+                ],
+                action: CleanupReviewsAction::MoveDown,
+                footer: Some(FooterHint {
+                    rank: 3,
+                    label: "move",
+                }),
+            },
+            ModalBinding {
+                description: "Move the highlight up",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('k')),
+                    ModalKey::plain(KeyCode::Up),
+                ],
+                action: CleanupReviewsAction::MoveUp,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Toggle the highlighted entry's selection",
+                keys: vec![ModalKey::plain(KeyCode::Char(' '))],
+                action: CleanupReviewsAction::Toggle,
+                footer: Some(FooterHint {
+                    rank: 2,
+                    label: "toggle",
+                }),
+            },
+            ModalBinding {
+                description: "Delete the selected finished reviews (worktree, branch, saved state)",
                 keys: vec![
                     ModalKey::plain(KeyCode::Enter),
                     ModalKey::plain(KeyCode::Char('y')),
@@ -1667,7 +1712,7 @@ pub(super) static CLEANUP_REVIEWS_KEYS: LazyLock<Vec<ModalBinding<CleanupReviews
                 ],
                 action: CleanupReviewsAction::Cancel,
                 footer: Some(FooterHint {
-                    rank: 2,
+                    rank: 4,
                     label: "cancel",
                 }),
             },
@@ -4419,6 +4464,108 @@ index 111..222 100644
                             app.running_op_label(),
                             None,
                             "Confirm remote op {label}: cancel must run nothing"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// An `App` with the cleanup modal already open ([`Mode::CleanupReviews`])
+    /// over two finished reviews, both selected — opened through
+    /// `open_cleanup_reviews` (not built by hand) so this exercises the real
+    /// entry path, mirroring `LauncherAction::Cleanup`'s own test above.
+    fn cleanup_reviews_app() -> App {
+        let mut app = app();
+        app.mode = Mode::ReviewLauncher {
+            tab: crate::ui::review_launcher::LauncherTab::PullRequests,
+            cursor: 0,
+            origin: crate::ui::app::ModeOrigin::Normal,
+        };
+        app.launcher_finished_reviews = vec![
+            crate::review::FinishedReview {
+                branch: "redquill/pr/1".to_string(),
+                number: 1,
+                title: "one".to_string(),
+                provider: crate::review::store::ForgeProviderKind::GitHub,
+                host: "github.com".to_string(),
+                worktree_path: PathBuf::from("/tmp/wt1"),
+                unpublished_count: 0,
+            },
+            crate::review::FinishedReview {
+                branch: "redquill/pr/2".to_string(),
+                number: 2,
+                title: "two".to_string(),
+                provider: crate::review::store::ForgeProviderKind::GitHub,
+                host: "github.com".to_string(),
+                worktree_path: PathBuf::from("/tmp/wt2"),
+                unpublished_count: 0,
+            },
+        ];
+        app.open_cleanup_reviews();
+        app
+    }
+
+    #[test]
+    fn every_cleanup_reviews_table_entry_drives_its_documented_action() {
+        use crate::ui::modes::handle_cleanup_reviews_key;
+
+        for binding in CLEANUP_REVIEWS_KEYS.iter() {
+            for key in &binding.keys {
+                let mut app = cleanup_reviews_app();
+                let label = binding.key_label();
+                match binding.action {
+                    CleanupReviewsAction::MoveDown => {
+                        handle_cleanup_reviews_key(&mut app, key.event());
+                        assert_eq!(
+                            app.mode,
+                            Mode::CleanupReviews {
+                                origin: crate::ui::app::ModeOrigin::Normal,
+                                cursor: 1,
+                            },
+                            "Cleanup reviews {label}: must move the highlight down"
+                        );
+                    }
+                    CleanupReviewsAction::MoveUp => {
+                        app.cleanup_reviews_move_down();
+                        handle_cleanup_reviews_key(&mut app, key.event());
+                        assert_eq!(
+                            app.mode,
+                            Mode::CleanupReviews {
+                                origin: crate::ui::app::ModeOrigin::Normal,
+                                cursor: 0,
+                            },
+                            "Cleanup reviews {label}: must move the highlight back up"
+                        );
+                    }
+                    CleanupReviewsAction::Toggle => {
+                        handle_cleanup_reviews_key(&mut app, key.event());
+                        assert_eq!(
+                            app.cleanup_reviews_selected,
+                            vec![false, true],
+                            "Cleanup reviews {label}: must toggle the highlighted (first) entry"
+                        );
+                    }
+                    CleanupReviewsAction::Confirm => {
+                        handle_cleanup_reviews_key(&mut app, key.event());
+                        assert!(
+                            matches!(app.mode, Mode::ReviewLauncher { .. }),
+                            "Cleanup reviews {label}: confirm must close back to the launcher"
+                        );
+                        assert!(
+                            app.cleanup_reviews.is_empty(),
+                            "Cleanup reviews {label}: confirm must clear the snapshot"
+                        );
+                    }
+                    CleanupReviewsAction::Cancel => {
+                        handle_cleanup_reviews_key(&mut app, key.event());
+                        assert!(
+                            matches!(app.mode, Mode::ReviewLauncher { .. }),
+                            "Cleanup reviews {label}: cancel must close back to the launcher"
+                        );
+                        assert!(
+                            app.cleanup_reviews.is_empty(),
+                            "Cleanup reviews {label}: cancel must clear the snapshot without deleting"
                         );
                     }
                 }

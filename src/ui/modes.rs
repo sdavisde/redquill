@@ -509,16 +509,21 @@ pub(super) fn handle_restore_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-/// Handles one key event while [`super::Mode::CleanupReviews`] is active: a
-/// binary confirm/cancel gate over the enumerated finished reviews. Confirm
-/// deletes each review's worktree, branch, and state entry; cancel closes back
-/// into the launcher, deleting nothing. Resolved against
-/// `app.modal_keys.cleanup_reviews` (see [`modal_keys::CLEANUP_REVIEWS_KEYS`]).
+/// Handles one key event while [`super::Mode::CleanupReviews`] is active:
+/// `j`/`k`/arrows move the highlight, `Space` toggles the highlighted entry's
+/// selection, and confirm/cancel gate the batch. Confirm deletes each
+/// selected review's worktree, branch, and state entry (a no-op with nothing
+/// selected); cancel closes back into the launcher, deleting nothing.
+/// Resolved against `app.modal_keys.cleanup_reviews` (see
+/// [`modal_keys::CLEANUP_REVIEWS_KEYS`]).
 pub(super) fn handle_cleanup_reviews_key(app: &mut App, key: KeyEvent) {
     let Some(action) = modal_keys::resolve(&app.modal_keys.cleanup_reviews, key) else {
         return;
     };
     match action {
+        CleanupReviewsAction::MoveDown => app.cleanup_reviews_move_down(),
+        CleanupReviewsAction::MoveUp => app.cleanup_reviews_move_up(),
+        CleanupReviewsAction::Toggle => app.toggle_cleanup_review_selection(),
         CleanupReviewsAction::Confirm => app.confirm_cleanup_reviews(),
         CleanupReviewsAction::Cancel => app.cancel_cleanup_reviews(),
     }
