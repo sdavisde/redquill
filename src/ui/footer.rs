@@ -515,6 +515,7 @@ pub(super) fn build_hints(
         Mode::ThreadView => modal_hints(&modal_keys.thread_view),
         Mode::PrDescription { .. } => modal_hints(&modal_keys.pr_description),
         Mode::SubmitForge => modal_hints(&modal_keys.submit_forge),
+        Mode::SubmitResult { .. } => modal_hints(&modal_keys.submit_result),
         Mode::CleanupReviews { .. } => modal_hints(&modal_keys.cleanup_reviews),
         Mode::ConfirmRestore { .. } => modal_hints(&modal_keys.restore),
         Mode::ReviewLauncher { .. } => modal_hints(&modal_keys.review_launcher),

@@ -44,6 +44,7 @@ mod file_view;
 mod footer;
 pub(crate) mod forge_open;
 mod forge_submit;
+mod forge_submit_result;
 mod forge_threads;
 mod git_panel;
 mod help;
@@ -399,6 +400,7 @@ fn dispatch_key(
         Mode::ThreadView => modes::handle_thread_view_key(app, key),
         Mode::PrDescription { .. } => modes::handle_pr_description_key(app, key),
         Mode::SubmitForge => modes::handle_submit_forge_key(app, key),
+        Mode::SubmitResult { .. } => modes::handle_submit_result_key(app, key),
         Mode::CleanupReviews { .. } => modes::handle_cleanup_reviews_key(app, key),
         Mode::ConfirmRestore { .. } => modes::handle_restore_key(app, key),
         Mode::Normal | Mode::Visual { .. } => {
@@ -898,6 +900,9 @@ fn draw(frame: &mut ratatui::Frame, app: &App, keymap: &Keymap, pending: Option<
     }
     if matches!(app.mode, Mode::SubmitForge) {
         forge_submit::render(frame, area, app);
+    }
+    if matches!(app.mode, Mode::SubmitResult { .. }) {
+        forge_submit_result::render(frame, area, app);
     }
     if matches!(app.mode, Mode::ConfirmRemoteOp { .. }) {
         confirm_remote_op_modal::render(frame, area, app);

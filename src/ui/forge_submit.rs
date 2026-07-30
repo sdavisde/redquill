@@ -152,7 +152,7 @@ fn plural(n: usize) -> &'static str {
 }
 
 /// The clipped-below marker, or `None` when the last line is on screen.
-fn below_marker(hidden: u16) -> Option<String> {
+pub(super) fn below_marker(hidden: u16) -> Option<String> {
     (hidden > 0).then(|| {
         format!(
             "\u{25be} {hidden} more line{} \u{2014} \u{2193} to scroll",
@@ -162,7 +162,7 @@ fn below_marker(hidden: u16) -> Option<String> {
 }
 
 /// The clipped-above marker, or `None` when the first line is on screen.
-fn above_marker(hidden: u16) -> Option<String> {
+pub(super) fn above_marker(hidden: u16) -> Option<String> {
     (hidden > 0).then(|| {
         format!(
             "\u{25b4} {hidden} more line{} above",
@@ -195,7 +195,7 @@ fn summary_overflow_note(summary: &str) -> Option<String> {
 /// line count the scroll math clamps against is the row count the terminal
 /// really shows — a re-flow behind the offset would put the bottom of a long
 /// batch out of reach and understate the "N more lines" count.
-fn wrap_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
+pub(super) fn wrap_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
     let chars: Vec<(char, Style)> = line
         .spans
         .iter()
@@ -372,8 +372,10 @@ pub(super) struct SubmitPreview {
 }
 
 /// The in-file anchor label for an annotation (`path:line`, `path:start-end`,
-/// or `path` for a whole-file target), for the preview.
-fn anchor_label(target: &Target) -> String {
+/// or `path` for a whole-file target), for the preview and the post-submit
+/// result view — one labeling, so an item reads the same before and after it
+/// is sent.
+pub(super) fn anchor_label(target: &Target) -> String {
     match target {
         Target::Line { path, line, .. } => format!("{path}:{line}"),
         Target::Range {
@@ -393,6 +395,48 @@ fn first_line(body: &str) -> String {
     body.lines().next().unwrap_or("").to_string()
 }
 
+/// One annotation's preview row — anchor, classification, one-line body, and
+/// publish path. Shared with the post-submit result view.
+pub(super) fn annotation_preview(annotation: &Annotation) -> AnnotationPreview {
+    AnnotationPreview {
+        anchor: anchor_label(&annotation.target),
+        classification: annotation.classification,
+        summary: first_line(&annotation.body),
+        note: PreviewNote::of(&annotation.target),
+    }
+}
+
+/// One reply's preview row, resolving its thread against the fetched overlay.
+/// Shared with the post-submit result view, so a reply is named the same way
+/// before and after it is sent.
+pub(super) fn reply_preview(
+    thread_id: u64,
+    body: &str,
+    threads: &ThreadOverlayStore,
+) -> ReplyPreview {
+    ReplyPreview {
+        thread_id,
+        target: threads.find(thread_id).map(|thread| ReplyTarget {
+            author: thread.root.author.clone(),
+            anchor: thread_anchor_label(&thread.anchor),
+        }),
+        summary: first_line(body),
+    }
+}
+
+/// A reply row's human label: who and where the thread is, or a bare thread id
+/// when the thread has dropped out of the overlay (e.g. a failed refresh) —
+/// the id is then the only thing still known.
+pub(super) fn reply_preview_label(reply: &ReplyPreview) -> String {
+    match &reply.target {
+        Some(target) => format!(
+            "to {} @ {} \u{2014} {}",
+            target.author, target.anchor, reply.summary
+        ),
+        None => format!("thread {}: {}", reply.thread_id, reply.summary),
+    }
+}
+
 /// Builds the grouped preview from the unpublished annotations and replies —
 /// annotations grouped by file in first-seen order, replies in insertion
 /// order. Pure; the caller passes the already-filtered unpublished sets and a
@@ -406,12 +450,7 @@ pub(super) fn build_preview<'a>(
     let mut groups: Vec<FileGroup> = Vec::new();
     for annotation in annotations {
         let path = annotation.target.path().to_string();
-        let item = AnnotationPreview {
-            anchor: anchor_label(&annotation.target),
-            classification: annotation.classification,
-            summary: first_line(&annotation.body),
-            note: PreviewNote::of(&annotation.target),
-        };
+        let item = annotation_preview(annotation);
         match groups.iter_mut().find(|g| g.path == path) {
             Some(group) => group.items.push(item),
             None => groups.push(FileGroup {
@@ -421,17 +460,7 @@ pub(super) fn build_preview<'a>(
         }
     }
     let replies = replies
-        .map(|(thread_id, body)| {
-            let target = threads.find(thread_id).map(|thread| ReplyTarget {
-                author: thread.root.author.clone(),
-                anchor: thread_anchor_label(&thread.anchor),
-            });
-            ReplyPreview {
-                thread_id,
-                target,
-                summary: first_line(body),
-            }
-        })
+        .map(|(thread_id, body)| reply_preview(thread_id, body, threads))
         .collect();
     SubmitPreview { groups, replies }
 }
@@ -809,12 +838,19 @@ impl App {
         };
         self.set_status_message(message);
         self.rebuild_rows();
+        // A stopped run leaves the reviewer needing to know *which* comments
+        // landed, which no one-line count can say — so the per-item result
+        // view opens on top of the status line (additive: the status stays for
+        // after it is dismissed). A clean submit needs no such accounting.
+        if report.failure.is_some() {
+            self.open_submit_result(&report);
+        }
     }
 }
 
 /// Centers a `width_pct`% x `height_pct`% rect inside `area` (same helper
 /// shape as [`super::forge_threads`]'s `centered`).
-fn centered(area: Rect, width_pct: u16, height_pct: u16) -> Rect {
+pub(super) fn centered(area: Rect, width_pct: u16, height_pct: u16) -> Rect {
     let [area] = Layout::horizontal([Constraint::Percentage(width_pct)])
         .flex(Flex::Center)
         .areas(area);
@@ -926,15 +962,7 @@ fn build_lines(
                 .add_modifier(Modifier::BOLD),
         )));
         for reply in &preview.replies {
-            let label = match &reply.target {
-                Some(target) => format!(
-                    "to {} @ {} \u{2014} {}",
-                    target.author, target.anchor, reply.summary
-                ),
-                // The thread dropped out of the overlay (e.g. a failed
-                // refresh) — fall back to the id, the only thing still known.
-                None => format!("thread {}: {}", reply.thread_id, reply.summary),
-            };
+            let label = reply_preview_label(reply);
             lines.push(Line::from(Span::styled(
                 format!("  \u{21b3} {label}"),
                 Style::default().fg(theme.annotation_text),

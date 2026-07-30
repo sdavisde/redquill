@@ -64,7 +64,7 @@ use crate::annotate::Side;
 
 use super::diagnose::submit_error_headline;
 use super::process::{harden_glab, run_captured_with_timeout, run_with_input_and_timeout};
-use super::submit::SubmitReport;
+use super::submit::{SubmitAttempt, SubmitReport};
 use super::threads::{Thread, ThreadAnchor, ThreadComment};
 use super::{ForgeError, PR_LIST_CAP, PrDetail, PullRequest};
 
@@ -830,9 +830,25 @@ pub fn run_gitlab_submit_sequence(
     batch: &GitlabSubmitBatch,
     exec: &dyn GitlabSubmitExecutor,
 ) -> SubmitReport {
-    match try_draft_submit(batch, exec) {
+    let mut report = match try_draft_submit(batch, exec) {
         DraftAttempt::Completed(report) => report,
         DraftAttempt::Unavailable => run_visible_fallback(batch, exec),
+    };
+    // Recorded once here rather than at each early return inside the two
+    // paths: the set a run sets out to send is a property of the batch, so one
+    // assignment can't drift out of step with a new stop point.
+    report.attempt = gitlab_attempt(batch);
+    report
+}
+
+/// What a GitLab run sets out to send: every note (positioned annotations and
+/// file comments alike), every reply whose discussion resolved, and the review
+/// itself when the batch carries a summary or an approval.
+fn gitlab_attempt(batch: &GitlabSubmitBatch) -> SubmitAttempt {
+    SubmitAttempt {
+        annotation_ids: batch.notes.iter().map(|n| n.annotation_id).collect(),
+        reply_ids: batch.replies.iter().map(|r| r.reply_id).collect(),
+        review_post: batch.summary.is_some() || batch.approve,
     }
 }
 

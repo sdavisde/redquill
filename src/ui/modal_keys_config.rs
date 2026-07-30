@@ -163,6 +163,7 @@ pub(super) fn effective_modal_keys(
         thread_view: modal_keys::THREAD_VIEW_KEYS.clone(),
         pr_description: modal_keys::PR_DESCRIPTION_KEYS.clone(),
         submit_forge: modal_keys::SUBMIT_FORGE_KEYS.clone(),
+        submit_result: modal_keys::SUBMIT_RESULT_KEYS.clone(),
         cleanup_reviews: modal_keys::CLEANUP_REVIEWS_KEYS.clone(),
         restore: modal_keys::RESTORE_KEYS.clone(),
     };

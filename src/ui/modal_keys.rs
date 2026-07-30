@@ -1436,6 +1436,95 @@ pub(super) static SUBMIT_FORGE_KEYS: LazyLock<Vec<ModalBinding<SubmitForgeAction
         ]
     });
 
+// -- Post-submit result modal -------------------------------------------------
+
+/// What a key does in the post-submit result modal
+/// ([`super::app::Mode::SubmitResult`]): scroll the read-only per-item account
+/// of a stopped run, dismiss it, or go straight back into the submit modal for
+/// another pass. Free of any text field, so `j`/`k` scroll here as they do in
+/// the thread overlay (the submit modal's arrows-only rule exists because its
+/// summary field owns the letter keys). Not config-remappable yet — see
+/// [`SUBMIT_RESULT_KEYS`] and the module doc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SubmitResultAction {
+    /// Scrolls the outcome list down one line.
+    ScrollDown,
+    /// Scrolls the outcome list up one line.
+    ScrollUp,
+    /// Scrolls the outcome list down a full viewport.
+    PageDown,
+    /// Scrolls the outcome list up a full viewport.
+    PageUp,
+    /// Dismisses the modal, restoring the mode it interrupted.
+    Dismiss,
+    /// Dismisses it and reopens the submit modal to retry the remainder (see
+    /// [`super::app::App::submit_result_retry`]).
+    Retry,
+}
+
+/// The result-modal control keys, for the help overlay, footer strip, and
+/// [`super::modes::handle_submit_result_key`]'s dispatch.
+pub(super) static SUBMIT_RESULT_KEYS: LazyLock<Vec<ModalBinding<SubmitResultAction>>> =
+    LazyLock::new(|| {
+        vec![
+            ModalBinding {
+                description: "Submit again — retry everything that didn't land",
+                keys: vec![ModalKey::plain(KeyCode::Char('U'))],
+                action: SubmitResultAction::Retry,
+                footer: Some(FooterHint {
+                    rank: 1,
+                    label: "submit again",
+                }),
+            },
+            ModalBinding {
+                description: "Dismiss the result view",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Enter),
+                    ModalKey::plain(KeyCode::Esc),
+                    ModalKey::plain(KeyCode::Char('q')),
+                ],
+                action: SubmitResultAction::Dismiss,
+                footer: Some(FooterHint {
+                    rank: 2,
+                    label: "dismiss",
+                }),
+            },
+            ModalBinding {
+                description: "Scroll the outcome list down",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('j')),
+                    ModalKey::plain(KeyCode::Down),
+                ],
+                action: SubmitResultAction::ScrollDown,
+                footer: Some(FooterHint {
+                    rank: 3,
+                    label: "scroll",
+                }),
+            },
+            ModalBinding {
+                description: "Scroll the outcome list up",
+                keys: vec![
+                    ModalKey::plain(KeyCode::Char('k')),
+                    ModalKey::plain(KeyCode::Up),
+                ],
+                action: SubmitResultAction::ScrollUp,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Scroll the outcome list down a page",
+                keys: vec![ModalKey::plain(KeyCode::PageDown)],
+                action: SubmitResultAction::PageDown,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Scroll the outcome list up a page",
+                keys: vec![ModalKey::plain(KeyCode::PageUp)],
+                action: SubmitResultAction::PageUp,
+                footer: None,
+            },
+        ]
+    });
+
 // -- Pull/push confirm modal --------------------------------------------------
 
 /// What a key does in the pull/push confirm modal (`p`/`P` in a review
@@ -3052,6 +3141,9 @@ pub struct ModalKeymaps {
     /// The submit-review modal. Not config-remappable yet — see
     /// [`SUBMIT_FORGE_KEYS`].
     pub(super) submit_forge: Vec<ModalBinding<SubmitForgeAction>>,
+    /// The post-submit result modal. Not config-remappable yet — see
+    /// [`SUBMIT_RESULT_KEYS`].
+    pub(super) submit_result: Vec<ModalBinding<SubmitResultAction>>,
     /// The finished-review cleanup confirm modal. Not config-remappable yet —
     /// see [`CLEANUP_REVIEWS_KEYS`].
     pub(super) cleanup_reviews: Vec<ModalBinding<CleanupReviewsAction>>,
@@ -3087,6 +3179,7 @@ impl Default for ModalKeymaps {
             thread_view: THREAD_VIEW_KEYS.clone(),
             pr_description: PR_DESCRIPTION_KEYS.clone(),
             submit_forge: SUBMIT_FORGE_KEYS.clone(),
+            submit_result: SUBMIT_RESULT_KEYS.clone(),
             cleanup_reviews: CLEANUP_REVIEWS_KEYS.clone(),
             filter_edit: FILTER_EDIT_KEYS.clone(),
         }

@@ -174,6 +174,16 @@ arrow/page keys rather than `j`/`k`.
 A re-submit only ever sends what hasn't already published, so a partial
 failure never double-posts.
 
+When a submit stops partway, the status line's counts are joined by a
+read-only result view naming each item's fate: `✓ published`, `◌ pending
+draft` (staged on GitLab, awaiting a publish), and `✗ not sent` — the last
+group led by the review itself when the verdict never landed — with the
+error underneath. Comments are named exactly as the submit modal named
+them. `Enter`/`Esc`/`q` dismiss it, `U` goes straight back to the submit
+modal to retry the remainder, and `j`/`k`/arrows and `PageUp`/`PageDown`
+scroll a long list (no summary field here, so the letter keys are free). A
+submit that publishes everything shows only the one-line status.
+
 ## Security notes
 
 redquill never reads, stores, logs, or displays a forge token. The two
