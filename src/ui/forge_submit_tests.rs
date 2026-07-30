@@ -4,7 +4,9 @@ use ratatui::backend::TestBackend;
 
 use crate::annotate::{Classification, Side, Target};
 use crate::diff::FileDiff;
-use crate::forge::{SubmitReport, Verdict};
+use crate::forge::{
+    SubmitReport, Thread, ThreadAnchor, ThreadComment, ThreadOverlayStore, Verdict,
+};
 use crate::git::{DiffTarget, RawFilePatch};
 use crate::review::store::{ForgeMetadata, ForgeProviderKind};
 
@@ -136,6 +138,7 @@ fn preview_groups_annotations_by_file_and_lists_replies_separately() {
         app.replies
             .unpublished()
             .map(|r| (r.thread_id, r.body.as_str())),
+        &ThreadOverlayStore::new(),
     );
 
     // a.rs group has the line comment then the file comment; b.rs has the
@@ -163,6 +166,74 @@ fn preview_groups_annotations_by_file_and_lists_replies_separately() {
     assert_eq!(preview.replies.len(), 2);
     assert_eq!(preview.replies[0].thread_id, 100);
     assert_eq!(preview.replies[0].summary, "agreed");
+}
+
+/// A positioned thread rooted by `author`, for reply-preview target
+/// resolution (mirrors `forge_threads_tests::positioned_thread`).
+fn positioned_thread(id: u64, author: &str, path: &str, line: u32) -> Thread {
+    Thread {
+        id,
+        anchor: ThreadAnchor::Position {
+            path: path.to_string(),
+            side: Side::New,
+            line,
+        },
+        root: ThreadComment {
+            id,
+            author: author.to_string(),
+            created_at: "2026-07-01T10:00:00Z".to_string(),
+            body: "root comment".to_string(),
+        },
+        replies: Vec::new(),
+        resolved: false,
+        outdated: false,
+        discussion_id: None,
+    }
+}
+
+#[test]
+fn reply_preview_names_the_root_author_and_anchor_when_the_thread_is_known() {
+    let mut app = github_review_app(&["src/a.rs"]);
+    app.replies.add(100, "agreed").unwrap();
+    let mut threads = ThreadOverlayStore::new();
+    threads.replace(vec![positioned_thread(100, "alice", "src/a.rs", 12)]);
+
+    let preview = build_preview(
+        app.annotations.unpublished(),
+        app.replies
+            .unpublished()
+            .map(|r| (r.thread_id, r.body.as_str())),
+        &threads,
+    );
+
+    let target = preview.replies[0]
+        .target
+        .as_ref()
+        .expect("the thread is present in the overlay");
+    assert_eq!(target.author, "alice");
+    assert_eq!(target.anchor, "src/a.rs:12");
+}
+
+#[test]
+fn reply_preview_falls_back_to_the_thread_id_when_the_thread_is_missing() {
+    // Simulates a failed refresh dropping the thread from the overlay: the
+    // reply is still drafted, but its author/anchor are no longer known.
+    let mut app = github_review_app(&["src/a.rs"]);
+    app.replies.add(100, "agreed").unwrap();
+    let threads = ThreadOverlayStore::new();
+
+    let preview = build_preview(
+        app.annotations.unpublished(),
+        app.replies
+            .unpublished()
+            .map(|r| (r.thread_id, r.body.as_str())),
+        &threads,
+    );
+
+    assert!(
+        preview.replies[0].target.is_none(),
+        "no target once the thread is gone from the overlay"
+    );
 }
 
 // -- open / not-a-forge-session no-op ----------------------------------------
@@ -558,6 +629,42 @@ fn render_modal(app: &App, width: u16, height: u16) -> String {
         .iter()
         .map(|c| c.symbol())
         .collect()
+}
+
+// -- reply preview target labels -----------------------------------
+
+#[test]
+fn a_reply_preview_renders_the_root_author_and_anchor_not_the_raw_id() {
+    let mut app = github_review_app(&["src/a.rs"]);
+    app.replies.add(100, "agreed").unwrap();
+    app.thread_overlay
+        .replace(vec![positioned_thread(100, "alice", "src/a.rs", 12)]);
+    app.open_submit_forge();
+
+    let rendered = render_modal(&app, 90, 24);
+    assert!(
+        rendered.contains("to alice @ src/a.rs:12"),
+        "the reply must name the root author and anchor: {rendered}"
+    );
+    assert!(
+        !rendered.contains("thread 100:"),
+        "a resolved thread must not fall back to the raw id: {rendered}"
+    );
+}
+
+#[test]
+fn a_reply_preview_falls_back_to_the_thread_id_once_the_thread_drops_out_of_the_overlay() {
+    // The overlay is empty — e.g. a failed refresh dropped the thread — so
+    // there is no author/anchor left to show.
+    let mut app = github_review_app(&["src/a.rs"]);
+    app.replies.add(100, "agreed").unwrap();
+    app.open_submit_forge();
+
+    let rendered = render_modal(&app, 90, 24);
+    assert!(
+        rendered.contains("thread 100: agreed"),
+        "with no thread in the overlay, the id form is the only honest label: {rendered}"
+    );
 }
 
 /// A review with `n` annotations spread over three files — enough rows to
