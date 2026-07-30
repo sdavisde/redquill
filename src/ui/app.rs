@@ -12,7 +12,7 @@ use crate::annotate::{AnnotationStore, Source, Target};
 #[cfg(test)]
 use crate::annotate::Side;
 use crate::config::{Config, ConfigWarning};
-use crate::diff::{DiffStat, FileDiff, StatDisplay};
+use crate::diff::{DiffStat, FileDiff, ReviewSummary, StatDisplay};
 use crate::git::{
     BranchStatus, CommitLogEntry, CommitSummary, DiffTarget, LocalBranch, RawFilePatch, RemoteOp,
     StagingMode, StashEntry, commit_command_line, remote_command,
@@ -309,6 +309,11 @@ pub struct App {
     /// `view.files`, refreshed alongside `stats`. Shown in the git panel's
     /// bottom counts line and the review banner.
     pub total_stats: DiffStat,
+    /// The review-wide roll-up over `view.files`, refreshed alongside
+    /// `stats`: file/binary counts, total churn, and the largest file and
+    /// hunk. The git panel's counts line reads the binary count from here;
+    /// the hotspot fields are what a "start here" jump will read next.
+    pub summary: ReviewSummary,
     /// Per-path [`ReviewStatus`] driving the accept/defer markers and the
     /// review banner's progress count (see [`super::review_ops`]),
     /// mirroring how `staged_states` drives the
@@ -753,6 +758,8 @@ pub(super) struct SuspendedView {
     pub(super) stats: HashMap<String, StatDisplay>,
     /// `target`'s aggregate added/removed counts.
     pub(super) total_stats: DiffStat,
+    /// `target`'s review-wide roll-up.
+    pub(super) summary: ReviewSummary,
 }
 
 /// Which mutating background git operation is in flight (see
@@ -811,7 +818,8 @@ impl App {
             .iter()
             .map(|f| (f.path.clone(), crate::diff::stat_display(f, f.stats())))
             .collect();
-        let total_stats: DiffStat = files.iter().map(FileDiff::stats).sum();
+        let summary = crate::diff::summarize(&files);
+        let total_stats: DiffStat = summary.stat;
         let mut app = App {
             view: DiffViewState::new(files),
             help: HelpOverlayState::new(),
@@ -831,6 +839,7 @@ impl App {
             staged_states: HashMap::new(),
             stats,
             total_stats,
+            summary,
             review_states: HashMap::new(),
             staging_cursor: 0,
             staging_filter: None,
@@ -930,6 +939,7 @@ impl App {
         app.staged_states = snapshot.staged_states;
         app.stats = snapshot.stats;
         app.total_stats = snapshot.total;
+        app.summary = snapshot.summary;
         app.target = target;
         app.stage_ops = Some(ops);
         app.recompute_untracked();
