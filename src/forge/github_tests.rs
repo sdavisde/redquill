@@ -48,6 +48,8 @@ fn pr_list_command_has_the_fixed_argv_and_hardened_env() {
             OsStr::new("list"),
             OsStr::new("--json"),
             OsStr::new(PR_LIST_JSON_FIELDS),
+            OsStr::new("--limit"),
+            OsStr::new("100"),
         ]
     );
     let envs: Vec<_> = cmd.get_envs().collect();
