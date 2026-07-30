@@ -21,6 +21,15 @@
 //! is resolved user-wins, with one [`ConfigWarning`] recorded. An unknown
 //! action name, or a two-chord key sequence (modal tables never supported
 //! `gd`-style sequences), is itself an invalid value.
+//!
+//! **Free-text modes** (Compose, the commit-message modal, Search, Finder,
+//! Project Search, and the submit-review modal's summary field) consult their
+//! table before the printable-char fallback, so binding a bare printable key
+//! to one of their control actions takes that character away from typing.
+//! That's allowed rather than rejected — it's the same trade every free-text
+//! mode here has always accepted, and the consequence is documented in
+//! `docs/example-config.toml` rather than encoded as a special-case
+//! validation rule.
 
 use std::collections::BTreeMap;
 
@@ -146,6 +155,38 @@ pub(super) fn effective_modal_keys(
             modal_keys::project_search_results_action_from_name,
             &mut warnings,
         ),
+        thread_view: apply_modal_overrides(
+            modal_keys::THREAD_VIEW_KEYS.clone(),
+            overrides_for("thread-view"),
+            "keys.thread-view",
+            modal_keys::thread_view_action_name,
+            modal_keys::thread_view_action_from_name,
+            &mut warnings,
+        ),
+        submit_forge: apply_modal_overrides(
+            modal_keys::SUBMIT_FORGE_KEYS.clone(),
+            overrides_for("submit-forge"),
+            "keys.submit-forge",
+            modal_keys::submit_forge_action_name,
+            modal_keys::submit_forge_action_from_name,
+            &mut warnings,
+        ),
+        submit_result: apply_modal_overrides(
+            modal_keys::SUBMIT_RESULT_KEYS.clone(),
+            overrides_for("submit-result"),
+            "keys.submit-result",
+            modal_keys::submit_result_action_name,
+            modal_keys::submit_result_action_from_name,
+            &mut warnings,
+        ),
+        cleanup_reviews: apply_modal_overrides(
+            modal_keys::CLEANUP_REVIEWS_KEYS.clone(),
+            overrides_for("cleanup-reviews"),
+            "keys.cleanup-reviews",
+            modal_keys::cleanup_reviews_action_name,
+            modal_keys::cleanup_reviews_action_from_name,
+            &mut warnings,
+        ),
         filter_edit: apply_modal_overrides(
             modal_keys::FILTER_EDIT_KEYS.clone(),
             overrides_for("filter-edit"),
@@ -160,19 +201,14 @@ pub(super) fn effective_modal_keys(
         end_review: modal_keys::END_REVIEW_KEYS.clone(),
         accepted_panel: modal_keys::ACCEPTED_PANEL_KEYS.clone(),
         confirm_remote_op: modal_keys::CONFIRM_REMOTE_OP_KEYS.clone(),
-        thread_view: modal_keys::THREAD_VIEW_KEYS.clone(),
-        submit_forge: modal_keys::SUBMIT_FORGE_KEYS.clone(),
-        submit_result: modal_keys::SUBMIT_RESULT_KEYS.clone(),
-        cleanup_reviews: modal_keys::CLEANUP_REVIEWS_KEYS.clone(),
         restore: modal_keys::RESTORE_KEYS.clone(),
     };
 
     // Every mode name the config actually provided a table for that isn't
-    // one of the thirteen known modes was already flagged (unknown key) at
-    // parse time in `crate::config::keys::KeysConfig::from_value`, which
-    // hardcodes the same thirteen names — see that module's `MODAL_MODE_NAMES`
-    // doc and this module's tests for the cross-check that the two lists
-    // agree.
+    // one of the known modes was already flagged (unknown key) at parse time
+    // in `crate::config::keys::KeysConfig::from_value`, which hardcodes the
+    // same list — see that module's `MODAL_MODE_NAMES` doc and this module's
+    // tests for the cross-check that the two lists agree.
     (keymaps, warnings)
 }
 

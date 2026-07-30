@@ -321,7 +321,9 @@ literal = false
 # the help overlay's scroll keys and its own `/` filter, the shared `/`
 # list-filter editing sub-state (annotation list / staging / accepted panel
 # / switcher, spec 12), Compose, the commit-message modal, the diff-view `/`
-# search input, the fuzzy file finder, and the two Project Search focuses) —
+# search input, the fuzzy file finder, the two Project Search focuses, the
+# imported-thread overlay, the submit-review modal, the post-submit result
+# view, and the finished-review cleanup modal) —
 # has its own `[keys.<mode>]` table, with the
 # identical grammar and merge semantics as `[keys.diff]`/`[keys.panel]`
 # above: `action-name = "<key>"` or `= ["<key>", ...]`, an override
@@ -329,13 +331,18 @@ literal = false
 # its defaults, `= []` unbinds it, and a same-table collision is won by
 # the override (with a warning).
 #
-# Free-text modes (Compose, the commit-message modal, Search, Finder, and
-# both Project Search focuses) type printable characters into a buffer or
-# query — that character insertion is never an action and can't be bound;
-# only the *control* keys listed below (Enter/Esc/arrows/Backspace/...)
-# are actions.
+# Free-text modes (Compose, the commit-message modal, Search, Finder, both
+# Project Search focuses, and the submit-review modal's summary field) type
+# printable characters into a buffer or query — that character insertion is
+# never an action and can't be bound; only the *control* keys listed below
+# (Enter/Esc/arrows/Backspace/...) are actions. The table is consulted
+# before the character-insert fallback, so binding a control action of one
+# of those modes to a bare printable key is accepted but takes that
+# character away from typing — e.g. `[keys.submit-forge] cancel = "q"` means
+# you can no longer type `q` into the review summary. Prefer a modified key
+# (`ctrl-`/`alt-`) or a named key in a free-text mode.
 #
-# The fourteen mode names and their complete action lists, each showing its
+# The eighteen mode names and their complete action lists, each showing its
 # default key(s):
 #
 # [keys.list]                          # Annotation list panel (`a`)
@@ -404,6 +411,8 @@ literal = false
 # jump-to-bottom = ["G", "end"]        # Jump to bottom
 # confirm = "enter"                    # Confirm the highlighted row
 # enter-filter = "/"                   # Filter (fuzzy, narrows the active tab)
+# toggle-all-commits = "a"             # Commits tab: ahead-of-base <-> full recent-HEAD log
+# cleanup-finished-reviews = "X"       # Pull Requests tab: clean up finished reviews
 # close = "esc"                        # Close
 #
 # [keys.help]                          # Help overlay scroll/close/filter-open keys
@@ -500,6 +509,39 @@ literal = false
 # toggle-case = "alt-c"                # Cycle case sensitivity (smart / sensitive / insensitive)
 # toggle-whole-word = "alt-w"          # Toggle whole-word matching
 # toggle-literal = "alt-r"             # Toggle regex / literal matching
+#
+# [keys.thread-view]                   # Imported PR comment thread overlay (spec 13)
+# scroll-down = ["j", "down"]           # Scroll conversation down
+# scroll-up = ["k", "up"]               # Scroll conversation up
+# reply = "r"                          # Reply to this thread
+# close = ["q", "esc"]                  # Close the thread overlay
+#
+# [keys.submit-forge]                  # Submit-review modal (`U` in a PR review, spec 13)
+# confirm = "enter"                    # Submit the review (publishes to the forge)
+# cancel = "esc"                       # Cancel — close this modal, send nothing
+# verdict-next = "tab"                 # Next verdict (comment / approve / request changes)
+# verdict-prev = "shift-tab"           # Previous verdict
+# scroll-down = "down"                 # Scroll the batch preview down
+# scroll-up = "up"                     # Scroll the batch preview up
+# page-down = "pagedown"               # Scroll the batch preview down a page
+# page-up = "pageup"                   # Scroll the batch preview up a page
+# delete-char = "backspace"            # Delete summary character
+# compose-summary = "ctrl-e"           # Edit the summary in the composer (multi-line)
+#
+# [keys.submit-result]                 # Post-submit result view (shown when a submit stops early)
+# retry = "U"                          # Submit again — retry everything that didn't land
+# dismiss = ["enter", "esc", "q"]       # Dismiss the result view
+# scroll-down = ["j", "down"]           # Scroll the outcome list down
+# scroll-up = ["k", "up"]               # Scroll the outcome list up
+# page-down = "pagedown"               # Scroll the outcome list down a page
+# page-up = "pageup"                   # Scroll the outcome list up a page
+#
+# [keys.cleanup-reviews]               # Finished-review cleanup confirm modal (launcher `X`)
+# move-down = ["j", "down"]             # Move the highlight down
+# move-up = ["k", "up"]                 # Move the highlight up
+# toggle = "space"                     # Toggle the highlighted entry's selection
+# confirm = ["enter", "y"]              # Delete the selected finished reviews (worktree, branch, saved state)
+# cancel = ["esc", "n"]                 # Cancel — close this modal, delete nothing
 #
 # Example: remap the staging panel's unstage key to `x` and the switcher's
 # confirm key to `l` (also still one of ToggleTab's defaults, so this would
