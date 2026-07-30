@@ -15,9 +15,10 @@
 //! read-only single-commit view on `Enter` via
 //! [`App::confirm_launcher_commit`]. The Pull Requests tab lists open PRs
 //! from whichever forge `origin` resolves to (async, through
-//! [`super::stage_ops::StageOps::async_pr_list_fetcher`]); `Enter` is
-//! stubbed to a status line via [`App::confirm_launcher_pr`] until PR
-//! checkout lands. All three tabs share the shared motion layer (spec 12
+//! [`super::stage_ops::StageOps::async_pr_list_fetcher`]); `Enter` checks the
+//! highlighted PR out into a managed worktree and starts a review session via
+//! [`App::confirm_launcher_pr`], the same weight as the Branches tab. All
+//! three tabs share the shared motion layer (spec 12
 //! FR-12) clamped against [`App::review_launcher_row_count`] and the shared
 //! `/` filter component (spec 12 FR-12, [`super::list_filter::ListFilter`])
 //! via [`App::launcher_filter`] — see that field's doc for the
