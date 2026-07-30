@@ -380,8 +380,9 @@ pub struct App {
     /// config cache persists across selections. `pub(super)` for the
     /// code-intelligence module's peek-preview highlighting.
     pub(super) highlighter: Highlighter,
-    /// Highlighted line spans, cached per `(path, side)` and cleared on
-    /// every [`App::refresh`] (see [`syntax::HighlightCache`]).
+    /// Highlighted line spans, cached per content source — per blob, not per
+    /// view — and invalidated per path on [`App::refresh`] (see
+    /// [`syntax::HighlightCache`]).
     pub(super) highlight_cache: HighlightCache,
     /// The active (or inactive) search session: confirmed pattern plus its
     /// match row indices against the current file's rows.
@@ -1237,17 +1238,17 @@ impl App {
         self.repo_root = Some(root);
     }
 
-    /// The number of `(path, side)` entries in the highlight cache (test hook).
+    /// The number of entries in the highlight cache (test hook).
     #[cfg(test)]
     pub(super) fn highlight_cache_len(&self) -> usize {
         self.highlight_cache.len()
     }
 
-    /// Whether the highlight cache holds an entry for `(path, side)` (test
-    /// hook — distinguishes "cached, no spans" from "not cached").
+    /// Whether the highlight cache holds any entry sourced from `path` (test
+    /// hook — an empty span list still counts as cached).
     #[cfg(test)]
-    pub(super) fn highlight_cache_contains(&self, path: &str, side: Side) -> bool {
-        self.highlight_cache.contains(path, side)
+    pub(super) fn highlight_cache_has_path(&self, path: &str) -> bool {
+        self.highlight_cache.has_path(path)
     }
 
     /// Applies one [`Action`] as a state transition.

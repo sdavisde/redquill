@@ -1,6 +1,6 @@
 //! Row and highlight assembly: [`super::App`]'s side of the seam between the
-//! diff model and the rendered multibuffer. `rebuild_rows` lazily populates
-//! the syntax-highlight cache and concatenates every file's rows into the one
+//! diff model and the rendered multibuffer. `rebuild_rows` populates the
+//! syntax-highlight cache and concatenates every file's rows into the one
 //! buffer [`super::DiffViewState`] renders; `refresh_rows` is the lighter
 //! post-annotation-mutation rebuild. Kept out of `app.rs` so the coordinator
 //! stays thin; these are the shared mutation points many gestures funnel
@@ -12,7 +12,7 @@ use crate::review::ReviewStatus;
 use super::App;
 use super::rows::{ReviewMarker, StagedMarker, SyntaxSpans, build_multibuffer};
 use super::stage_ops::StagedState;
-use super::syntax;
+use super::syntax::{self, ContentSource};
 
 impl App {
     /// Rebuilds `rows` for the currently selected file against the current
@@ -29,73 +29,47 @@ impl App {
         }
     }
 
-    /// Rebuilds the whole multi-file row buffer: lazily populates the
-    /// syntax-highlight cache for the in-use side(s) of every *expanded*
-    /// file (collapsed files show only a header, so they are never
-    /// highlighted until expanded — a cache miss is highlighted at most once
-    /// per `(path, side)` between refreshes), then concatenates every file's
-    /// rows into one buffer via [`build_multibuffer`], carrying per-file
-    /// collapse state and staged markers. Also recomputes the active
-    /// search's matches and re-derives `selected_file` from the cursor. This
-    /// is `App`'s side of the seam: highlighting and the git backend live
-    /// here, and the built buffer is fed into [`super::DiffViewState`].
+    /// Rebuilds the whole multi-file row buffer: populates the syntax-highlight
+    /// cache for the in-use side(s) of every *expanded* file, then concatenates
+    /// every file's rows into one buffer via [`build_multibuffer`], carrying
+    /// per-file collapse state and staged markers. Also recomputes the active
+    /// search's matches and re-derives `selected_file` from the cursor. This is
+    /// `App`'s side of the seam: highlighting and the git backend live here,
+    /// and the built buffer is fed into [`super::DiffViewState`].
+    ///
+    /// Each blob is highlighted at most once however many views reach it — the
+    /// cache is keyed by content source, not by file — and is re-highlighted
+    /// only when its bytes could have changed. A collapsed file shows only a
+    /// header and is never highlighted until expanded.
     pub(super) fn rebuild_rows(&mut self) {
-        // Per-file metadata, collected first (cloning paths) so the cache /
-        // highlighter can be mutably borrowed without also holding `files`.
-        struct Meta {
-            path: String,
-            old_path: Option<String>,
-            collapsed: bool,
-            needs_new: bool,
-            needs_old: bool,
-            synthetic: bool,
+        // Resolved once and reused twice below, by the populate pass and by
+        // the span lookup.
+        let sources: Vec<[Option<ContentSource>; 2]> = (0..self.view.files.len())
+            .map(|i| self.highlight_sources(i))
+            .collect();
+
+        for index in 0..self.view.files.len() {
+            let (Some(pair), Some(file)) = (sources.get(index), self.view.files.get(index)) else {
+                continue;
+            };
+            let path = file.path.clone();
+            for source in pair.iter().flatten() {
+                syntax::populate_cache(
+                    &mut self.highlight_cache,
+                    &mut self.highlighter,
+                    self.stage_ops.as_deref(),
+                    source,
+                    &path,
+                );
+            }
         }
-        let metas: Vec<Meta> = self
+
+        let collapsed: Vec<bool> = self
             .view
             .files
             .iter()
-            .enumerate()
-            .map(|(i, file)| {
-                let collapsed = self.view.is_collapsed(&file.path);
-                Meta {
-                    path: file.path.clone(),
-                    old_path: file.old_path.clone(),
-                    collapsed,
-                    needs_new: !collapsed && syntax::side_in_use(file, Side::New),
-                    needs_old: !collapsed && syntax::side_in_use(file, Side::Old),
-                    synthetic: self.patches.get(i).is_none_or(|p| p.is_none()),
-                }
-            })
+            .map(|f| self.view.is_collapsed(&f.path))
             .collect();
-
-        for meta in &metas {
-            if meta.needs_new {
-                syntax::populate_cache(
-                    &mut self.highlight_cache,
-                    &mut self.highlighter,
-                    self.stage_ops.as_deref(),
-                    &self.target,
-                    &meta.path,
-                    meta.old_path.as_deref(),
-                    Side::New,
-                    meta.synthetic,
-                );
-            }
-            if meta.needs_old {
-                syntax::populate_cache(
-                    &mut self.highlight_cache,
-                    &mut self.highlighter,
-                    self.stage_ops.as_deref(),
-                    &self.target,
-                    &meta.path,
-                    meta.old_path.as_deref(),
-                    Side::Old,
-                    meta.synthetic,
-                );
-            }
-        }
-
-        let collapsed: Vec<bool> = metas.iter().map(|m| m.collapsed).collect();
         let markers: Vec<StagedMarker> = self
             .view
             .files
@@ -122,13 +96,18 @@ impl App {
                 ReviewStatus::ChangedSinceAccepted => ReviewMarker::Changed,
             })
             .collect();
-        let syntax: Vec<SyntaxSpans> = self
-            .view
-            .files
+        // A file with no cached spans (a side with no content to source, or a
+        // language with no grammar) renders unhighlighted — the same silent
+        // degradation as before.
+        let syntax: Vec<SyntaxSpans> = sources
             .iter()
-            .map(|f| SyntaxSpans {
-                new: self.highlight_cache.get(&f.path, Side::New),
-                old: self.highlight_cache.get(&f.path, Side::Old),
+            .map(|[new, old]| SyntaxSpans {
+                new: new
+                    .as_ref()
+                    .map_or(&[][..], |s| self.highlight_cache.get(s)),
+                old: old
+                    .as_ref()
+                    .map_or(&[][..], |s| self.highlight_cache.get(s)),
             })
             .collect();
 
@@ -168,5 +147,34 @@ impl App {
         self.view.rebuild_layout();
         self.view.selected_file = self.view.file_of_cursor();
         self.search.recompute(&self.view.rows);
+    }
+
+    /// The content sources for one file's two sides, `None` per side where
+    /// that side needs no highlighting at all: a collapsed file (only its
+    /// header renders), a side no row uses (the old side of a pure addition),
+    /// or a synthetic file's absent old side.
+    ///
+    /// One definition, so the populate pass and the span lookup can't
+    /// disagree about what a given file needs.
+    fn highlight_sources(&self, index: usize) -> [Option<ContentSource>; 2] {
+        let Some(file) = self.view.files.get(index) else {
+            return [None, None];
+        };
+        if self.view.is_collapsed(&file.path) {
+            return [None, None];
+        }
+        let synthetic = self.patches.get(index).is_none_or(|p| p.is_none());
+        [Side::New, Side::Old].map(|side| {
+            if !syntax::side_in_use(file, side) {
+                return None;
+            }
+            syntax::source_for(
+                &self.target,
+                side,
+                &file.path,
+                file.old_path.as_deref(),
+                synthetic,
+            )
+        })
     }
 }

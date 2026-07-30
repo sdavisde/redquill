@@ -98,11 +98,6 @@ impl App {
             self.total_stats = file_stat;
         }
 
-        // The just-suspended (or just-replaced) content shares the highlight
-        // cache by path; clearing it prevents cross-contamination between
-        // the suspended view's cached spans and the file view's (mirrors
-        // `open_commit_view`).
-        self.highlight_cache.clear();
         self.rebuild_rows();
 
         if let Some(line) = line {
@@ -140,7 +135,6 @@ impl App {
         self.staged_states = suspended.staged_states;
         self.stats = suspended.stats;
         self.total_stats = suspended.total_stats;
-        self.highlight_cache.clear();
         self.rebuild_rows();
         self.mode = self.file_view_return_mode;
         self.file_view_return_mode = Mode::Normal;

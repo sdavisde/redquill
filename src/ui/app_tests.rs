@@ -2703,15 +2703,14 @@ fn refresh_drops_highlight_cache_entries_for_removed_files() {
     let (mut app, diff, show_calls) = app_with_counting_fake(vec![a, b]);
     // Two expanded files, two sides each -> 4 fetches.
     assert_eq!(*show_calls.borrow(), 4);
-    assert!(app.highlight_cache_contains("b.rs", Side::New));
+    assert!(app.highlight_cache_has_path("b.rs"));
 
     // b.rs leaves the review; its cache entries must be dropped (no
     // unbounded growth), while a.rs (unchanged) keeps its cached spans.
     *diff.borrow_mut() = vec![highlight_patch("a.rs")];
     app.refresh();
-    assert!(app.highlight_cache_contains("a.rs", Side::New));
-    assert!(!app.highlight_cache_contains("b.rs", Side::New));
-    assert!(!app.highlight_cache_contains("b.rs", Side::Old));
+    assert!(app.highlight_cache_has_path("a.rs"));
+    assert!(!app.highlight_cache_has_path("b.rs"));
     // a.rs was a cache hit -> no further fetches.
     assert_eq!(*show_calls.borrow(), 4);
     assert_eq!(app.highlight_cache_len(), 2);

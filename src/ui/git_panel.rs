@@ -1036,11 +1036,6 @@ impl App {
         }
         self.active_commit = header;
         self.recompute_untracked();
-        // The just-suspended (or just-replaced) content shares this cache by
-        // path; clearing it prevents the commit's highlighted spans from
-        // cross-contaminating the suspended view's cache entries (and vice
-        // versa on return).
-        self.highlight_cache.clear();
         self.rebuild_rows();
         self.mode = Mode::Normal;
     }
@@ -1063,7 +1058,6 @@ impl App {
         self.total_stats = suspended.total_stats;
         self.active_commit = None;
         self.recompute_untracked();
-        self.highlight_cache.clear();
         self.rebuild_rows();
         self.mode = Mode::Normal;
     }
