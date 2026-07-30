@@ -641,6 +641,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App, keymap: &Keymap) {
         ),
         dim("]".to_string()),
     ];
+    // Binary files sit in the file count but contribute nothing to `+A -R`,
+    // so call them out rather than leaving the counts looking short.
+    if app.summary.binary_files > 0 {
+        counts_spans.push(dim(format!(" [{} bin]", app.summary.binary_files)));
+    }
     if !app.staged.is_empty() {
         counts_spans.push(dim(format!(" [{} staged]", app.staged.len())));
     }
@@ -1010,6 +1015,7 @@ impl App {
                 staged_states: std::mem::replace(&mut self.staged_states, snapshot.staged_states),
                 stats: std::mem::replace(&mut self.stats, snapshot.stats),
                 total_stats: std::mem::replace(&mut self.total_stats, snapshot.total),
+                summary: std::mem::replace(&mut self.summary, snapshot.summary),
             });
         } else {
             self.target = target;
@@ -1019,6 +1025,7 @@ impl App {
             self.staged_states = snapshot.staged_states;
             self.stats = snapshot.stats;
             self.total_stats = snapshot.total;
+            self.summary = snapshot.summary;
         }
         self.active_commit = header;
         self.recompute_untracked();
@@ -1047,6 +1054,7 @@ impl App {
         self.staged_states = suspended.staged_states;
         self.stats = suspended.stats;
         self.total_stats = suspended.total_stats;
+        self.summary = suspended.summary;
         self.active_commit = None;
         self.recompute_untracked();
         self.highlight_cache.clear();

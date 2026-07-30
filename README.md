@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  A portable, efficeint tool for reviewing code
+  A portable, efficient tool for reviewing code
 </p>
 
 ## Vision
@@ -31,3 +31,4 @@ brew install sdavisde/tap/redquill
 ## Documentation
 
 - [`docs/forge-setup.md`](docs/forge-setup.md) — Pull Requests tab: supported providers, zero-config detection, hosted-instance setup, troubleshooting.
+- [`docs/diff-summary.md`](docs/diff-summary.md) — the review-wide summary model: what counts as churn, how binary and rename-only files are treated, and where the numbers come from.

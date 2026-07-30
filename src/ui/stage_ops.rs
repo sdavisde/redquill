@@ -11,7 +11,10 @@ use std::process::Command;
 
 use thiserror::Error;
 
-use crate::diff::{DiffParseError, DiffStat, FileChangeKind, FileDiff, StatDisplay, stat_display};
+use crate::diff::{
+    DiffParseError, DiffStat, FileChangeKind, FileDiff, ReviewSummary, StatDisplay, stat_display,
+    summarize,
+};
 use crate::forge::{
     self, CredentialChecker, ForgeError, GhCredentialChecker, GlabCredentialChecker, ProviderKind,
     ProviderResolution, PullRequest, ResolutionCache, Thread, UnresolvedReason,
@@ -1127,7 +1130,12 @@ pub struct ReviewSnapshot {
     /// `files`) fall back to [`StatDisplay::Omitted`].
     pub stats: HashMap<String, StatDisplay>,
     /// The aggregate added/removed counts across every file in `files`.
+    /// Same value as `summary.stat`, kept as its own field so the render
+    /// surfaces that only want the totals don't reach through the summary.
     pub total: DiffStat,
+    /// The review-wide roll-up: file and binary counts, total churn, and the
+    /// largest file and hunk in the review.
+    pub summary: ReviewSummary,
 }
 
 /// A single file's staged state, derived from its `git status` index-side
@@ -1304,14 +1312,13 @@ pub fn build_review(
     let (files, patches): (Vec<FileDiff>, Vec<Option<RawFilePatch>>) = entries.into_iter().unzip();
 
     // Computed once here (not per render frame): each file's raw stat feeds
-    // both its own display decision and the running aggregate.
+    // its own display decision, and the review-wide roll-up carries the
+    // aggregate every summary surface reads.
     let mut stats = HashMap::with_capacity(files.len());
-    let mut total = DiffStat::default();
     for file in &files {
-        let stat = file.stats();
-        total += stat;
-        stats.insert(file.path.clone(), stat_display(file, stat));
+        stats.insert(file.path.clone(), stat_display(file, file.stats()));
     }
+    let summary = summarize(&files);
 
     Ok(ReviewSnapshot {
         files,
@@ -1319,7 +1326,8 @@ pub fn build_review(
         staged: staged_from_status(&status),
         staged_states: staged_states_from_status(&status),
         stats,
-        total,
+        total: summary.stat,
+        summary,
     })
 }
 

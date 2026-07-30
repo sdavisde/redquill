@@ -17,6 +17,25 @@ pub struct DiffStat {
     pub removed: usize,
 }
 
+impl DiffStat {
+    /// Total changed lines — added plus removed. The churn measure: a line
+    /// rewritten in place counts twice, once on each side, which is what
+    /// makes it a reasonable proxy for how much there is to read.
+    pub fn total(self) -> usize {
+        self.added + self.removed
+    }
+
+    /// Lines gained minus lines lost. Negative for a net deletion.
+    pub fn net(self) -> isize {
+        self.added as isize - self.removed as isize
+    }
+
+    /// Whether nothing changed on either side.
+    pub fn is_empty(self) -> bool {
+        self.added == 0 && self.removed == 0
+    }
+}
+
 impl std::ops::AddAssign for DiffStat {
     fn add_assign(&mut self, other: DiffStat) {
         self.added += other.added;
@@ -46,6 +65,12 @@ impl Hunk {
                 }
                 acc
             })
+    }
+
+    /// How many of this hunk's lines actually changed — its churn, context
+    /// excluded. Distinct from [`Hunk::new_count`], which spans context too.
+    pub fn changed_lines(&self) -> usize {
+        self.stats().total()
     }
 }
 
@@ -87,7 +112,7 @@ pub enum StatDisplay {
 pub fn stat_display(file: &FileDiff, stat: DiffStat) -> StatDisplay {
     if file.is_binary {
         StatDisplay::Binary
-    } else if file.hunks.is_empty() || (stat.added == 0 && stat.removed == 0) {
+    } else if file.hunks.is_empty() || stat.is_empty() {
         StatDisplay::Omitted
     } else {
         StatDisplay::Counts(stat)
@@ -138,6 +163,57 @@ mod tests {
                 added: 2,
                 removed: 1
             }
+        );
+    }
+
+    #[test]
+    fn hunk_changed_lines_excludes_context() {
+        let h = hunk(vec![
+            line(LineOrigin::Context),
+            line(LineOrigin::Context),
+            line(LineOrigin::Added),
+            line(LineOrigin::Removed),
+        ]);
+        assert_eq!(h.changed_lines(), 2);
+    }
+
+    // -- DiffStat arithmetic --
+
+    #[test]
+    fn total_and_net_treat_a_rewritten_line_differently() {
+        let stat = DiffStat {
+            added: 4,
+            removed: 4,
+        };
+        assert_eq!(stat.total(), 8);
+        assert_eq!(stat.net(), 0);
+    }
+
+    #[test]
+    fn net_goes_negative_for_a_deletion_heavy_stat() {
+        let stat = DiffStat {
+            added: 1,
+            removed: 6,
+        };
+        assert_eq!(stat.net(), -5);
+    }
+
+    #[test]
+    fn is_empty_only_when_neither_side_changed() {
+        assert!(DiffStat::default().is_empty());
+        assert!(
+            !DiffStat {
+                added: 0,
+                removed: 1
+            }
+            .is_empty()
+        );
+        assert!(
+            !DiffStat {
+                added: 1,
+                removed: 0
+            }
+            .is_empty()
         );
     }
 

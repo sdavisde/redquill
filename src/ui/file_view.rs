@@ -23,7 +23,7 @@
 
 use std::collections::HashMap;
 
-use crate::diff::{FileDiff, stat_display};
+use crate::diff::{FileDiff, stat_display, summarize};
 use crate::git::DiffTarget;
 
 use super::app::{App, Mode, SuspendedView};
@@ -76,6 +76,7 @@ impl App {
         // `stat_display`'s own rule stays the single source of truth.
         let file_stat = file.stats();
         let file_stats_map = HashMap::from([(file.path.clone(), stat_display(&file, file_stat))]);
+        let file_summary = summarize(std::slice::from_ref(&file));
 
         if self.suspended_file_view.is_none() {
             self.file_view_return_mode = return_mode;
@@ -89,6 +90,7 @@ impl App {
                 staged_states: std::mem::take(&mut self.staged_states),
                 stats: std::mem::replace(&mut self.stats, file_stats_map),
                 total_stats: std::mem::replace(&mut self.total_stats, file_stat),
+                summary: std::mem::replace(&mut self.summary, file_summary),
             });
         } else {
             self.target = target;
@@ -96,6 +98,7 @@ impl App {
             self.patches = vec![None];
             self.stats = file_stats_map;
             self.total_stats = file_stat;
+            self.summary = file_summary;
         }
 
         // The just-suspended (or just-replaced) content shares the highlight
@@ -140,6 +143,7 @@ impl App {
         self.staged_states = suspended.staged_states;
         self.stats = suspended.stats;
         self.total_stats = suspended.total_stats;
+        self.summary = suspended.summary;
         self.highlight_cache.clear();
         self.rebuild_rows();
         self.mode = self.file_view_return_mode;

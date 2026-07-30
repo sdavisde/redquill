@@ -286,6 +286,7 @@ impl App {
         self.staged_states = snapshot.staged_states;
         self.stats = snapshot.stats;
         self.total_stats = snapshot.total;
+        self.summary = snapshot.summary;
         self.recompute_untracked();
         self.refresh_repo_state();
 
