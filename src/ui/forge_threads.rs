@@ -638,10 +638,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         ""
     };
+    // No bottom-border key hints: the shared footer strip below the overlay
+    // already shows this mode's footer-tagged rows.
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!("thread{state}"))
-        .title_bottom(Line::from(" j/k scroll  r reply  Esc/q close "));
+        .title(format!("thread{state}"));
 
     // Clamp to the offset that puts the content's last line on the
     // viewport's last row (zero once everything already fits), and write it

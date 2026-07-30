@@ -30,7 +30,7 @@ Everything renders from the existing keymap/modal-key tables, preserving the rep
 
 **Functional Requirements:**
 
-- FR-1: The help overlay shall have two tabs: **"This context"** (default on open) and **"All keys"**. `Tab`/`Shift-Tab` and `h`/`l` shall switch tabs, added to the help modal key table (which is already config-remappable) and shown in its footer hints.
+- FR-1: The help overlay shall have two tabs: **"This context"** (default on open) and **"All keys"**. `Tab`/`l`/`]` and `Shift-Tab`/`h`/`[` shall switch tabs (next/previous), added to the help modal key table (which is already config-remappable) and shown in its footer hints.
 - FR-2: The "This context" tab shall render, in order: the common-workflows header (Unit 2), the bindings applicable to the mode/scope the overlay was opened from (diff scope in `Normal`/`Visual`, panel scope in `Panel`, the corresponding modal table when opened from a mode whose table binds `?`), and a "Works everywhere" section listing `Scope::Global` bindings. Existing capability-gating (hiding inapplicable rows) continues to apply.
 - FR-3: The "All keys" tab shall render today's full grouped reference (diff groups, panel section, modal sections) unchanged in content.
 - FR-4: The existing `/` filter shall work on both tabs, filtering the visible tab's sections live; scroll position and filter shall reset when switching tabs.

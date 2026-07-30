@@ -1006,14 +1006,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         &app.thread_overlay,
     );
 
+    // No bottom-border key hints: the shared footer strip below the modal
+    // already shows this mode's footer-tagged rows; the summary field keeps
+    // its own newline hint on its own border.
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("Submit review \u{2014} nothing is sent until you confirm")
-        // Kept under the narrow modal's title width: the summary field carries
-        // its own newline hint on its own border, and the rest by the `?` help.
-        .title_bottom(Line::from(
-            " Enter submit  Esc cancel  Tab verdict  PgUp/PgDn scroll ",
-        ));
+        .title("Submit review \u{2014} nothing is sent until you confirm");
     let outer_inner = block.inner(popup);
     frame.render_widget(block, popup);
 

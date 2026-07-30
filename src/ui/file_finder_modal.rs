@@ -60,10 +60,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let popup = centered(area, 70, 60);
     frame.render_widget(Clear, popup);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" find file ")
-        .title_bottom(Line::from(" Enter open  Up/Down move  Esc close "));
+    // No bottom-border key hints: the shared footer strip below the modal
+    // already shows this mode's footer-tagged rows.
+    let block = Block::default().borders(Borders::ALL).title(" find file ");
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 

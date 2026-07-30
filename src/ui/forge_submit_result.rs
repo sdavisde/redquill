@@ -305,12 +305,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let popup = super::forge_submit::centered(area, 72, 72);
     frame.render_widget(Clear, popup);
 
+    // No bottom-border key hints: the shared footer strip below the modal
+    // already shows this mode's footer-tagged rows.
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("Submit stopped \u{2014} what landed and what didn't")
-        .title_bottom(Line::from(
-            " Enter/Esc dismiss  U submit again  j/k scroll ",
-        ));
+        .title("Submit stopped \u{2014} what landed and what didn't");
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 

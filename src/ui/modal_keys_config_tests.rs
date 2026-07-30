@@ -210,7 +210,7 @@ fn colliding_override_wins_and_drops_the_default_with_a_warning() {
 fn multiple_keys_for_one_overridden_action_stay_one_row() {
     // A remap to two alternate keys must produce one row carrying both, not
     // two rows repeating the description: the help overlay/footer must show
-    // one joined label, matching how `SwitcherAction::ToggleTab`'s six
+    // one joined label, matching how `SwitcherAction::ToggleTab`'s eight
     // default keys already render as one row.
     let mut keys = KeysConfig::default();
     let mut table = BTreeMap::new();

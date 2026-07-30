@@ -876,27 +876,24 @@ pub fn render(
         }
         _ => "available commands and configured shortcuts".to_string(),
     };
-    let footer = "j/k scroll  \u{00b7}  pgup/pgdn page  \u{00b7}  g/G ends  \u{00b7}  / filter  \u{00b7}  tab/shift-tab tabs  \u{00b7}  esc close";
     let total = lines.len() as u16;
 
-    // Width: fit the widest content line (or the subtitle/footer), plus a
+    // Width: fit the widest content line (or the subtitle), plus a
     // column for the scrollbar, plus borders and 1-col side padding. Capped
     // so it never spills off a narrow terminal and never grows absurdly wide.
     // 130 comfortably fits the widest default row — a modal key label built
     // from several alternate encodings for one action (e.g. the switcher's
-    // `ToggleTab`, bound to `Tab`/`Shift-Tab`/`h`/`l`/`Left`/`Right`) — with
-    // room to spare.
+    // `ToggleTab`, bound to `Tab`/`Shift-Tab`/`h`/`l`/`Left`/`Right`/`[`/`]`)
+    // — with room to spare.
     let content_w = lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16;
     let inner_w = content_w
         .max(subtitle.chars().count() as u16)
-        .max(footer.chars().count() as u16)
         .saturating_add(1); // scrollbar gutter
     let width = (inner_w + 4).min(area.width.saturating_sub(2)).min(130);
 
     // Height: borders (2) + subtitle (1) + spacer (1) = 4 rows of chrome
-    // around the list (the footer hint rides the bottom border, costing no
-    // row). Cap to ~3/5 of the screen so it reads as a floating panel and
-    // scrolls rather than filling every row.
+    // around the list. Cap to ~3/5 of the screen so it reads as a floating
+    // panel and scrolls rather than filling every row.
     let chrome = 4u16;
     let desired = total.saturating_add(chrome);
     let cap = (area.height.saturating_mul(3) / 5).max(chrome + 1);
@@ -921,14 +918,9 @@ pub fn render(
             .left_aligned(),
         )
         .title_top(tab_bar(state.tab, theme).centered())
-        .title_top(Line::from(Span::styled(" esc close ", pill)).right_aligned())
-        .title_bottom(
-            Line::from(Span::styled(
-                format!(" {footer} "),
-                Style::default().fg(theme.footer_text),
-            ))
-            .centered(),
-        );
+        // No bottom-border key hints: the shared footer strip below the
+        // overlay shows this mode's footer-tagged rows while help is open.
+        .title_top(Line::from(Span::styled(" esc close ", pill)).right_aligned());
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 

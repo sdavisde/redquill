@@ -28,8 +28,7 @@ use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
 use crate::forge::PrDetail;
 
 use super::app::{App, Mode};
-use super::modal_keys::{ModalBinding, PrDescriptionAction};
-use super::pr_description::{PrDescriptionReturn, PrDetailOutcome};
+use super::pr_description::PrDetailOutcome;
 use super::theme::Theme;
 use super::time_format::{now_unix, parse_rfc3339_to_unix, relative_time};
 
@@ -128,32 +127,10 @@ fn body_lines(
     }
 }
 
-/// The bottom-border hint line, keys read from the *effective* table so a
-/// remap shows up here with no extra wiring. `StartReview` is dropped when the
-/// overlay was opened from inside a review session: `Enter` genuinely does
-/// nothing there (the PR is already open), and advertising it would be
-/// untruthful — the same "don't hint a key that does nothing visible here"
-/// rule the launcher's tab-scoped footer follows.
-fn hint_line(table: &[ModalBinding<PrDescriptionAction>], ret: PrDescriptionReturn) -> String {
-    table
-        .iter()
-        .filter(|b| {
-            b.action != PrDescriptionAction::StartReview
-                || matches!(ret, PrDescriptionReturn::Launcher { .. })
-        })
-        .filter_map(|b| {
-            let hint = b.footer?;
-            let key = b.keys.first()?.label();
-            Some(format!("{key} {}", hint.label))
-        })
-        .collect::<Vec<_>>()
-        .join("  ")
-}
-
 /// Renders the description overlay, centered over `area`. A no-op outside
 /// [`Mode::PrDescription`], or when no overlay state is present.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let Mode::PrDescription { ret } = app.mode else {
+    let Mode::PrDescription { .. } = app.mode else {
         return;
     };
     let Some(state) = app.pr_description.as_ref() else {
@@ -169,14 +146,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         // that's known for certain — never another PR's cached title.
         _ => format!("#{}", state.number),
     };
+    // No bottom-border key hints: the shared footer strip below the overlay
+    // shows this mode's footer-tagged rows, with `start review` dropped
+    // inside a review session (see `super::footer`).
     let block = Block::default()
         .borders(Borders::ALL)
         .padding(Padding::horizontal(1))
-        .title(format!(" {title} "))
-        .title_bottom(Line::from(format!(
-            " {} ",
-            hint_line(&app.modal_keys.pr_description, ret)
-        )));
+        .title(format!(" {title} "));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 

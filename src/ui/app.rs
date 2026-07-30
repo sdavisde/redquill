@@ -536,7 +536,7 @@ pub struct App {
     pub(super) launcher_all_commits: bool,
     /// The active launcher tab's `/` filter session (`None`: no filter
     /// active). One field shared by every tab, cleared on every
-    /// [`App::review_launcher_switch_tab`] — spec 12 FR-12's decision,
+    /// [`App::review_launcher_next_tab`] — spec 12 FR-12's decision,
     /// mirroring [`super::switcher::SwitcherState::filter`]'s identical
     /// shared-field-cleared-on-toggle choice: a query typed against branch
     /// names carries no meaning over to commit subjects, or vice versa.

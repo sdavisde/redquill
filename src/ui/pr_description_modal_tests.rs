@@ -4,8 +4,7 @@ use ratatui::backend::TestBackend;
 use crate::diff::FileDiff;
 use crate::git::RawFilePatch;
 
-use super::super::app::ModeOrigin;
-use super::super::pr_description::PrDescriptionState;
+use super::super::pr_description::{PrDescriptionReturn, PrDescriptionState};
 use super::*;
 
 // -- fixtures ----------------------------------------------------------------
@@ -53,13 +52,6 @@ fn overlay_app(outcome: Option<PrDetailOutcome>, ret: PrDescriptionReturn) -> Ap
         app.pr_details.insert(34, outcome);
     }
     app
-}
-
-fn launcher_ret() -> PrDescriptionReturn {
-    PrDescriptionReturn::Launcher {
-        cursor: 0,
-        origin: ModeOrigin::Normal,
-    }
 }
 
 /// Draws the overlay at `width`x`height` and returns the flattened buffer
@@ -252,21 +244,6 @@ fn renders_nothing_outside_the_description_mode() {
     assert!(render_overlay(&app).trim().is_empty());
 }
 
-// -- the hint line ------------------------------------------------------------
-
-/// `Enter` starts the review only from the launcher; inside a session it does
-/// nothing, so its hint must not be advertised there.
-#[test]
-fn the_start_review_hint_belongs_to_the_launcher_context_only() {
-    let table = &super::super::modal_keys::PR_DESCRIPTION_KEYS;
-    let from_launcher = hint_line(table, launcher_ret());
-    let from_session = hint_line(table, PrDescriptionReturn::Session);
-
-    assert!(from_launcher.contains("start review"), "{from_launcher}");
-    assert!(!from_session.contains("start review"), "{from_session}");
-    // Both contexts keep the scroll/close hints.
-    for line in [&from_launcher, &from_session] {
-        assert!(line.contains("scroll"), "{line}");
-        assert!(line.contains("close"), "{line}");
-    }
-}
+// The `start review`-only-from-the-launcher scoping now lives in the shared
+// footer strip — asserted in `crate::ui::footer`'s tests
+// (`pr_description_strip_drops_start_review_inside_a_review_session`).

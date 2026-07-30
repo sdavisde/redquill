@@ -298,7 +298,7 @@ literal = false
 # panel-jump-to-top = ["g", "home"]   # Jump panel cursor to top
 # panel-jump-to-bottom = ["G", "end"] # Jump panel cursor to bottom
 # panel-select = "enter"              # Focus diff on this file (History tab: open the commit)
-# toggle-panel-tab = "tab"            # Switch Changes / History tab
+# toggle-panel-tab = "tab"            # Switch Changes / History tab (also "[", "]")
 # remote-fetch = "f"                  # Fetch from remote
 # remote-pull = "p"                   # Pull from remote
 # remote-push = "P"                   # Push to remote (publishes an unpublished branch)
@@ -386,7 +386,7 @@ literal = false
 # close = "esc"                        # Close
 #
 # [keys.switcher]                      # Branch/worktree switcher (`b`, panel scope)
-# toggle-tab = ["tab", "shift-tab", "h", "l", "left", "right"]  # Switch tab
+# toggle-tab = ["tab", "shift-tab", "h", "l", "left", "right", "[", "]"]  # Switch tab
 # move-down = ["j", "down"]             # Move selection down
 # move-up = ["k", "up"]                 # Move selection up
 # half-page-down = "ctrl-d"            # Scroll half page down
@@ -400,7 +400,8 @@ literal = false
 # close = "esc"                        # Close
 #
 # [keys.review-launcher]               # Review launcher (`R`, works everywhere, spec 09)
-# toggle-tab = ["tab", "shift-tab", "h", "l", "left", "right"]  # Switch tab
+# next-tab = ["tab", "l", "right", "]"]     # Next tab (Branches / Commits / Pull Requests)
+# prev-tab = ["shift-tab", "h", "left", "["]  # Previous tab
 # move-down = ["j", "down"]             # Move selection down
 # move-up = ["k", "up"]                 # Move selection up
 # half-page-down = "ctrl-d"            # Scroll half page down
@@ -426,8 +427,8 @@ literal = false
 # top = ["g", "home"]                   # Scroll to top
 # bottom = ["G", "end"]                 # Scroll to bottom
 # search = "/"                         # Filter keybinds
-# next-tab = ["tab", "l"]               # Next tab (This context / All keys)
-# prev-tab = ["shift-tab", "h"]         # Previous tab (This context / All keys)
+# next-tab = ["tab", "l", "]"]          # Next tab (This context / All keys)
+# prev-tab = ["shift-tab", "h", "["]    # Previous tab (This context / All keys)
 #
 # [keys.help-search]                   # Help overlay's own `/` filter, while editing it
 # lock = "enter"                       # Lock in the filter (scroll keys resume)

@@ -279,19 +279,15 @@ pub(super) static LIST_KEYS: LazyLock<Vec<ModalBinding<ListAction>>> = LazyLock:
             description: "Move focus down",
             keys: vec![ModalKey::plain(KeyCode::Char('j'))],
             action: ListAction::MoveDown,
-            footer: Some(FooterHint {
-                rank: 1,
-                label: "move",
-            }),
+            // Standard vim motion doing its standard thing — documented in
+            // `?` help, not worth strip space.
+            footer: None,
         },
         ModalBinding {
             description: "Move focus up",
             keys: vec![ModalKey::plain(KeyCode::Char('k'))],
             action: ListAction::MoveUp,
-            footer: Some(FooterHint {
-                rank: 1,
-                label: "move",
-            }),
+            footer: None,
         },
         ModalBinding {
             description: "Scroll half page down",
@@ -446,19 +442,14 @@ pub(super) static STAGING_KEYS: LazyLock<Vec<ModalBinding<StagingAction>>> = Laz
             description: "Move focus down",
             keys: vec![ModalKey::plain(KeyCode::Char('j'))],
             action: StagingAction::MoveDown,
-            footer: Some(FooterHint {
-                rank: 1,
-                label: "move",
-            }),
+            // Standard vim motion — `?` help lists it, the strip doesn't.
+            footer: None,
         },
         ModalBinding {
             description: "Move focus up",
             keys: vec![ModalKey::plain(KeyCode::Char('k'))],
             action: StagingAction::MoveUp,
-            footer: Some(FooterHint {
-                rank: 1,
-                label: "move",
-            }),
+            footer: None,
         },
         ModalBinding {
             description: "Scroll half page down",
@@ -578,19 +569,14 @@ pub(super) static ACCEPTED_PANEL_KEYS: LazyLock<Vec<ModalBinding<AcceptedPanelAc
                 description: "Move focus down",
                 keys: vec![ModalKey::plain(KeyCode::Char('j'))],
                 action: AcceptedPanelAction::MoveDown,
-                footer: Some(FooterHint {
-                    rank: 1,
-                    label: "move",
-                }),
+                // Standard vim motion — `?` help lists it, the strip doesn't.
+                footer: None,
             },
             ModalBinding {
                 description: "Move focus up",
                 keys: vec![ModalKey::plain(KeyCode::Char('k'))],
                 action: AcceptedPanelAction::MoveUp,
-                footer: Some(FooterHint {
-                    rank: 1,
-                    label: "move",
-                }),
+                footer: None,
             },
             ModalBinding {
                 description: "Scroll half page down",
@@ -728,19 +714,14 @@ pub(super) static PEEK_KEYS: LazyLock<Vec<ModalBinding<PeekAction>>> = LazyLock:
             description: "Move selection / scroll hover down",
             keys: vec![ModalKey::plain(KeyCode::Char('j'))],
             action: PeekAction::MoveDown,
-            footer: Some(FooterHint {
-                rank: 1,
-                label: "move",
-            }),
+            // Standard vim motion — `?` help lists it, the strip doesn't.
+            footer: None,
         },
         ModalBinding {
             description: "Move selection / scroll hover up",
             keys: vec![ModalKey::plain(KeyCode::Char('k'))],
             action: PeekAction::MoveUp,
-            footer: Some(FooterHint {
-                rank: 1,
-                label: "move",
-            }),
+            footer: None,
         },
         ModalBinding {
             description: "Scroll half page down",
@@ -874,6 +855,8 @@ pub(super) static SWITCHER_KEYS: LazyLock<Vec<ModalBinding<SwitcherAction>>> =
                     ModalKey::plain(KeyCode::Char('l')),
                     ModalKey::plain(KeyCode::Left),
                     ModalKey::plain(KeyCode::Right),
+                    ModalKey::plain(KeyCode::Char('[')),
+                    ModalKey::plain(KeyCode::Char(']')),
                 ],
                 action: SwitcherAction::ToggleTab,
                 footer: Some(FooterHint {
@@ -888,10 +871,8 @@ pub(super) static SWITCHER_KEYS: LazyLock<Vec<ModalBinding<SwitcherAction>>> =
                     ModalKey::plain(KeyCode::Down),
                 ],
                 action: SwitcherAction::MoveDown,
-                footer: Some(FooterHint {
-                    rank: 2,
-                    label: "move",
-                }),
+                // Standard vim motion — `?` help lists it, the strip doesn't.
+                footer: None,
             },
             ModalBinding {
                 description: "Move selection up",
@@ -900,10 +881,6 @@ pub(super) static SWITCHER_KEYS: LazyLock<Vec<ModalBinding<SwitcherAction>>> =
                     ModalKey::plain(KeyCode::Up),
                 ],
                 action: SwitcherAction::MoveUp,
-                // Not also tagged: its label ("k / Up") is already a compound
-                // key display, so merging it with MoveDown's would double up
-                // the " / " separators in the footer merge. The MoveDown
-                // row's own label reads fine alone.
                 footer: None,
             },
             ModalBinding {
@@ -1142,10 +1119,9 @@ pub(super) static END_REVIEW_KEYS: LazyLock<Vec<ModalBinding<EndReviewAction>>> 
                     ModalKey::plain(KeyCode::Down),
                 ],
                 action: EndReviewAction::MoveDown,
-                footer: Some(FooterHint {
-                    rank: 4,
-                    label: "move",
-                }),
+                // Standard vim motion — `?` help lists it, the strip doesn't;
+                // the mnemonic keys (`p`/`f`/`c`) carry the modal.
+                footer: None,
             },
             ModalBinding {
                 description: "Move highlighted option up",
@@ -1154,7 +1130,6 @@ pub(super) static END_REVIEW_KEYS: LazyLock<Vec<ModalBinding<EndReviewAction>>> 
                     ModalKey::plain(KeyCode::Up),
                 ],
                 action: EndReviewAction::MoveUp,
-                // Not tagged — same reasoning as SWITCHER_KEYS's MoveUp row.
                 footer: None,
             },
             ModalBinding {
@@ -1222,10 +1197,8 @@ pub(super) static THREAD_VIEW_KEYS: LazyLock<Vec<ModalBinding<ThreadViewAction>>
                     ModalKey::plain(KeyCode::Down),
                 ],
                 action: ThreadViewAction::ScrollDown,
-                footer: Some(FooterHint {
-                    rank: 1,
-                    label: "scroll",
-                }),
+                // Standard vim motion — `?` help lists it, the strip doesn't.
+                footer: None,
             },
             ModalBinding {
                 description: "Scroll conversation up",
@@ -1296,10 +1269,8 @@ pub(super) static PR_DESCRIPTION_KEYS: LazyLock<Vec<ModalBinding<PrDescriptionAc
                     ModalKey::plain(KeyCode::Down),
                 ],
                 action: PrDescriptionAction::ScrollDown,
-                footer: Some(FooterHint {
-                    rank: 1,
-                    label: "scroll",
-                }),
+                // Standard vim motion — `?` help lists it, the strip doesn't.
+                footer: None,
             },
             ModalBinding {
                 description: "Scroll description up",
@@ -1679,10 +1650,8 @@ pub(super) static SUBMIT_RESULT_KEYS: LazyLock<Vec<ModalBinding<SubmitResultActi
                     ModalKey::plain(KeyCode::Down),
                 ],
                 action: SubmitResultAction::ScrollDown,
-                footer: Some(FooterHint {
-                    rank: 3,
-                    label: "scroll",
-                }),
+                // Standard vim motion — `?` help lists it, the strip doesn't.
+                footer: None,
             },
             ModalBinding {
                 description: "Scroll the outcome list up",
@@ -1875,10 +1844,8 @@ pub(super) static CLEANUP_REVIEWS_KEYS: LazyLock<Vec<ModalBinding<CleanupReviews
                     ModalKey::plain(KeyCode::Down),
                 ],
                 action: CleanupReviewsAction::MoveDown,
-                footer: Some(FooterHint {
-                    rank: 3,
-                    label: "move",
-                }),
+                // Standard vim motion — `?` help lists it, the strip doesn't.
+                footer: None,
             },
             ModalBinding {
                 description: "Move the highlight up",
@@ -1928,8 +1895,11 @@ pub(super) static CLEANUP_REVIEWS_KEYS: LazyLock<Vec<ModalBinding<CleanupReviews
 // -- Review launcher modal ---------------------------------------------------
 
 /// What a key does in the Review launcher modal (`R`, `Scope::Global` —
-/// opens [`super::app::Mode::ReviewLauncher`]): `Tab`/`Shift-Tab`/`h`/`l`
-/// cycle through the Branches, Commits, and Pull Requests tabs, `j`/`k`/
+/// opens [`super::app::Mode::ReviewLauncher`]): `Tab`/`l`/`Right`/`]` step
+/// forward and `Shift-Tab`/`h`/`Left`/`[` step backward through the
+/// Branches, Commits, and Pull Requests tabs (with three tabs the direction
+/// matters, so the pair is split — unlike the two-tab switcher's single
+/// toggle), `j`/`k`/
 /// arrows move the active tab's cursor, `Enter` confirms the highlighted
 /// row — starts a branch review on the Branches tab, opens a read-only
 /// commit view on the Commits tab, checks out the highlighted PR into a
@@ -1938,15 +1908,19 @@ pub(super) static CLEANUP_REVIEWS_KEYS: LazyLock<Vec<ModalBinding<CleanupReviews
 /// closes the modal and restores the mode `R` was pressed from, and `a`
 /// toggles the Commits tab's data source between ahead-of-base and the full
 /// recent-HEAD log. Same shape as
-/// [`SwitcherAction`] for the first five — tab toggle, cursor pair, confirm,
-/// close — plus the shared motion set beyond plain step (spec 12 FR-12,
+/// [`SwitcherAction`] for the cursor pair, confirm, and
+/// close, plus the shared motion set beyond plain step (spec 12 FR-12,
 /// half/full-page paging, jump-to-extremes — see [`SwitcherAction`]'s
 /// identical doc note on jump-to-top's single-`g` divergence), the `/`
 /// filter (spec 12 FR-12), and the launcher-specific rows
 /// (`ToggleAllCommits`, `Cleanup`, `Refresh`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LauncherAction {
-    ToggleTab,
+    NextTab,
+    /// Steps backward through the tabs — its own action/key row (mirroring
+    /// [`HelpAction::PrevTab`]) so the two directions are independently
+    /// remappable.
+    PrevTab,
     MoveDown,
     MoveUp,
     HalfPageDown,
@@ -1982,7 +1956,8 @@ pub(super) enum LauncherAction {
 
 pub(super) fn launcher_action_name(action: LauncherAction) -> &'static str {
     match action {
-        LauncherAction::ToggleTab => "toggle-tab",
+        LauncherAction::NextTab => "next-tab",
+        LauncherAction::PrevTab => "prev-tab",
         LauncherAction::MoveDown => "move-down",
         LauncherAction::MoveUp => "move-up",
         LauncherAction::HalfPageDown => "half-page-down",
@@ -2003,7 +1978,8 @@ pub(super) fn launcher_action_name(action: LauncherAction) -> &'static str {
 
 pub(super) fn launcher_action_from_name(name: &str) -> Option<LauncherAction> {
     Some(match name {
-        "toggle-tab" => LauncherAction::ToggleTab,
+        "next-tab" => LauncherAction::NextTab,
+        "prev-tab" => LauncherAction::PrevTab,
         "move-down" => LauncherAction::MoveDown,
         "move-up" => LauncherAction::MoveUp,
         "half-page-down" => LauncherAction::HalfPageDown,
@@ -2030,20 +2006,31 @@ pub(super) static REVIEW_LAUNCHER_KEYS: LazyLock<Vec<ModalBinding<LauncherAction
     LazyLock::new(|| {
         vec![
             ModalBinding {
-                description: "Switch tab (Branches / Commits / Pull Requests)",
+                description: "Next tab (Branches / Commits / Pull Requests)",
                 keys: vec![
                     ModalKey::plain(KeyCode::Tab),
-                    ModalKey::plain(KeyCode::BackTab),
-                    ModalKey::plain(KeyCode::Char('h')),
                     ModalKey::plain(KeyCode::Char('l')),
-                    ModalKey::plain(KeyCode::Left),
                     ModalKey::plain(KeyCode::Right),
+                    ModalKey::plain(KeyCode::Char(']')),
                 ],
-                action: LauncherAction::ToggleTab,
+                action: LauncherAction::NextTab,
                 footer: Some(FooterHint {
                     rank: 1,
                     label: "switch tab",
                 }),
+            },
+            ModalBinding {
+                description: "Previous tab (Branches / Commits / Pull Requests)",
+                keys: vec![
+                    ModalKey::plain(KeyCode::BackTab),
+                    ModalKey::plain(KeyCode::Char('h')),
+                    ModalKey::plain(KeyCode::Left),
+                    ModalKey::plain(KeyCode::Char('[')),
+                ],
+                action: LauncherAction::PrevTab,
+                // Not tagged — NextTab's "switch tab" hint covers the
+                // gesture; the footer names one direction, `?` lists both.
+                footer: None,
             },
             ModalBinding {
                 description: "Move selection down",
@@ -2052,10 +2039,8 @@ pub(super) static REVIEW_LAUNCHER_KEYS: LazyLock<Vec<ModalBinding<LauncherAction
                     ModalKey::plain(KeyCode::Down),
                 ],
                 action: LauncherAction::MoveDown,
-                footer: Some(FooterHint {
-                    rank: 2,
-                    label: "move",
-                }),
+                // Standard vim motion — `?` help lists it, the strip doesn't.
+                footer: None,
             },
             ModalBinding {
                 description: "Move selection up",
@@ -2064,7 +2049,6 @@ pub(super) static REVIEW_LAUNCHER_KEYS: LazyLock<Vec<ModalBinding<LauncherAction
                     ModalKey::plain(KeyCode::Up),
                 ],
                 action: LauncherAction::MoveUp,
-                // Not tagged — same reasoning as SWITCHER_KEYS's MoveUp row.
                 footer: None,
             },
             ModalBinding {
@@ -2176,8 +2160,8 @@ pub(super) static REVIEW_LAUNCHER_KEYS: LazyLock<Vec<ModalBinding<LauncherAction
     });
 
 /// Which launcher tab a row's key only does something visible on; `None`
-/// means every tab. [`super::review_launcher_modal::hint_line`] reads this
-/// to keep `ToggleAllCommits`/`Cleanup`/`Refresh` out of the footer strip on
+/// means every tab. The footer strip's launcher arm (`super::footer`) reads
+/// this to keep `ToggleAllCommits`/`Cleanup`/`Refresh` out of the strip on
 /// tabs where they'd be a truthful-but-pointless hint, without filtering by the
 /// hint's label text (the dispatch itself is unchanged — both keys still
 /// resolve everywhere, see `every_launcher_table_entry_drives_its_documented_action`).
@@ -2524,10 +2508,8 @@ pub(super) static PROJECT_SEARCH_RESULTS_HINTS: LazyLock<
                 ModalKey::plain(KeyCode::Up),
             ],
             action: MoveUp,
-            footer: Some(FooterHint {
-                rank: 3,
-                label: "move",
-            }),
+            // Standard vim motion — `?` help lists it, the strip doesn't.
+            footer: None,
         },
         ModalBinding {
             description: "Move result selection down",
@@ -2536,10 +2518,7 @@ pub(super) static PROJECT_SEARCH_RESULTS_HINTS: LazyLock<
                 ModalKey::plain(KeyCode::Down),
             ],
             action: MoveDown,
-            footer: Some(FooterHint {
-                rank: 3,
-                label: "move",
-            }),
+            footer: None,
         },
         ModalBinding {
             description: "Open the selected result (read-only whole-file view, cursor on the hit)",
@@ -2671,12 +2650,8 @@ pub(super) static HELP_KEYS: LazyLock<Vec<ModalBinding<HelpAction>>> = LazyLock:
                 ModalKey::plain(KeyCode::Down),
             ],
             action: HelpAction::ScrollDown,
-            // `ScrollUp` isn't tagged either — same reasoning as
-            // SWITCHER_KEYS's MoveUp row.
-            footer: Some(FooterHint {
-                rank: 1,
-                label: "scroll",
-            }),
+            // Standard vim motion — `?` help lists it, the strip doesn't.
+            footer: None,
         },
         ModalBinding {
             description: "Scroll up",
@@ -2731,6 +2706,7 @@ pub(super) static HELP_KEYS: LazyLock<Vec<ModalBinding<HelpAction>>> = LazyLock:
             keys: vec![
                 ModalKey::plain(KeyCode::Tab),
                 ModalKey::plain(KeyCode::Char('l')),
+                ModalKey::plain(KeyCode::Char(']')),
             ],
             action: HelpAction::NextTab,
             footer: Some(FooterHint {
@@ -2743,6 +2719,7 @@ pub(super) static HELP_KEYS: LazyLock<Vec<ModalBinding<HelpAction>>> = LazyLock:
             keys: vec![
                 ModalKey::plain(KeyCode::BackTab),
                 ModalKey::plain(KeyCode::Char('h')),
+                ModalKey::plain(KeyCode::Char('[')),
             ],
             action: HelpAction::PrevTab,
             footer: Some(FooterHint {
@@ -4197,7 +4174,7 @@ index 111..222 100644
                 let mut app = launcher_app();
                 let label = binding.key_label();
                 match binding.action {
-                    LauncherAction::ToggleTab => {
+                    LauncherAction::NextTab => {
                         handle_review_launcher_key(&mut app, key.event());
                         assert_eq!(
                             app.mode,
@@ -4206,7 +4183,19 @@ index 111..222 100644
                                 cursor: 0,
                                 origin: crate::ui::app::ModeOrigin::Normal,
                             },
-                            "Launcher {label}: must switch tab"
+                            "Launcher {label}: must switch to the next tab"
+                        );
+                    }
+                    LauncherAction::PrevTab => {
+                        handle_review_launcher_key(&mut app, key.event());
+                        assert_eq!(
+                            app.mode,
+                            Mode::ReviewLauncher {
+                                tab: LauncherTab::PullRequests,
+                                cursor: 0,
+                                origin: crate::ui::app::ModeOrigin::Normal,
+                            },
+                            "Launcher {label}: must wrap back to the previous tab"
                         );
                     }
                     LauncherAction::MoveDown => {
@@ -4320,9 +4309,9 @@ index 111..222 100644
                     }
                     LauncherAction::ToggleAllCommits => {
                         // Only observable on the Commits tab — switch there
-                        // first (`ToggleTab`'s own case above already
+                        // first (`NextTab`'s own case above already
                         // proves that key works).
-                        app.review_launcher_switch_tab();
+                        app.review_launcher_next_tab();
                         assert!(!app.launcher_all_commits);
                         handle_review_launcher_key(&mut app, key.event());
                         assert!(

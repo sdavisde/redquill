@@ -214,13 +214,12 @@ fn panel_mode_hints_match_the_curated_list_in_order() {
     assert_eq!(
         keys(&entries),
         vec![
-            "j/k", "Enter", "Space", "S", "d", "f", "p", "P", "c", "`/Esc", "Tab", "s", "/", "?"
+            "Enter", "Space", "S", "d", "f", "p", "P", "c", "`/Esc", "Tab", "s", "/", "?"
         ]
     );
     assert_eq!(
         labels(&entries),
         vec![
-            "move",
             "open",
             "stage",
             "stage file",
@@ -250,9 +249,7 @@ fn panel_mode_hints_hide_stage_rows_on_a_read_only_target() {
     assert!(!labels(&entries).contains(&"stage file"));
     assert_eq!(
         keys(&entries),
-        vec![
-            "j/k", "Enter", "f", "p", "P", "c", "`/Esc", "Tab", "s", "/", "?"
-        ]
+        vec!["Enter", "f", "p", "P", "c", "`/Esc", "Tab", "s", "/", "?"]
     );
 }
 
@@ -290,9 +287,7 @@ fn panel_mode_hints_hide_file_actions_on_the_history_tab() {
     let entries = panel_hints(&km, false, true, false, None, false);
     assert_eq!(
         keys(&entries),
-        vec![
-            "j/k", "Enter", "f", "p", "P", "c", "`/Esc", "Tab", "s", "/", "?"
-        ]
+        vec!["Enter", "f", "p", "P", "c", "`/Esc", "Tab", "s", "/", "?"]
     );
     let review_entries = panel_hints(&km, false, false, true, None, false);
     let review_labels = labels(&review_entries);
@@ -333,7 +328,7 @@ fn list_mode_hints_have_no_help_entry() {
     let entries = modal_hints(&LIST_KEYS);
     assert_eq!(
         labels(&entries),
-        vec!["move", "open", "edit", "delete", "filter", "close"]
+        vec!["open", "edit", "delete", "filter", "close"]
     );
     assert!(!labels(&entries).contains(&"help"));
 }
@@ -341,25 +336,100 @@ fn list_mode_hints_have_no_help_entry() {
 #[test]
 fn switcher_mode_hints() {
     let entries = modal_hints(&SWITCHER_KEYS);
+    // No "move" entry: `j`/`k` are standard vim motions, listed in `?` help
+    // but pruned from the strip. ToggleTab's label lists every bound key
+    // (computed from `ModalBinding::key_label`), including
+    // `Shift-Tab`/`Left`/`Right`/`[`/`]`.
     assert_eq!(
         labels(&entries),
-        vec!["switch tab", "move", "switch", "filter", "close"]
+        vec!["switch tab", "switch", "filter", "close"]
     );
-    // "move" must stay MoveDown's own compound label ("j / Down") alone —
-    // merging it with MoveUp's ("k / Up") would double up the " / "
-    // separators into "j / Down/k / Up". ToggleTab's label lists every bound
-    // key (computed from `ModalBinding::key_label`), including
-    // `Shift-Tab`/`Left`/`Right`.
     assert_eq!(
         keys(&entries),
         vec![
-            "Tab / Shift-Tab / h / l / Left / Right",
-            "j / Down",
+            "Tab / Shift-Tab / h / l / Left / Right / [ / ]",
             "Enter",
             "/",
             "Esc"
         ]
     );
+}
+
+fn flags() -> FooterFlags {
+    FooterFlags {
+        staging_allowed: true,
+        code_intel_allowed: true,
+        push_publishes: false,
+        viewing_commit: false,
+        help_open: false,
+        project_search_focus: SearchFocus::Input,
+        review_session: false,
+        web_target: None,
+    }
+}
+
+/// The launcher strip is tab-scoped: a row whose action only does something
+/// visible on one tab (`launcher_action_tab_scope`) is dropped from the
+/// other tabs' strips — the key still dispatches everywhere.
+#[test]
+fn review_launcher_strip_shows_only_the_active_tabs_scoped_hints() {
+    use crate::ui::review_launcher::LauncherTab;
+    let modal_keys = ModalKeymaps::default();
+    let km = Keymap::default_map();
+    for (tab, expected) in [
+        (
+            LauncherTab::Branches,
+            vec!["switch tab", "confirm", "filter", "close"],
+        ),
+        (
+            LauncherTab::Commits,
+            vec!["switch tab", "confirm", "filter", "close", "all commits"],
+        ),
+        (
+            LauncherTab::PullRequests,
+            vec![
+                "switch tab",
+                "confirm",
+                "filter",
+                "close",
+                "clean up",
+                "refresh",
+                "description",
+            ],
+        ),
+    ] {
+        let mode = Mode::ReviewLauncher {
+            tab,
+            cursor: 0,
+            origin: crate::ui::app::ModeOrigin::Normal,
+        };
+        let entries = build_hints(mode, flags(), None, &km, &modal_keys);
+        assert_eq!(labels(&entries), expected, "{tab:?}");
+    }
+}
+
+/// The PR description strip drops `start review` when the overlay was opened
+/// from inside a review session — `Enter` genuinely does nothing there.
+#[test]
+fn pr_description_strip_drops_start_review_inside_a_review_session() {
+    use crate::ui::pr_description::PrDescriptionReturn;
+    let modal_keys = ModalKeymaps::default();
+    let km = Keymap::default_map();
+
+    let from_launcher = Mode::PrDescription {
+        ret: PrDescriptionReturn::Launcher {
+            cursor: 0,
+            origin: crate::ui::app::ModeOrigin::Normal,
+        },
+    };
+    let entries = build_hints(from_launcher, flags(), None, &km, &modal_keys);
+    assert!(labels(&entries).contains(&"start review"));
+
+    let in_session = Mode::PrDescription {
+        ret: PrDescriptionReturn::Session,
+    };
+    let entries = build_hints(in_session, flags(), None, &km, &modal_keys);
+    assert!(!labels(&entries).contains(&"start review"));
 }
 
 /// End-to-end for the `[keys.<mode>]` -> footer path: the strip is built
@@ -456,7 +526,7 @@ fn help_open_takes_precedence_over_the_mode_strip() {
     );
     assert_eq!(
         labels(&entries),
-        vec!["scroll", "filter", "close", "next tab", "prev tab"]
+        vec!["filter", "close", "next tab", "prev tab"]
     );
 }
 

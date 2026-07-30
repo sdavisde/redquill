@@ -111,8 +111,20 @@ fn keymap_hints(
 /// overrides), not the compiled-in `'static` default, so the footer strip
 /// reflects a remap with no additional wiring.
 fn modal_hints<A: Copy + Clone>(table: &[ModalBinding<A>]) -> Vec<FooterEntry> {
+    modal_hints_where(table, |_| true)
+}
+
+/// [`modal_hints`] with a row predicate, for modes whose strip depends on
+/// modal state the table can't express: the launcher hides rows scoped to
+/// another tab, the PR description overlay hides `start review` inside a
+/// review session. The keys still dispatch everywhere — this only keeps the
+/// strip from advertising a key that does nothing visible right now.
+fn modal_hints_where<A: Copy + Clone>(
+    table: &[ModalBinding<A>],
+    keep: impl Fn(&ModalBinding<A>) -> bool,
+) -> Vec<FooterEntry> {
     let mut grouped: Vec<(FooterHint, String)> = Vec::new();
-    for b in table {
+    for b in table.iter().filter(|b| keep(b)) {
         let Some(hint) = b.footer else { continue };
         match grouped.iter_mut().find(|(h, _)| *h == hint) {
             Some((_, key)) => {
@@ -394,10 +406,10 @@ fn pending_hints(
     entries
 }
 
-/// The minimal strip shown while the help overlay is open: scroll, `/`
-/// filter, close — derived from `app.modal_keys.help`'s own [`FooterHint`]
-/// tags. No `? help` entry (the overlay is already open, so it would be
-/// redundant).
+/// The minimal strip shown while the help overlay is open: `/` filter,
+/// close, tab switching — derived from `app.modal_keys.help`'s own
+/// [`FooterHint`] tags. No `? help` entry (the overlay is already open, so
+/// it would be redundant).
 fn help_open_hints(modal_keys: &ModalKeymaps) -> Vec<FooterEntry> {
     modal_hints(&modal_keys.help)
 }
@@ -513,12 +525,27 @@ pub(super) fn build_hints(
         Mode::EndReview { .. } => modal_hints(&modal_keys.end_review),
         Mode::ConfirmRemoteOp { .. } => modal_hints(&modal_keys.confirm_remote_op),
         Mode::ThreadView => modal_hints(&modal_keys.thread_view),
-        Mode::PrDescription { .. } => modal_hints(&modal_keys.pr_description),
+        // `Enter` genuinely does nothing when the overlay was opened from
+        // inside a review session (the PR is already open), so its hint is
+        // dropped there rather than advertised untruthfully.
+        Mode::PrDescription { ret } => modal_hints_where(&modal_keys.pr_description, |b| {
+            b.action != super::modal_keys::PrDescriptionAction::StartReview
+                || matches!(
+                    ret,
+                    super::pr_description::PrDescriptionReturn::Launcher { .. }
+                )
+        }),
         Mode::SubmitForge => modal_hints(&modal_keys.submit_forge),
         Mode::SubmitResult { .. } => modal_hints(&modal_keys.submit_result),
         Mode::CleanupReviews { .. } => modal_hints(&modal_keys.cleanup_reviews),
         Mode::ConfirmRestore { .. } => modal_hints(&modal_keys.restore),
-        Mode::ReviewLauncher { .. } => modal_hints(&modal_keys.review_launcher),
+        // Rows scoped to a different tab (the Commits-only `all commits`
+        // toggle, the Pull-Requests-only cleanup/refresh/description) are
+        // dropped from the strip on tabs where they'd be truthful but
+        // pointless.
+        Mode::ReviewLauncher { tab, .. } => modal_hints_where(&modal_keys.review_launcher, |b| {
+            super::modal_keys::launcher_action_tab_scope(b.action).is_none_or(|scope| scope == tab)
+        }),
     }
 }
 

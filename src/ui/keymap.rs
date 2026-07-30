@@ -935,18 +935,18 @@ impl Keymap {
                 // action, same footer hint (merges with the row above into
                 // one "`/Esc close" entry), so the two never drift apart.
                 p(KeySeq::one(Esc, none), FocusGitPanel, "Close git panel").footer(10, "close"),
+                // Standard vim motions — `?` help lists them, the strip
+                // doesn't.
                 p(
                     KeySeq::one(Char('j'), none),
                     PanelCursorDown,
                     "Move panel cursor down",
-                )
-                .footer(1, "move"),
+                ),
                 p(
                     KeySeq::one(Char('k'), none),
                     PanelCursorUp,
                     "Move panel cursor up",
-                )
-                .footer(1, "move"),
+                ),
                 // Shared motion set (see `super::motion`): half/full-page
                 // paging and buffer-extreme jumps, same physical keys as
                 // diff scope except jump-to-top, which is a single `g`/
@@ -1051,6 +1051,18 @@ impl Keymap {
                     "Switch Changes / History tab",
                 )
                 .footer(11, "tab"),
+                // `[`/`]` are hunk motions in diff scope only, so the panel
+                // can lend them to tab switching without a collision.
+                p(
+                    KeySeq::one(Char(']'), none),
+                    TogglePanelTab,
+                    "Switch Changes / History tab",
+                ),
+                p(
+                    KeySeq::one(Char('['), none),
+                    TogglePanelTab,
+                    "Switch Changes / History tab",
+                ),
                 p(
                     KeySeq::one(Char('f'), none),
                     RemoteFetch,
@@ -1768,32 +1780,9 @@ mod tests {
         );
     }
 
-    /// `Scope::Panel`'s own `j`/`k` rows (`PanelCursorDown`/`PanelCursorUp`)
-    /// are untouched by the global-strip trim (the git panel's footer is a
-    /// separate, mode-specific strip) and still merge into one `j/k move`
-    /// hint via the shared-hint mechanism.
-    #[test]
-    fn panel_scope_cursor_down_and_up_are_still_promoted_with_the_same_footer_hint() {
-        let km = Keymap::default_map();
-        let down = km
-            .bindings()
-            .iter()
-            .find(|b| b.scope == Scope::Panel && b.action == Action::PanelCursorDown)
-            .unwrap();
-        let up = km
-            .bindings()
-            .iter()
-            .find(|b| b.scope == Scope::Panel && b.action == Action::PanelCursorUp)
-            .unwrap();
-        assert_eq!(
-            down.footer,
-            Some(FooterHint {
-                rank: 1,
-                label: "move"
-            })
-        );
-        assert_eq!(down.footer, up.footer);
-    }
+    // `Scope::Panel`'s `j`/`k` rows carry no footer tag — standard vim
+    // motions are pruned from the strip (the exact curated panel strip is
+    // pinned in `footer_tests::panel_mode_hints_match_the_curated_list_in_order`).
 
     #[test]
     fn help_toggle_is_promoted_with_rank_zero_in_both_scopes() {

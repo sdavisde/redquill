@@ -193,10 +193,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         None => (0..tab_len).collect(),
     };
 
+    // No bottom-border key hints: the shared footer strip below the modal
+    // already shows this mode's footer-tagged rows.
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(tab_bar(state.tab, &app.theme))
-        .title_bottom(Line::from(" Enter switch  Tab tabs  / filter  Esc close "));
+        .title(tab_bar(state.tab, &app.theme));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 

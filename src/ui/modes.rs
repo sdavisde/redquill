@@ -795,8 +795,8 @@ pub(super) fn handle_switcher_key(app: &mut App, key: KeyEvent) {
 }
 
 /// Handles one key event while [`super::Mode::ReviewLauncher`] is active
-/// (the Review launcher modal, `R`, `Scope::Global`): `Tab`/`Shift-Tab`/
-/// `h`/`l`/arrows switch between the Branches and Commits tabs, the shared
+/// (the Review launcher modal, `R`, `Scope::Global`): `Tab`/`l`/`Right`/`]`
+/// and `Shift-Tab`/`h`/`Left`/`[` step forward/backward through the tabs, the shared
 /// motion set (`j`/`k`, half/full-page paging, jump-to-extremes, count
 /// prefixes — spec 12 FR-12) moves the cursor, `/` filters the active tab
 /// (spec 12 FR-12), `Enter` confirms the highlighted row — starts a branch
@@ -816,7 +816,8 @@ pub(super) fn handle_review_launcher_key(app: &mut App, key: KeyEvent) {
         return;
     };
     match action {
-        LauncherAction::ToggleTab => app.review_launcher_switch_tab(),
+        LauncherAction::NextTab => app.review_launcher_next_tab(),
+        LauncherAction::PrevTab => app.review_launcher_prev_tab(),
         LauncherAction::MoveDown => apply_motion_n_times(count, || app.review_launcher_move_down()),
         LauncherAction::MoveUp => apply_motion_n_times(count, || app.review_launcher_move_up()),
         LauncherAction::HalfPageDown => {

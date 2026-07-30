@@ -139,7 +139,7 @@ pub enum LauncherTab {
 
 impl LauncherTab {
     /// Every tab, in display/cycle order — the one place a new tab gets
-    /// added; [`LauncherTab::toggle`] and anything else that needs "all
+    /// added; [`LauncherTab::next`]/[`LauncherTab::prev`] and anything else that needs "all
     /// tabs" reads through this rather than re-listing variants.
     const ORDER: &'static [LauncherTab] = &[
         LauncherTab::Branches,
@@ -148,14 +148,18 @@ impl LauncherTab {
     ];
 
     /// The next tab in [`LauncherTab::ORDER`], wrapping past the end back
-    /// to the start. `REVIEW_LAUNCHER_KEYS`' `ToggleTab` row binds both
-    /// directions (`h`/`l`, `Tab`/`BackTab`) to this one action, so
-    /// switching always advances forward through every tab rather than
-    /// picking a direction. Falls back to the first tab if `self` somehow
+    /// to the start. Falls back to the first tab if `self` somehow
     /// isn't in the table — defensive rather than reachable.
-    fn toggle(self) -> LauncherTab {
+    fn next(self) -> LauncherTab {
         let idx = Self::ORDER.iter().position(|&t| t == self).unwrap_or(0);
         Self::ORDER[(idx + 1) % Self::ORDER.len()]
+    }
+
+    /// The previous tab in [`LauncherTab::ORDER`], wrapping past the start
+    /// back to the end — [`LauncherTab::next`]'s mirror.
+    fn prev(self) -> LauncherTab {
+        let idx = Self::ORDER.iter().position(|&t| t == self).unwrap_or(0);
+        Self::ORDER[(idx + Self::ORDER.len() - 1) % Self::ORDER.len()]
     }
 }
 
@@ -203,18 +207,27 @@ impl App {
         self.launcher_filter = None;
     }
 
-    /// Cycles the launcher to its next tab (see [`LauncherTab::toggle`]),
+    /// Cycles the launcher to its next tab (see [`LauncherTab::next`]),
     /// resetting the cursor to the top (each tab's list is independent) and
     /// remembering the new tab in `last_launcher_tab` so the next open this
     /// process lands back here.
     /// Also drops any active filter (see [`App::launcher_filter`]'s doc on
-    /// why toggling tabs doesn't try to carry a query over). A no-op unless
+    /// why switching tabs doesn't try to carry a query over). A no-op unless
     /// the launcher is open.
-    pub(super) fn review_launcher_switch_tab(&mut self) {
+    pub(super) fn review_launcher_next_tab(&mut self) {
+        self.review_launcher_set_tab(LauncherTab::next);
+    }
+
+    /// [`App::review_launcher_next_tab`]'s mirror, stepping backward.
+    pub(super) fn review_launcher_prev_tab(&mut self) {
+        self.review_launcher_set_tab(LauncherTab::prev);
+    }
+
+    fn review_launcher_set_tab(&mut self, step: impl FnOnce(LauncherTab) -> LauncherTab) {
         let Mode::ReviewLauncher { tab, cursor, .. } = &mut self.mode else {
             return;
         };
-        *tab = tab.toggle();
+        *tab = step(*tab);
         *cursor = 0;
         let new_tab = *tab;
         self.launcher_filter = None;
@@ -1146,7 +1159,7 @@ impl App {
     /// Toggles the Commits tab between the ahead-of-base list and the full
     /// recent-HEAD log (`a`, remembered for the process lifetime like
     /// `last_launcher_tab`): the newly-active source's load is kicked off
-    /// immediately (mirrors `review_launcher_switch_tab` eagerly loading
+    /// immediately (mirrors `review_launcher_next_tab` eagerly loading
     /// Branches data) so displaying it never shows a stale, pre-toggle
     /// list, and the cursor resets to the top since the two sources are
     /// different lengths.
@@ -1586,13 +1599,20 @@ index 111..222 100644
         App::new(vec![sample_file()])
     }
 
-    // -- LauncherTab::toggle -------------------------------------------------
+    // -- LauncherTab::next / LauncherTab::prev -------------------------------
 
     #[test]
-    fn toggle_cycles_through_every_tab_and_wraps() {
-        assert_eq!(LauncherTab::Branches.toggle(), LauncherTab::Commits);
-        assert_eq!(LauncherTab::Commits.toggle(), LauncherTab::PullRequests);
-        assert_eq!(LauncherTab::PullRequests.toggle(), LauncherTab::Branches);
+    fn next_cycles_through_every_tab_and_wraps() {
+        assert_eq!(LauncherTab::Branches.next(), LauncherTab::Commits);
+        assert_eq!(LauncherTab::Commits.next(), LauncherTab::PullRequests);
+        assert_eq!(LauncherTab::PullRequests.next(), LauncherTab::Branches);
+    }
+
+    #[test]
+    fn prev_cycles_through_every_tab_backward_and_wraps() {
+        assert_eq!(LauncherTab::Branches.prev(), LauncherTab::PullRequests);
+        assert_eq!(LauncherTab::PullRequests.prev(), LauncherTab::Commits);
+        assert_eq!(LauncherTab::Commits.prev(), LauncherTab::Branches);
     }
 
     // -- App::open_review_launcher / close_review_launcher: origin restore --
@@ -1621,7 +1641,7 @@ index 111..222 100644
         let mut app = app();
         assert_eq!(app.last_launcher_tab, LauncherTab::Branches);
         app.open_review_launcher();
-        app.review_launcher_switch_tab();
+        app.review_launcher_next_tab();
         assert_eq!(app.last_launcher_tab, LauncherTab::Commits);
         app.close_review_launcher();
         app.open_review_launcher();
@@ -1750,8 +1770,8 @@ index 111..222 100644
     #[test]
     fn switching_onto_the_branches_tab_reloads_the_list() {
         // `PullRequests` is the tab immediately before `Branches` in cycle
-        // order, so `toggle()` from here lands on Branches (see
-        // `toggle_cycles_through_every_tab_and_wraps`).
+        // order, so `next()` from here lands on Branches (see
+        // `next_cycles_through_every_tab_and_wraps`).
         let mut app = app_with_branches(vec![branch("alpha")]);
         app.mode = Mode::ReviewLauncher {
             tab: LauncherTab::PullRequests,
@@ -1760,7 +1780,7 @@ index 111..222 100644
         };
         app.last_launcher_tab = LauncherTab::PullRequests;
         assert!(app.launcher_branches.is_empty(), "not loaded yet");
-        app.review_launcher_switch_tab();
+        app.review_launcher_next_tab();
         assert_eq!(
             app.launcher_branches
                 .iter()
@@ -2041,7 +2061,7 @@ index 111..222 100644
     fn toggle_state_survives_close_and_reopen() {
         let mut app = app_with_commit_range(Vec::new());
         app.open_review_launcher();
-        app.review_launcher_switch_tab(); // Branches -> Commits
+        app.review_launcher_next_tab(); // Branches -> Commits
         app.review_launcher_toggle_all_commits();
         assert!(app.launcher_all_commits);
 
@@ -3048,7 +3068,7 @@ index 111..222 100644
         app.last_launcher_tab = LauncherTab::Commits;
         assert!(app.launcher_prs.is_none(), "not loaded yet");
 
-        app.review_launcher_switch_tab(); // Commits -> PullRequests
+        app.review_launcher_next_tab(); // Commits -> PullRequests
 
         assert!(matches!(
             app.mode,

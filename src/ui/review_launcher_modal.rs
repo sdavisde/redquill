@@ -9,16 +9,14 @@
 //! so both surfaces render commits identically. The Pull Requests tab
 //! renders `app.launcher_prs` — either a listing, a loading placeholder, the
 //! zero-open-PRs empty state, or one of the degraded-state prescriptions
-//! (see [`prs_degraded_body_lines`]) — never a blank body. The footer hint
-//! line is built from the *effective* `REVIEW_LAUNCHER_KEYS` table
-//! (`app.modal_keys.review_launcher`) rather than a hardcoded string, so a
-//! `[keys.review-launcher]` remap shows up here with no extra wiring —
-//! including the Commits tab's empty-state line, which names whatever key
-//! the table currently binds to `toggle-all-commits`. The hint line also
-//! drops a row whose action is scoped to a different tab (see
-//! [`hint_line`]/`super::modal_keys::launcher_action_tab_scope`), so the
-//! Commits-only `all commits` toggle and the Pull-Requests-only `clean up`
-//! cleanup and `refresh` only appear in the footer on their own tab.
+//! (see [`prs_degraded_body_lines`]) — never a blank body. The modal carries
+//! no key-hint chrome of its own: the shared footer strip below it shows this
+//! mode's footer-tagged rows, tab-scoped through
+//! `super::modal_keys::launcher_action_tab_scope` (see `super::footer`).
+//! The Commits tab's empty-state line still reads the *effective*
+//! `REVIEW_LAUNCHER_KEYS` table (`app.modal_keys.review_launcher`), naming
+//! whatever key the table currently binds to `toggle-all-commits`, so a
+//! `[keys.review-launcher]` remap shows up with no extra wiring.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
@@ -31,7 +29,7 @@ use crate::git::{CommitLogEntry, LocalBranch};
 
 use super::app::App;
 use super::git_panel::history_item;
-use super::modal_keys::{self, LauncherAction, ModalBinding};
+use super::modal_keys::{LauncherAction, ModalBinding};
 use super::review_launcher::LauncherTab;
 use super::stage_ops::PrFetchOutcome;
 use super::theme::Theme;
@@ -413,36 +411,6 @@ fn prs_rows(
     items
 }
 
-/// Builds the bottom-border hint line from the *effective* launcher table:
-/// one `key label` per footer-tagged row (its first bound key — a remap's
-/// alternate keys still resolve, this is just the label shown), joined in
-/// table order. Mirrors `super::footer`'s "only footer-tagged rows get a
-/// hint" rule, but reads `app.modal_keys.review_launcher` directly rather
-/// than going through that module's merge helper, since this renders inside
-/// the modal's own border rather than the shared footer strip. Rows scoped
-/// to a different tab by [`modal_keys::launcher_action_tab_scope`] (the
-/// Commits-only `all commits` toggle, the Pull-Requests-only `clean up`)
-/// are dropped from `active_tab`'s hint line — the keys still work
-/// everywhere (unchanged dispatch), this only keeps the hint from
-/// advertising a key that does nothing visible on the tab you're looking
-/// at.
-fn hint_line(table: &[ModalBinding<LauncherAction>], active_tab: LauncherTab) -> String {
-    table
-        .iter()
-        .filter_map(|b| {
-            let hint = b.footer?;
-            if !modal_keys::launcher_action_tab_scope(b.action)
-                .is_none_or(|scope| scope == active_tab)
-            {
-                return None;
-            }
-            let key = b.keys.first()?.label();
-            Some(format!("{key} {}", hint.label))
-        })
-        .collect::<Vec<_>>()
-        .join("  ")
-}
-
 /// Renders the Review launcher modal, centered over `area`. A no-op if
 /// `app.mode` isn't [`super::app::Mode::ReviewLauncher`] (the caller should
 /// only invoke this in that mode).
@@ -461,13 +429,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let popup = centered(area, 80, 60);
     frame.render_widget(Clear, popup);
 
+    // No bottom-border key hints: the shared footer strip below the modal
+    // already shows this mode's footer-tagged rows, tab-scoped.
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(tab_bar(tab, &app.theme))
-        .title_bottom(Line::from(format!(
-            " {} ",
-            hint_line(&app.modal_keys.review_launcher, tab)
-        )));
+        .title(tab_bar(tab, &app.theme));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -609,9 +575,8 @@ index 111..222 100644
     }
 
     fn render_launcher(app: &App) -> String {
-        // Wide enough that the bottom-border hint line (built from the full
-        // effective key table) never gets clipped by ratatui's title-width
-        // truncation.
+        // Wide enough that the tab bar and empty-state lines never get
+        // clipped by ratatui's title-width truncation.
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         let area = Rect::new(0, 0, 100, 24);
@@ -683,26 +648,11 @@ index 111..222 100644
         assert!(content.contains("loading"));
     }
 
+    /// The modal frame itself carries no key-hint chrome — the shared footer
+    /// strip owns the hints (its tab-scoping is asserted in
+    /// `super::super::footer`'s tests).
     #[test]
-    fn footer_hint_line_reflects_the_effective_table() {
-        let mut app = App::new(vec![sample_file()]);
-        app.mode = Mode::ReviewLauncher {
-            tab: LauncherTab::Branches,
-            cursor: 0,
-            origin: ModeOrigin::Normal,
-        };
-        let content = render_launcher(&app);
-        assert!(content.contains("switch tab"));
-        assert!(content.contains("confirm"));
-        assert!(content.contains("close"));
-    }
-
-    /// `ToggleAllCommits`'s `all commits` hint is Commits-only and
-    /// `Cleanup`'s `clean up` hint is Pull-Requests-only — neither belongs on
-    /// the Branches tab's footer, which advertised both before this was
-    /// tab-scoped.
-    #[test]
-    fn branches_tab_footer_hides_both_tab_specific_hints() {
+    fn the_modal_frame_carries_no_key_hint_chrome() {
         let mut app = App::new(vec![sample_file()]);
         app.mode = Mode::ReviewLauncher {
             tab: LauncherTab::Branches,
@@ -711,79 +661,8 @@ index 111..222 100644
         };
         let content = render_launcher(&app);
         assert!(
-            !content.contains("all commits"),
-            "Branches tab must not advertise the Commits-only toggle:\n{content}"
-        );
-        assert!(
-            !content.contains("clean up"),
-            "Branches tab must not advertise the Pull-Requests-only cleanup:\n{content}"
-        );
-    }
-
-    /// The `refresh` hint is Pull-Requests-only. Asserted against
-    /// [`hint_line`] rather than the rendered frame because it sits last in
-    /// the table, where the modal's border can truncate it — the scoping
-    /// decision is the contract, not whether it fits at a given width.
-    #[test]
-    fn the_refresh_hint_belongs_to_the_pull_requests_tab_only() {
-        let app = App::new(vec![sample_file()]);
-        for (tab, expected) in [
-            (LauncherTab::Branches, false),
-            (LauncherTab::Commits, false),
-            (LauncherTab::PullRequests, true),
-        ] {
-            let line = hint_line(&app.modal_keys.review_launcher, tab);
-            assert_eq!(
-                line.contains("refresh"),
-                expected,
-                "{tab:?} hint line: {line}"
-            );
-        }
-    }
-
-    /// The Commits tab's footer shows its own `all commits` hint but not the
-    /// Pull Requests tab's `clean up` hint.
-    #[test]
-    fn commits_tab_footer_shows_only_its_own_tab_specific_hint() {
-        let mut app = App::new(vec![sample_file()]);
-        app.mode = Mode::ReviewLauncher {
-            tab: LauncherTab::Commits,
-            cursor: 0,
-            origin: ModeOrigin::Normal,
-        };
-        let content = render_launcher(&app);
-        assert!(
-            content.contains("all commits"),
-            "Commits tab must advertise its own toggle:\n{content}"
-        );
-        assert!(
-            !content.contains("clean up"),
-            "Commits tab must not advertise the Pull-Requests-only cleanup:\n{content}"
-        );
-    }
-
-    /// The Pull Requests tab's footer shows its own `clean up` hint but not
-    /// the Commits tab's `all commits` hint.
-    #[test]
-    fn pull_requests_tab_footer_shows_only_its_own_tab_specific_hint() {
-        let mut app = App::new(vec![sample_file()]);
-        app.mode = Mode::ReviewLauncher {
-            tab: LauncherTab::PullRequests,
-            cursor: 0,
-            origin: ModeOrigin::Normal,
-        };
-        app.launcher_prs = Some(PrFetchOutcome::Loaded {
-            repo_label: "org/repo".to_string(),
-            prs: Vec::new(),
-        });
-        let content = render_launcher(&app);
-        assert!(
-            content.contains("clean up"),
-            "Pull Requests tab must advertise its own cleanup:\n{content}"
-        );
-        assert!(
-            !content.contains("all commits"),
-            "Pull Requests tab must not advertise the Commits-only toggle:\n{content}"
+            !content.contains("switch tab"),
+            "hints belong to the footer strip, not the modal frame:\n{content}"
         );
     }
 

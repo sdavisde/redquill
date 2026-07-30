@@ -119,10 +119,9 @@ fn preview_lines(
 }
 
 fn render_hover(frame: &mut Frame, popup: Rect, peek: &PeekState) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title("hover")
-        .title_bottom(Line::from(" j/k scroll  Esc/q close "));
+    // No bottom-border key hints: the shared footer strip below the overlay
+    // already shows this mode's footer-tagged rows.
+    let block = Block::default().borders(Borders::ALL).title("hover");
     let paragraph = Paragraph::new(peek.hover_text.clone())
         .block(block)
         .wrap(Wrap { trim: false })
@@ -163,12 +162,8 @@ fn render_locations(frame: &mut Frame, popup: Rect, peek: &PeekState, app: &App)
         })
         .collect();
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .title_bottom(Line::from(" j/k move  Enter jump  Esc/q close ")),
-        )
+        // No bottom-border key hints: the shared footer strip covers them.
+        .block(Block::default().borders(Borders::ALL).title(title))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     let mut state = ListState::default();
     state.select(Some(peek.selected));
