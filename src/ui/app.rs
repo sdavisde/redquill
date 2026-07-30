@@ -564,6 +564,12 @@ pub struct App {
     /// `Enter` or refresh can't stack a concurrent fetch/worktree op (see
     /// [`App::spawn_pr_checkout`]/[`App::poll_pr_checkout`]).
     pub(super) pr_checkout_in_flight: Option<super::review_launcher::InFlightPrCheckout>,
+    /// Set just before a launcher-initiated [`App::spawn_pr_checkout`] call
+    /// when no provider resolution was cached for the PR (the checkout falls
+    /// back to GitHub); consumed and reset inside that call so it never leaks
+    /// into an unrelated checkout. Lets the eventual fetch-failure diagnostic
+    /// name the assumption instead of surfacing a bare "PR fetch failed".
+    pub(super) pr_checkout_provider_assumed: bool,
     /// The background-task poller PR checkouts run through, separate from the
     /// PR-list poller so their results drain independently.
     pub(super) pr_checkout_tasks: BackgroundTasks<super::stage_ops::PrCheckoutOutcome>,
@@ -886,6 +892,7 @@ impl App {
             cleanup_reviews: Vec::new(),
             restore_request: None,
             pr_checkout_in_flight: None,
+            pr_checkout_provider_assumed: false,
             pr_checkout_tasks: BackgroundTasks::new(),
             review_forge: None,
             review_stale: false,
