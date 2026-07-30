@@ -17,7 +17,7 @@ use super::submit::ForgeSubmitExecutor;
 use super::threads::{
     Thread, apply_resolved_states, parse_resolved_thread_states, parse_review_comments_json,
 };
-use super::{ForgeError, PullRequest, Verdict};
+use super::{ForgeError, PR_LIST_CAP, PullRequest, Verdict};
 
 /// The exact `--json` field list `gh pr list` is asked for — fixed at the
 /// listing's field set, never composed from caller input.
@@ -29,11 +29,21 @@ pub const PR_LIST_JSON_FIELDS: &str =
 /// since this is a real network round trip, not a local auth-store read.
 const LIST_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Builds the fixed argv for `gh pr list --json <fields>`, with prompts
-/// disabled and color stripped from the (JSON, machine-read) output.
+/// Builds the fixed argv for `gh pr list --json <fields> --limit <cap>`,
+/// with prompts disabled and color stripped from the (JSON, machine-read)
+/// output. `--limit` matches [`super::PR_LIST_CAP`] (the same cap
+/// `gitlab::mr_list_command`'s `--per-page` requests) — without it, `gh`
+/// silently truncates to its own default of 30 with no indicator.
 pub fn pr_list_command() -> Command {
     let mut cmd = Command::new("gh");
-    cmd.args(["pr", "list", "--json", PR_LIST_JSON_FIELDS]);
+    cmd.args([
+        "pr",
+        "list",
+        "--json",
+        PR_LIST_JSON_FIELDS,
+        "--limit",
+        &PR_LIST_CAP.to_string(),
+    ]);
     harden(&mut cmd);
     cmd
 }

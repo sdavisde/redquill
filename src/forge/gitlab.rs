@@ -63,7 +63,7 @@ use super::diagnose::submit_error_headline;
 use super::process::{harden_glab, run_captured_with_timeout, run_with_input_and_timeout};
 use super::submit::SubmitReport;
 use super::threads::{Thread, ThreadAnchor, ThreadComment};
-use super::{ForgeError, PullRequest};
+use super::{ForgeError, PR_LIST_CAP, PullRequest};
 
 /// How long a `glab` read invocation (list, detail, discussions) may run
 /// before it's treated as failed and killed. Same budget `github.rs` uses
@@ -72,14 +72,23 @@ const READ_TIMEOUT: Duration = Duration::from_secs(15);
 
 // -- MR listing ---------------------------------------------------------------
 
-/// Builds the fixed argv for `glab mr list -F json`. `mr list` defaults to
-/// open MRs (`--state opened`), matching the "open PRs" scope this listing
-/// wants, so no explicit `-s`/`--state` flag is added. `--per-page 100`
-/// raises the page size since, unlike `gh pr list --json`, `glab mr list`
-/// has no documented automatic multi-page JSON fetch.
+/// Builds the fixed argv for `glab mr list -F json --per-page <cap>`. `mr
+/// list` defaults to open MRs (`--state opened`), matching the "open PRs"
+/// scope this listing wants, so no explicit `-s`/`--state` flag is added.
+/// `--per-page` raises the page size to [`super::PR_LIST_CAP`] (the same
+/// cap `github::pr_list_command`'s `--limit` requests) since, unlike `gh pr
+/// list --json`, `glab mr list` has no documented automatic multi-page JSON
+/// fetch.
 pub fn mr_list_command() -> Command {
     let mut cmd = Command::new("glab");
-    cmd.args(["mr", "list", "-F", "json", "--per-page", "100"]);
+    cmd.args([
+        "mr",
+        "list",
+        "-F",
+        "json",
+        "--per-page",
+        &PR_LIST_CAP.to_string(),
+    ]);
     harden_glab(&mut cmd);
     cmd
 }

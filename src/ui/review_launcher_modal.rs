@@ -306,6 +306,33 @@ fn cleanup_key_label(table: &[ModalBinding<LauncherAction>]) -> String {
         .unwrap_or_else(|| "X".to_string())
 }
 
+/// Whether a landed listing of `count` rows might be missing rows beyond
+/// the provider's fixed page cap ([`crate::forge::PR_LIST_CAP`]) — the only
+/// signal available, since neither `gh` nor `glab` reports a listing's true
+/// total, only the rows it actually returned. Pure so it's unit-testable
+/// without a render pass; called fresh from the just-applied listing on
+/// every render (first load and refresh alike), never cached in a
+/// separately-updated flag.
+fn prs_reached_cap(count: usize) -> bool {
+    count >= crate::forge::PR_LIST_CAP
+}
+
+/// The "showing first N open PRs" truncation note: appended below the
+/// listing whenever [`prs_reached_cap`] holds for the landed row count.
+/// Says "first N", never an exact total — a landing at the cap is
+/// indistinguishable from one that's merely equal to it, so the copy
+/// doesn't overclaim. Styled in the secondary `footer_text` tone, matching
+/// [`finished_reviews_footer_line`].
+fn truncated_listing_footer_line(theme: &Theme) -> Line<'static> {
+    Line::from(Span::styled(
+        format!(
+            "showing first {} open PRs \u{2014} narrow with /",
+            crate::forge::PR_LIST_CAP
+        ),
+        Style::default().fg(theme.footer_text),
+    ))
+}
+
 /// The "N finished review(s)" footer line: rendered whenever cleanup
 /// candidates exist (managed reviews whose PR is no longer open), alongside
 /// both a real listing and the zero-open-PRs empty state (FR-22). Names the
@@ -335,9 +362,11 @@ fn finished_reviews_footer_line(
 /// repo, or a degraded-state prescription — never a blank body. `order`
 /// restricts which PRs render and in what sequence (see [`commits_rows`]'s
 /// identical convention, spec 12 FR-12); loading/empty/degraded states take
-/// priority over `order`, same precedence as every other tab. When cleanup
-/// candidates exist, a non-selectable "N finished review(s)" footer line is
-/// appended below the listing or empty state (FR-22).
+/// priority over `order`, same precedence as every other tab. When the
+/// landed listing hit the provider's page cap ([`prs_reached_cap`]), a
+/// truncation note is appended below it. When cleanup candidates exist, a
+/// non-selectable "N finished review(s)" footer line is appended after
+/// that (FR-22).
 fn prs_rows(
     app: &App,
     order: &[usize],
@@ -368,6 +397,11 @@ fn prs_rows(
             .collect(),
         degraded => return vec![ListItem::new(prs_degraded_body_lines(degraded, theme))],
     };
+    if let PrFetchOutcome::Loaded { prs, .. } = outcome
+        && prs_reached_cap(prs.len())
+    {
+        items.push(ListItem::new(truncated_listing_footer_line(theme)));
+    }
     let finished = app.launcher_finished_reviews.len();
     if finished > 0 {
         items.push(ListItem::new(finished_reviews_footer_line(
@@ -1016,5 +1050,55 @@ index 111..222 100644
         let content = render_launcher(&app);
         assert!(content.contains("No open pull requests on sdavisde/redquill"));
         assert!(content.contains("1 finished review(s)"));
+    }
+
+    #[test]
+    fn prs_reached_cap_is_true_at_the_cap_and_false_one_below_it() {
+        let cap = crate::forge::PR_LIST_CAP;
+        assert!(!prs_reached_cap(cap - 1));
+        assert!(prs_reached_cap(cap));
+        assert!(prs_reached_cap(cap + 1));
+    }
+
+    fn prs_of_len(count: usize) -> Vec<PullRequest> {
+        (0..count as u64)
+            .map(|n| pr(n, "title", "dev", "branch", false))
+            .collect()
+    }
+
+    #[test]
+    fn prs_tab_shows_the_truncation_note_when_the_listing_hits_the_cap() {
+        let app = prs_app(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: prs_of_len(crate::forge::PR_LIST_CAP),
+        });
+        // Taller than `render_launcher`'s fixed 100x24: each PR row is two
+        // terminal lines ([`pr_row`]'s primary + meta line), so `PR_LIST_CAP`
+        // rows plus the appended truncation note need well over 200 lines of
+        // viewport to avoid scrolling off (the cursor sits on row 0, so
+        // ratatui doesn't auto-scroll to reveal it otherwise).
+        let backend = TestBackend::new(100, 400);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let area = Rect::new(0, 0, 100, 400);
+        terminal.draw(|frame| render(frame, area, &app)).unwrap();
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(content.contains("showing first 100 open PRs"));
+        assert!(content.contains("narrow with /"));
+    }
+
+    #[test]
+    fn prs_tab_omits_the_truncation_note_when_the_listing_is_below_the_cap() {
+        let app = prs_app(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: prs_of_len(crate::forge::PR_LIST_CAP - 1),
+        });
+        let content = render_launcher(&app);
+        assert!(!content.contains("showing first"));
     }
 }

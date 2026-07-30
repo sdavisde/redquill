@@ -66,6 +66,13 @@ pub use threads::{
 
 use thiserror::Error;
 
+/// The page-size cap both providers' PR/MR listing commands request
+/// (`gh pr list --limit`, `glab mr list --per-page`) — defined once so the
+/// two argv builders and the launcher's truncation indicator can't drift.
+/// A listing landing at exactly this count is the only signal that rows
+/// beyond it exist: neither CLI reports a listing's true total.
+pub const PR_LIST_CAP: usize = 100;
+
 /// One PR/MR row as listed by a provider: enough to render a list and to
 /// target a checkout, nothing more.
 #[derive(Debug, Clone, PartialEq, Eq)]
