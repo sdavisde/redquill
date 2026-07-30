@@ -2696,6 +2696,38 @@ fn app_with_counting_fake(
     (app, diff_h, show_calls)
 }
 
+/// The defect this catches: highlighting every file in the review up front.
+/// That is what made opening a 100-file commit stall for seconds before the
+/// first frame — the fetch-and-parse cost scaled with the review rather than
+/// with the screen. The second half guards the opposite failure: files that
+/// scroll into view must actually get highlighted, not stay bare forever.
+#[test]
+fn a_many_file_review_highlights_only_what_is_on_screen() {
+    const FILES: usize = 40;
+    let patches: Vec<RawFilePatch> = (0..FILES)
+        .map(|i| highlight_patch(&format!("f{i:02}.rs")))
+        .collect();
+    let (mut app, _diff, show_calls) = app_with_counting_fake(patches);
+
+    // Both sides of every file would be `2 * FILES` fetches.
+    let on_open = *show_calls.borrow();
+    assert!(on_open > 0, "the file under the cursor must be highlighted");
+    assert!(
+        on_open < FILES,
+        "opening fetched {on_open} sides across {FILES} files — \
+         population is not viewport-scoped"
+    );
+    assert!(!app.highlight_cache_has_path("f39.rs"));
+
+    app.view.cursor = app.view.max_cursor();
+    app.view.ensure_visible();
+    app.ensure_visible_highlights();
+    assert!(
+        app.highlight_cache_has_path("f39.rs"),
+        "a file scrolled into view must pick up its highlighting"
+    );
+}
+
 #[test]
 fn refresh_drops_highlight_cache_entries_for_removed_files() {
     let a = highlight_patch("a.rs");

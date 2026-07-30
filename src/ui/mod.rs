@@ -1034,6 +1034,11 @@ fn event_loop(
             diff_area,
             app.active_commit.is_some(),
         ));
+        // Highlighting follows the viewport, so it has to be reconciled after
+        // the frame's real geometry is known and before anything is drawn —
+        // scrolling moves which files are on screen without going through
+        // `rebuild_rows`. A no-op on frames where nothing new scrolled in.
+        app.ensure_visible_highlights();
 
         terminal.draw(|frame| draw(frame, app, keymap, pending_prefix))?;
 

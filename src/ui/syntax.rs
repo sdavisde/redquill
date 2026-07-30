@@ -280,6 +280,13 @@ impl HighlightCache {
             .unwrap_or(&[])
     }
 
+    /// Whether `source` has a cached entry, empty spans included — the
+    /// "is this file ready to render?" question
+    /// [`super::App::ensure_visible_highlights`] asks once per frame.
+    pub(super) fn is_cached(&self, source: &ContentSource) -> bool {
+        self.entries.contains_key(source)
+    }
+
     /// Marks `source` as just-used and reports whether it was cached at all.
     fn touch(&mut self, source: &ContentSource) -> bool {
         self.clock += 1;

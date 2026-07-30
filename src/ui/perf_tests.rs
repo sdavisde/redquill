@@ -4,8 +4,8 @@
 //!
 //! 1. Full row/multibuffer construction (`rebuild_rows` / `build_multibuffer`).
 //! 2. `apply_snapshot` (the refresh fold-in).
-//! 3. Highlight-cache population for the whole diff (tree-sitter over every
-//!    expanded file).
+//! 3. Highlight-cache population (tree-sitter over every expanded file the
+//!    viewport can show).
 //! 4. Cursor / hunk navigation over the built buffer (per-keypress cost).
 //! 5. The shared `/` list-filter's fuzzy re-rank over a 5k-row candidate
 //!    list (spec 12's perf requirement — every filter-adopting context's
@@ -280,14 +280,22 @@ fn rebuild_rows_warm_is_bounded() {
     );
 }
 
-/// Hot path 3: highlight-cache population — tree-sitter over every expanded
-/// file's whole content, both sides. Measured cold (cache cleared) each pass.
+/// Hot path 3: highlight-cache population — tree-sitter over the whole
+/// content, both sides, of every expanded file *the viewport can show*.
+/// Measured cold (cache cleared) each pass, so this is the cost of opening a
+/// review: what the user waits through before the first frame.
+///
+/// Population is viewport-scoped, so this is meant to stay flat as reviews get
+/// wider. It is not a file-count regression detector on its own — this
+/// fixture has a fixed 25 files — see
+/// `app_tests::a_many_file_review_highlights_only_what_is_on_screen` for the
+/// assertion that population doesn't scale with the review.
 #[test]
 fn highlight_population_is_bounded() {
     const ITERS: u32 = 5;
-    // Measured ~1.4s debug on a dev machine (tree-sitter is the noisiest hot
-    // path, so the margin is widest); ~13x headroom.
-    const BUDGET: Duration = Duration::from_millis(18_000);
+    // Measured ~0.23s debug on a dev machine, down from ~1.4s when every file
+    // was highlighted eagerly; ~17x headroom.
+    const BUDGET: Duration = Duration::from_millis(4_000);
     let (mut app, diff_lines) = build_app();
     let start = Instant::now();
     for _ in 0..ITERS {

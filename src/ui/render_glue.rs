@@ -1,10 +1,11 @@
 //! Row and highlight assembly: [`super::App`]'s side of the seam between the
 //! diff model and the rendered multibuffer. `rebuild_rows` populates the
-//! syntax-highlight cache and concatenates every file's rows into the one
-//! buffer [`super::DiffViewState`] renders; `refresh_rows` is the lighter
-//! post-annotation-mutation rebuild. Kept out of `app.rs` so the coordinator
-//! stays thin; these are the shared mutation points many gestures funnel
-//! through, so their signatures are unchanged.
+//! syntax-highlight cache for what is on screen and concatenates every file's
+//! rows into the one buffer [`super::DiffViewState`] renders;
+//! `ensure_visible_highlights` extends that to whatever scrolls in afterwards;
+//! `refresh_rows` is the lighter post-annotation-mutation rebuild. Kept out of
+//! `app.rs` so the coordinator stays thin; these are the shared mutation
+//! points many gestures funnel through, so their signatures are unchanged.
 
 use crate::annotate::Side;
 use crate::review::ReviewStatus;
@@ -30,25 +31,34 @@ impl App {
     }
 
     /// Rebuilds the whole multi-file row buffer: populates the syntax-highlight
-    /// cache for the in-use side(s) of every *expanded* file, then concatenates
-    /// every file's rows into one buffer via [`build_multibuffer`], carrying
-    /// per-file collapse state and staged markers. Also recomputes the active
-    /// search's matches and re-derives `selected_file` from the cursor. This is
-    /// `App`'s side of the seam: highlighting and the git backend live here,
-    /// and the built buffer is fed into [`super::DiffViewState`].
+    /// cache for the in-use side(s) of every *expanded, on-screen* file, then
+    /// concatenates every file's rows into one buffer via
+    /// [`build_multibuffer`], carrying per-file collapse state and staged
+    /// markers. Also recomputes the active search's matches and re-derives
+    /// `selected_file` from the cursor. This is `App`'s side of the seam:
+    /// highlighting and the git backend live here, and the built buffer is fed
+    /// into [`super::DiffViewState`].
     ///
-    /// Each blob is highlighted at most once however many views reach it — the
-    /// cache is keyed by content source, not by file — and is re-highlighted
-    /// only when its bytes could have changed. A collapsed file shows only a
-    /// header and is never highlighted until expanded.
+    /// Highlighting is scoped to the viewport, not the review: a collapsed
+    /// file shows only a header and is never highlighted until expanded, and
+    /// an off-screen file waits until it scrolls in (see
+    /// [`App::ensure_visible_highlights`]). Each blob is highlighted at most
+    /// once however many views reach it — the cache is keyed by content
+    /// source, not by file — and only re-highlighted when its bytes could
+    /// have changed.
     pub(super) fn rebuild_rows(&mut self) {
-        // Resolved once and reused twice below, by the populate pass and by
-        // the span lookup.
+        // Resolved once and reused twice below: the populate pass walks the
+        // on-screen slice of this, the span lookup walks all of it.
         let sources: Vec<[Option<ContentSource>; 2]> = (0..self.view.files.len())
             .map(|i| self.highlight_sources(i))
             .collect();
 
-        for index in 0..self.view.files.len() {
+        // Highlight only what this frame can actually show. Everything else
+        // is highlighted when it scrolls into view (see
+        // `ensure_visible_highlights`) — at a couple of milliseconds a file,
+        // that is cheaper than parsing a whole review up front, and it is
+        // what keeps opening a 100-file commit instant.
+        for index in self.visible_files() {
             let (Some(pair), Some(file)) = (sources.get(index), self.view.files.get(index)) else {
                 continue;
             };
@@ -96,9 +106,10 @@ impl App {
                 ReviewStatus::ChangedSinceAccepted => ReviewMarker::Changed,
             })
             .collect();
-        // A file with no cached spans (a side with no content to source, or a
-        // language with no grammar) renders unhighlighted — the same silent
-        // degradation as before.
+        // A file with no cached spans yet (off screen, or not reached by the
+        // populate pass above) renders unhighlighted — the same degradation a
+        // language with no grammar already gets — and picks up its spans on
+        // the rebuild that follows it scrolling into view.
         let syntax: Vec<SyntaxSpans> = sources
             .iter()
             .map(|[new, old]| SyntaxSpans {
@@ -154,8 +165,8 @@ impl App {
     /// header renders), a side no row uses (the old side of a pure addition),
     /// or a synthetic file's absent old side.
     ///
-    /// One definition, so the populate pass and the span lookup can't
-    /// disagree about what a given file needs.
+    /// One definition, so the populate pass and the per-frame readiness check
+    /// can't disagree about what a given file needs.
     fn highlight_sources(&self, index: usize) -> [Option<ContentSource>; 2] {
         let Some(file) = self.view.files.get(index) else {
             return [None, None];
@@ -176,5 +187,48 @@ impl App {
                 synthetic,
             )
         })
+    }
+
+    /// The files whose rows intersect the viewport, plus the cursor's file.
+    ///
+    /// Derived from the row and layout state of the *last* build — which is
+    /// what is on screen right now. A build that shifts rows can leave this
+    /// momentarily stale, so the cursor's file is included unconditionally
+    /// (it is authoritative even when the layout isn't) and
+    /// [`App::ensure_visible_highlights`] re-checks before the next draw.
+    fn visible_files(&self) -> Vec<usize> {
+        let mut files = vec![self.view.selected_file];
+        if !self.view.file_of_row.is_empty() {
+            let last_row = self.view.file_of_row.len() - 1;
+            let top = self.view.logical_of_visual(self.view.scroll).min(last_row);
+            let bottom = self
+                .view
+                .logical_of_visual(self.view.scroll + self.view.viewport_height())
+                .min(last_row);
+            files.extend(self.view.file_of_row[top..=bottom].iter().copied());
+        }
+        files.sort_unstable();
+        files.dedup();
+        files
+    }
+
+    /// Highlights any file that is on screen but not yet cached, rebuilding
+    /// the rows so the fresh spans reach them.
+    ///
+    /// Scrolling changes which files are visible without going through
+    /// [`App::rebuild_rows`], so this is what makes highlighting follow the
+    /// viewport. Called once per frame before the draw; on the overwhelming
+    /// majority of frames everything visible is already cached and this costs
+    /// one set walk and no rebuild.
+    pub(super) fn ensure_visible_highlights(&mut self) {
+        let ready = self.visible_files().into_iter().all(|index| {
+            self.highlight_sources(index)
+                .iter()
+                .flatten()
+                .all(|source| self.highlight_cache.is_cached(source))
+        });
+        if !ready {
+            self.rebuild_rows();
+        }
     }
 }
