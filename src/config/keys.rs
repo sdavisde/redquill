@@ -180,6 +180,10 @@ const MODAL_MODE_NAMES: &[&str] = &[
     "finder",
     "project-search-input",
     "project-search-results",
+    "thread-view",
+    "submit-forge",
+    "submit-result",
+    "cleanup-reviews",
     "filter-edit",
 ];
 
@@ -195,7 +199,7 @@ const MODAL_MODE_NAMES: &[&str] = &[
 /// `diff`/`panel`/`global`, keyed by mode name (one of [`MODAL_MODE_NAMES`])
 /// — a single map rather than one field per mode, since
 /// `crate::ui::modal_keys_config` (the edge module resolving these) already
-/// needs one generic merge function reusable across all thirteen modes.
+/// needs one generic merge function reusable across every mode.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct KeysConfig {
     pub diff: BTreeMap<String, Vec<KeySeqSpec>>,

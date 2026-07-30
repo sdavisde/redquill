@@ -1173,8 +1173,7 @@ pub(super) static END_REVIEW_KEYS: LazyLock<Vec<ModalBinding<EndReviewAction>>> 
 
 /// What a key does in the imported-thread overlay
 /// ([`super::app::Mode::ThreadView`]): scroll the read-only conversation,
-/// draft a reply to it, or close. Not config-remappable yet — see
-/// [`THREAD_VIEW_KEYS`] and the module doc.
+/// draft a reply to it, or close. Remappable through `[keys.thread-view]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ThreadViewAction {
     /// Scroll the conversation down one line (see
@@ -1189,9 +1188,30 @@ pub(super) enum ThreadViewAction {
     Close,
 }
 
+pub(super) fn thread_view_action_name(action: ThreadViewAction) -> &'static str {
+    match action {
+        ThreadViewAction::ScrollDown => "scroll-down",
+        ThreadViewAction::ScrollUp => "scroll-up",
+        ThreadViewAction::Reply => "reply",
+        ThreadViewAction::Close => "close",
+    }
+}
+
+pub(super) fn thread_view_action_from_name(name: &str) -> Option<ThreadViewAction> {
+    Some(match name {
+        "scroll-down" => ThreadViewAction::ScrollDown,
+        "scroll-up" => ThreadViewAction::ScrollUp,
+        "reply" => ThreadViewAction::Reply,
+        "close" => ThreadViewAction::Close,
+        _ => return None,
+    })
+}
+
 /// The thread-overlay control keys (`j`/`k`/arrow scroll plus `Esc`/`q`
 /// close), for the help overlay, footer strip, and
-/// [`super::modes::handle_thread_view_key`]'s dispatch.
+/// [`super::modes::handle_thread_view_key`]'s dispatch. Defaults only — the
+/// effective table is this plus any `[keys.thread-view]` config override (see
+/// `super::modal_keys_config`).
 pub(super) static THREAD_VIEW_KEYS: LazyLock<Vec<ModalBinding<ThreadViewAction>>> =
     LazyLock::new(|| {
         vec![
@@ -1324,8 +1344,11 @@ pub(super) static PR_DESCRIPTION_KEYS: LazyLock<Vec<ModalBinding<PrDescriptionAc
 /// summary (a hand-written fallback in
 /// [`super::modes::handle_submit_forge_key`], never remappable) — so this
 /// table documents only the control keys, and the scroll keys are deliberately
-/// the arrow/page keys rather than `j`/`k`, which belong to the summary. Not
-/// config-remappable yet; see the module doc.
+/// the arrow/page keys rather than `j`/`k`, which belong to the summary.
+/// Remappable through `[keys.submit-forge]`; because the table is consulted
+/// before the char-insert fallback, binding a bare printable key here takes
+/// that character away from summary typing (documented in
+/// `docs/example-config.toml`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SubmitForgeAction {
     /// Publishes the previewed batch (see
@@ -1353,8 +1376,41 @@ pub(super) enum SubmitForgeAction {
     ComposeSummary,
 }
 
+pub(super) fn submit_forge_action_name(action: SubmitForgeAction) -> &'static str {
+    match action {
+        SubmitForgeAction::Confirm => "confirm",
+        SubmitForgeAction::Cancel => "cancel",
+        SubmitForgeAction::VerdictNext => "verdict-next",
+        SubmitForgeAction::VerdictPrev => "verdict-prev",
+        SubmitForgeAction::ScrollDown => "scroll-down",
+        SubmitForgeAction::ScrollUp => "scroll-up",
+        SubmitForgeAction::PageDown => "page-down",
+        SubmitForgeAction::PageUp => "page-up",
+        SubmitForgeAction::DeleteChar => "delete-char",
+        SubmitForgeAction::ComposeSummary => "compose-summary",
+    }
+}
+
+pub(super) fn submit_forge_action_from_name(name: &str) -> Option<SubmitForgeAction> {
+    Some(match name {
+        "confirm" => SubmitForgeAction::Confirm,
+        "cancel" => SubmitForgeAction::Cancel,
+        "verdict-next" => SubmitForgeAction::VerdictNext,
+        "verdict-prev" => SubmitForgeAction::VerdictPrev,
+        "scroll-down" => SubmitForgeAction::ScrollDown,
+        "scroll-up" => SubmitForgeAction::ScrollUp,
+        "page-down" => SubmitForgeAction::PageDown,
+        "page-up" => SubmitForgeAction::PageUp,
+        "delete-char" => SubmitForgeAction::DeleteChar,
+        "compose-summary" => SubmitForgeAction::ComposeSummary,
+        _ => return None,
+    })
+}
+
 /// The submit-review modal's control-key table, for the help overlay, footer
-/// strip, and [`super::modes::handle_submit_forge_key`]'s dispatch.
+/// strip, and [`super::modes::handle_submit_forge_key`]'s dispatch. Defaults
+/// only — the effective table is this plus any `[keys.submit-forge]` config
+/// override (see `super::modal_keys_config`).
 pub(super) static SUBMIT_FORGE_KEYS: LazyLock<Vec<ModalBinding<SubmitForgeAction>>> =
     LazyLock::new(|| {
         vec![
@@ -1443,8 +1499,8 @@ pub(super) static SUBMIT_FORGE_KEYS: LazyLock<Vec<ModalBinding<SubmitForgeAction
 /// of a stopped run, dismiss it, or go straight back into the submit modal for
 /// another pass. Free of any text field, so `j`/`k` scroll here as they do in
 /// the thread overlay (the submit modal's arrows-only rule exists because its
-/// summary field owns the letter keys). Not config-remappable yet — see
-/// [`SUBMIT_RESULT_KEYS`] and the module doc.
+/// summary field owns the letter keys). Remappable through
+/// `[keys.submit-result]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SubmitResultAction {
     /// Scrolls the outcome list down one line.
@@ -1462,8 +1518,33 @@ pub(super) enum SubmitResultAction {
     Retry,
 }
 
+pub(super) fn submit_result_action_name(action: SubmitResultAction) -> &'static str {
+    match action {
+        SubmitResultAction::ScrollDown => "scroll-down",
+        SubmitResultAction::ScrollUp => "scroll-up",
+        SubmitResultAction::PageDown => "page-down",
+        SubmitResultAction::PageUp => "page-up",
+        SubmitResultAction::Dismiss => "dismiss",
+        SubmitResultAction::Retry => "retry",
+    }
+}
+
+pub(super) fn submit_result_action_from_name(name: &str) -> Option<SubmitResultAction> {
+    Some(match name {
+        "scroll-down" => SubmitResultAction::ScrollDown,
+        "scroll-up" => SubmitResultAction::ScrollUp,
+        "page-down" => SubmitResultAction::PageDown,
+        "page-up" => SubmitResultAction::PageUp,
+        "dismiss" => SubmitResultAction::Dismiss,
+        "retry" => SubmitResultAction::Retry,
+        _ => return None,
+    })
+}
+
 /// The result-modal control keys, for the help overlay, footer strip, and
-/// [`super::modes::handle_submit_result_key`]'s dispatch.
+/// [`super::modes::handle_submit_result_key`]'s dispatch. Defaults only — the
+/// effective table is this plus any `[keys.submit-result]` config override
+/// (see `super::modal_keys_config`).
 pub(super) static SUBMIT_RESULT_KEYS: LazyLock<Vec<ModalBinding<SubmitResultAction>>> =
     LazyLock::new(|| {
         vec![
@@ -1631,8 +1712,8 @@ pub(super) static RESTORE_KEYS: LazyLock<Vec<ModalBinding<RestoreAction>>> = Laz
 /// toggles the highlighted entry's selection (all checked by default), and
 /// confirm/cancel gate the batch. Confirm deletes only the *selected*
 /// reviews' worktree, branch, and state entry (a no-op with nothing
-/// selected); cancel mutates nothing. Not config-remappable yet — see module
-/// doc.
+/// selected); cancel mutates nothing. Remappable through
+/// `[keys.cleanup-reviews]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CleanupReviewsAction {
     /// Moves the highlight down one entry (see
@@ -1653,12 +1734,35 @@ pub(super) enum CleanupReviewsAction {
     Cancel,
 }
 
+pub(super) fn cleanup_reviews_action_name(action: CleanupReviewsAction) -> &'static str {
+    match action {
+        CleanupReviewsAction::MoveDown => "move-down",
+        CleanupReviewsAction::MoveUp => "move-up",
+        CleanupReviewsAction::Toggle => "toggle",
+        CleanupReviewsAction::Confirm => "confirm",
+        CleanupReviewsAction::Cancel => "cancel",
+    }
+}
+
+pub(super) fn cleanup_reviews_action_from_name(name: &str) -> Option<CleanupReviewsAction> {
+    Some(match name {
+        "move-down" => CleanupReviewsAction::MoveDown,
+        "move-up" => CleanupReviewsAction::MoveUp,
+        "toggle" => CleanupReviewsAction::Toggle,
+        "confirm" => CleanupReviewsAction::Confirm,
+        "cancel" => CleanupReviewsAction::Cancel,
+        _ => return None,
+    })
+}
+
 /// The cleanup confirm modal's key table, for the help overlay, footer strip,
 /// and [`super::modes::handle_cleanup_reviews_key`]'s dispatch. The
 /// confirm/cancel rows mirror [`CONFIRM_REMOTE_OP_KEYS`]' binary-gate shape;
 /// the move pair mirrors [`SWITCHER_KEYS`]' — only `MoveDown` carries the
 /// footer hint, since its label ("j / Down") already reads as a compound key
 /// display and merging `MoveUp`'s in would double the " / " separators.
+/// Defaults only — the effective table is this plus any
+/// `[keys.cleanup-reviews]` config override (see `super::modal_keys_config`).
 pub(super) static CLEANUP_REVIEWS_KEYS: LazyLock<Vec<ModalBinding<CleanupReviewsAction>>> =
     LazyLock::new(|| {
         vec![
@@ -3117,9 +3221,9 @@ pub(super) static SEARCH_HINTS: LazyLock<Vec<ModalBinding<SearchAction>>> = Lazy
 // -- Effective (post-config-override) modal tables --------------------------
 
 /// The canonical `[keys.<mode>]` table names, in
-/// the same order [`ModalKeymaps`]'s fields are declared. One table per modal
-/// mode currently defined in this module; adding a fourteenth mode means
-/// adding both a field here and a name here, which
+/// the same order [`ModalKeymaps`]'s fields are declared. One name per
+/// config-remappable modal mode; adding another means adding both a field
+/// here and a name here, which
 /// `crate::config::keys::KeysConfig::from_value`'s parallel hardcoded list
 /// must also gain (that module can't import this one — see its layering
 /// note — so `crate::ui::modal_keys_config`'s tests cross-check the two
@@ -3141,6 +3245,10 @@ pub(super) const MODAL_MODE_NAMES: &[&str] = &[
     "finder",
     "project-search-input",
     "project-search-results",
+    "thread-view",
+    "submit-forge",
+    "submit-result",
+    "cleanup-reviews",
     "filter-edit",
 ];
 
@@ -3177,20 +3285,16 @@ pub struct ModalKeymaps {
     /// The pull/push confirm modal. Not config-remappable yet — see
     /// [`CONFIRM_REMOTE_OP_KEYS`].
     pub(super) confirm_remote_op: Vec<ModalBinding<ConfirmRemoteOpAction>>,
-    /// The imported-thread overlay. Not config-remappable yet — see
-    /// [`THREAD_VIEW_KEYS`].
+    /// The imported-thread overlay (`[keys.thread-view]`).
     pub(super) thread_view: Vec<ModalBinding<ThreadViewAction>>,
     /// The read-only PR description overlay. Not config-remappable yet — see
     /// [`PR_DESCRIPTION_KEYS`].
     pub(super) pr_description: Vec<ModalBinding<PrDescriptionAction>>,
-    /// The submit-review modal. Not config-remappable yet — see
-    /// [`SUBMIT_FORGE_KEYS`].
+    /// The submit-review modal (`[keys.submit-forge]`).
     pub(super) submit_forge: Vec<ModalBinding<SubmitForgeAction>>,
-    /// The post-submit result modal. Not config-remappable yet — see
-    /// [`SUBMIT_RESULT_KEYS`].
+    /// The post-submit result modal (`[keys.submit-result]`).
     pub(super) submit_result: Vec<ModalBinding<SubmitResultAction>>,
-    /// The finished-review cleanup confirm modal. Not config-remappable yet —
-    /// see [`CLEANUP_REVIEWS_KEYS`].
+    /// The finished-review cleanup confirm modal (`[keys.cleanup-reviews]`).
     pub(super) cleanup_reviews: Vec<ModalBinding<CleanupReviewsAction>>,
     /// The restore confirm modal. Not config-remappable yet — see
     /// [`RESTORE_KEYS`].
@@ -3286,8 +3390,8 @@ mod tests {
         }
     }
 
-    /// One test over all fourteen mode tables: each mode's action names must
-    /// be unique and round-trip back to the same action.
+    /// One test over every config-remappable mode table: each mode's action
+    /// names must be unique and round-trip back to the same action.
     #[test]
     fn every_modal_action_name_mapping_is_total_and_bijective() {
         assert_action_names_are_total_and_bijective(
@@ -3359,6 +3463,26 @@ mod tests {
             &PROJECT_SEARCH_RESULTS_HINTS,
             project_search_results_action_name,
             project_search_results_action_from_name,
+        );
+        assert_action_names_are_total_and_bijective(
+            &THREAD_VIEW_KEYS,
+            thread_view_action_name,
+            thread_view_action_from_name,
+        );
+        assert_action_names_are_total_and_bijective(
+            &SUBMIT_FORGE_KEYS,
+            submit_forge_action_name,
+            submit_forge_action_from_name,
+        );
+        assert_action_names_are_total_and_bijective(
+            &SUBMIT_RESULT_KEYS,
+            submit_result_action_name,
+            submit_result_action_from_name,
+        );
+        assert_action_names_are_total_and_bijective(
+            &CLEANUP_REVIEWS_KEYS,
+            cleanup_reviews_action_name,
+            cleanup_reviews_action_from_name,
         );
     }
 

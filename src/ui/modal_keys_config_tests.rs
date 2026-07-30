@@ -35,7 +35,7 @@ fn modal_mode_names_match_config_keys_hardcoded_list() {
     // and the count must match exactly (a name accepted by config that the
     // ui list doesn't know about would still slip past this check only if
     // it also appeared in `effective_modal_keys`'s match below, which is
-    // exhaustive over the thirteen `ModalKeymaps` fields — so a name drifting
+    // exhaustive over the `ModalKeymaps` fields — so a name drifting
     // out of sync in either direction fails this test or fails to compile).
     let toml = modal_keys::MODAL_MODE_NAMES
         .iter()
@@ -88,6 +88,13 @@ fn no_overrides_yields_every_default_table_unchanged() {
         &modal_keys::PROJECT_SEARCH_RESULTS_HINTS,
     );
     same(&effective.filter_edit, &modal_keys::FILTER_EDIT_KEYS);
+    same(&effective.thread_view, &modal_keys::THREAD_VIEW_KEYS);
+    same(&effective.submit_forge, &modal_keys::SUBMIT_FORGE_KEYS);
+    same(&effective.submit_result, &modal_keys::SUBMIT_RESULT_KEYS);
+    same(
+        &effective.cleanup_reviews,
+        &modal_keys::CLEANUP_REVIEWS_KEYS,
+    );
 }
 
 // -- Replace: an action named in config gets exactly the listed keys --------
@@ -337,6 +344,197 @@ fn overriding_a_compose_control_action_leaves_the_rest_of_the_table_intact() {
     assert_eq!(effective.compose.len(), modal_keys::COMPOSE_HINTS.len());
 }
 
+// -- PR-flow modals: each section is wired to its own table ------------------
+//
+// One test per newly wired section, because the defect each catches is
+// distinct: that *this* mode's `[keys.<mode>]` table never reached
+// `effective_modal_keys` (the remap silently does nothing). Each asserts the
+// three observable consequences of a wired section — the new key drives the
+// action, the displaced default no longer does, and the row's `key_label`
+// (the exact string `super::help`'s overlay and `super::footer`'s strip
+// print) shows the new key.
+
+#[test]
+fn remapping_a_thread_view_action_moves_the_key_and_its_displayed_label() {
+    let keys = keys_with(
+        "thread-view",
+        "reply",
+        one(KeyCode::Char('a'), KeyModifiers::NONE),
+    );
+    let (effective, warnings) = effective_modal_keys(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    assert_eq!(
+        modal_keys::resolve(
+            &effective.thread_view,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)
+        ),
+        Some(modal_keys::ThreadViewAction::Reply)
+    );
+    assert_eq!(
+        modal_keys::resolve(
+            &effective.thread_view,
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)
+        ),
+        None,
+        "the displaced default must no longer reply"
+    );
+    let row = effective
+        .thread_view
+        .iter()
+        .find(|b| b.action == modal_keys::ThreadViewAction::Reply)
+        .expect("reply row");
+    assert_eq!(row.key_label(), "a");
+}
+
+#[test]
+fn remapping_a_submit_forge_action_moves_the_key_and_its_displayed_label() {
+    let keys = keys_with(
+        "submit-forge",
+        "compose-summary",
+        one(KeyCode::Char('y'), KeyModifiers::CONTROL),
+    );
+    let (effective, warnings) = effective_modal_keys(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    assert_eq!(
+        modal_keys::resolve(
+            &effective.submit_forge,
+            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL)
+        ),
+        Some(modal_keys::SubmitForgeAction::ComposeSummary)
+    );
+    assert_eq!(
+        modal_keys::resolve(
+            &effective.submit_forge,
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL)
+        ),
+        None,
+        "the displaced default must no longer open the composer"
+    );
+    let row = effective
+        .submit_forge
+        .iter()
+        .find(|b| b.action == modal_keys::SubmitForgeAction::ComposeSummary)
+        .expect("compose-summary row");
+    assert_eq!(row.key_label(), "Ctrl-y");
+}
+
+#[test]
+fn remapping_a_submit_result_action_moves_the_key_and_its_displayed_label() {
+    let keys = keys_with(
+        "submit-result",
+        "retry",
+        one(KeyCode::Char('R'), KeyModifiers::NONE),
+    );
+    let (effective, warnings) = effective_modal_keys(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    assert_eq!(
+        modal_keys::resolve(
+            &effective.submit_result,
+            KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE)
+        ),
+        Some(modal_keys::SubmitResultAction::Retry)
+    );
+    assert_eq!(
+        modal_keys::resolve(
+            &effective.submit_result,
+            KeyEvent::new(KeyCode::Char('U'), KeyModifiers::NONE)
+        ),
+        None,
+        "the displaced default must no longer retry"
+    );
+    let row = effective
+        .submit_result
+        .iter()
+        .find(|b| b.action == modal_keys::SubmitResultAction::Retry)
+        .expect("retry row");
+    assert_eq!(row.key_label(), "R");
+}
+
+#[test]
+fn remapping_a_cleanup_reviews_action_moves_the_key_and_its_displayed_label() {
+    let keys = keys_with(
+        "cleanup-reviews",
+        "toggle",
+        one(KeyCode::Char('t'), KeyModifiers::NONE),
+    );
+    let (effective, warnings) = effective_modal_keys(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    assert_eq!(
+        modal_keys::resolve(
+            &effective.cleanup_reviews,
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)
+        ),
+        Some(modal_keys::CleanupReviewsAction::Toggle)
+    );
+    assert_eq!(
+        modal_keys::resolve(
+            &effective.cleanup_reviews,
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE)
+        ),
+        None,
+        "the displaced default must no longer toggle"
+    );
+    let row = effective
+        .cleanup_reviews
+        .iter()
+        .find(|b| b.action == modal_keys::CleanupReviewsAction::Toggle)
+        .expect("toggle row");
+    assert_eq!(row.key_label(), "t");
+}
+
+// -- Invalid values in the PR-flow sections surface the launcher's warnings --
+
+/// A section that never reached [`effective_modal_keys`] fails differently:
+/// `KeysConfig::from_value` would reject the whole `[keys.<mode>]` header as
+/// an unknown key, so neither of the per-action warnings below could appear.
+/// Table-driven over the four sections since the assertion is on the warning
+/// shape, not on any mode's action types.
+#[test]
+fn each_pr_flow_section_reports_bad_values_like_the_launcher_section_does() {
+    for (mode, real_action) in [
+        ("thread-view", "reply"),
+        ("submit-forge", "confirm"),
+        ("submit-result", "retry"),
+        ("cleanup-reviews", "toggle"),
+    ] {
+        // An unparseable key string is rejected at config-parse time.
+        let raw: toml::Table = format!("[{mode}]\n{real_action} = \"not-a-key\"\n")
+            .parse()
+            .expect("valid TOML");
+        let mut warnings = Vec::new();
+        let cfg = KeysConfig::from_value(toml::Value::Table(raw), &mut warnings);
+        assert_eq!(warnings.len(), 1, "[keys.{mode}]: {warnings:?}");
+        match &warnings[0] {
+            crate::config::ConfigWarning::InvalidValue { section, key, .. } => {
+                assert_eq!(section, &format!("keys.{mode}"));
+                assert_eq!(key, real_action);
+            }
+            other => panic!("[keys.{mode}]: expected InvalidValue, got {other:?}"),
+        }
+        assert!(
+            cfg.modal.contains_key(mode),
+            "[keys.{mode}] must be a recognized section, not an unknown key"
+        );
+
+        // An unknown action name is rejected at merge time, naming the same
+        // section.
+        let keys = keys_with(
+            mode,
+            "not-a-real-action",
+            one(KeyCode::Esc, KeyModifiers::NONE),
+        );
+        let (_effective, warnings) = effective_modal_keys(&keys);
+        assert_eq!(warnings.len(), 1, "[keys.{mode}]: {warnings:?}");
+        match &warnings[0] {
+            crate::config::ConfigWarning::InvalidValue { section, key, .. } => {
+                assert_eq!(section, &format!("keys.{mode}"));
+                assert_eq!(key, "not-a-real-action");
+            }
+            other => panic!("[keys.{mode}]: expected InvalidValue, got {other:?}"),
+        }
+    }
+}
+
 // -- docs/example-config.toml completeness -----------------------------------
 //
 // The `[keys.<mode>]` sections are entirely commented out (like
@@ -417,14 +615,27 @@ fn parse_doc_modal_blocks(text: &str) -> DocModalBlocks {
 
 /// Asserts `mode`'s doc block (from `docs/example-config.toml`) names
 /// exactly the modal action space `from_name` resolves, and that every key
-/// string it lists parses under the grammar.
+/// string it lists parses under the grammar. The expected action set is read
+/// off `table` (the mode's default table) rather than hand-listed at the call
+/// site: every variant appears in its table by construction — the same
+/// argument `modal_keys`'s bijectivity test relies on — and a hand-kept
+/// parallel list can go stale in step with the doc it's meant to police,
+/// which is exactly how `[keys.review-launcher]`'s two newest actions went
+/// undocumented.
 fn assert_doc_block_matches<A: Copy + PartialEq>(
     blocks: &DocModalBlocks,
     mode: &str,
-    all_actions: &[A],
+    table: &[ModalBinding<A>],
     name_of: fn(A) -> &'static str,
     from_name: fn(&str) -> Option<A>,
 ) {
+    let mut all_actions: Vec<A> = Vec::new();
+    for b in table {
+        if !all_actions.contains(&b.action) {
+            all_actions.push(b.action);
+        }
+    }
+    let all_actions = &all_actions[..];
     // The first block named `mode` is the canonical documentation block;
     // the doc's trailing "Example:" section deliberately reuses
     // `staging`/`switcher` for a live one-line demo and isn't meant to be
@@ -478,248 +689,127 @@ fn example_config_documents_every_modal_action_exactly_once() {
     assert_doc_block_matches(
         &blocks,
         "list",
-        &[
-            ListAction::MoveDown,
-            ListAction::MoveUp,
-            ListAction::HalfPageDown,
-            ListAction::HalfPageUp,
-            ListAction::FullPageDown,
-            ListAction::FullPageUp,
-            ListAction::JumpToTop,
-            ListAction::JumpToBottom,
-            ListAction::Jump,
-            ListAction::Edit,
-            ListAction::Delete,
-            ListAction::EnterFilter,
-            ListAction::Close,
-        ],
+        &LIST_KEYS,
         list_action_name,
         list_action_from_name,
     );
     assert_doc_block_matches(
         &blocks,
         "staging",
-        &[
-            StagingAction::MoveDown,
-            StagingAction::MoveUp,
-            StagingAction::HalfPageDown,
-            StagingAction::HalfPageUp,
-            StagingAction::FullPageDown,
-            StagingAction::FullPageUp,
-            StagingAction::JumpToTop,
-            StagingAction::JumpToBottom,
-            StagingAction::Unstage,
-            StagingAction::EnterFilter,
-            StagingAction::Close,
-        ],
+        &STAGING_KEYS,
         staging_action_name,
         staging_action_from_name,
     );
     assert_doc_block_matches(
         &blocks,
         "peek",
-        &[
-            PeekAction::MoveDown,
-            PeekAction::MoveUp,
-            PeekAction::HalfPageDown,
-            PeekAction::HalfPageUp,
-            PeekAction::FullPageDown,
-            PeekAction::FullPageUp,
-            PeekAction::JumpToTop,
-            PeekAction::JumpToBottom,
-            PeekAction::Enter,
-            PeekAction::Close,
-        ],
+        &PEEK_KEYS,
         peek_action_name,
         peek_action_from_name,
     );
     assert_doc_block_matches(
         &blocks,
         "switcher",
-        &[
-            SwitcherAction::ToggleTab,
-            SwitcherAction::MoveDown,
-            SwitcherAction::MoveUp,
-            SwitcherAction::HalfPageDown,
-            SwitcherAction::HalfPageUp,
-            SwitcherAction::FullPageDown,
-            SwitcherAction::FullPageUp,
-            SwitcherAction::JumpToTop,
-            SwitcherAction::JumpToBottom,
-            SwitcherAction::Confirm,
-            SwitcherAction::EnterFilter,
-            SwitcherAction::Close,
-        ],
+        &SWITCHER_KEYS,
         switcher_action_name,
         switcher_action_from_name,
     );
     assert_doc_block_matches(
         &blocks,
         "review-launcher",
-        &[
-            LauncherAction::ToggleTab,
-            LauncherAction::MoveDown,
-            LauncherAction::MoveUp,
-            LauncherAction::HalfPageDown,
-            LauncherAction::HalfPageUp,
-            LauncherAction::FullPageDown,
-            LauncherAction::FullPageUp,
-            LauncherAction::JumpToTop,
-            LauncherAction::JumpToBottom,
-            LauncherAction::Confirm,
-            LauncherAction::EnterFilter,
-            LauncherAction::Close,
-        ],
+        &REVIEW_LAUNCHER_KEYS,
         launcher_action_name,
         launcher_action_from_name,
     );
     assert_doc_block_matches(
         &blocks,
         "help",
-        &[
-            HelpAction::Close,
-            HelpAction::ScrollDown,
-            HelpAction::ScrollUp,
-            HelpAction::PageDown,
-            HelpAction::PageUp,
-            HelpAction::Top,
-            HelpAction::Bottom,
-            HelpAction::Search,
-            HelpAction::NextTab,
-            HelpAction::PrevTab,
-        ],
+        &HELP_KEYS,
         help_action_name,
         help_action_from_name,
     );
     assert_doc_block_matches(
         &blocks,
         "help-search",
-        &[
-            HelpSearchAction::Lock,
-            HelpSearchAction::Clear,
-            HelpSearchAction::DeleteChar,
-        ],
+        &HELP_SEARCH_HINTS,
         help_search_action_name,
         help_search_action_from_name,
     );
     assert_doc_block_matches(
         &blocks,
         "filter-edit",
-        &[
-            FilterEditAction::Lock,
-            FilterEditAction::Clear,
-            FilterEditAction::DeleteChar,
-        ],
+        &FILTER_EDIT_KEYS,
         filter_edit_action_name,
         filter_edit_action_from_name,
     );
     assert_doc_block_matches(
         &blocks,
         "compose",
-        &[
-            ComposeAction::Cancel,
-            ComposeAction::Submit,
-            ComposeAction::CycleClassification,
-            ComposeAction::Edit(BufferEditAction::Newline),
-            ComposeAction::Edit(BufferEditAction::MoveLeft),
-            ComposeAction::Edit(BufferEditAction::MoveRight),
-            ComposeAction::Edit(BufferEditAction::MoveUp),
-            ComposeAction::Edit(BufferEditAction::MoveDown),
-            ComposeAction::Edit(BufferEditAction::WordLeft),
-            ComposeAction::Edit(BufferEditAction::WordRight),
-            ComposeAction::Edit(BufferEditAction::LineStart),
-            ComposeAction::Edit(BufferEditAction::LineEnd),
-            ComposeAction::Edit(BufferEditAction::DocStart),
-            ComposeAction::Edit(BufferEditAction::DocEnd),
-            ComposeAction::Edit(BufferEditAction::DeleteBack),
-            ComposeAction::Edit(BufferEditAction::DeleteForward),
-            ComposeAction::Edit(BufferEditAction::DeleteWordBack),
-            ComposeAction::Edit(BufferEditAction::DeleteWordForward),
-        ],
+        &COMPOSE_HINTS,
         compose_action_name,
         compose_action_from_name,
     );
     assert_doc_block_matches(
         &blocks,
         "commit-message",
-        &[
-            CommitMessageAction::Cancel,
-            CommitMessageAction::Submit,
-            CommitMessageAction::Edit(BufferEditAction::Newline),
-            CommitMessageAction::Edit(BufferEditAction::MoveLeft),
-            CommitMessageAction::Edit(BufferEditAction::MoveRight),
-            CommitMessageAction::Edit(BufferEditAction::MoveUp),
-            CommitMessageAction::Edit(BufferEditAction::MoveDown),
-            CommitMessageAction::Edit(BufferEditAction::WordLeft),
-            CommitMessageAction::Edit(BufferEditAction::WordRight),
-            CommitMessageAction::Edit(BufferEditAction::LineStart),
-            CommitMessageAction::Edit(BufferEditAction::LineEnd),
-            CommitMessageAction::Edit(BufferEditAction::DocStart),
-            CommitMessageAction::Edit(BufferEditAction::DocEnd),
-            CommitMessageAction::Edit(BufferEditAction::DeleteBack),
-            CommitMessageAction::Edit(BufferEditAction::DeleteForward),
-            CommitMessageAction::Edit(BufferEditAction::DeleteWordBack),
-            CommitMessageAction::Edit(BufferEditAction::DeleteWordForward),
-        ],
+        &COMMIT_MESSAGE_HINTS,
         commit_message_action_name,
         commit_message_action_from_name,
     );
     assert_doc_block_matches(
         &blocks,
         "search",
-        &[
-            SearchAction::Confirm,
-            SearchAction::Cancel,
-            SearchAction::DeleteChar,
-        ],
+        &SEARCH_HINTS,
         search_action_name,
         search_action_from_name,
     );
     assert_doc_block_matches(
         &blocks,
         "finder",
-        &[
-            FinderAction::MoveUp,
-            FinderAction::MoveDown,
-            FinderAction::Open,
-            FinderAction::Close,
-            FinderAction::DeleteChar,
-        ],
+        &FINDER_HINTS,
         finder_action_name,
         finder_action_from_name,
     );
     assert_doc_block_matches(
         &blocks,
         "project-search-input",
-        &[
-            ProjectSearchInputAction::MoveUp,
-            ProjectSearchInputAction::MoveDown,
-            ProjectSearchInputAction::Open,
-            ProjectSearchInputAction::FocusResults,
-            ProjectSearchInputAction::ToggleFocus,
-            ProjectSearchInputAction::DeleteChar,
-            ProjectSearchInputAction::ToggleCase,
-            ProjectSearchInputAction::ToggleWholeWord,
-            ProjectSearchInputAction::ToggleLiteral,
-        ],
+        &PROJECT_SEARCH_INPUT_HINTS,
         project_search_input_action_name,
         project_search_input_action_from_name,
     );
     assert_doc_block_matches(
         &blocks,
         "project-search-results",
-        &[
-            ProjectSearchResultsAction::EditQuery,
-            ProjectSearchResultsAction::Close,
-            ProjectSearchResultsAction::MoveUp,
-            ProjectSearchResultsAction::MoveDown,
-            ProjectSearchResultsAction::Open,
-            ProjectSearchResultsAction::ToggleFocus,
-            ProjectSearchResultsAction::ToggleCase,
-            ProjectSearchResultsAction::ToggleWholeWord,
-            ProjectSearchResultsAction::ToggleLiteral,
-        ],
+        &PROJECT_SEARCH_RESULTS_HINTS,
         project_search_results_action_name,
         project_search_results_action_from_name,
+    );
+    assert_doc_block_matches(
+        &blocks,
+        "thread-view",
+        &THREAD_VIEW_KEYS,
+        thread_view_action_name,
+        thread_view_action_from_name,
+    );
+    assert_doc_block_matches(
+        &blocks,
+        "submit-forge",
+        &SUBMIT_FORGE_KEYS,
+        submit_forge_action_name,
+        submit_forge_action_from_name,
+    );
+    assert_doc_block_matches(
+        &blocks,
+        "submit-result",
+        &SUBMIT_RESULT_KEYS,
+        submit_result_action_name,
+        submit_result_action_from_name,
+    );
+    assert_doc_block_matches(
+        &blocks,
+        "cleanup-reviews",
+        &CLEANUP_REVIEWS_KEYS,
+        cleanup_reviews_action_name,
+        cleanup_reviews_action_from_name,
     );
 }

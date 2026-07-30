@@ -617,6 +617,39 @@ fn typing_a_summary_clears_the_hint_and_lets_request_changes_confirm() {
     assert!(app.submit_forge.is_none());
 }
 
+/// The accepted trade for making `[keys.submit-forge]` remappable: the table
+/// is consulted before the char-insert fallback, so a control action bound to
+/// a bare printable key takes that character away from summary typing. Pins
+/// the ordering — flipping it would silently un-remap every letter-keyed
+/// submit-forge override.
+#[test]
+fn a_submit_forge_action_remapped_onto_a_letter_shadows_summary_typing() {
+    let mut keys = crate::config::KeysConfig::default();
+    let mut table = std::collections::BTreeMap::new();
+    table.insert(
+        "cancel".to_string(),
+        vec![crate::config::keys::KeySeqSpec::One(
+            crate::config::keys::ChordSpec {
+                code: KeyCode::Char('q'),
+                mods: KeyModifiers::NONE,
+            },
+        )],
+    );
+    keys.modal.insert("submit-forge".to_string(), table);
+    let (modal_keys, warnings) = crate::ui::modal_keys_config::effective_modal_keys(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+    let mut app = github_review_app(&["src/a.rs"]);
+    app.modal_keys = modal_keys;
+    app.open_submit_forge();
+    handle_submit_forge_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+    );
+    assert_eq!(app.mode, Mode::Normal, "`q` must cancel, not type");
+    assert!(app.submit_forge.is_none());
+}
+
 // -- confirm on the fake path sends nothing (no live backend) ----------------
 
 // -- scrollable preview + overflow markers -----------------------------------

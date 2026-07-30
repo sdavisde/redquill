@@ -362,6 +362,52 @@ fn switcher_mode_hints() {
     );
 }
 
+/// End-to-end for the `[keys.<mode>]` -> footer path: the strip is built
+/// from the *effective* tables, so a remapped modal key reaches the footer
+/// with no per-mode wiring. Uses `Mode::ThreadView` as the representative
+/// PR-flow modal — a strip built from the compiled-in default table instead
+/// would still print `r`.
+#[test]
+fn a_remapped_modal_key_shows_up_in_that_modes_hint_strip() {
+    let mut keys = crate::config::KeysConfig::default();
+    let mut table = std::collections::BTreeMap::new();
+    table.insert(
+        "reply".to_string(),
+        vec![crate::config::keys::KeySeqSpec::One(
+            crate::config::keys::ChordSpec {
+                code: KeyCode::Char('a'),
+                mods: KeyModifiers::NONE,
+            },
+        )],
+    );
+    keys.modal.insert("thread-view".to_string(), table);
+    let (modal_keys, warnings) = crate::ui::modal_keys_config::effective_modal_keys(&keys);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+    let km = Keymap::default_map();
+    let entries = build_hints(
+        Mode::ThreadView,
+        FooterFlags {
+            staging_allowed: true,
+            code_intel_allowed: true,
+            push_publishes: false,
+            viewing_commit: false,
+            help_open: false,
+            project_search_focus: SearchFocus::Input,
+            review_session: true,
+            web_target: None,
+        },
+        None,
+        &km,
+        &modal_keys,
+    );
+    let reply = entries
+        .iter()
+        .find(|e| e.label == "reply")
+        .expect("the thread overlay's reply hint");
+    assert_eq!(reply.key, "a");
+}
+
 #[test]
 fn search_mode_has_no_hint_strip() {
     let km = Keymap::default_map();
