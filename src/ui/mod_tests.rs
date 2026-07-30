@@ -247,8 +247,9 @@ fn help_overlay_shows_staging_rows_on_the_working_tree_target() {
 #[test]
 fn help_overlay_shows_review_rows_and_hides_staging_rows_during_a_review_session() {
     // Tall enough that the overlay's ~3/5-of-screen cap still fits the whole
-    // This context list (workflow header + Navigation..Quit groups).
-    let backend = TestBackend::new(100, 89);
+    // This context list (workflow header + Navigation..Quit groups) — every
+    // row added to a diff-scope group needs ~5/3 more screen rows here.
+    let backend = TestBackend::new(100, 92);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = App::new(vec![sample_file()]);
     app.help.open = true;

@@ -841,6 +841,7 @@ fn commit_view_help_overlay_shows_only_truthful_keys() {
                 | Action::OpenThread
                 | Action::NextThread
                 | Action::PrevThread
+                | Action::OpenPrDescription
         );
         // staging_allowed=false, code_intel_allowed=false in a commit view.
         assert_eq!(

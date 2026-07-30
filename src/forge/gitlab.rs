@@ -9,14 +9,17 @@
 //!   row, so [`RawMr`] just declares the subset this model needs and lets
 //!   serde ignore the rest, same as [`super::github::RawPr`] does structurally
 //!   even though the two commands differ.
-//! - MR detail and the discussions import both go through `glab api`
-//!   (`projects/:id/merge_requests/<iid>[...]`) rather than `mr view`
-//!   porcelain, because `api` returns the GitLab REST response verbatim —
-//!   the only shape confirmed to carry `diff_refs`. `:id` is `glab api`'s
-//!   own placeholder for the current repo's project id (mirroring `gh
-//!   api`'s `{owner}/{repo}` substitution in `github.rs`), so the MR number
-//!   (`u64` end-to-end) stays the only variable part of the path — no argv
-//!   is ever string-assembled from caller input.
+//! - The `diff_refs` detail read and the discussions import both go through
+//!   `glab api` (`projects/:id/merge_requests/<iid>[...]`) rather than `mr
+//!   view` porcelain, because `api` returns the GitLab REST response
+//!   verbatim — the only shape confirmed to carry `diff_refs`. `:id` is
+//!   `glab api`'s own placeholder for the current repo's project id
+//!   (mirroring `gh api`'s `{owner}/{repo}` substitution in `github.rs`), so
+//!   the MR number (`u64` end-to-end) stays the only variable part of the
+//!   path — no argv is ever string-assembled from caller input. The
+//!   *description* read ([`mr_description`]) is the one exception: it needs
+//!   no `diff_refs`, so it uses `glab`'s own `mr view -F json` porcelain,
+//!   which is the documented way to read one MR's fields.
 //!
 //! **Unverified against a real `glab`**: this machine has no `glab` on
 //! `PATH`, so every argv shape and field name here is built from documented
@@ -63,7 +66,7 @@ use super::diagnose::submit_error_headline;
 use super::process::{harden_glab, run_captured_with_timeout, run_with_input_and_timeout};
 use super::submit::SubmitReport;
 use super::threads::{Thread, ThreadAnchor, ThreadComment};
-use super::{ForgeError, PR_LIST_CAP, PullRequest};
+use super::{ForgeError, PR_LIST_CAP, PrDetail, PullRequest};
 
 /// How long a `glab` read invocation (list, detail, discussions) may run
 /// before it's treated as failed and killed. Same budget `github.rs` uses
@@ -345,6 +348,101 @@ pub fn mr_detail(iid: u64) -> Result<MrDetail, ForgeError> {
 
     let json = String::from_utf8_lossy(&output.stdout);
     parse_mr_detail_json(&json)
+}
+
+// -- MR description (the detail read behind the description overlay) -----------
+
+/// Builds the fixed argv for `glab mr view <iid> -F json`. Unlike
+/// [`mr_detail_command`] this goes through `mr view` rather than `glab api`:
+/// the porcelain's JSON output is `glab`'s own documented way to read one
+/// MR's fields (`description` included), and no `diff_refs` is needed here —
+/// that was the only reason `mr_detail` reaches for `api`. The MR iid is a
+/// `u64` end-to-end, so the argv's only variable part can't be anything but
+/// digits, and `glab` infers the project from the working directory.
+/// Read-only: `mr view` never writes to the MR.
+pub fn mr_description_command(iid: u64) -> Command {
+    let mut cmd = Command::new("glab");
+    cmd.args(["mr", "view", &iid.to_string(), "-F", "json"]);
+    harden_glab(&mut cmd);
+    cmd
+}
+
+/// The raw shape of `glab mr view -F json`'s object — GitLab's full
+/// `MergeRequest` resource trimmed to the fields the description overlay
+/// needs (serde ignores the rest, same convention [`RawMr`] follows).
+/// `description` is `#[serde(default)]` because GitLab sends `null` for an
+/// MR with none, and an `Option` collapsed to `""` keeps the model's `body`
+/// a plain `String`.
+#[derive(Debug, Deserialize)]
+struct RawMrDescription {
+    iid: u64,
+    title: String,
+    author: RawAuthor,
+    source_branch: String,
+    target_branch: String,
+    #[serde(default)]
+    description: Option<String>,
+    /// Both draft spellings, combined exactly as [`RawMr`] does.
+    #[serde(default)]
+    draft: Option<bool>,
+    #[serde(default)]
+    work_in_progress: Option<bool>,
+    updated_at: String,
+}
+
+/// Parses `glab mr view <iid> -F json`'s stdout into the same [`PrDetail`]
+/// `github.rs` produces: `number` <- `iid`, `author` <- `author.username`,
+/// `head_ref`/`base_ref` <- `source_branch`/`target_branch`, `body` <-
+/// `description` (a `null`/absent description reads as empty). Pure —
+/// fixture-tested.
+pub fn parse_mr_description_json(json: &str) -> Result<PrDetail, ForgeError> {
+    let raw: RawMrDescription = serde_json::from_str(json).map_err(|e| ForgeError::Parse {
+        cli: "glab",
+        message: e.to_string(),
+    })?;
+    Ok(PrDetail {
+        number: raw.iid,
+        title: raw.title,
+        author: raw.author.username,
+        base_ref: raw.target_branch,
+        head_ref: raw.source_branch,
+        body: raw.description.unwrap_or_default(),
+        is_draft: raw.draft.or(raw.work_in_progress).unwrap_or(false),
+        updated_at: raw.updated_at,
+    })
+}
+
+/// Runs the MR description fetch and returns the typed detail. The only
+/// function in this pair that spawns a process — kept thin and deliberately
+/// untested, same as [`list_open_mrs`].
+pub fn mr_description(iid: u64) -> Result<PrDetail, ForgeError> {
+    let mut cmd = mr_description_command(iid);
+    let output = run_captured_with_timeout(&mut cmd, READ_TIMEOUT).map_err(|source| {
+        if source.kind() == std::io::ErrorKind::NotFound {
+            ForgeError::CliNotFound { cli: "glab" }
+        } else {
+            ForgeError::Spawn {
+                cli: "glab",
+                source,
+            }
+        }
+    })?;
+
+    if !output.status.success() {
+        return Err(ForgeError::Command {
+            cli: "glab",
+            command: format!("mr view {iid}"),
+            code: output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_string()),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
+    }
+
+    let json = String::from_utf8_lossy(&output.stdout);
+    parse_mr_description_json(&json)
 }
 
 // -- Discussion-thread import ---------------------------------------------------

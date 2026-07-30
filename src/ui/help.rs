@@ -105,7 +105,7 @@ fn group_of(action: Action) -> &'static str {
         EnterVisual | Compose | EditAnnotation | DeleteAnnotation => "Annotate",
         ToggleStage | StageFile | ToggleStagingPanel | RestoreFile => "Stage",
         ToggleAccept | AcceptFile | ToggleDefer | OpenThread | NextThread | PrevThread
-        | SubmitForgeReview | OpenInBrowser => "Review",
+        | SubmitForgeReview | OpenInBrowser | OpenPrDescription => "Review",
         Search | SearchNext | SearchPrev | SearchWordForward | SearchWordBackward => "Search",
         ToggleList | ToggleHelp | FocusGitPanel | ToggleCommandLog | Refresh | OpenFileFinder
         | OpenProjectSearch | OpenEditor | DismissConfigWarning | OpenReviewLauncher => "Panels",
@@ -182,7 +182,9 @@ fn key_line(key: &str, description: &str, key_width: usize, theme: &Theme) -> Li
 /// - `OpenThread`/`NextThread`/`PrevThread` (`T`/`gt`/`gT`) ride the same
 ///   `review_session` flag: imported forge comment threads only exist inside
 ///   a review session, so outside one the keys are dead weight and are
-///   hidden rather than listed-but-inert.
+///   hidden rather than listed-but-inert. `OpenPrDescription` (`gi`) rides it
+///   too: there is no PR to describe outside a review session, and the same
+///   description is reachable from the launcher's own `d` there.
 /// - `gx` doesn't ride `review_session` at all: it's gated on `web_target`,
 ///   `Some` in any view with a forge counterpart (a PR/MR review, a branch
 ///   review, a commit view — see [`super::app::App::web_target`]) and `None`
@@ -216,6 +218,7 @@ pub(super) fn binding_hidden(
                     | Action::OpenThread
                     | Action::NextThread
                     | Action::PrevThread
+                    | Action::OpenPrDescription
             ))
         || (web_target.is_none() && matches!(action, Action::OpenInBrowser))
 }
@@ -249,7 +252,7 @@ fn modal_hints<A: Clone>(table: &[ModalBinding<A>]) -> Vec<(String, &'static str
 /// applies), so only one of the two ever documents itself here at a time,
 /// exactly like `Action::ToggleStage`/`Action::ToggleAccept`'s mutual
 /// exclusion in [`binding_hidden`].
-fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 18] {
+fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 19] {
     let staging_section = if review_session {
         (
             "Accepted files panel (s, review sessions)",
@@ -297,6 +300,10 @@ fn modal_sections(modal_keys: &ModalKeymaps, review_session: bool) -> [Section; 
         (
             "Thread overlay (T, PR review session)",
             modal_hints(&modal_keys.thread_view),
+        ),
+        (
+            "PR description (gi in a PR review, i on the Pull Requests tab)",
+            modal_hints(&modal_keys.pr_description),
         ),
         (
             "Submit review (U, PR review session)",
@@ -1066,7 +1073,14 @@ mod tests {
     /// `U`'s equivalent gating.
     #[test]
     fn thread_actions_hidden_only_outside_a_review_session() {
-        for action in [Action::OpenThread, Action::NextThread, Action::PrevThread] {
+        for action in [
+            Action::OpenThread,
+            Action::NextThread,
+            Action::PrevThread,
+            // `gi` rides the same flag: outside a review session there is no
+            // PR under review to describe.
+            Action::OpenPrDescription,
+        ] {
             assert!(
                 binding_hidden(action, true, true, false, None),
                 "{action:?} must be hidden outside a review session"

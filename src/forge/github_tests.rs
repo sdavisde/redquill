@@ -145,6 +145,99 @@ fn parse_pr_list_json_rejects_a_row_missing_a_required_field() {
     assert!(matches!(err, ForgeError::Parse { cli: "gh", .. }));
 }
 
+// -- pr_detail_command / parse_pr_detail_json ---------------------------------
+
+/// A captured-shape fixture matching `gh pr view <n> --json
+/// number,title,author,baseRefName,headRefName,body,isDraft,updatedAt`: a
+/// multi-paragraph body, so the parser's line-break preservation is visible.
+const FIXTURE_PR_DETAIL: &str = r#"{
+  "number": 34,
+  "title": "Add widget support",
+  "author": {
+    "id": "MDQ6VXNlcjE=",
+    "is_bot": false,
+    "login": "octocat",
+    "name": "The Octocat"
+  },
+  "baseRefName": "main",
+  "headRefName": "feature/widget",
+  "body": "Adds widgets.\n\n## Why\nBecause gizmos are not enough.",
+  "isDraft": false,
+  "updatedAt": "2026-07-18T12:34:56Z"
+}"#;
+
+#[test]
+fn pr_detail_command_is_a_read_only_view_argv_carrying_only_the_typed_number() {
+    let cmd = pr_detail_command(34);
+    assert_eq!(cmd.get_program(), OsStr::new("gh"));
+    let args: Vec<&OsStr> = cmd.get_args().collect();
+    assert_eq!(
+        args,
+        vec![
+            OsStr::new("pr"),
+            OsStr::new("view"),
+            OsStr::new("34"),
+            OsStr::new("--json"),
+            OsStr::new(PR_DETAIL_JSON_FIELDS),
+        ]
+    );
+    // No `--web`: this read must never hand anything to a browser.
+    assert!(!args.iter().any(|a| *a == OsStr::new("--web")));
+    let envs: Vec<_> = cmd.get_envs().collect();
+    assert!(envs.contains(&(OsStr::new("GH_PROMPT_DISABLED"), Some(OsStr::new("1")))));
+    assert!(envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))));
+}
+
+#[test]
+fn parse_pr_detail_json_maps_a_fixture_including_the_body_verbatim() {
+    let detail = parse_pr_detail_json(FIXTURE_PR_DETAIL).unwrap();
+    assert_eq!(detail.number, 34);
+    assert_eq!(detail.title, "Add widget support");
+    assert_eq!(detail.author, "octocat");
+    assert_eq!(detail.base_ref, "main");
+    assert_eq!(detail.head_ref, "feature/widget");
+    assert!(!detail.is_draft);
+    assert_eq!(detail.updated_at, "2026-07-18T12:34:56Z");
+    // The body's line breaks survive: the overlay renders them as-is, so a
+    // parser that collapsed or trimmed them would change what's on screen.
+    assert_eq!(
+        detail.body,
+        "Adds widgets.\n\n## Why\nBecause gizmos are not enough."
+    );
+}
+
+/// An empty body (`""`, what `gh` sends for a description-less PR) and an
+/// absent `body` key (an older `gh`, or a field list without it) must both
+/// parse to an empty body rather than failing the whole read — the overlay's
+/// "no description" line depends on this.
+#[test]
+fn parse_pr_detail_json_reads_an_empty_or_absent_body_as_empty() {
+    let cases = [
+        r#"{"number":7,"title":"t","author":{"login":"o"},"baseRefName":"main","headRefName":"h","body":"","isDraft":true,"updatedAt":"u"}"#,
+        r#"{"number":7,"title":"t","author":{"login":"o"},"baseRefName":"main","headRefName":"h","isDraft":true,"updatedAt":"u"}"#,
+    ];
+    for json in cases {
+        let detail = parse_pr_detail_json(json).unwrap_or_else(|e| panic!("{json}: {e}"));
+        assert_eq!(detail.number, 7);
+        assert!(detail.is_draft);
+        assert!(detail.body.is_empty(), "{json}");
+    }
+}
+
+#[test]
+fn parse_pr_detail_json_rejects_malformed_json_and_a_missing_required_field() {
+    for json in [
+        "not json",
+        r#"{"title":"t","author":{"login":"o"},"baseRefName":"m","headRefName":"h","isDraft":false,"updatedAt":"u"}"#,
+    ] {
+        let err = parse_pr_detail_json(json).unwrap_err();
+        assert!(
+            matches!(err, ForgeError::Parse { cli: "gh", .. }),
+            "{json}: {err:?}"
+        );
+    }
+}
+
 // -- review_comments_command -------------------------------------------------
 
 #[test]
