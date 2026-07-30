@@ -25,7 +25,7 @@ use super::app::{App, Mode};
 use super::background::TaskId;
 use super::rows::{Row, ThreadLine};
 use super::theme::Theme;
-use super::time_format::{now_unix, relative_time};
+use super::time_format::{now_unix, parse_rfc3339_to_unix, relative_time};
 
 /// A background thread fetch awaiting completion: its [`TaskId`] and the
 /// generation captured at spawn (a straggler from before a bump is dropped).
@@ -451,42 +451,6 @@ impl App {
             self.view.ensure_visible();
         }
     }
-}
-
-/// Parses an RFC 3339 timestamp (`YYYY-MM-DDThh:mm:ss…`, the shape GitHub's
-/// `created_at` uses) into a Unix timestamp in seconds. Timezone-naive: a
-/// trailing `Z`/offset is ignored, which is accurate for the `Z`-suffixed
-/// UTC values GitHub returns and harmless (a few hours' skew at worst) for
-/// the cosmetic relative-time label otherwise. `None` on any shape it can't
-/// read, so the caller falls back to the raw string.
-fn parse_rfc3339_to_unix(s: &str) -> Option<i64> {
-    let (date, time) = s.split_once('T')?;
-    let mut date_parts = date.split('-');
-    let year: i64 = date_parts.next()?.parse().ok()?;
-    let month: u32 = date_parts.next()?.parse().ok()?;
-    let day: u32 = date_parts.next()?.parse().ok()?;
-    // Trim the timezone / fractional-second suffix off the time.
-    let time = &time[..time.find(['Z', '+', '.']).unwrap_or(time.len())];
-    let mut time_parts = time.split(':');
-    let hour: i64 = time_parts.next()?.parse().ok()?;
-    let minute: i64 = time_parts.next()?.parse().ok()?;
-    let second: i64 = time_parts.next().unwrap_or("0").parse().ok()?;
-    let days = days_from_civil(year, month, day);
-    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
-}
-
-/// Days since the Unix epoch for a proleptic-Gregorian date (Howard
-/// Hinnant's `days_from_civil`, public domain — the inverse of
-/// [`super::time_format`]'s `civil_from_days`).
-fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let m = m as i64;
-    let d = d as i64;
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
 }
 
 /// Centers a `width_pct`% x `height_pct`% rect inside `area` (same helper
