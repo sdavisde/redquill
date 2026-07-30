@@ -1,3 +1,7 @@
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
+
 use crate::annotate::{Classification, Side, Target};
 use crate::diff::FileDiff;
 use crate::forge::{SubmitReport, Verdict};
@@ -5,6 +9,7 @@ use crate::git::{DiffTarget, RawFilePatch};
 use crate::review::store::{ForgeMetadata, ForgeProviderKind};
 
 use super::super::app::{App, Mode};
+use super::super::modes::handle_submit_forge_key;
 use super::*;
 
 // -- fixtures ----------------------------------------------------------------
@@ -536,6 +541,233 @@ fn typing_a_summary_clears_the_hint_and_lets_request_changes_confirm() {
 }
 
 // -- confirm on the fake path sends nothing (no live backend) ----------------
+
+// -- scrollable preview + overflow markers -----------------------------------
+
+/// Renders the modal over a `width` x `height` terminal and returns its cell
+/// symbols as one string (the `cleanup_reviews_modal` test idiom).
+fn render_modal(app: &App, width: u16, height: u16) -> String {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let area = Rect::new(0, 0, width, height);
+    terminal.draw(|frame| render(frame, area, app)).unwrap();
+    terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect()
+}
+
+/// A review with `n` annotations spread over three files — enough rows to
+/// overflow any sensibly sized modal.
+fn app_with_many_annotations(n: usize) -> App {
+    let paths = ["src/a.rs", "src/b.rs", "src/c.rs"];
+    let mut app = github_review_app(&paths);
+    for i in 0..n {
+        app.annotations
+            .add(
+                Target::line(paths[i % paths.len()], 2, Side::New),
+                Classification::Issue,
+                format!("comment number {i}"),
+            )
+            .unwrap();
+    }
+    app
+}
+
+#[test]
+fn scroll_geometry_clamps_to_the_content_and_counts_what_is_hidden() {
+    // Content that fits keeps the whole box, never offsets, and hides nothing
+    // — even when a stale offset asks for the bottom.
+    let fits = resolve_scroll(6, 20, u16::MAX);
+    assert_eq!(fits.offset, 0);
+    assert_eq!(fits.body_height, 20);
+    assert_eq!((fits.hidden_above, fits.hidden_below), (0, 0));
+
+    // 40 lines in a 10-row box: two rows go to the markers, so 8 show at once.
+    let top = resolve_scroll(40, 10, 0);
+    assert_eq!(top.body_height, 8);
+    assert_eq!((top.offset, top.hidden_above, top.hidden_below), (0, 0, 32));
+
+    // A mid-scroll offset splits the hidden lines between the two directions.
+    let mid = resolve_scroll(40, 10, 12);
+    assert_eq!(
+        (mid.offset, mid.hidden_above, mid.hidden_below),
+        (12, 12, 20)
+    );
+
+    // An overshoot lands on the last page, with nothing left below.
+    let bottom = resolve_scroll(40, 10, u16::MAX);
+    assert_eq!(
+        (bottom.offset, bottom.hidden_above, bottom.hidden_below),
+        (32, 32, 0)
+    );
+
+    // A box too short to spend rows on markers still scrolls, using them all.
+    let tiny = resolve_scroll(40, 2, u16::MAX);
+    assert_eq!(tiny.body_height, 2);
+    assert_eq!(tiny.offset, 38);
+}
+
+#[test]
+fn overflow_markers_are_shown_only_for_the_clipped_direction() {
+    assert_eq!(below_marker(0), None, "nothing below, no marker");
+    assert_eq!(above_marker(0), None, "nothing above, no marker");
+    let below = below_marker(7).expect("clipped below is marked");
+    assert!(
+        below.contains('7') && below.contains("more lines"),
+        "{below}"
+    );
+    assert!(
+        below.contains('\u{2193}'),
+        "the marker must name the scroll key: {below}"
+    );
+    let above = above_marker(1).expect("clipped above is marked");
+    assert!(
+        above.contains("1 more line above"),
+        "a single hidden line reads singular: {above}"
+    );
+}
+
+#[test]
+fn a_tall_batch_renders_the_overflow_marker_and_scrolls() {
+    let mut app = app_with_many_annotations(40);
+    app.open_submit_forge();
+
+    // Fresh open: clipped below, nothing above.
+    let first = render_modal(&app, 90, 24);
+    assert!(
+        first.contains("more lines"),
+        "a clipped batch must say how much is hidden: {first}"
+    );
+    assert!(
+        !first.contains("above"),
+        "nothing is hidden above at the top of the batch: {first}"
+    );
+
+    // Scrolling down moves the window: the clamped offset advances and the
+    // top marker appears.
+    for _ in 0..5 {
+        app.submit_forge_scroll_down();
+    }
+    let scrolled = render_modal(&app, 90, 24);
+    assert_eq!(app.submit_forge.as_ref().unwrap().scroll.get(), 5);
+    assert!(
+        scrolled.contains("more lines above"),
+        "scrolled down, the lines above must be marked: {scrolled}"
+    );
+
+    // An overshoot is clamped to the last page by the render, and the bottom
+    // marker goes away because nothing is left below.
+    app.submit_forge.as_ref().unwrap().scroll.set(u16::MAX);
+    let bottom = render_modal(&app, 90, 24);
+    let offset = app.submit_forge.as_ref().unwrap().scroll.get();
+    assert!(offset > 0 && offset < u16::MAX, "clamped offset: {offset}");
+    assert!(
+        !bottom.contains("to scroll"),
+        "at the bottom there is nothing more to scroll to: {bottom}"
+    );
+    // Re-rendering at the clamped offset is stable (the clamp is idempotent).
+    render_modal(&app, 90, 24);
+    assert_eq!(app.submit_forge.as_ref().unwrap().scroll.get(), offset);
+}
+
+#[test]
+fn a_short_batch_neither_scrolls_nor_marks_overflow() {
+    let mut app = app_with_many_annotations(1);
+    app.open_submit_forge();
+    // A stale/overshooting offset must not scroll content that already fits.
+    app.submit_forge.as_ref().unwrap().scroll.set(u16::MAX);
+    let content = render_modal(&app, 90, 24);
+    assert_eq!(app.submit_forge.as_ref().unwrap().scroll.get(), 0);
+    assert!(
+        !content.contains("more line"),
+        "everything fits, so no overflow marker: {content}"
+    );
+    assert!(content.contains("comment number 0"));
+}
+
+#[test]
+fn reopening_the_modal_starts_at_the_top() {
+    let mut app = app_with_many_annotations(40);
+    app.open_submit_forge();
+    app.submit_forge_page_down();
+    render_modal(&app, 90, 24);
+    assert!(app.submit_forge.as_ref().unwrap().scroll.get() > 0);
+    app.close_submit_forge();
+    app.open_submit_forge();
+    assert_eq!(
+        app.submit_forge.as_ref().unwrap().scroll.get(),
+        0,
+        "a fresh open starts at the top of the batch"
+    );
+}
+
+#[test]
+fn scroll_keys_move_the_preview_while_printable_keys_still_type_the_summary() {
+    let mut app = app_with_many_annotations(40);
+    app.open_submit_forge();
+    // Record a viewport so PageDown has a real page to move by.
+    render_modal(&app, 90, 24);
+
+    // Down scrolls and leaves the summary alone.
+    handle_submit_forge_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let state = app.submit_forge.as_ref().unwrap();
+    assert_eq!(state.scroll.get(), 1);
+    assert_eq!(
+        state.summary, "",
+        "a scroll key must not type into the summary"
+    );
+
+    // `j`/`k` belong to the summary, not to the scroll — they must type.
+    handle_submit_forge_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+    );
+    handle_submit_forge_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+    );
+    let state = app.submit_forge.as_ref().unwrap();
+    assert_eq!(state.summary, "jk");
+    assert_eq!(state.scroll.get(), 1, "typing must not move the preview");
+
+    // PageDown pages by the recorded viewport, Up steps back.
+    let page = app.submit_forge.as_ref().unwrap().viewport.get();
+    assert!(page > 1, "the render must record a real viewport");
+    handle_submit_forge_key(
+        &mut app,
+        KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+    );
+    assert_eq!(app.submit_forge.as_ref().unwrap().scroll.get(), 1 + page);
+    handle_submit_forge_key(&mut app, KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+    assert_eq!(app.submit_forge.as_ref().unwrap().scroll.get(), 1);
+    handle_submit_forge_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.submit_forge.as_ref().unwrap().scroll.get(), 0);
+}
+
+#[test]
+fn a_blocked_confirm_scrolls_its_hint_into_view_on_a_tall_batch() {
+    let mut app = app_with_many_annotations(40);
+    app.open_submit_forge();
+    render_modal(&app, 90, 24);
+    // Select request-changes and confirm with no summary: blocked, hinted.
+    app.submit_forge_verdict_next();
+    app.submit_forge_verdict_next();
+    app.submit_forge_confirm();
+    assert_eq!(app.mode, Mode::SubmitForge);
+
+    // The hint is the last line of the content, so the modal must be showing
+    // its bottom for the reviewer to read why the confirm did nothing.
+    let content = render_modal(&app, 90, 24);
+    assert!(
+        app.submit_forge.as_ref().unwrap().scroll.get() > 0,
+        "the hint's own line was off-screen and must be scrolled to"
+    );
+    assert!(content.contains("needs a summary"), "hint not visible");
+}
 
 #[test]
 fn confirm_without_a_live_submitter_backend_sends_nothing() {

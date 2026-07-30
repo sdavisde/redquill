@@ -1244,11 +1244,13 @@ pub(super) static THREAD_VIEW_KEYS: LazyLock<Vec<ModalBinding<ThreadViewAction>>
 
 /// What a control key does in the submit-review modal
 /// ([`super::app::Mode::SubmitForge`]): confirm the publish, cancel it, cycle
-/// the verdict picker, or delete a summary character. Free-text like
-/// Compose/Search — every printable char extends the summary (a hand-written
-/// fallback in [`super::modes::handle_submit_forge_key`], never remappable) —
-/// so this table documents only the control keys. Not config-remappable yet;
-/// see the module doc.
+/// the verdict picker, scroll the batch preview, or delete a summary
+/// character. Free-text like Compose/Search — every printable char extends the
+/// summary (a hand-written fallback in
+/// [`super::modes::handle_submit_forge_key`], never remappable) — so this
+/// table documents only the control keys, and the scroll keys are deliberately
+/// the arrow/page keys rather than `j`/`k`, which belong to the summary. Not
+/// config-remappable yet; see the module doc.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SubmitForgeAction {
     /// Publishes the previewed batch (see
@@ -1261,6 +1263,14 @@ pub(super) enum SubmitForgeAction {
     VerdictNext,
     /// Cycles the verdict picker backward.
     VerdictPrev,
+    /// Scrolls the batch preview down one line.
+    ScrollDown,
+    /// Scrolls the batch preview up one line.
+    ScrollUp,
+    /// Scrolls the batch preview down a full viewport.
+    PageDown,
+    /// Scrolls the batch preview up a full viewport.
+    PageUp,
     /// Deletes the last summary character.
     DeleteChar,
 }
@@ -1301,6 +1311,33 @@ pub(super) static SUBMIT_FORGE_KEYS: LazyLock<Vec<ModalBinding<SubmitForgeAction
                 description: "Previous verdict",
                 keys: vec![ModalKey::plain(KeyCode::BackTab)],
                 action: SubmitForgeAction::VerdictPrev,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Scroll the batch preview down",
+                keys: vec![ModalKey::plain(KeyCode::Down)],
+                action: SubmitForgeAction::ScrollDown,
+                footer: Some(FooterHint {
+                    rank: 4,
+                    label: "scroll",
+                }),
+            },
+            ModalBinding {
+                description: "Scroll the batch preview up",
+                keys: vec![ModalKey::plain(KeyCode::Up)],
+                action: SubmitForgeAction::ScrollUp,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Scroll the batch preview down a page",
+                keys: vec![ModalKey::plain(KeyCode::PageDown)],
+                action: SubmitForgeAction::PageDown,
+                footer: None,
+            },
+            ModalBinding {
+                description: "Scroll the batch preview up a page",
+                keys: vec![ModalKey::plain(KeyCode::PageUp)],
+                action: SubmitForgeAction::PageUp,
                 footer: None,
             },
             ModalBinding {
