@@ -298,7 +298,7 @@ impl App {
     /// list backs the active tab — the one point `Enter`
     /// ([`App::review_launcher_confirm`]) and the Commits-tab prefetch check
     /// route through.
-    fn review_launcher_real_index(&self, cursor: usize) -> Option<usize> {
+    pub(super) fn review_launcher_real_index(&self, cursor: usize) -> Option<usize> {
         match &self.launcher_filter {
             Some(f) => f.real_index(cursor),
             None => (cursor < self.review_launcher_raw_row_count()).then_some(cursor),

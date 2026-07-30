@@ -756,6 +756,7 @@ impl App {
             | Mode::EndReview { .. }
             | Mode::ConfirmRemoteOp { .. }
             | Mode::ThreadView
+            | Mode::PrDescription { .. }
             | Mode::SubmitForge
             | Mode::CleanupReviews { .. }
             | Mode::ConfirmRestore { .. } => {}

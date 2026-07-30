@@ -18,8 +18,9 @@ use super::App;
 use super::modal_keys::{
     self, AcceptedPanelAction, CleanupReviewsAction, CommitMessageAction, ComposeAction,
     ConfirmRemoteOpAction, EndReviewAction, FilterEditAction, FinderAction, LauncherAction,
-    ListAction, PeekAction, ProjectSearchInputAction, ProjectSearchResultsAction, RestoreAction,
-    SearchAction, StagingAction, SubmitForgeAction, SwitcherAction, ThreadViewAction,
+    ListAction, PeekAction, PrDescriptionAction, ProjectSearchInputAction,
+    ProjectSearchResultsAction, RestoreAction, SearchAction, StagingAction, SubmitForgeAction,
+    SwitcherAction, ThreadViewAction,
 };
 use super::motion;
 
@@ -582,6 +583,31 @@ pub(super) fn handle_thread_view_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// Handles one key event while [`super::Mode::PrDescription`] is active (the
+/// read-only PR description overlay): `j`/`k`/arrows scroll (count-prefixable
+/// like every other motion), `Enter` starts the review when the overlay was
+/// opened from the launcher, `q`/`Esc` close. See
+/// [`modal_keys::PR_DESCRIPTION_KEYS`].
+pub(super) fn handle_pr_description_key(app: &mut App, key: KeyEvent) {
+    let count = match intercept_motion_count(app, key) {
+        MotionIntercept::Handled => return,
+        MotionIntercept::Resolve(count) => count,
+    };
+    let Some(action) = modal_keys::resolve(&app.modal_keys.pr_description, key) else {
+        return;
+    };
+    match action {
+        PrDescriptionAction::ScrollDown => {
+            apply_motion_n_times(count, || app.pr_description_scroll_down())
+        }
+        PrDescriptionAction::ScrollUp => {
+            apply_motion_n_times(count, || app.pr_description_scroll_up())
+        }
+        PrDescriptionAction::StartReview => app.pr_description_confirm(),
+        PrDescriptionAction::Close => app.close_pr_description(),
+    }
+}
+
 /// Handles one key event while [`super::Mode::SubmitForge`] is active (the
 /// submit-review modal): printable chars extend the optional summary (never
 /// remappable), and the control keys — Enter confirms the publish, Esc
@@ -775,6 +801,7 @@ pub(super) fn handle_review_launcher_key(app: &mut App, key: KeyEvent) {
         LauncherAction::ToggleAllCommits => app.review_launcher_toggle_all_commits(),
         LauncherAction::Cleanup => app.open_cleanup_reviews(),
         LauncherAction::Refresh => app.review_launcher_refresh_prs(),
+        LauncherAction::Details => app.open_pr_description_from_launcher(),
     }
 }
 

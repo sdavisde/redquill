@@ -157,6 +157,17 @@ pub enum Mode {
     /// `T` on a line/file that has a thread; the focused thread and scroll
     /// live in [`App::thread_view`].
     ThreadView,
+    /// The read-only PR/MR description overlay is open (see
+    /// [`super::pr_description`]). Opened either with `d` on the Review
+    /// launcher's Pull Requests tab or with `gi` inside a PR review session;
+    /// `ret` is which of those to restore on close, captured at open time (the
+    /// same origin-restore contract [`Mode::CleanupReviews`] carries, extended
+    /// to two possible origins). Which PR it shows, and its scroll offset,
+    /// live in [`App::pr_description`] — a `Cell`-based scroll pair can't ride
+    /// in a `Copy` mode payload.
+    PrDescription {
+        ret: super::pr_description::PrDescriptionReturn,
+    },
     /// The submit-review modal is open (`submit-forge-review`, PR review
     /// sessions only): a grouped batch preview of every unpublished comment
     /// and reply, a capability-driven verdict picker, and an optional
@@ -615,6 +626,25 @@ pub struct App {
     /// The expandable thread-view overlay's state, `Some` only while
     /// [`Mode::ThreadView`] is active (see [`super::forge_threads`]).
     pub(super) thread_view: Option<super::forge_threads::ThreadViewState>,
+    /// The PR description overlay's state (which PR, and its clamped scroll
+    /// offset), `Some` only while [`Mode::PrDescription`] is active (see
+    /// [`super::pr_description`]).
+    pub(super) pr_description: Option<super::pr_description::PrDescriptionState>,
+    /// Every PR/MR description read this process has resolved, keyed by PR
+    /// number and kept for the process lifetime — reopening a PR paints from
+    /// here with no second round trip, and a body is only ever looked up under
+    /// the number it was fetched for (see [`super::pr_description`]'s module
+    /// doc for the caching and degradation contracts).
+    pub(super) pr_details: HashMap<u64, super::pr_description::PrDetailOutcome>,
+    /// The background poller description reads run through, separate from the
+    /// other forge pollers so its result drains independently.
+    pub(super) pr_detail_tasks: BackgroundTasks<Result<crate::forge::PrDetail, String>>,
+    /// The single in-flight description read, if any (single-flight, mirroring
+    /// `thread_fetch_in_flight`).
+    pub(super) pr_detail_in_flight: Option<super::pr_description::InFlightPrDetailFetch>,
+    /// Bumped on every description read so a straggler spawned before the bump
+    /// is dropped on arrival (mirrors `thread_fetch_generation`).
+    pub(super) pr_detail_generation: u64,
     /// The submit-review modal's state, `Some` only while
     /// [`Mode::SubmitForge`] is active (see [`super::forge_submit`]).
     pub(super) submit_forge: Option<super::forge_submit::SubmitForgeState>,
@@ -905,6 +935,11 @@ impl App {
             web_target_noun: "page",
             threads_unavailable: false,
             thread_view: None,
+            pr_description: None,
+            pr_details: HashMap::new(),
+            pr_detail_tasks: BackgroundTasks::new(),
+            pr_detail_in_flight: None,
+            pr_detail_generation: 0,
             submit_forge: None,
             forge_submit_tasks: BackgroundTasks::new(),
             forge_submit_in_flight: None,
@@ -1376,6 +1411,7 @@ impl App {
             Action::PrevThread => self.prev_thread(),
             Action::SubmitForgeReview => self.open_submit_forge(),
             Action::OpenInBrowser => self.open_in_browser(),
+            Action::OpenPrDescription => self.open_pr_description_in_session(),
             // `Quit`/`QuitDiscard` end the session; `OpenEditor` suspends the
             // TUI to spawn the configured editor. Both are intercepted by
             // `super::dispatch_key` before reaching here (see `Action::Quit`'s
