@@ -152,6 +152,12 @@ replies, a verdict, an optional summary — is local until you confirm it
 from the submit modal. Nothing is ever sent on quit, and nothing is sent
 until that confirm.
 
+A batch taller than the modal scrolls — `↑`/`↓` by a line, `PageUp`/
+`PageDown` by a page — and a marker line names how many lines are hidden
+above and below, so nothing you're about to send is clipped out of sight.
+Printable keys still type the summary, which is why the scroll keys are the
+arrow/page keys rather than `j`/`k`.
+
 - **GitHub** posts one review (the reviews endpoint carries every
   positioned comment plus the verdict and summary at once), then any
   file-level comments and thread replies follow one at a time. Verdicts:

@@ -611,7 +611,8 @@ pub(super) fn handle_pr_description_key(app: &mut App, key: KeyEvent) {
 /// Handles one key event while [`super::Mode::SubmitForge`] is active (the
 /// submit-review modal): printable chars extend the optional summary (never
 /// remappable), and the control keys — Enter confirms the publish, Esc
-/// cancels, Tab/Shift-Tab cycle the verdict, Backspace deletes — resolve
+/// cancels, Tab/Shift-Tab cycle the verdict, the arrow/page keys scroll a
+/// taller-than-the-modal batch, Backspace deletes — resolve
 /// against `app.modal_keys.submit_forge` first. See
 /// [`modal_keys::SUBMIT_FORGE_KEYS`] (control keys only; free-text chars are
 /// the exemption every free-text mode's hint table carries). Confirm is the
@@ -632,6 +633,10 @@ pub(super) fn handle_submit_forge_key(app: &mut App, key: KeyEvent) {
         SubmitForgeAction::Cancel => app.close_submit_forge(),
         SubmitForgeAction::VerdictNext => app.submit_forge_verdict_next(),
         SubmitForgeAction::VerdictPrev => app.submit_forge_verdict_prev(),
+        SubmitForgeAction::ScrollDown => app.submit_forge_scroll_down(),
+        SubmitForgeAction::ScrollUp => app.submit_forge_scroll_up(),
+        SubmitForgeAction::PageDown => app.submit_forge_page_down(),
+        SubmitForgeAction::PageUp => app.submit_forge_page_up(),
         SubmitForgeAction::DeleteChar => app.submit_forge_delete_char(),
     }
 }

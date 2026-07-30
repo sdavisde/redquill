@@ -16,11 +16,13 @@
 //! submitter, so a fake-provider test exercises the marking/persist/split logic
 //! via [`App::apply_submit_outcome`] directly without spawning anything.
 
+use std::cell::Cell;
+
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::annotate::{Annotation, Classification, Target};
 use crate::forge::{Capabilities, SubmitBatch, SubmitReplyItem, SubmitReport, Verdict};
@@ -28,6 +30,7 @@ use crate::review::store::ForgeProviderKind;
 
 use super::app::{App, Mode};
 use super::background::TaskId;
+use super::theme::Theme;
 
 /// A background submit run awaiting completion: its [`TaskId`] and the
 /// generation captured at spawn (a straggler from a superseded run is
@@ -58,6 +61,14 @@ pub(super) struct SubmitForgeState {
     /// blocked (e.g. request-changes with no summary). Cleared the moment the
     /// reviewer edits the verdict or summary.
     pub(super) hint: Option<String>,
+    /// The preview's vertical scroll offset, advanced by the scroll keys and
+    /// clamped to the real rendered line count by [`render`], which writes the
+    /// clamped value back — the batch's height isn't known until the frame is
+    /// laid out (the help overlay's `Cell` model).
+    pub(super) scroll: Cell<u16>,
+    /// The scrollable body's height, recorded each frame so PageUp/PageDown
+    /// page by a real viewport.
+    pub(super) viewport: Cell<u16>,
 }
 
 impl SubmitForgeState {
@@ -68,6 +79,99 @@ impl SubmitForgeState {
             .copied()
             .unwrap_or(Verdict::Comment)
     }
+}
+
+/// One frame's scroll geometry for the modal body: the clamped offset, the
+/// body's height, and how many rendered lines are hidden above and below it.
+/// Pure, so the clamp and the overflow decision are unit-tested without
+/// building a frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct SubmitScroll {
+    pub(super) offset: u16,
+    pub(super) body_height: u16,
+    pub(super) hidden_above: u16,
+    pub(super) hidden_below: u16,
+}
+
+/// Resolves the body geometry for `total` rendered lines inside an
+/// `inner_height`-row modal at the requested offset. Content that fits gets
+/// the whole box and no offset; content that overflows gives up one row at the
+/// top and one at the bottom for the overflow markers — both for the whole
+/// scroll, so the body never changes height (and the text never shifts) as the
+/// markers come and go. `requested` is clamped, so `u16::MAX` means "bottom".
+pub(super) fn resolve_scroll(total: u16, inner_height: u16, requested: u16) -> SubmitScroll {
+    if total <= inner_height {
+        return SubmitScroll {
+            offset: 0,
+            body_height: inner_height,
+            hidden_above: 0,
+            hidden_below: 0,
+        };
+    }
+    // Below three rows there is no room to spend on markers; the body keeps
+    // every row it has and scrolls unmarked.
+    let body_height = if inner_height >= 3 {
+        inner_height - 2
+    } else {
+        inner_height
+    };
+    let offset = requested.min(total.saturating_sub(body_height));
+    SubmitScroll {
+        offset,
+        body_height,
+        hidden_above: offset,
+        hidden_below: total.saturating_sub(offset.saturating_add(body_height)),
+    }
+}
+
+/// `s` when `n` isn't one, for the marker lines' line count.
+fn plural(n: u16) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
+/// The clipped-below marker, or `None` when the last line is on screen.
+fn below_marker(hidden: u16) -> Option<String> {
+    (hidden > 0).then(|| {
+        format!(
+            "\u{25be} {hidden} more line{} \u{2014} \u{2193} to scroll",
+            plural(hidden)
+        )
+    })
+}
+
+/// The clipped-above marker, or `None` when the first line is on screen.
+fn above_marker(hidden: u16) -> Option<String> {
+    (hidden > 0).then(|| format!("\u{25b4} {hidden} more line{} above", plural(hidden)))
+}
+
+/// Splits `line` into rows no wider than `width`, preserving each character's
+/// style. The modal pre-wraps rather than handing `Paragraph` a `Wrap`, so the
+/// line count the scroll math clamps against is the row count the terminal
+/// really shows — a re-flow behind the offset would put the bottom of a long
+/// batch out of reach and understate the "N more lines" count.
+fn wrap_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
+    let chars: Vec<(char, Style)> = line
+        .spans
+        .iter()
+        .flat_map(|span| span.content.chars().map(move |c| (c, span.style)))
+        .collect();
+    if chars.is_empty() {
+        return vec![Line::from(String::new())];
+    }
+    let text: String = chars.iter().map(|(c, _)| *c).collect();
+    super::textwrap::wrap_ranges(&text, width)
+        .into_iter()
+        .map(|(start, end)| {
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            for (c, style) in &chars[start..end] {
+                match spans.last_mut() {
+                    Some(prev) if prev.style == *style => prev.content.to_mut().push(*c),
+                    _ => spans.push(Span::styled(c.to_string(), *style)),
+                }
+            }
+            Line::from(spans)
+        })
+        .collect()
 }
 
 /// Which verdicts a provider supports, from its [`Capabilities`] — Comment is
@@ -286,6 +390,9 @@ impl App {
             target_line,
             disclosure,
             hint: None,
+            // A fresh open starts at the top of the batch.
+            scroll: Cell::new(0),
+            viewport: Cell::new(0),
         });
         self.mode = Mode::SubmitForge;
     }
@@ -315,6 +422,38 @@ impl App {
             let n = state.verdicts.len();
             state.verdict_index = (state.verdict_index + n - 1) % n;
             state.hint = None;
+        }
+    }
+
+    /// Scrolls the preview down one line. The offset is clamped to the content
+    /// by [`render`], so an overshoot here can't run off the end.
+    pub(super) fn submit_forge_scroll_down(&mut self) {
+        if let Some(state) = self.submit_forge.as_ref() {
+            state.scroll.set(state.scroll.get().saturating_add(1));
+        }
+    }
+
+    /// Scrolls the preview up one line.
+    pub(super) fn submit_forge_scroll_up(&mut self) {
+        if let Some(state) = self.submit_forge.as_ref() {
+            state.scroll.set(state.scroll.get().saturating_sub(1));
+        }
+    }
+
+    /// Scrolls the preview down a full viewport (the height the last frame
+    /// recorded).
+    pub(super) fn submit_forge_page_down(&mut self) {
+        if let Some(state) = self.submit_forge.as_ref() {
+            let page = state.viewport.get().max(1);
+            state.scroll.set(state.scroll.get().saturating_add(page));
+        }
+    }
+
+    /// Scrolls the preview up a full viewport.
+    pub(super) fn submit_forge_page_up(&mut self) {
+        if let Some(state) = self.submit_forge.as_ref() {
+            let page = state.viewport.get().max(1);
+            state.scroll.set(state.scroll.get().saturating_sub(page));
         }
     }
 
@@ -349,6 +488,10 @@ impl App {
         if verdict == Verdict::RequestChanges && summary.is_empty() {
             state.hint =
                 Some("Request changes needs a summary explaining what to change.".to_string());
+            // The hint is the last line of the content, so jumping to the
+            // bottom (the render clamps it) puts it on screen for a batch too
+            // tall to fit.
+            state.scroll.set(u16::MAX);
             return;
         }
         self.submit_forge = None;
@@ -564,26 +707,17 @@ fn centered(area: Rect, width_pct: u16, height_pct: u16) -> Rect {
     area
 }
 
-/// Renders the submit-review modal, centered over `area`. A no-op when the
-/// modal isn't open. Shows the target line, the verdict picker (selected
-/// verdict emphasized), the grouped-by-file batch preview with local-only and
-/// file-comment labels, the summary being typed, and an unmistakable
-/// nothing-sent-until-confirm footer.
-pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let Some(state) = &app.submit_forge else {
-        return;
-    };
-    let theme = &app.theme;
-    let popup = centered(area, 72, 72);
-    frame.render_widget(Clear, popup);
-
-    let preview = build_preview(
-        app.annotations.unpublished(),
-        app.replies
-            .unpublished()
-            .map(|r| (r.thread_id, r.body.as_str())),
-    );
-
+/// Builds the modal's body, top to bottom: the target line and submit-shape
+/// disclosure, the verdict picker (selected verdict emphasized), the
+/// grouped-by-file batch preview with local-only and file-comment labels, the
+/// summary being typed, and a blocked-confirm validation hint. Split out from
+/// [`render`] so the rendered line count — what the scroll math clamps against
+/// — is a value the caller holds rather than a side effect of drawing.
+fn build_lines(
+    state: &SubmitForgeState,
+    preview: &SubmitPreview,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = Vec::new();
 
     // Target line — which PR this lands on.
@@ -713,16 +847,89 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         )));
     }
 
+    lines
+}
+
+/// Renders the submit-review modal, centered over `area`. A no-op when the
+/// modal isn't open. Shows the batch (see [`build_lines`]) and an unmistakable
+/// nothing-sent-until-confirm footer. A batch taller than the modal scrolls
+/// (`Up`/`Down`, `PageUp`/`PageDown`) with a marker row naming how many lines
+/// are hidden in each direction, so nothing about what will be sent is clipped
+/// silently.
+pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(state) = &app.submit_forge else {
+        return;
+    };
+    let theme = &app.theme;
+    let popup = centered(area, 72, 72);
+    frame.render_widget(Clear, popup);
+
+    let preview = build_preview(
+        app.annotations.unpublished(),
+        app.replies
+            .unpublished()
+            .map(|r| (r.thread_id, r.body.as_str())),
+    );
+
     let block = Block::default()
         .borders(Borders::ALL)
         .title("Submit review \u{2014} nothing is sent until you confirm")
+        // Kept under the narrow modal's title width: the "type summary"
+        // affordance the scroll hint displaces is already spelled out by the
+        // summary field's own placeholder, and the page keys by the `?` help.
         .title_bottom(Line::from(
-            " Enter submit  Esc cancel  Tab/Shift-Tab verdict  type summary ",
+            " Enter submit  Esc cancel  Tab/Shift-Tab verdict  \u{2191}\u{2193} scroll ",
         ));
-    let paragraph = Paragraph::new(lines)
-        .block(block)
-        .wrap(Wrap { trim: false });
-    frame.render_widget(paragraph, popup);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let lines: Vec<Line> = build_lines(state, &preview, theme)
+        .into_iter()
+        .flat_map(|line| wrap_line(&line, inner.width as usize))
+        .collect();
+
+    let total = u16::try_from(lines.len()).unwrap_or(u16::MAX);
+    let view = resolve_scroll(total, inner.height, state.scroll.get());
+    state.scroll.set(view.offset);
+    state.viewport.set(view.body_height.max(1));
+
+    // Two rows means `resolve_scroll` reserved the marker rows; otherwise the
+    // whole box is body.
+    let body = if inner.height.saturating_sub(view.body_height) == 2 {
+        let [top, body, bottom] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .areas(inner);
+        if let Some(text) = above_marker(view.hidden_above) {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    text,
+                    Style::default()
+                        .fg(theme.gutter)
+                        .add_modifier(Modifier::DIM),
+                ))),
+                top,
+            );
+        }
+        if let Some(text) = below_marker(view.hidden_below) {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    text,
+                    Style::default()
+                        .fg(theme.hunk_header)
+                        .add_modifier(Modifier::BOLD),
+                ))),
+                bottom,
+            );
+        }
+        body
+    } else {
+        inner
+    };
+
+    frame.render_widget(Paragraph::new(lines).scroll((view.offset, 0)), body);
 }
 
 #[cfg(test)]
