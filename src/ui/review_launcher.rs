@@ -264,7 +264,12 @@ impl App {
     /// Builds the active tab's `/`-filterable labels: branch names on the
     /// Branches tab, "`<short-sha> <subject>`" on the Commits tab —
     /// whichever source [`App::launcher_commits_rows`] currently selects —
-    /// or "`#<number> <title>`" on the Pull Requests tab.
+    /// or "`#<number> <title> <author> <head_ref>`" on the Pull Requests
+    /// tab. Author and head branch are folded into the haystack so `/dana`
+    /// or `/porcelain` narrow the list even though neither is part of the
+    /// displayed title — the label only ever feeds ranking (never rendered
+    /// directly; row display pulls straight from the `PullRequest` fields),
+    /// so appending hidden match text here doesn't affect what's shown.
     fn review_launcher_filter_labels(&self) -> Vec<String> {
         let Mode::ReviewLauncher { tab, .. } = self.mode else {
             return Vec::new();
@@ -283,7 +288,7 @@ impl App {
             LauncherTab::PullRequests => self
                 .launcher_prs_rows()
                 .iter()
-                .map(|pr| format!("#{} {}", pr.number, pr.title))
+                .map(|pr| format!("#{} {} {} {}", pr.number, pr.title, pr.author, pr.head_ref))
                 .collect(),
         }
     }
@@ -2264,11 +2269,15 @@ index 111..222 100644
     }
 
     fn pr(number: u64, title: &str) -> PullRequest {
+        pr_authored(number, title, "octocat", "feature")
+    }
+
+    fn pr_authored(number: u64, title: &str, author: &str, head_ref: &str) -> PullRequest {
         PullRequest {
             number,
             title: title.to_string(),
-            author: "octocat".to_string(),
-            head_ref: "feature".to_string(),
+            author: author.to_string(),
+            head_ref: head_ref.to_string(),
             base_ref: "main".to_string(),
             is_draft: false,
             updated_at: "2026-07-19T00:00:00Z".to_string(),
@@ -2829,7 +2838,7 @@ index 111..222 100644
     }
 
     #[test]
-    fn filter_labels_on_the_prs_tab_are_number_and_title() {
+    fn filter_labels_on_the_prs_tab_fold_in_number_title_author_and_branch() {
         let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
             repo_label: "org/repo".to_string(),
             prs: vec![pr(42, "fix the thing")],
@@ -2842,7 +2851,95 @@ index 111..222 100644
         app.ensure_launcher_prs_fresh();
         assert_eq!(
             app.review_launcher_filter_labels(),
-            vec!["#42 fix the thing".to_string()]
+            vec!["#42 fix the thing octocat feature".to_string()]
         );
+    }
+
+    /// A PR authored by someone whose login doesn't appear anywhere in the
+    /// title must still be reachable by `/`-filtering on that login — the
+    /// defect this guards is the haystack reverting to number+title only,
+    /// which would make `/dana` match nothing.
+    #[test]
+    fn filtering_by_author_narrows_to_that_authors_prs() {
+        let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![
+                pr_authored(1, "fix the thing", "dana", "fix/porcelain-rename"),
+                pr_authored(2, "add feature", "bob", "feature/widgets"),
+            ],
+        });
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.ensure_launcher_prs_fresh();
+        app.review_launcher_enter_filter();
+        for c in "dana".chars() {
+            app.review_launcher_filter_push_char(c);
+        }
+        let filter = app.launcher_filter.as_ref().expect("filter is active");
+        assert_eq!(filter.len(), 1, "only dana's PR should remain");
+        let selected = filter.real_index(0).expect("one match");
+        assert_eq!(app.launcher_prs_rows()[selected].number, 1);
+    }
+
+    /// Mirrors `filtering_by_author_narrows_to_that_authors_prs` for the
+    /// head branch name, which is likewise painted on the row but was
+    /// previously unsearchable.
+    #[test]
+    fn filtering_by_head_branch_fragment_narrows_to_that_pr() {
+        let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![
+                pr_authored(1, "fix the thing", "dana", "fix/porcelain-rename"),
+                pr_authored(2, "add feature", "bob", "feature/widgets"),
+            ],
+        });
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.ensure_launcher_prs_fresh();
+        app.review_launcher_enter_filter();
+        for c in "porcelain".chars() {
+            app.review_launcher_filter_push_char(c);
+        }
+        let filter = app.launcher_filter.as_ref().expect("filter is active");
+        assert_eq!(
+            filter.len(),
+            1,
+            "only the porcelain-rename PR should remain"
+        );
+        let selected = filter.real_index(0).expect("one match");
+        assert_eq!(app.launcher_prs_rows()[selected].number, 1);
+    }
+
+    /// A title query must keep working once author/branch are folded into
+    /// the haystack — the enrichment must add reach, not steal it.
+    #[test]
+    fn filtering_by_title_still_narrows_the_prs_tab() {
+        let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
+            repo_label: "org/repo".to_string(),
+            prs: vec![
+                pr_authored(1, "fix the thing", "dana", "fix/porcelain-rename"),
+                pr_authored(2, "add feature", "bob", "feature/widgets"),
+            ],
+        });
+        app.mode = Mode::ReviewLauncher {
+            tab: LauncherTab::PullRequests,
+            cursor: 0,
+            origin: ModeOrigin::Normal,
+        };
+        app.ensure_launcher_prs_fresh();
+        app.review_launcher_enter_filter();
+        for c in "add feature".chars() {
+            app.review_launcher_filter_push_char(c);
+        }
+        let filter = app.launcher_filter.as_ref().expect("filter is active");
+        assert_eq!(filter.len(), 1, "only the matching title should remain");
+        let selected = filter.real_index(0).expect("one match");
+        assert_eq!(app.launcher_prs_rows()[selected].number, 2);
     }
 }
