@@ -93,8 +93,12 @@ pub(super) struct PrCheckoutContext {
     pub(super) base_ref: String,
     /// The managed branch short name (`redquill/pr/<n>`).
     pub(super) managed_branch: String,
-    /// The PR title, for the "reviewing #N …" status line.
-    pub(super) title: String,
+    /// The PR title, for the "reviewing #N …" status line: `Some` when a
+    /// fresh title is known (the launcher just read it off the PR list),
+    /// `None` on a mid-session refresh where no re-listing happened — in
+    /// that case [`App::enter_pr_review`] keeps whatever title is already
+    /// stored rather than clobbering it with a placeholder.
+    pub(super) title: Option<String>,
     /// The resolved `review-state.json` path, for reconciliation and saves.
     pub(super) state_path: Option<PathBuf>,
     /// The origin repo root (outside any worktree), for discovering the
@@ -584,7 +588,7 @@ impl App {
             return;
         };
         let number = pr.number;
-        let title = pr.title.clone();
+        let title = Some(pr.title.clone());
         let base_ref = pr.base_ref.clone();
         // The checkout follows whichever provider the tab's background list
         // already resolved for this host (peeked, never re-resolved), so a
@@ -636,12 +640,15 @@ impl App {
     /// current `stage_ops` is the origin repo) from a mid-session refresh
     /// (the origin ops are [`App::review_origin_ops`], since `stage_ops` is
     /// then rooted inside the managed worktree).
+    ///
+    /// `title` is `None` when the caller has no freshly-read title to offer
+    /// (a mid-session refresh) — see [`PrCheckoutContext::title`].
     pub(super) fn spawn_pr_checkout(
         &mut self,
         number: u64,
         base_ref: String,
         host: String,
-        title: String,
+        title: Option<String>,
         provider: ForgeProviderKind,
         from_session: bool,
     ) {
@@ -856,6 +863,14 @@ impl App {
                 return;
             }
         };
+        // A mid-session refresh has no freshly-read title to offer (no PR
+        // re-listing happened); keep whatever is already stored rather than
+        // falling back to a bare "#N" placeholder that would clobber it.
+        let title = ctx
+            .title
+            .clone()
+            .or_else(|| self.review_forge.as_ref().map(|f| f.title.clone()))
+            .unwrap_or_else(|| format!("#{}", ctx.number));
         let base = format!("origin/{}", ctx.base_ref);
         let reconciled = ctx
             .state_path
@@ -905,7 +920,7 @@ impl App {
                     provider: ctx.provider,
                     host: ctx.host.clone(),
                     number: ctx.number,
-                    title: ctx.title.clone(),
+                    title: title.clone(),
                     last_head_sha: head_sha.unwrap_or_default(),
                     diff_refs: diff_refs.or_else(|| {
                         ctx.state_path
@@ -935,7 +950,7 @@ impl App {
                         "PR updated \u{2014} {demoted} accepted file(s) changed"
                     ));
                 } else if !stale {
-                    self.set_status_message(format!("reviewing #{} {}", ctx.number, ctx.title));
+                    self.set_status_message(format!("reviewing #{} {}", ctx.number, title));
                 }
             }
             Err(e) => {

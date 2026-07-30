@@ -19,6 +19,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use crate::annotate::{Side, Target};
 use crate::forge::{Thread, ThreadAnchor, ThreadComment};
 
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use super::app::{App, Mode};
@@ -39,10 +40,18 @@ pub(super) struct InFlightThreadFetch {
 
 /// The expandable thread overlay's state: which thread (its root id) is
 /// shown, and the vertical scroll offset within its conversation.
-#[derive(Debug, Clone, Copy)]
+///
+/// `scroll` is advanced freely (`saturating_add`/`saturating_sub`) by the
+/// `j`/`k` handlers and clamped to the rendered content only at render time
+/// (same model as [`super::help::HelpOverlayState::scroll`]) — a `Cell` so
+/// `render`, which only ever sees `&App`, can write the clamped value back.
+/// Without the write-back, a held `j` past the end would keep growing the
+/// raw offset forever, and an equal number of `k` presses would be needed
+/// just to undo the overshoot before the view starts moving again.
+#[derive(Debug, Clone)]
 pub(super) struct ThreadViewState {
     pub(super) root_id: u64,
-    pub(super) scroll: usize,
+    pub(super) scroll: Cell<usize>,
 }
 
 impl App {
@@ -361,7 +370,10 @@ impl App {
     pub(super) fn open_thread_view(&mut self) {
         match self.thread_at_cursor() {
             Some(root_id) => {
-                self.thread_view = Some(ThreadViewState { root_id, scroll: 0 });
+                self.thread_view = Some(ThreadViewState {
+                    root_id,
+                    scroll: Cell::new(0),
+                });
                 self.mode = Mode::ThreadView;
             }
             None => {
@@ -388,18 +400,19 @@ impl App {
         self.mode = Mode::Compose;
     }
 
-    /// Scrolls the open thread overlay down one line (clamped by the render's
-    /// own overscroll handling).
+    /// Scrolls the open thread overlay down one line (clamped against the
+    /// rendered content by `render`'s own overscroll handling — see
+    /// [`ThreadViewState::scroll`]).
     pub(super) fn thread_view_scroll_down(&mut self) {
-        if let Some(tv) = self.thread_view.as_mut() {
-            tv.scroll = tv.scroll.saturating_add(1);
+        if let Some(tv) = self.thread_view.as_ref() {
+            tv.scroll.set(tv.scroll.get().saturating_add(1));
         }
     }
 
     /// Scrolls the open thread overlay up one line.
     pub(super) fn thread_view_scroll_up(&mut self) {
-        if let Some(tv) = self.thread_view.as_mut() {
-            tv.scroll = tv.scroll.saturating_sub(1);
+        if let Some(tv) = self.thread_view.as_ref() {
+            tv.scroll.set(tv.scroll.get().saturating_sub(1));
         }
     }
 
@@ -629,10 +642,22 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .title(format!("thread{state}"))
         .title_bottom(Line::from(" j/k scroll  r reply  Esc/q close "));
+
+    // Clamp to the offset that puts the content's last line on the
+    // viewport's last row (zero once everything already fits), and write it
+    // back so the next `k` moves the view immediately rather than first
+    // unwinding a runaway offset (see `ThreadViewState::scroll`'s doc). The
+    // line count ignores line-wrap the same way the LSP peek overlay's
+    // `hover_line_count` does — an accepted approximation, not exactness.
+    let inner_height = popup.height.saturating_sub(2) as usize; // top/bottom border
+    let max_scroll = lines.len().saturating_sub(inner_height);
+    let offset = tv.scroll.get().min(max_scroll);
+    tv.scroll.set(offset);
+
     let paragraph = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false })
-        .scroll((tv.scroll as u16, 0));
+        .scroll((offset as u16, 0));
     frame.render_widget(paragraph, popup);
 }
 

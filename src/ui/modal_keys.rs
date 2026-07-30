@@ -4082,7 +4082,7 @@ index 111..222 100644
         let mut app = app();
         app.thread_view = Some(super::super::forge_threads::ThreadViewState {
             root_id: 1,
-            scroll: 0,
+            scroll: std::cell::Cell::new(0),
         });
         app.mode = Mode::ThreadView;
         app
@@ -4100,7 +4100,7 @@ index 111..222 100644
                     ThreadViewAction::ScrollDown => {
                         handle_thread_view_key(&mut app, key.event());
                         assert_eq!(
-                            app.thread_view.as_ref().map(|tv| tv.scroll),
+                            app.thread_view.as_ref().map(|tv| tv.scroll.get()),
                             Some(1),
                             "Thread view {label}: scroll-down advances the scroll offset"
                         );
@@ -4108,12 +4108,12 @@ index 111..222 100644
                     ThreadViewAction::ScrollUp => {
                         // Start one line down so scroll-up has an observable
                         // effect (the fixture opens at scroll 0).
-                        if let Some(tv) = app.thread_view.as_mut() {
-                            tv.scroll = 1;
+                        if let Some(tv) = app.thread_view.as_ref() {
+                            tv.scroll.set(1);
                         }
                         handle_thread_view_key(&mut app, key.event());
                         assert_eq!(
-                            app.thread_view.as_ref().map(|tv| tv.scroll),
+                            app.thread_view.as_ref().map(|tv| tv.scroll.get()),
                             Some(0),
                             "Thread view {label}: scroll-up retreats the scroll offset"
                         );

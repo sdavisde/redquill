@@ -111,7 +111,11 @@ impl App {
             forge.number,
             base_ref,
             forge.host.clone(),
-            format!("#{}", forge.number),
+            // No fresh title was read here (this is a refresh, not a
+            // re-listing) — `None` tells `enter_pr_review` to keep the
+            // title already stored rather than overwrite it with a
+            // placeholder.
+            None,
             forge.provider,
             true,
         );
