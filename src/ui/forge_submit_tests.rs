@@ -637,7 +637,7 @@ fn render_modal(app: &App, width: u16, height: u16) -> String {
         .collect()
 }
 
-// -- reply preview target labels (ENG-174) -----------------------------------
+// -- reply preview target labels -----------------------------------
 
 #[test]
 fn a_reply_preview_renders_the_root_author_and_anchor_not_the_raw_id() {
@@ -882,7 +882,7 @@ fn a_blocked_confirm_scrolls_its_hint_into_view_on_a_tall_batch() {
     assert!(content.contains("needs a summary"), "hint not visible");
 }
 
-// -- multi-line review summary via the composer (ENG-175) --------------------
+// -- multi-line review summary via the composer --------------------
 
 /// Types `text` into the open composer through its real keymap: `Ctrl-j` for
 /// each newline, a plain char for everything else.
