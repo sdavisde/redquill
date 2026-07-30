@@ -1244,8 +1244,9 @@ pub(super) static THREAD_VIEW_KEYS: LazyLock<Vec<ModalBinding<ThreadViewAction>>
 
 /// What a control key does in the submit-review modal
 /// ([`super::app::Mode::SubmitForge`]): confirm the publish, cancel it, cycle
-/// the verdict picker, scroll the batch preview, or delete a summary
-/// character. Free-text like Compose/Search — every printable char extends the
+/// the verdict picker, scroll the batch preview, delete a summary character, or
+/// hand the summary to the Compose editor for multi-line editing.
+/// Free-text like Compose/Search — every printable char extends the
 /// summary (a hand-written fallback in
 /// [`super::modes::handle_submit_forge_key`], never remappable) — so this
 /// table documents only the control keys, and the scroll keys are deliberately
@@ -1273,6 +1274,9 @@ pub(super) enum SubmitForgeAction {
     PageUp,
     /// Deletes the last summary character.
     DeleteChar,
+    /// Opens the Compose editor on the summary, for multi-line editing (see
+    /// [`super::app::App::open_summary_compose`]).
+    ComposeSummary,
 }
 
 /// The submit-review modal's control-key table, for the help overlay, footer
@@ -1345,6 +1349,15 @@ pub(super) static SUBMIT_FORGE_KEYS: LazyLock<Vec<ModalBinding<SubmitForgeAction
                 keys: vec![ModalKey::plain(KeyCode::Backspace)],
                 action: SubmitForgeAction::DeleteChar,
                 footer: None,
+            },
+            ModalBinding {
+                description: "Edit the summary in the composer (multi-line)",
+                keys: vec![ModalKey::ctrl(KeyCode::Char('e'))],
+                action: SubmitForgeAction::ComposeSummary,
+                footer: Some(FooterHint {
+                    rank: 5,
+                    label: "summary",
+                }),
             },
         ]
     });
@@ -3986,7 +3999,7 @@ index 111..222 100644
                             "Thread view {label}: reply opens Compose"
                         );
                         assert_eq!(
-                            app.compose.as_ref().and_then(|c| c.thread_id),
+                            app.compose.as_ref().and_then(|c| c.thread_id()),
                             Some(1),
                             "Thread view {label}: reply targets the open thread's root"
                         );

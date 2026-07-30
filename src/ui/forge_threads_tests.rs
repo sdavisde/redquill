@@ -814,7 +814,7 @@ fn thread_conversation_and_reply_journey_transcript() {
     // Draft a reply to the thread (r), type it, submit.
     app.open_reply_compose();
     assert_eq!(app.mode, Mode::Compose);
-    assert_eq!(app.compose.as_ref().and_then(|c| c.thread_id), Some(1));
+    assert_eq!(app.compose.as_ref().and_then(|c| c.thread_id()), Some(1));
     if let Some(compose) = app.compose.as_mut() {
         for ch in "I'll take the empty-input guard.".chars() {
             compose.buffer.insert_char(ch);

@@ -703,7 +703,7 @@ index 111..222 100644
 
         assert_eq!(app.mode, Mode::Compose);
         let compose = app.compose.as_ref().unwrap();
-        assert_eq!(compose.thread_id, Some(77));
+        assert_eq!(compose.thread_id(), Some(77));
         assert_eq!(compose.buffer.text(), "original reply");
     }
 

@@ -24,7 +24,7 @@ use crate::review::ReviewStatus;
 use super::background::{BackgroundTasks, CommandOutcome, TaskId, run_command};
 use super::command_log::{CommandLog, CommandLogEntry};
 use super::commit_message::CommitMessageState;
-use super::compose::ComposeState;
+use super::compose::{ComposeKind, ComposeState};
 use super::diff_view_state::DiffViewState;
 use super::editor::EditorLaunch;
 use super::file_finder::{FinderState, InFlightFinderLoad};
@@ -1557,10 +1557,15 @@ impl App {
         }
     }
 
-    /// Cancels Compose without saving, discarding the draft.
+    /// Cancels Compose without saving, discarding the draft. A summary compose
+    /// returns to the submit modal it was opened from, leaving the summary as
+    /// it was.
     pub fn cancel_compose(&mut self) {
-        self.compose = None;
-        self.mode = Mode::Normal;
+        let kind = self.compose.take().map(|c| c.kind);
+        self.mode = match kind {
+            Some(ComposeKind::ReviewSummary) if self.submit_forge.is_some() => Mode::SubmitForge,
+            _ => Mode::Normal,
+        };
     }
 
     /// Submits the Compose draft: adds a new annotation, or (when editing)
@@ -1568,18 +1573,26 @@ impl App {
     /// whitespace-only body cancels instead — the store rejects empty
     /// bodies, and surfacing that as a hard error over "just cancel" would
     /// be needless friction for a body the reviewer clearly abandoned.
+    ///
+    /// A summary compose is the exception to that rule: it writes back to the
+    /// submit modal's own state (no store involved), where an emptied buffer is
+    /// a deliberate "clear the summary" rather than an abandoned draft.
     pub fn submit_compose(&mut self) {
         let Some(compose) = self.compose.take() else {
             self.mode = Mode::Normal;
             return;
         };
         let body = compose.buffer.text();
+        if compose.kind == ComposeKind::ReviewSummary {
+            self.save_review_summary(&body);
+            return;
+        }
         if body.trim().is_empty() {
             self.mode = Mode::Normal;
             return;
         }
 
-        if let Some(thread_id) = compose.thread_id {
+        if let Some(thread_id) = compose.thread_id() {
             // Reply mode: add or edit a draft reply rather than an annotation.
             // Replies never carry a classification and never reach stdout.
             match compose.editing_id {
