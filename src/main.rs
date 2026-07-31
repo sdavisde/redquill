@@ -270,6 +270,12 @@ fn run_tui(config: &RunConfig) -> anyhow::Result<()> {
 
     let mut app = App::with_git(snapshot, target.clone(), Box::new(runner.clone()));
     if let DiffTarget::Review { branch, .. } = &target {
+        // Recorded before `discovered` moves into `set_review_origin_ops`:
+        // pausing or finishing the review re-roots the app back onto this
+        // root's working tree rather than exiting (see
+        // `ui::end_review::App::leave_review_session`), so a `--review`
+        // launch needs it just as much as a launcher-started session does.
+        app.set_review_origin_root(discovered.root().to_path_buf());
         // Load + reconcile this branch's persisted progress before the
         // first render, so `Accepted`/`Deferred` files start collapsed and a
         // stale `Accepted` file starts marked `ChangedSinceAccepted` and
@@ -322,9 +328,19 @@ fn run_tui(config: &RunConfig) -> anyhow::Result<()> {
     ));
     let outcome = ui::run(&mut app)?;
 
+    // Reviews finished during the run already handed their annotations over
+    // (see `App::finished_annotations`); finish promised to emit them, so they
+    // go out regardless of how the process was eventually quit. The live
+    // session's own annotations join them only on `QuitOutcome::Emit`. One
+    // render, one presentation — a consumer still sees each annotation exactly
+    // once.
+    let mut emitted = std::mem::take(&mut app.finished_annotations);
     if let QuitOutcome::Emit = outcome {
-        let markdown = render_markdown(&app.annotations);
-        present_annotations(&markdown, app.annotations.len(), config.output.as_deref())?;
+        app.annotations.drain_into(&mut emitted);
+    }
+    if !emitted.is_empty() {
+        let markdown = render_markdown(&emitted);
+        present_annotations(&markdown, emitted.len(), config.output.as_deref())?;
     }
 
     Ok(())

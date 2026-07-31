@@ -26,10 +26,13 @@ use super::modal_keys::EndReviewAction;
 const CONTENT_WIDTH: u16 = 48;
 /// Total modal width: content + 2 columns of padding + 2 columns of border.
 const MODAL_WIDTH: u16 = CONTENT_WIDTH + 2 + 2;
-/// The caption under the three options: annotations print to stdout exactly
-/// once, on finish, whether they were made this session or restored from an
-/// earlier one — pause never emits.
-const CAPTION: &str = "annotations print to stdout once, on finish";
+/// The caption under the three options. Two facts a reviewer at this modal
+/// needs and can't read off the option rows: pause and finish both land back
+/// on the working tree rather than exiting redquill, and the annotations a
+/// finish earmarks — this session's and any restored from an earlier one —
+/// print to stdout exactly once, when redquill itself exits. Pause never
+/// emits. Kept within [`CONTENT_WIDTH`], which is sized to this line.
+const CAPTION: &str = "both return to the working tree; finish emits once";
 
 /// The three exits' display order, short label, and short description —
 /// the modal's own tuned prose, distinct from [`super::modal_keys::END_REVIEW_KEYS`]'s

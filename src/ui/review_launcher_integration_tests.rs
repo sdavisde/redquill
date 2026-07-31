@@ -1565,3 +1565,255 @@ fn forge_unresolvable_host_journey_transcript() {
 
     drop(tmp);
 }
+
+// -- Scenarios: leaving a review lands on the working tree, never on a quit --
+//
+// The four exits a reviewer has (`q`+`p`, `q`+`f`, `Esc`, and confirming a
+// different review from the launcher) all re-root back onto the origin
+// checkout. These run against real git because that re-root is the whole
+// behavior: a fake backend would prove the flag flipped, not that the app is
+// genuinely rooted outside the managed worktree afterwards.
+
+/// Two candidate branches, each one commit ahead of `main` on its own file —
+/// so a review of either produces a non-empty diff, and swapping from one to
+/// the other is observable in the file list as well as in the target.
+fn repo_with_two_branches_ahead_of_main() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    assert_inside_tempdir(dir, &tmp);
+    git(dir, &["init", "-q", "-b", "main"]);
+    configure_identity(dir);
+    write(dir, "a.rs", "fn a() {}\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "initial"]);
+    for (branch, file) in [("alpha", "alpha.rs"), ("zulu", "zulu.rs")] {
+        git(dir, &["checkout", "-q", "-b", branch, "main"]);
+        write(dir, file, "fn tip() {}\n");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-q", "-m", branch]);
+    }
+    git(dir, &["checkout", "-q", "main"]);
+    tmp
+}
+
+/// Opens the launcher and confirms `branch`, navigating to its row first.
+/// The Branches tab excludes whatever branch the *current* root has checked
+/// out, so the row index differs between the origin checkout and a review
+/// worktree — resolving it from the loaded list keeps that off the tests.
+fn launch_review_of(app: &mut App, keymap: &Keymap, pending: &mut Option<KeyEvent>, branch: &str) {
+    press(app, keymap, pending, KeyCode::Char('R'));
+    let row = app
+        .launcher_branches
+        .iter()
+        .position(|b| b.name == branch)
+        .unwrap_or_else(|| {
+            panic!(
+                "{branch} must be listed, got {:?}",
+                app.launcher_branches
+                    .iter()
+                    .map(|b| &b.name)
+                    .collect::<Vec<_>>()
+            )
+        });
+    for _ in 0..row {
+        press(app, keymap, pending, KeyCode::Char('j'));
+    }
+    press(app, keymap, pending, KeyCode::Enter);
+}
+
+/// The headline behavior: confirming a second review while one is already
+/// open no longer refuses. The first is paused — its worktree and persisted
+/// progress survive, so reopening it resumes — and the app lands in the
+/// second. Without the pause the second review's worktree/base resolution
+/// would run rooted *inside* the first review's worktree.
+#[test]
+fn confirming_a_second_review_pauses_the_first_and_starts_the_second() {
+    let tmp = repo_with_two_branches_ahead_of_main();
+    let dir = tmp.path();
+    let mut app = app_for(dir);
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+
+    launch_review_of(&mut app, &keymap, &mut pending, "alpha");
+    assert!(
+        matches!(&app.target, DiffTarget::Review { branch, .. } if branch == "alpha"),
+        "sanity: the first review must have started, got {:?}",
+        app.target
+    );
+    // Accept a file so `alpha` has persisted progress worth preserving
+    // across the swap.
+    app.select_file_by_path("alpha.rs");
+    press(&mut app, &keymap, &mut pending, KeyCode::Char(' '));
+    assert_eq!(app.review_status("alpha.rs"), ReviewStatus::Accepted);
+    let alpha_root = canon(app.repo_root.as_ref().expect("repo root set"));
+
+    launch_review_of(&mut app, &keymap, &mut pending, "zulu");
+
+    assert!(
+        matches!(&app.target, DiffTarget::Review { branch, .. } if branch == "zulu"),
+        "the swap must land in the second review, got {:?}",
+        app.target
+    );
+    let zulu_root = canon(app.repo_root.as_ref().expect("repo root set"));
+    assert_ne!(
+        zulu_root, alpha_root,
+        "the app must be rooted in zulu's worktree, not still in alpha's"
+    );
+    assert!(
+        app.view.files.iter().any(|f| f.path == "zulu.rs"),
+        "the diff must be zulu's, got {:?}",
+        app.view.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+    );
+    assert!(
+        !app.review_states.contains_key("alpha.rs"),
+        "alpha's accept marks must not carry into zulu's session"
+    );
+
+    // Paused, not finished: alpha's worktree is still registered and its
+    // progress is still on disk, so reopening it resumes mid-review.
+    let wt_list = git_out(dir, &["worktree", "list"]);
+    assert!(
+        wt_list.contains(alpha_root.to_str().unwrap()),
+        "alpha's worktree must survive the swap: {wt_list}"
+    );
+    let common_dir = GitRunner::discover_in(dir)
+        .unwrap()
+        .git_common_dir()
+        .unwrap();
+    let saved = store::load(&common_dir.join("redquill").join("review-state.json"));
+    assert_eq!(
+        saved.reviews["alpha"].files["alpha.rs"].status,
+        store::PersistedStatus::Accepted,
+        "alpha's accepted file must still be persisted after the swap"
+    );
+
+    drop(tmp);
+}
+
+/// `q` then `p` returns to the working tree instead of quitting, leaving the
+/// review resumable. The regression this catches is the app either exiting
+/// (the old behavior) or staying rooted inside the managed worktree while
+/// claiming to show the working tree.
+#[test]
+fn pausing_a_review_returns_to_the_origin_working_tree() {
+    let tmp = repo_with_two_branches_ahead_of_main();
+    let dir = tmp.path();
+    let mut app = app_for(dir);
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let origin_root = canon(app.repo_root.as_ref().expect("repo root set"));
+
+    launch_review_of(&mut app, &keymap, &mut pending, "alpha");
+    let review_root = canon(app.repo_root.as_ref().expect("repo root set"));
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('q'));
+    assert!(
+        matches!(app.mode, Mode::EndReview { .. }),
+        "q must open the end-review modal, got {:?}",
+        app.mode
+    );
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('p'));
+
+    assert_eq!(app.target, DiffTarget::WorkingTree);
+    assert_eq!(
+        canon(app.repo_root.as_ref().expect("repo root set")),
+        origin_root,
+        "pause must re-root back onto the origin checkout"
+    );
+    assert!(app.review_states.is_empty());
+    let wt_list = git_out(dir, &["worktree", "list"]);
+    assert!(
+        wt_list.contains(review_root.to_str().unwrap()),
+        "pause must keep the worktree for the resumed review: {wt_list}"
+    );
+
+    drop(tmp);
+}
+
+/// `Esc` with nothing else to unwind pauses the review the same way. It must
+/// still yield to the overlays that already own `Esc` — proven here by the
+/// help overlay, which closes on the first `Esc` and leaves the session alone.
+#[test]
+fn esc_closes_an_overlay_first_and_only_then_pauses_the_review() {
+    let tmp = repo_with_two_branches_ahead_of_main();
+    let dir = tmp.path();
+    let mut app = app_for(dir);
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let origin_root = canon(app.repo_root.as_ref().expect("repo root set"));
+
+    launch_review_of(&mut app, &keymap, &mut pending, "alpha");
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('?'));
+    assert!(app.help.open, "sanity: the help overlay must be open");
+    press(&mut app, &keymap, &mut pending, KeyCode::Esc);
+    assert!(!app.help.open, "the first Esc closes help");
+    assert!(
+        app.in_review_session(),
+        "the Esc that closed help must not also have ended the review"
+    );
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Esc);
+
+    assert_eq!(app.target, DiffTarget::WorkingTree);
+    assert_eq!(
+        canon(app.repo_root.as_ref().expect("repo root set")),
+        origin_root
+    );
+
+    drop(tmp);
+}
+
+/// `q` then `f` removes the worktree and returns to the working tree, handing
+/// the session's annotations to the buffer `main` renders on exit. The
+/// regression this catches is finish silently dropping the annotations it
+/// promised to emit now that it no longer quits.
+#[test]
+fn finishing_a_review_returns_to_the_working_tree_and_carries_its_annotations() {
+    use crate::annotate::{Classification, Target};
+
+    let tmp = repo_with_two_branches_ahead_of_main();
+    let dir = tmp.path();
+    let mut app = app_for(dir);
+    let keymap = Keymap::default_map();
+    let mut pending: Option<KeyEvent> = None;
+    let origin_root = canon(app.repo_root.as_ref().expect("repo root set"));
+
+    launch_review_of(&mut app, &keymap, &mut pending, "alpha");
+    let review_root = canon(app.repo_root.as_ref().expect("repo root set"));
+    app.annotations
+        .add(Target::file("alpha.rs"), Classification::Question, "why?")
+        .unwrap();
+
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('q'));
+    press(&mut app, &keymap, &mut pending, KeyCode::Char('f'));
+
+    assert_eq!(
+        app.target,
+        DiffTarget::WorkingTree,
+        "finish must land on the working tree, not quit: {:?}",
+        app.status_message
+    );
+    assert_eq!(
+        canon(app.repo_root.as_ref().expect("repo root set")),
+        origin_root
+    );
+    assert!(
+        !review_root.exists(),
+        "finish must remove the managed worktree"
+    );
+    assert_eq!(
+        app.finished_annotations
+            .iter()
+            .map(|a| a.body.as_str())
+            .collect::<Vec<_>>(),
+        vec!["why?"],
+        "the finished review's annotations must reach the exit-time emit buffer"
+    );
+    assert!(
+        app.annotations.is_empty(),
+        "and must not also stay behind to be emitted a second time"
+    );
+
+    drop(tmp);
+}

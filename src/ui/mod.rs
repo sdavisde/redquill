@@ -138,26 +138,29 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// actually changing, so idle ticks are cheap.
 const AUTO_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
-/// How a TUI session ended: governs only the one stdout side effect (`main`'s
-/// `render_markdown(&app.annotations)` call on quit) — never what's kept in
-/// `app.annotations` itself or on disk, both of which are already settled by
-/// the time either variant is produced.
+/// How a TUI session ended: governs only whether the *live* view's
+/// annotations join `main`'s one stdout emission — never what's kept on disk,
+/// which is already settled by the time either variant is produced.
 ///
-/// [`QuitOutcome::Emit`]: a plain session's `q`, or a review session's `f`
-/// (finish, [`super::app::App::finish_review`]) — finish emits the complete
-/// annotation set exactly once, in the unchanged markdown format.
-/// [`QuitOutcome::Discard`]: a plain session's `Q`/Ctrl-C, or a review
-/// session's `p` (pause). Pause keeps the worktree, the review state, and
-/// every annotation on disk; only the stdout emission is suppressed, so a
-/// consumer piping redquill's output sees each annotation exactly once, on
-/// finish rather than once per pause plus once more on finish.
+/// A review session's `p` (pause) and `f` (finish) no longer produce either
+/// variant: neither ends the process, both return to the working tree (see
+/// [`end_review::LeaveReason`]). Finish's promised emission happens through
+/// `App::finished_annotations`, which `main` renders on exit whichever
+/// variant this eventually is — an explicit finish must not be undone by a
+/// later `Q`. So a consumer piping redquill's output still sees each
+/// annotation exactly once, on finish rather than once per pause plus once
+/// more on finish.
+///
+/// [`QuitOutcome::Emit`]: `q` outside a review session.
+/// [`QuitOutcome::Discard`]: `Q`/Ctrl-C, in any view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuitOutcome {
-    /// Emit `app.annotations` to stdout on the way out.
+    /// Emit `app.annotations` to stdout on the way out, alongside any already
+    /// in `app.finished_annotations`.
     Emit,
-    /// Emit nothing; annotations already in `app.annotations` are simply
-    /// dropped from memory (not from disk — a review session's are already
-    /// persisted by this point).
+    /// Emit only `app.finished_annotations`; whatever is still in
+    /// `app.annotations` is dropped from memory (not from disk — a review
+    /// session's are already persisted by this point).
     Discard,
 }
 
@@ -294,9 +297,13 @@ enum Flow {
 /// (diff-scope [`dispatch_key`] and [`modes::handle_panel_key`]) so review
 /// mode's `q` can't drift between them: during a review
 /// session it opens the end-review modal instead of quitting; otherwise it
-/// quits exactly as before, emitting annotations. `Action::QuitDiscard`
-/// (`Q`) is untouched by this — its global "quit immediately, emit nothing"
-/// meaning holds in every mode, review session or not.
+/// quits exactly as before, emitting annotations. Since neither of that
+/// modal's exits quits either, leaving a review takes `q` twice — once to end
+/// the review, once to quit the working-tree view it lands on.
+/// `Action::QuitDiscard` (`Q`) is untouched by this — its global "quit
+/// immediately, emit nothing" meaning holds in every mode, review session or
+/// not, and remains the one keypress that leaves redquill from inside a
+/// review.
 fn quit_action(app: &mut App) -> Flow {
     if app.in_review_session() {
         app.open_end_review_modal();
@@ -445,13 +452,22 @@ fn dispatch_key(
             let just_started_sequence =
                 motion::count_survives_sequence_start(had_pending, pending.is_some());
 
-            // Esc only ever closes an already-open help overlay, cancels an
-            // in-progress Visual selection, or returns from a commit view
-            // opened via the git panel's History tab; it is
-            // never bound to opening help, unlike `?` (see keymap.rs). This
-            // runs only when nothing was pending — an Esc that cancelled a
-            // pending `g` prefix (handled inside `resolve`) stops there
-            // instead. Esc always cancels an in-progress count too.
+            // Esc closes an already-open help overlay, cancels an in-progress
+            // Visual selection, returns from a file/commit view opened via
+            // the git panel, or — with none of those claiming it — pauses an
+            // active review session back onto the working tree. It is never
+            // bound to opening help, unlike `?` (see keymap.rs). This runs
+            // only when nothing was pending — an Esc that cancelled a pending
+            // `g` prefix (handled inside `resolve`) stops there instead. Esc
+            // always cancels an in-progress count too.
+            //
+            // The review-pause arm is last on purpose: every overlay Esc
+            // already unwinds keeps its meaning, and only a "nothing left to
+            // close" Esc reaches the session itself. Pausing is
+            // non-destructive (the worktree, the persisted progress, and every
+            // annotation stay exactly where they are), so this needs no
+            // confirmation — `q`'s modal is still there for the finish that
+            // does destroy something.
             if key.code == KeyCode::Esc && !had_pending {
                 *pending_count = None;
                 if app.help.open {
@@ -466,6 +482,8 @@ fn dispatch_key(
                     app.return_from_file_view();
                 } else if app.viewing_commit() {
                     app.return_from_commit_view();
+                } else if app.in_review_session() {
+                    app.leave_review_session(end_review::LeaveReason::Pause);
                 }
                 return Flow::Continue;
             }

@@ -724,12 +724,13 @@ impl Keymap {
                 // the actual dispatch is a hand-written cascade in
                 // `mod.rs`'s `dispatch_key` (close help / cancel a Visual
                 // selection / return from a commit view opened via the
-                // History tab) — the same multi-duty-single-key pattern
-                // Visual-cancel uses.
+                // History tab / pause a review back onto the working tree)
+                // — the same multi-duty-single-key pattern Visual-cancel
+                // uses.
                 d(
                     KeySeq::one(Esc, none),
                     ToggleHelp,
-                    "Close help / cancel selection / return from a commit view",
+                    "Close help / cancel selection / return from a commit view / pause review",
                 ),
                 d(
                     KeySeq::one(Char('v'), none),

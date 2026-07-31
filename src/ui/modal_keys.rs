@@ -1029,14 +1029,17 @@ pub(super) static FILTER_EDIT_KEYS: LazyLock<Vec<ModalBinding<FilterEditAction>>
 /// immediately regardless of the highlight.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum EndReviewAction {
-    /// Quit emitting nothing; the worktree, review state, and every
-    /// annotation (already durable via save-on-change) are kept.
+    /// Return to the working tree emitting nothing; the worktree, review
+    /// state, and every annotation (already durable via save-on-change) are
+    /// kept, so the review resumes exactly where it left off.
     Pause,
-    /// Emit the complete annotation set (restored-from-earlier-sessions and
-    /// this session's own, together, exactly once), remove the worktree
-    /// (and delete the persisted review-state entry — statuses and
-    /// annotations together), then quit. On removal failure the modal
-    /// closes with the git error surfaced instead of quitting.
+    /// Remove the worktree (and delete the persisted review-state entry —
+    /// statuses and annotations together), then return to the working tree.
+    /// The complete annotation set (restored-from-earlier-sessions and this
+    /// session's own, together) is carried into
+    /// [`super::app::App::finished_annotations`] and emitted exactly once on
+    /// exit. On removal failure the modal closes with the git error surfaced
+    /// and the session stays open.
     Finish,
     /// Close the modal and keep reviewing; nothing happens.
     Cancel,
@@ -1080,7 +1083,7 @@ pub(super) static END_REVIEW_KEYS: LazyLock<Vec<ModalBinding<EndReviewAction>>> 
     LazyLock::new(|| {
         vec![
             ModalBinding {
-                description: "Pause — quit, emit nothing (keep worktree)",
+                description: "Pause — back to the working tree (keep worktree)",
                 keys: vec![ModalKey::plain(KeyCode::Char('p'))],
                 action: EndReviewAction::Pause,
                 footer: Some(FooterHint {
@@ -1089,7 +1092,7 @@ pub(super) static END_REVIEW_KEYS: LazyLock<Vec<ModalBinding<EndReviewAction>>> 
                 }),
             },
             ModalBinding {
-                description: "Finish — emit annotations once, remove worktree, quit",
+                description: "Finish — remove worktree, back to the working tree",
                 keys: vec![ModalKey::plain(KeyCode::Char('f'))],
                 action: EndReviewAction::Finish,
                 footer: Some(FooterHint {
@@ -4385,42 +4388,72 @@ index 111..222 100644
 
     /// An `App` mid-review, with `Mode::EndReview` already open (`origin:
     /// Normal`), so every end-review action has an observable effect.
-    fn end_review_app() -> App {
+    ///
+    /// The origin root is a throwaway git repo (returned alongside, so the
+    /// caller keeps it alive): pause and finish both re-root the app back onto
+    /// it, so without a real repository there they would degrade to a footer
+    /// message and become indistinguishable from cancel.
+    fn end_review_app() -> (App, tempfile::TempDir) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "test@redquill.invalid"],
+            &["config", "user.name", "redquill test"],
+        ] {
+            let out = std::process::Command::new("git")
+                .current_dir(tmp.path())
+                .args(args)
+                .output()
+                .expect("spawn git");
+            assert!(out.status.success(), "git {args:?} failed");
+        }
         let mut app = app();
         app.target = crate::git::DiffTarget::Review {
             base: "main".to_string(),
             branch: "feature".to_string(),
         };
+        app.set_review_origin_root(tmp.path().to_path_buf());
         app.open_end_review_modal();
-        app
+        (app, tmp)
     }
 
     #[test]
     fn every_end_review_table_entry_drives_its_documented_action() {
-        use crate::ui::{Flow, QuitOutcome, modes::handle_end_review_key};
+        use crate::ui::modes::handle_end_review_key;
 
         for binding in END_REVIEW_KEYS.iter() {
             for key in &binding.keys {
-                let mut app = end_review_app();
+                let (mut app, _tmp) = end_review_app();
                 let label = binding.key_label();
                 match binding.action {
                     EndReviewAction::Pause => {
-                        let flow = handle_end_review_key(&mut app, key.event());
+                        let _ = handle_end_review_key(&mut app, key.event());
                         assert!(
-                            matches!(flow, Flow::Quit(QuitOutcome::Discard)),
-                            "End review {label}: pause must quit emitting nothing (spec 08 Unit 6)"
+                            !app.in_review_session(),
+                            "End review {label}: pause must leave the review session"
+                        );
+                        assert_eq!(
+                            app.target,
+                            crate::git::DiffTarget::WorkingTree,
+                            "End review {label}: pause lands on the working tree, not on a quit"
                         );
                     }
                     EndReviewAction::Finish => {
-                        // No `review_origin_ops` attached here (no git
+                        // No `review_origin_ops` attached here (no worktree
                         // backend in this fixture), so finish degrades to a
-                        // footer message and stays open rather than quitting
-                        // — still proving `f` reaches `App::finish_review`.
+                        // footer message, keeps the session, and closes back
+                        // to the origin mode — still proving `f` reaches
+                        // `App::finish_review`, and distinct from pause, which
+                        // leaves the session from the same fixture.
                         let _ = handle_end_review_key(&mut app, key.event());
                         assert_eq!(
                             app.mode,
                             Mode::Normal,
                             "End review {label}: a failed finish closes back to the origin mode"
+                        );
+                        assert!(
+                            app.in_review_session(),
+                            "End review {label}: a failed finish must keep the session"
                         );
                         assert!(app.status_message.is_some());
                     }
@@ -4430,6 +4463,10 @@ index 111..222 100644
                             app.mode,
                             Mode::Normal,
                             "End review {label}: cancel returns to the origin mode"
+                        );
+                        assert!(
+                            app.in_review_session(),
+                            "End review {label}: cancel keeps reviewing"
                         );
                     }
                     EndReviewAction::MoveDown => {
@@ -4456,10 +4493,11 @@ index 111..222 100644
                         // The fixture opens with Pause (cursor 0)
                         // highlighted, so Enter must behave exactly like
                         // the `p` mnemonic.
-                        let flow = handle_end_review_key(&mut app, key.event());
+                        let _ = handle_end_review_key(&mut app, key.event());
                         assert!(
-                            matches!(flow, Flow::Quit(QuitOutcome::Discard)),
-                            "End review {label}: confirm on the highlighted Pause option must quit emitting nothing"
+                            !app.in_review_session(),
+                            "End review {label}: confirm on the highlighted Pause option must \
+                             leave the review session"
                         );
                     }
                 }
