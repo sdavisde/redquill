@@ -454,7 +454,7 @@ pub(super) fn history_item(
     ]);
     // Right-align the short sha, leaving one trailing cell of margin.
     let sha_w = entry.short_sha.chars().count();
-    let used = subject_line.width() as usize;
+    let used = subject_line.width();
     let pad = content_width.saturating_sub(used + sha_w + 1).max(1);
     subject_line.spans.push(Span::raw(" ".repeat(pad)));
     subject_line.spans.push(Span::styled(
