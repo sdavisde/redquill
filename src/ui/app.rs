@@ -272,19 +272,14 @@ pub struct App {
     /// mirroring lazygit), and the mode/scope `?` was pressed from. Reset by
     /// [`Action::ToggleHelp`] whenever the overlay opens or closes.
     pub(super) help: HelpOverlayState,
-    /// Annotations accumulated this session.
+    /// Annotations accumulated this session. Cleared when a review session is
+    /// left (see [`super::end_review::App::leave_review_session`]): a review's
+    /// annotations belong to that review — persisted in `review-state.json`
+    /// and, for a PR/MR, submitted to the forge — and must not follow the
+    /// reviewer back to the working tree, where they would show up in the
+    /// list panel against a diff they don't describe and be written into the
+    /// *next* review's persisted state.
     pub annotations: AnnotationStore,
-    /// Annotations carried over from review sessions *finished* during this
-    /// run. Finishing a review no longer quits — it returns to the working
-    /// tree (see [`super::end_review::LeaveReason`]) — so the session's
-    /// annotations are moved here as it unwinds rather than left in
-    /// `annotations`, where they would bleed into the next target's list
-    /// panel and into the next review's persisted state. `main` renders this
-    /// buffer to stdout on exit regardless of the final [`super::QuitOutcome`]
-    /// (a later `Q` must not silently drop what an explicit finish already
-    /// promised to emit), so each annotation still reaches a consumer exactly
-    /// once. Empty unless a review was finished this run.
-    pub finished_annotations: AnnotationStore,
     /// The current interaction mode.
     pub mode: Mode,
     /// The Compose modal's state, when `mode == Mode::Compose`.
@@ -896,7 +891,6 @@ impl App {
             view: DiffViewState::new(files),
             help: HelpOverlayState::new(),
             annotations,
-            finished_annotations: AnnotationStore::new(),
             mode: Mode::Normal,
             compose: None,
             commit_message: None,

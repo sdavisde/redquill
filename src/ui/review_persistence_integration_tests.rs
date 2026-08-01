@@ -477,33 +477,35 @@ fn annotate_pause_resume_restores_and_finish_emits_the_complete_set_once() {
     wait_for_review_save(&mut app);
     assert_eq!(app.annotations.len(), 2);
 
-    // -- Finish: emits the complete restored-plus-new set exactly once. -----
-    // Finish no longer quits — it removes the worktree and returns to the
-    // origin working tree, handing the session's annotations to the buffer
-    // `main` renders on exit. Both halves run here, so the emitted set is
-    // read from where `main` actually reads it.
+    // Restored-plus-new, each exactly once: the resume replayed the persisted
+    // copy into a store that then took a live addition, and neither half
+    // doubled the other. This is the defect the two-session shape exists to
+    // catch — a re-entry bug that appends a second copy of every restored
+    // annotation is invisible in a single-session test.
+    let saved_before_finish = store::load(&state_path);
+    let bodies: Vec<&str> = saved_before_finish.reviews["feature"]
+        .annotations
+        .iter()
+        .map(|a| a.body.as_str())
+        .collect();
+    assert_eq!(bodies, vec!["first note", "second note"]);
+
+    // -- Finish: the whole entry goes, annotations included. ----------------
+    // Finish neither quits nor emits: it removes the worktree, deletes the
+    // persisted entry, and returns to the origin working tree. A review's
+    // annotations belong to that entry (and, for a PR, to the forge), so
+    // finishing is the point at which they stop existing.
     app.open_end_review_modal();
     assert!(app.finish_review());
     assert!(app.leave_review_session(super::end_review::LeaveReason::Finish));
 
-    let markdown = crate::annotate::render_markdown(&app.finished_annotations);
-    assert_eq!(
-        markdown.matches("first note").count(),
-        1,
-        "the restored annotation must appear exactly once in the emitted set"
-    );
-    assert_eq!(
-        markdown.matches("second note").count(),
-        1,
-        "the new annotation must appear exactly once in the emitted set"
-    );
+    assert_eq!(app.target, DiffTarget::WorkingTree);
     assert!(
         app.annotations.is_empty(),
-        "the finished session's annotations move to the emit buffer rather than \
-         staying behind to be emitted a second time on the next quit"
+        "the finished review's annotations must not follow the reviewer back \
+         to the working tree, where a later plain `q` would present them"
     );
 
-    // -- One lifecycle: finish deletes the whole entry, annotations included. --
     let final_state = store::load(&state_path);
     assert!(
         !final_state.reviews.contains_key("feature"),

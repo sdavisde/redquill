@@ -1035,11 +1035,10 @@ pub(super) enum EndReviewAction {
     Pause,
     /// Remove the worktree (and delete the persisted review-state entry —
     /// statuses and annotations together), then return to the working tree.
-    /// The complete annotation set (restored-from-earlier-sessions and this
-    /// session's own, together) is carried into
-    /// [`super::app::App::finished_annotations`] and emitted exactly once on
-    /// exit. On removal failure the modal closes with the git error surfaced
-    /// and the session stays open.
+    /// The review is over, so its annotations go with the entry; anything
+    /// meant to outlive it should already have been submitted to the forge.
+    /// On removal failure the modal closes with the git error surfaced and
+    /// the session stays open.
     Finish,
     /// Close the modal and keep reviewing; nothing happens.
     Cancel,
@@ -1092,7 +1091,7 @@ pub(super) static END_REVIEW_KEYS: LazyLock<Vec<ModalBinding<EndReviewAction>>> 
                 }),
             },
             ModalBinding {
-                description: "Finish — remove worktree, back to the working tree",
+                description: "Finish — remove worktree & comments, back to the working tree",
                 keys: vec![ModalKey::plain(KeyCode::Char('f'))],
                 action: EndReviewAction::Finish,
                 footer: Some(FooterHint {

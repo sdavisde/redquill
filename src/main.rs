@@ -328,19 +328,14 @@ fn run_tui(config: &RunConfig) -> anyhow::Result<()> {
     ));
     let outcome = ui::run(&mut app)?;
 
-    // Reviews finished during the run already handed their annotations over
-    // (see `App::finished_annotations`); finish promised to emit them, so they
-    // go out regardless of how the process was eventually quit. The live
-    // session's own annotations join them only on `QuitOutcome::Emit`. One
-    // render, one presentation — a consumer still sees each annotation exactly
-    // once.
-    let mut emitted = std::mem::take(&mut app.finished_annotations);
+    // Only a non-review session's `q` ever reaches here with `Emit` (see
+    // `QuitOutcome`): a review's own annotations belong to its persisted
+    // entry and, for a PR/MR, to the forge submit flow, and are cleared from
+    // `app.annotations` as the review is left — so nothing a review produced
+    // can arrive here to be presented.
     if let QuitOutcome::Emit = outcome {
-        app.annotations.drain_into(&mut emitted);
-    }
-    if !emitted.is_empty() {
-        let markdown = render_markdown(&emitted);
-        present_annotations(&markdown, emitted.len(), config.output.as_deref())?;
+        let markdown = render_markdown(&app.annotations);
+        present_annotations(&markdown, app.annotations.len(), config.output.as_deref())?;
     }
 
     Ok(())

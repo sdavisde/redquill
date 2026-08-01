@@ -138,29 +138,28 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// actually changing, so idle ticks are cheap.
 const AUTO_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
-/// How a TUI session ended: governs only whether the *live* view's
-/// annotations join `main`'s one stdout emission — never what's kept on disk,
-/// which is already settled by the time either variant is produced.
+/// How a TUI session ended: governs only whether `main` presents
+/// `app.annotations` on the way out (`present_annotations` — the clipboard,
+/// plus `-o <file>` when given, with stdout as the headless fallback) — never
+/// what's kept on disk, which is already settled by the time either variant
+/// is produced.
 ///
-/// A review session's `p` (pause) and `f` (finish) no longer produce either
-/// variant: neither ends the process, both return to the working tree (see
-/// [`end_review::LeaveReason`]). Finish's promised emission happens through
-/// `App::finished_annotations`, which `main` renders on exit whichever
-/// variant this eventually is — an explicit finish must not be undone by a
-/// later `Q`. So a consumer piping redquill's output still sees each
-/// annotation exactly once, on finish rather than once per pause plus once
-/// more on finish.
+/// This is a **non-review-session** contract. A review's `p` (pause) and `f`
+/// (finish) produce neither variant: neither ends the process, both return to
+/// the working tree and clear `app.annotations` on the way (see
+/// [`end_review::LeaveReason`]). A review's annotations reach their consumer
+/// through its persisted entry and, for a PR/MR, the forge submit flow — so
+/// nothing a review produced is ever presented here, whichever variant the
+/// eventual quit yields.
 ///
 /// [`QuitOutcome::Emit`]: `q` outside a review session.
 /// [`QuitOutcome::Discard`]: `Q`/Ctrl-C, in any view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuitOutcome {
-    /// Emit `app.annotations` to stdout on the way out, alongside any already
-    /// in `app.finished_annotations`.
+    /// Present `app.annotations` on the way out.
     Emit,
-    /// Emit only `app.finished_annotations`; whatever is still in
-    /// `app.annotations` is dropped from memory (not from disk — a review
-    /// session's are already persisted by this point).
+    /// Present nothing; annotations still in `app.annotations` are simply
+    /// dropped from memory.
     Discard,
 }
 

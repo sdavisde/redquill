@@ -1764,12 +1764,14 @@ fn esc_closes_an_overlay_first_and_only_then_pauses_the_review() {
     drop(tmp);
 }
 
-/// `q` then `f` removes the worktree and returns to the working tree, handing
-/// the session's annotations to the buffer `main` renders on exit. The
-/// regression this catches is finish silently dropping the annotations it
-/// promised to emit now that it no longer quits.
+/// `q` then `f` removes the worktree, returns to the working tree, and takes
+/// the review's annotations with it. The regression this catches is a
+/// finished review's annotations surviving into the working-tree view, where
+/// a later plain `q` would present them to the clipboard — a review's
+/// comments belong to its persisted entry and to the forge, and finishing
+/// deletes that entry.
 #[test]
-fn finishing_a_review_returns_to_the_working_tree_and_carries_its_annotations() {
+fn finishing_a_review_returns_to_the_working_tree_and_drops_its_annotations() {
     use crate::annotate::{Classification, Target};
 
     let tmp = repo_with_two_branches_ahead_of_main();
@@ -1802,17 +1804,10 @@ fn finishing_a_review_returns_to_the_working_tree_and_carries_its_annotations() 
         !review_root.exists(),
         "finish must remove the managed worktree"
     );
-    assert_eq!(
-        app.finished_annotations
-            .iter()
-            .map(|a| a.body.as_str())
-            .collect::<Vec<_>>(),
-        vec!["why?"],
-        "the finished review's annotations must reach the exit-time emit buffer"
-    );
     assert!(
         app.annotations.is_empty(),
-        "and must not also stay behind to be emitted a second time"
+        "the finished review's annotations must not follow the reviewer back \
+         to the working tree"
     );
 
     drop(tmp);

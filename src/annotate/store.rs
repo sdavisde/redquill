@@ -189,27 +189,6 @@ impl AnnotationStore {
     pub fn unpublished(&self) -> impl Iterator<Item = &Annotation> {
         self.annotations.iter().filter(|a| !a.published)
     }
-
-    /// Moves every annotation out of `self` (leaving it empty) and appends
-    /// them to the end of `dest`, in insertion order. Ids are reassigned from
-    /// `dest`'s own counter so the merged store keeps the "stable ordinal,
-    /// never reused" guarantee `add` establishes — the two stores were
-    /// numbered independently, so carrying the original ids across would
-    /// collide.
-    ///
-    /// Used when a finished review session hands its annotations to the
-    /// process-lifetime emit buffer (`ui::App::finished_annotations`): the
-    /// session's own store is cleared as it returns to the working tree,
-    /// while the annotations it produced survive to be rendered to stdout
-    /// exactly once on exit.
-    pub fn drain_into(&mut self, dest: &mut AnnotationStore) {
-        for mut annotation in std::mem::take(&mut self.annotations) {
-            annotation.id = dest.next_id;
-            dest.next_id += 1;
-            dest.annotations.push(annotation);
-        }
-        self.next_id = 0;
-    }
 }
 
 #[cfg(test)]

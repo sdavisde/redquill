@@ -10,32 +10,37 @@
 //! view redquill opens in by default. Only `Q`/Ctrl-C, and `q` from outside a
 //! review, still quit.
 //!
-//! The three reasons differ in what they leave behind, not in where they land
-//! (see [`LeaveReason`]): pause keeps the worktree, the persisted state, and
-//! every annotation on disk; finish first removes the worktree and deletes the
-//! persisted entry ([`App::finish_review`]) and carries the session's
-//! annotations into [`App::finished_annotations`] for the one stdout emission
-//! finish has always promised; a swap behaves exactly like pause, so the
-//! review being left is resumable the moment the new one is done.
+//! The three reasons differ only in what they leave *on disk* (see
+//! [`LeaveReason`]) and in the status line's wording: pause and a swap keep
+//! the worktree and the persisted entry, so the review resumes exactly where
+//! it stopped; finish removes both first ([`App::finish_review`]).
+//!
+//! **Leaving a review never emits.** A review's annotations have their own
+//! destinations — `review-state.json` while it is open, and for a PR/MR the
+//! forge submit flow (`super::forge_submit`) — so none of the three exits
+//! hands anything to the clipboard/stdout presentation `main` runs on quit.
+//! That path belongs to non-review sessions, whose `q` still emits exactly as
+//! it always has. The session's in-memory annotations are simply dropped as
+//! it unwinds, which is also what keeps them out of the working tree's list
+//! panel and out of the *next* review's persisted state.
 
 use super::app::{App, Mode, ModeOrigin};
 use super::modal_keys::EndReviewAction;
 use crate::git::{DiffTarget, GitRunner};
 
-/// Why a review session is being left — the one thing that differs between
-/// the three exits, all of which land on the origin working tree via
-/// [`App::leave_review_session`].
+/// Why a review session is being left. All three land on the origin working
+/// tree via [`App::leave_review_session`] and clear the same in-memory state;
+/// what they leave on disk was already settled by the caller before it got
+/// here, so this only picks the status line's wording.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LeaveReason {
-    /// `p` in the end-review modal, or `Esc` from the diff view. Everything
-    /// (worktree, persisted state, annotations) stays on disk; the session's
-    /// in-memory annotations are dropped rather than emitted, so a consumer
-    /// reading stdout still sees each one exactly once — on finish.
+    /// `p` in the end-review modal, or `Esc` from the diff view. The
+    /// worktree, the persisted entry, and every annotation in it stay on
+    /// disk, so reopening this review resumes mid-review.
     Pause,
     /// `f` in the end-review modal, after [`App::finish_review`] has already
-    /// removed the worktree and deleted the persisted entry. The session's
-    /// annotations move to [`App::finished_annotations`] to be emitted on
-    /// exit.
+    /// removed the worktree and deleted the persisted entry — annotations
+    /// included, since one entry holds both.
     Finish,
     /// Confirming a different branch or PR in the review launcher while a
     /// review is already open. Identical to [`LeaveReason::Pause`] in effect;
@@ -138,13 +143,12 @@ impl App {
     /// [`crate::review::store::delete_review`] call removes both, and a
     /// later fresh `--review` of the same branch starts clean. Returns `true`
     /// on success, so the caller can hand off to
-    /// [`App::leave_review_session`] and land back on the working tree with
-    /// the session's annotations carried into [`App::finished_annotations`]
-    /// for the one stdout emission finish promises. On failure (e.g. a dirty
-    /// worktree, or no origin backend/review session attached) the git
-    /// message surfaces as a status message, the modal closes back to its
-    /// origin mode, the session stays open, and the persisted state entry is
-    /// left untouched for retry.
+    /// [`App::leave_review_session`] and land back on the working tree.
+    /// Nothing is emitted on the way — see this module's doc. On failure
+    /// (e.g. a dirty worktree, or no origin backend/review session attached)
+    /// the git message surfaces as a status message, the modal closes back to
+    /// its origin mode, the session stays open, and the persisted state entry
+    /// is left untouched for retry.
     pub(super) fn finish_review(&mut self) -> bool {
         let Some(ops) = self.review_origin_ops.as_deref() else {
             self.set_status_message("finish unavailable (no origin git backend)");
@@ -229,11 +233,15 @@ impl App {
     /// This is the single unwind path for all three exits — the end-review
     /// modal's pause and finish, `Esc` from the diff view, and the review
     /// launcher's swap-to-another-review — so what a review leaves behind can
-    /// never drift between them. `reason` governs only two things: the status
-    /// line's wording, and whether the session's annotations are carried into
-    /// [`App::finished_annotations`] (finish) or dropped (pause/switch, where
-    /// they are already durable in `review-state.json` and would otherwise be
-    /// emitted a second time on a later quit).
+    /// never drift between them. `reason` picks the status line's wording and
+    /// nothing else: every exit clears the same in-memory state, and what
+    /// survives on disk was already settled before this was called (pause
+    /// leaves the persisted entry alone, finish deleted it).
+    ///
+    /// Nothing is emitted here. A review's annotations reach their consumer
+    /// through the persisted entry and, for a PR/MR, the forge — never the
+    /// clipboard/stdout presentation, which belongs to a non-review session's
+    /// `q`. See this module's doc.
     ///
     /// The re-root is attempted *before* any session state is cleared, so a
     /// failure — a missing origin root (never the case for a session started
@@ -281,12 +289,7 @@ impl App {
         // remaining scrap of per-session state goes with it, so the working
         // tree isn't left wearing the review's accept marks, annotations, or
         // imported comment threads.
-        match reason {
-            LeaveReason::Finish => self.annotations.drain_into(&mut self.finished_annotations),
-            LeaveReason::Pause | LeaveReason::Switch => {
-                self.annotations = crate::annotate::AnnotationStore::new();
-            }
-        }
+        self.annotations = crate::annotate::AnnotationStore::new();
         self.replies = super::draft_reply::DraftReplyStore::new();
         self.review_states.clear();
         self.review_blob_shas.clear();
