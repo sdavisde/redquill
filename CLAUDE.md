@@ -41,6 +41,7 @@ Keep these boundaries clean; they're the seams for testing and for future work:
 - `git/` — runs git commands, parses porcelain/diff output into typed structs. No TUI types leak in here.
 - `diff/` — diff model: files, hunks, lines, intra-line word diff. Pure data + transforms; heavily unit-tested.
 - `annotate/` — annotation model, persistence, stdout serialization.
+- `clipboard.rs` — the one seam around `arboard`, shared by `ui`'s in-app copy gesture (`U` off a PR) and `main`'s on-quit presentation. Caches its handle for the process lifetime: on X11 the clipboard is served by the owning process, so a handle created and dropped per copy would leave the reviewer with nothing while the TUI is still running.
 - `lsp/` — server lifecycle + the three requests. Must be fully async and never block the render loop; missing/slow servers degrade silently.
 - `ui/` — ratatui widgets, layout, event loop, keymap. Keymap is data (remappable), not hardcoded match arms scattered through widgets.
 - `review/` — per-file review-status model (spec 08 Unit 3, docs/specs/08-spec-branch-review-mode/08-spec-branch-review-mode.md): pure `ReviewStatus` tri-state and transition functions, no TUI types. Persistence (`review-state.json`, blob-SHA reconciliation) lands as a `review::store` submodule in spec 08 task 4.0.

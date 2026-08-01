@@ -836,7 +836,6 @@ fn commit_view_help_overlay_shows_only_truthful_keys() {
                 | Action::ToggleAccept
                 | Action::AcceptFile
                 | Action::ToggleDefer
-                | Action::SubmitForgeReview
                 | Action::OpenInBrowser
                 | Action::OpenThread
                 | Action::NextThread

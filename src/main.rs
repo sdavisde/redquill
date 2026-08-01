@@ -365,7 +365,7 @@ fn present_annotations(
     if count == 0 {
         return Ok(());
     }
-    match copy_to_clipboard(markdown) {
+    match redquill::clipboard::copy(markdown) {
         Ok(()) => {
             let noun = if count == 1 {
                 "annotation"
@@ -381,15 +381,6 @@ fn present_annotations(
             print!("{markdown}");
         }
     }
-    Ok(())
-}
-
-/// Copies `text` to the system clipboard, returning any backend error so the
-/// caller can fall back. Kept as a thin seam around `arboard` so the fallback
-/// policy lives in one place ([`present_annotations`]).
-fn copy_to_clipboard(text: &str) -> anyhow::Result<()> {
-    let mut clipboard = arboard::Clipboard::new()?;
-    clipboard.set_text(text.to_owned())?;
     Ok(())
 }
 

@@ -185,6 +185,11 @@ fn key_line(key: &str, description: &str, key_width: usize, theme: &Theme) -> Li
 ///   hidden rather than listed-but-inert. `OpenPrDescription` (`gi`) rides it
 ///   too: there is no PR to describe outside a review session, and the same
 ///   description is reachable from the launcher's own `d` there.
+/// - `SubmitForgeReview` (`U`) doesn't ride `review_session` either, and is
+///   never hidden: it means "hand off my review" on every target. On a PR it
+///   opens the submit modal; everywhere else — including the working tree,
+///   where most of redquill's use starts — it copies the annotations to the
+///   clipboard. A key that acts in every view is listed in every view.
 /// - `gx` doesn't ride `review_session` at all: it's gated on `web_target`,
 ///   `Some` in any view with a forge counterpart (a PR/MR review, a branch
 ///   review, a commit view — see [`super::app::App::web_target`]) and `None`
@@ -214,7 +219,6 @@ pub(super) fn binding_hidden(
                 Action::ToggleAccept
                     | Action::AcceptFile
                     | Action::ToggleDefer
-                    | Action::SubmitForgeReview
                     | Action::OpenThread
                     | Action::NextThread
                     | Action::PrevThread
