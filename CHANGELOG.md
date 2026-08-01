@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.1](https://github.com/sdavisde/redquill/compare/v0.21.0...v0.21.1) (2026-08-01)
+
+
+### Bug Fixes
+
+* drop a redundant usize cast in the git panel ([#53](https://github.com/sdavisde/redquill/issues/53)) ([c7b4c60](https://github.com/sdavisde/redquill/commit/c7b4c60b71a64be296dec8a7bee87bffeebdf3eb))
+
 ## [0.21.0](https://github.com/sdavisde/redquill/compare/v0.20.1...v0.21.0) (2026-07-30)
 
 
