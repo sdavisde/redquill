@@ -453,15 +453,27 @@ pub(super) fn build_preview<'a>(
 }
 
 impl App {
-    /// The imperative `submit-forge-review` entry: opens the modal in a forge
-    /// PR review session, or leaves a one-line hint everywhere else (a plain
-    /// review session with no forge PR, or no review at all — the action is
-    /// listed in the Review group but inert outside a PR review, matching the
-    /// "no-op with a hint" contract). A no-op with a hint while a prior submit
-    /// is still publishing (single-flight).
+    /// The imperative `submit-forge-review` entry — "hand off my review",
+    /// whatever the target is. One gesture, two destinations, picked by
+    /// whether there is a PR/MR to send to:
+    ///
+    /// - **A forge PR review** opens the modal below, where the reviewer
+    ///   picks a verdict and confirms. Nothing is sent from the keypress
+    ///   itself; the modal is the safety boundary (see the module doc).
+    /// - **Everything else** — the working tree, `--staged`, a commit or
+    ///   range, and a local branch review with no PR behind it — has no forge
+    ///   to submit to, so the annotations go to the clipboard instead
+    ///   ([`App::copy_annotations_to_clipboard`]), in the same markdown format
+    ///   `main` presents on quit. No modal: there is no verdict to choose and
+    ///   nothing irreversible to confirm, so a confirm step would be
+    ///   ceremony. Its whole point is that handing a review to an agent no
+    ///   longer requires quitting redquill first.
+    ///
+    /// A no-op with a hint while a prior submit is still publishing
+    /// (single-flight).
     pub(super) fn open_submit_forge(&mut self) {
         let Some(forge) = self.review_forge.clone() else {
-            self.set_status_message("submit unavailable \u{2014} not a PR review");
+            self.copy_annotations_to_clipboard();
             return;
         };
         if self.forge_submit_in_flight.is_some() {

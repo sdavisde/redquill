@@ -217,11 +217,18 @@ pub enum Action {
     /// `gT` in the diff view: moves the cursor to the previous imported
     /// thread's anchor (wrapping).
     PrevThread,
-    /// `U` in the diff view: opens the submit-review modal in a forge PR
-    /// review session (see [`super::app::Mode::SubmitForge`]). A no-op with a
-    /// status hint everywhere else (a plain review session, or no review) —
-    /// nothing is ever sent from the keypress itself; the modal is the safety
-    /// boundary.
+    /// `U` in the diff view: hands off the review. In a forge PR review
+    /// session that opens the submit-review modal (see
+    /// [`super::app::Mode::SubmitForge`]) — nothing is ever *sent* from the
+    /// keypress itself; the modal is the safety boundary. On every other
+    /// target (working tree, staged, commit/range, a local branch review with
+    /// no PR behind it) there is no forge to submit to, so it copies the
+    /// annotations to the clipboard as markdown instead (see
+    /// `super::annotation_export`). Never a dead key.
+    ///
+    /// The config id stays `submit-forge-review` even though the gesture now
+    /// covers both destinations: it is a user-facing `[keys]` name, and
+    /// renaming it would silently break existing config files.
     SubmitForgeReview,
     /// `gx` in the diff view (vim's "open the thing under the cursor in a
     /// browser" gesture): hands the PR/MR under review to the platform's
@@ -724,12 +731,13 @@ impl Keymap {
                 // the actual dispatch is a hand-written cascade in
                 // `mod.rs`'s `dispatch_key` (close help / cancel a Visual
                 // selection / return from a commit view opened via the
-                // History tab) — the same multi-duty-single-key pattern
-                // Visual-cancel uses.
+                // History tab / pause a review back onto the working tree)
+                // — the same multi-duty-single-key pattern Visual-cancel
+                // uses.
                 d(
                     KeySeq::one(Esc, none),
                     ToggleHelp,
-                    "Close help / cancel selection / return from a commit view",
+                    "Close help / cancel selection / return from a commit view / pause review",
                 ),
                 d(
                     KeySeq::one(Char('v'), none),
@@ -775,14 +783,14 @@ impl Keymap {
                     PrevThread,
                     "Jump to previous comment thread",
                 ),
-                // Submit the whole review (comments, replies, verdict) from
-                // the confirm modal — PR review sessions only, a no-op hint
-                // elsewhere. `U` (uppercase, "pUblish/submit") was free in
-                // this scope.
+                // Hand off the review: the whole thing (comments, replies,
+                // verdict) through the confirm modal on a PR, or the
+                // annotations to the clipboard on every other target. `U`
+                // (uppercase, "pUblish/submit") was free in this scope.
                 d(
                     KeySeq::one(Char('U'), none),
                     SubmitForgeReview,
-                    "Submit review to the forge (PR review)",
+                    "Submit review to the forge (PR) / copy annotations (elsewhere)",
                 )
                 .footer(9, "submit"),
                 // Open the PR/MR under review on its forge. `gx` is vim's own

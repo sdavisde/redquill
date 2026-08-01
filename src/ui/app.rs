@@ -272,7 +272,13 @@ pub struct App {
     /// mirroring lazygit), and the mode/scope `?` was pressed from. Reset by
     /// [`Action::ToggleHelp`] whenever the overlay opens or closes.
     pub(super) help: HelpOverlayState,
-    /// Annotations accumulated this session.
+    /// Annotations accumulated this session. Cleared when a review session is
+    /// left (see [`super::end_review::App::leave_review_session`]): a review's
+    /// annotations belong to that review — persisted in `review-state.json`
+    /// and, for a PR/MR, submitted to the forge — and must not follow the
+    /// reviewer back to the working tree, where they would show up in the
+    /// list panel against a diff they don't describe and be written into the
+    /// *next* review's persisted state.
     pub annotations: AnnotationStore,
     /// The current interaction mode.
     pub mode: Mode,
@@ -763,9 +769,12 @@ pub struct App {
     /// git-less/test contexts that never call finish.
     pub(super) review_origin_ops: Option<Box<dyn StageOps>>,
     /// The origin repository root the PR-checkout fetch/worktree ops run
-    /// from (outside any managed worktree), captured when a PR review session
-    /// starts so a mid-session refresh can re-root a fresh origin runner for
-    /// the fetch. `None` outside a PR review session.
+    /// from (outside any managed worktree), captured when a review session
+    /// starts. A mid-session PR refresh re-roots a fresh origin runner from
+    /// it for the fetch, and leaving a review ([`App::leave_review_session`])
+    /// re-roots the whole app back onto it. Set by every session entry point
+    /// — the CLI's `--review` bootstrap and both launcher tabs — so leaving
+    /// always has somewhere to return to; `None` outside a review session.
     pub(super) review_origin_root: Option<PathBuf>,
     /// The path `<git-common-dir>/redquill/review-state.json` resolves to
     /// for this session, set once at startup by
@@ -1146,6 +1155,16 @@ impl App {
     /// outside one simply never call `finish_review`.
     pub fn set_review_origin_ops(&mut self, ops: Box<dyn StageOps>) {
         self.review_origin_ops = Some(ops);
+    }
+
+    /// Records the origin checkout's root (outside any managed worktree) for
+    /// this review session — the directory [`App::leave_review_session`]
+    /// re-roots back onto when the review is paused, finished, or swapped for
+    /// another. Set alongside [`App::set_review_origin_ops`] by every session
+    /// entry point; without it, leaving a review has no working tree to
+    /// return to and degrades to a status message.
+    pub fn set_review_origin_root(&mut self, root: PathBuf) {
+        self.review_origin_root = Some(root);
     }
 
     /// Sets the path this session persists review progress to

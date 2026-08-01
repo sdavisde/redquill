@@ -56,7 +56,10 @@ fn keys(entries: &[FooterEntry]) -> Vec<String> {
 fn normal_mode_hints_match_the_curated_list_in_order() {
     let km = Keymap::default_map();
     let entries = normal_hints(&km, true, true, false, false, None);
-    assert_eq!(keys(&entries), vec!["Space", "S", "c", "d", "e", "x", "?"]);
+    assert_eq!(
+        keys(&entries),
+        vec!["Space", "S", "c", "d", "e", "x", "U", "?"]
+    );
     assert_eq!(
         labels(&entries),
         vec![
@@ -66,6 +69,10 @@ fn normal_mode_hints_match_the_curated_list_in_order() {
             "restore",
             "edit",
             "delete",
+            // `U` is in the plain strip too, not just a review session's:
+            // outside a PR it copies the annotations to the clipboard, which
+            // is the ordinary way to hand a working-tree review to an agent.
+            "submit",
             "help",
         ]
     );
@@ -93,8 +100,9 @@ fn normal_mode_hints_exclude_staging_when_not_allowed() {
     let entries = normal_hints(&km, false, true, false, false, None);
     assert!(!labels(&entries).contains(&"stage hunk"));
     assert!(!labels(&entries).contains(&"stage file"));
-    // Everything else survives (edit/delete are staging-independent).
-    assert_eq!(entries.len(), 4);
+    // Everything else survives (comment/edit/delete/submit are all
+    // staging-independent).
+    assert_eq!(entries.len(), 5);
     assert_eq!(labels(&entries).last(), Some(&"help"), "help stays last");
 }
 

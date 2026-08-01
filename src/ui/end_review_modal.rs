@@ -26,10 +26,12 @@ use super::modal_keys::EndReviewAction;
 const CONTENT_WIDTH: u16 = 48;
 /// Total modal width: content + 2 columns of padding + 2 columns of border.
 const MODAL_WIDTH: u16 = CONTENT_WIDTH + 2 + 2;
-/// The caption under the three options: annotations print to stdout exactly
-/// once, on finish, whether they were made this session or restored from an
-/// earlier one — pause never emits.
-const CAPTION: &str = "annotations print to stdout once, on finish";
+/// The caption under the three options: the one fact a reviewer at this
+/// modal can't read off the option rows — pause and finish both land back on
+/// the working tree rather than exiting redquill, which is what they used to
+/// do. What each does to the review itself is on its own row. Kept within
+/// [`CONTENT_WIDTH`], which is sized to this line.
+const CAPTION: &str = "both return to the working tree, not to a quit";
 
 /// The three exits' display order, short label, and short description —
 /// the modal's own tuned prose, distinct from [`super::modal_keys::END_REVIEW_KEYS`]'s
@@ -38,7 +40,14 @@ const CAPTION: &str = "annotations print to stdout once, on finish";
 /// control keys, not exits, so they have no row of their own.
 const OPTIONS: [(EndReviewAction, &str, &str); 3] = [
     (EndReviewAction::Pause, "Pause", "keep worktree & state"),
-    (EndReviewAction::Finish, "Finish", "remove worktree"),
+    // Names the comments explicitly: finish deletes the persisted entry, and
+    // a review's annotations live in that entry, so anything not already
+    // submitted to the forge goes with it. Nothing is emitted on the way out.
+    (
+        EndReviewAction::Finish,
+        "Finish",
+        "remove worktree & comments",
+    ),
     (EndReviewAction::Cancel, "Cancel", "keep reviewing"),
 ];
 

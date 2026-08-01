@@ -41,6 +41,7 @@ use crate::review::store::{ForgeMetadata, ForgeProviderKind};
 
 use super::app::{App, Mode, ModeOrigin};
 use super::background::TaskId;
+use super::end_review::SwitchPause;
 use super::list_filter::ListFilter;
 use super::review_session::{
     ensure_review_worktree, load_reconciled_review_state, resolve_review_base,
@@ -573,20 +574,20 @@ impl App {
     /// resolves. The fetch runs off the render loop (see
     /// [`App::spawn_pr_checkout`]).
     ///
-    /// Guarded first by the in-session check (a nested review is
-    /// unsupported), second by the single-in-flight rules a running remote
-    /// op or an already-running checkout impose — mirroring
+    /// Guarded by the single-in-flight rules a running remote op or an
+    /// already-running checkout impose — mirroring
     /// [`App::confirm_launcher_branch_review`]. A no-op on an out-of-range
     /// cursor (empty, still loading, or a degraded state with nothing
-    /// selectable).
+    /// selectable), and on the PR already under review (re-entering it would
+    /// only churn the session it is already showing; `r` refreshes it).
+    ///
+    /// An *unrelated* review already in flight is not an obstacle: it is
+    /// paused first ([`App::leave_review_session`]), which also puts
+    /// `stage_ops`/`repo_root` back on the origin checkout — exactly what the
+    /// checkout below reads them for. Only a pause that fails to land (its
+    /// message already in the footer) stops the switch, since the checkout
+    /// would otherwise run rooted inside the outgoing review's worktree.
     fn confirm_launcher_pr(&mut self, cursor: usize) {
-        if self.in_review_session() {
-            self.set_status_message(format!(
-                "already reviewing {} \u{2014} press q to finish or pause",
-                self.review_branch().unwrap_or("this branch")
-            ));
-            return;
-        }
         if let Some(label) = self.running_op_label() {
             self.set_status_message(format!(
                 "{label} is running \u{2014} wait before starting a review"
@@ -603,6 +604,16 @@ impl App {
         let number = pr.number;
         let title = Some(pr.title.clone());
         let base_ref = pr.base_ref.clone();
+        if self.reviewing_pr(number) {
+            self.set_status_message(format!(
+                "already reviewing #{number} \u{2014} press r to refresh it"
+            ));
+            return;
+        }
+        let paused = self.pause_review_for_switch();
+        if paused == SwitchPause::Blocked {
+            return;
+        }
         // The checkout follows whichever provider the tab's background list
         // already resolved for this host (peeked, never re-resolved), so a
         // GitLab MR fetches its `refs/merge-requests/<iid>/head` and a GitHub
@@ -627,7 +638,10 @@ impl App {
                  check the origin URL or run glab auth login",
             );
         } else {
-            self.set_status_message(format!("checking out #{number} \u{2026}"));
+            self.set_status_message(format!(
+                "{}checking out #{number} \u{2026}",
+                paused.status_prefix()
+            ));
         }
         self.spawn_pr_checkout(number, base_ref, host, title, provider, false);
     }
@@ -984,13 +998,14 @@ impl App {
     /// for why this is the one "ensure a review session" path shared with
     /// the CLI's `--review` flag.
     ///
-    /// Guarded first by the in-session check: starting a second review from
-    /// inside one is unsupported (nested worktrees would tangle the
-    /// banner/finish bookkeeping), so this only ever sets a status message
-    /// naming `q` — no branch lookup, no worktree call, no mode change.
-    /// Guarded second by the same single-in-flight rule
+    /// Guarded by the same single-in-flight rule
     /// [`App::request_remote_op`]/[`App::switcher_confirm`] enforce: a
-    /// running fetch/pull/push blocks starting a review.
+    /// running fetch/pull/push blocks starting a review. A review already in
+    /// flight is not a blocker — it is paused first
+    /// ([`App::pause_review_for_switch`]), which also puts `stage_ops` back on
+    /// the origin checkout, where the worktree and base-ref resolution below
+    /// have to run from. Confirming the branch already under review is a no-op
+    /// beyond a status line, since nothing about the session would change.
     ///
     /// On success the launcher closes into the re-rooted review view (see
     /// [`App::close_review_launcher_after_start`]); `after_panel_coherence`
@@ -999,13 +1014,6 @@ impl App {
     /// message surfaced as a status line — the launcher is one keystroke
     /// away again for a retry.
     fn confirm_launcher_branch_review(&mut self, cursor: usize) {
-        if self.in_review_session() {
-            self.set_status_message(format!(
-                "already reviewing {} \u{2014} press q to finish or pause",
-                self.review_branch().unwrap_or("this branch")
-            ));
-            return;
-        }
         if let Some(label) = self.running_op_label() {
             self.set_status_message(format!(
                 "{label} is running \u{2014} wait before starting a review"
@@ -1015,6 +1023,14 @@ impl App {
         let Some(branch) = self.launcher_branches.get(cursor).map(|b| b.name.clone()) else {
             return;
         };
+        if self.review_branch() == Some(branch.as_str()) {
+            self.set_status_message(format!("already reviewing {branch}"));
+            return;
+        }
+        let paused = self.pause_review_for_switch();
+        if paused == SwitchPause::Blocked {
+            return;
+        }
         let Some(ops) = self.stage_ops.as_deref() else {
             self.set_status_message("review unavailable (no git backend)");
             return;
@@ -1055,9 +1071,12 @@ impl App {
         // The backend `finish_review` later runs `worktree_remove`/`prune`
         // through: discovered fresh at the *current* (pre-reroot) repo root,
         // since it must be rooted outside the worktree being removed, which
-        // the worktree about to become `self.repo_root` is not.
-        let origin_runner = self
-            .repo_root
+        // the worktree about to become `self.repo_root` is not. The same root
+        // is recorded on the session (`review_origin_root`) so leaving the
+        // review has a working tree to re-root back onto — see
+        // [`App::leave_review_session`].
+        let origin_root = self.repo_root.clone();
+        let origin_runner = origin_root
             .as_deref()
             .and_then(|root| GitRunner::discover_in(root).ok());
 
@@ -1067,6 +1086,7 @@ impl App {
         };
         match self.reroot(session_runner, target) {
             Ok(()) => {
+                self.review_origin_root = origin_root;
                 if let Some(origin) = origin_runner {
                     self.set_review_origin_ops(Box::new(origin));
                 }
@@ -1080,7 +1100,7 @@ impl App {
                 }
                 self.close_review_launcher_after_start();
                 self.after_panel_coherence();
-                self.set_status_message(format!("reviewing {branch}"));
+                self.set_status_message(format!("{}reviewing {branch}", paused.status_prefix()));
             }
             Err(e) => {
                 self.set_status_message(format!("review failed: {e}"));
@@ -1790,15 +1810,20 @@ index 111..222 100644
         );
     }
 
-    // -- Branches tab: in-session guard (FR-10) ------------------------------
+    // -- Branches tab: same-branch guard --------------------------------------
 
+    /// Confirming the branch *already* under review changes nothing: there is
+    /// no other session to swap to, so tearing this one down and rebuilding it
+    /// would only lose the reviewer's place. A different branch is a swap
+    /// instead (covered against real git in
+    /// `review_launcher_integration_tests.rs`).
     #[test]
-    fn confirm_during_an_active_review_session_emits_the_hint_and_mutates_nothing() {
+    fn confirm_on_the_branch_already_under_review_mutates_nothing() {
         let mut app = app_with_branches(vec![branch("alpha")]);
         app.open_review_launcher();
         app.target = crate::git::DiffTarget::Review {
             base: "main".to_string(),
-            branch: "feature".to_string(),
+            branch: "alpha".to_string(),
         };
 
         app.review_launcher_confirm();
@@ -1815,10 +1840,14 @@ index 111..222 100644
             app.mode
         );
         assert!(
+            app.in_review_session(),
+            "the session under review must survive untouched"
+        );
+        assert!(
             app.status_message
                 .as_deref()
-                .is_some_and(|m| m.contains("feature") && m.contains('q')),
-            "the hint must name the branch under review and point at q, got {:?}",
+                .is_some_and(|m| m.contains("alpha")),
+            "the hint must name the branch already under review, got {:?}",
             app.status_message
         );
         // `BranchListOps::worktree_add`/`git_common_dir`/`default_base` all
@@ -1830,15 +1859,17 @@ index 111..222 100644
     /// FR-12): a locked filter narrows two real branches down to one
     /// (`"zulu-target"`, real index 1 — deliberately not the first row, so
     /// this can't pass by coincidence the way an unfiltered index-0 case
-    /// could), yet the in-session guard still fires before any branch
-    /// lookup or worktree call, exactly as the unfiltered case above.
+    /// could), and the guard reads *that* translated row, not row 0. Without
+    /// the translation the highlighted branch would resolve to `"alpha"`, the
+    /// confirm would be treated as a swap, and `BranchListOps`' panicking
+    /// worktree calls would fire.
     #[test]
-    fn confirm_during_an_active_review_session_emits_the_hint_and_mutates_nothing_under_a_filter() {
+    fn confirm_on_the_branch_already_under_review_mutates_nothing_under_a_filter() {
         let mut app = app_with_branches(vec![branch("alpha"), branch("zulu-target")]);
         app.open_review_launcher();
         app.target = crate::git::DiffTarget::Review {
             base: "main".to_string(),
-            branch: "feature".to_string(),
+            branch: "zulu-target".to_string(),
         };
 
         app.review_launcher_enter_filter();
@@ -1866,10 +1897,14 @@ index 111..222 100644
             app.mode
         );
         assert!(
+            app.in_review_session(),
+            "the session under review must survive untouched"
+        );
+        assert!(
             app.status_message
                 .as_deref()
-                .is_some_and(|m| m.contains("feature") && m.contains('q')),
-            "the hint must name the branch under review and point at q, got {:?}",
+                .is_some_and(|m| m.contains("zulu-target")),
+            "the hint must name the branch already under review, got {:?}",
             app.status_message
         );
         // `BranchListOps::worktree_add`/`git_common_dir`/`default_base` all
@@ -3024,7 +3059,7 @@ index 111..222 100644
     /// The in-session guard: `Enter` on a PR row while already reviewing must
     /// emit the same hint the Branches tab does and start no checkout.
     #[test]
-    fn confirm_on_prs_tab_during_a_review_session_emits_the_hint_and_starts_nothing() {
+    fn confirm_on_the_pr_already_under_review_starts_no_checkout() {
         let mut app = app_with_pr_outcome(PrFetchOutcome::Loaded {
             repo_label: "org/repo".to_string(),
             prs: vec![pr(7, "add widgets")],
@@ -3037,16 +3072,28 @@ index 111..222 100644
         app.ensure_launcher_prs_fresh();
         app.target = DiffTarget::Review {
             base: "main".to_string(),
-            branch: "feature".to_string(),
+            branch: "redquill/pr/7".to_string(),
         };
+        app.review_forge = Some(ForgeMetadata {
+            provider: ForgeProviderKind::GitHub,
+            host: "github.com".to_string(),
+            number: 7,
+            title: "add widgets".to_string(),
+            last_head_sha: "abc123".to_string(),
+            diff_refs: None,
+        });
 
         app.review_launcher_confirm();
 
         assert!(app.pr_checkout_in_flight.is_none(), "no checkout may start");
         assert!(
+            app.in_review_session(),
+            "the session under review must survive untouched"
+        );
+        assert!(
             app.status_message
                 .as_deref()
-                .is_some_and(|m| m.contains("feature") && m.contains('q')),
+                .is_some_and(|m| m.contains("#7")),
             "got {:?}",
             app.status_message
         );

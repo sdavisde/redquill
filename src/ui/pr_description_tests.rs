@@ -284,16 +284,24 @@ fn enter_is_a_no_op_when_the_overlay_was_opened_from_a_session() {
 }
 
 /// `Enter` from a launcher-opened overlay routes back through the launcher's
-/// own confirm — including its guards. With a review already in progress that
-/// guard refuses and says so, which is the observable proof the confirm ran
-/// (rather than the keypress being swallowed by the overlay).
+/// own confirm — including its guards. With PR 42 already the one under
+/// review, that guard refuses and says so, which is the observable proof the
+/// confirm ran (rather than the keypress being swallowed by the overlay).
 #[test]
 fn enter_from_the_launcher_runs_the_tabs_own_confirm_guards() {
     let mut app = launcher_app(&[42], FakeDetail::Ok);
     app.target = DiffTarget::Review {
         base: "origin/main".to_string(),
-        branch: "feature".to_string(),
+        branch: "redquill/pr/42".to_string(),
     };
+    app.review_forge = Some(ForgeMetadata {
+        provider: ForgeProviderKind::GitHub,
+        host: "github.com".to_string(),
+        number: 42,
+        title: "title 42".to_string(),
+        last_head_sha: "abc".to_string(),
+        diff_refs: None,
+    });
     app.open_pr_description_from_launcher();
     app.pr_description_confirm();
 
@@ -306,7 +314,7 @@ fn enter_from_the_launcher_runs_the_tabs_own_confirm_guards() {
         app.status_message
             .as_deref()
             .is_some_and(|m| m.contains("already reviewing")),
-        "the launcher's in-session guard must have run: {:?}",
+        "the launcher's same-PR guard must have run: {:?}",
         app.status_message
     );
 }

@@ -320,8 +320,7 @@ fn resume_staleness_re_accept_and_finish_round_trip_against_real_git() {
 
     // -- Finish: worktree removed, admin records pruned, state entry gone. --
     app.open_end_review_modal();
-    let outcome = app.finish_review();
-    assert_eq!(outcome, Some(super::QuitOutcome::Emit));
+    assert!(app.finish_review());
 
     assert!(!worktree_path.exists(), "finish must remove the worktree");
     let worktree_list = git_out(repo.path(), &["worktree", "list", "--porcelain"]);
@@ -395,14 +394,12 @@ fn annotate_pause_resume_restores_and_finish_emits_the_complete_set_once() {
         wait_for_review_save(&mut app);
 
         assert_eq!(app.annotations.len(), 1);
-        // Pause: `app` is simply dropped here — exactly like the end-review
-        // modal's `p`, which quits via `Flow::Quit(QuitOutcome::Discard)`
-        // (see `modal_keys.rs`'s drift test for that wiring) and therefore
-        // never reaches `main.rs`'s `render_markdown` call at all. Nothing
-        // in this in-crate test observes stdout directly (that gate is
-        // `main.rs`'s job, already pinned by `modal_keys.rs`'s
-        // `every_end_review_table_entry_drives_its_documented_action`); this
-        // test's job is the persistence/restore half of the contract.
+        // Pause: `app` is simply dropped here. The live pause gesture returns
+        // to the working tree instead of quitting, but it emits nothing
+        // either way, and what this test is about is the persistence/restore
+        // half of the contract — that the annotation is on disk before the
+        // session goes away. Where the reviewer lands afterwards is pinned by
+        // `end_review.rs`'s own tests.
     }
     let after_pause = store::load(&state_path);
     let saved_review = after_pause
@@ -439,6 +436,7 @@ fn annotate_pause_resume_restores_and_finish_emits_the_complete_set_once() {
     app.set_review_states(states, blob_shas);
     app.set_review_state_path(state_path.clone());
     app.set_review_origin_ops(Box::new(GitRunner::discover_in(repo.path()).unwrap()));
+    app.set_review_origin_root(repo.path().to_path_buf());
 
     // Restore happens before anything else, exactly mirroring `main.rs`'s
     // bootstrap ordering (`set_review_states` then `restore_review_annotations`,
@@ -479,24 +477,35 @@ fn annotate_pause_resume_restores_and_finish_emits_the_complete_set_once() {
     wait_for_review_save(&mut app);
     assert_eq!(app.annotations.len(), 2);
 
-    // -- Finish: emits the complete restored-plus-new set exactly once. -----
+    // Restored-plus-new, each exactly once: the resume replayed the persisted
+    // copy into a store that then took a live addition, and neither half
+    // doubled the other. This is the defect the two-session shape exists to
+    // catch — a re-entry bug that appends a second copy of every restored
+    // annotation is invisible in a single-session test.
+    let saved_before_finish = store::load(&state_path);
+    let bodies: Vec<&str> = saved_before_finish.reviews["feature"]
+        .annotations
+        .iter()
+        .map(|a| a.body.as_str())
+        .collect();
+    assert_eq!(bodies, vec!["first note", "second note"]);
+
+    // -- Finish: the whole entry goes, annotations included. ----------------
+    // Finish neither quits nor emits: it removes the worktree, deletes the
+    // persisted entry, and returns to the origin working tree. A review's
+    // annotations belong to that entry (and, for a PR, to the forge), so
+    // finishing is the point at which they stop existing.
     app.open_end_review_modal();
-    let outcome = app.finish_review();
-    assert_eq!(outcome, Some(super::QuitOutcome::Emit));
+    assert!(app.finish_review());
+    assert!(app.leave_review_session(super::end_review::LeaveReason::Finish));
 
-    let markdown = crate::annotate::render_markdown(&app.annotations);
-    assert_eq!(
-        markdown.matches("first note").count(),
-        1,
-        "the restored annotation must appear exactly once in the emitted set"
-    );
-    assert_eq!(
-        markdown.matches("second note").count(),
-        1,
-        "the new annotation must appear exactly once in the emitted set"
+    assert_eq!(app.target, DiffTarget::WorkingTree);
+    assert!(
+        app.annotations.is_empty(),
+        "the finished review's annotations must not follow the reviewer back \
+         to the working tree, where a later plain `q` would present them"
     );
 
-    // -- One lifecycle: finish deletes the whole entry, annotations included. --
     let final_state = store::load(&state_path);
     assert!(
         !final_state.reviews.contains_key("feature"),

@@ -4,6 +4,7 @@
 //! integration tests exercise them directly.
 
 pub mod annotate;
+pub mod clipboard;
 pub mod config;
 pub mod diff;
 pub mod forge;

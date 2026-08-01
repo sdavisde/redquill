@@ -846,18 +846,17 @@ pub(super) fn handle_review_launcher_key(app: &mut App, key: KeyEvent) {
 
 /// Handles one key event while [`super::Mode::EndReview`] is active (`q` in
 /// a review session opens this modal instead of quitting — see
-/// [`super::quit_action`]): `p` pauses (quits, emitting annotations through
-/// the ordinary on-quit path — the worktree and review state are
-/// untouched), `f` finishes (removes the worktree via
-/// [`super::App::finish_review`], quitting on success or surfacing the
-/// failure and staying open), `c`/`Esc` cancel back to the mode `q` was
-/// pressed from. `j`/`k`/arrows move a highlighted selection across the
-/// three options and `Enter` confirms whichever one is highlighted (acting
-/// exactly like its mnemonic; see [`EndReviewAction::from_cursor`]). Unlike
-/// most modal handlers this one returns [`super::Flow`] (like
-/// [`handle_panel_key`]): pause/a successful finish end the session, so the
-/// event loop must see the quit rather than this function looping it
-/// internally.
+/// [`super::quit_action`]): `p` pauses (worktree, review state, and
+/// annotations all kept on disk), `f` finishes (removes the worktree via
+/// [`super::App::finish_review`], or surfaces the failure and stays open),
+/// `c`/`Esc` cancel back to the mode `q` was pressed from. Neither exit ends
+/// the process any more — both return to the working tree via
+/// [`super::App::leave_review_session`]. `j`/`k`/arrows move a highlighted
+/// selection across the three options and `Enter` confirms whichever one is
+/// highlighted (acting exactly like its mnemonic; see
+/// [`EndReviewAction::from_cursor`]). Returns [`super::Flow`] like
+/// [`handle_panel_key`] for signature symmetry with the other `Flow`-shaped
+/// handlers; every arm now continues.
 pub(super) fn handle_end_review_key(app: &mut App, key: KeyEvent) -> super::Flow {
     use super::Flow;
     let Some(action) = modal_keys::resolve(&app.modal_keys.end_review, key) else {
@@ -891,17 +890,25 @@ pub(super) fn handle_end_review_key(app: &mut App, key: KeyEvent) -> super::Flow
 /// never produces them, and [`handle_end_review_key`]'s own match never
 /// passes them here — this is a defensive fallback, not a reachable path).
 fn end_review_choice(app: &mut App, choice: EndReviewAction) -> super::Flow {
-    use super::{Flow, QuitOutcome};
+    use super::Flow;
+    use super::end_review::LeaveReason;
     match choice {
-        // Pause discards rather than emits, so a consumer sees each
-        // annotation exactly once — on finish. The worktree, review state,
-        // and every annotation made this session are still kept; only the
-        // stdout side effect changes (see `QuitOutcome`'s doc).
-        EndReviewAction::Pause => Flow::Quit(QuitOutcome::Discard),
-        EndReviewAction::Finish => match app.finish_review() {
-            Some(outcome) => Flow::Quit(outcome),
-            None => Flow::Continue,
-        },
+        // Both exits close the modal back to the mode `q` was pressed from
+        // *first*, then unwind the session onto the working tree — so the
+        // restored mode is the one the re-rooted view lands in, and a failed
+        // unwind leaves the user exactly where cancelling would have.
+        EndReviewAction::Pause => {
+            app.cancel_end_review();
+            app.leave_review_session(LeaveReason::Pause);
+            Flow::Continue
+        }
+        EndReviewAction::Finish => {
+            if app.finish_review() {
+                app.cancel_end_review();
+                app.leave_review_session(LeaveReason::Finish);
+            }
+            Flow::Continue
+        }
         EndReviewAction::Cancel => {
             app.cancel_end_review();
             Flow::Continue

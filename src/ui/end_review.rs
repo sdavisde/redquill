@@ -4,15 +4,79 @@
 //! and deleting the persisted state). Split out of `app.rs` alongside this
 //! state, mirroring [`super::switcher`]'s own state-plus-handlers split.
 //!
-//! Pausing has no dedicated method here: it's exactly the pre-existing quit
-//! path (`Flow::Quit(QuitOutcome::Discard)`, handled by
-//! [`super::modes::handle_end_review_key`]'s `end_review_choice`). Pause
-//! keeps the worktree, review state, and annotations on disk and emits
-//! nothing; quit-and-emit prints annotations exactly once.
+//! Ending a review does not end the process. Pause, finish, and the
+//! swap-to-another-review path all converge on [`App::leave_review_session`],
+//! which re-roots the app back onto the origin checkout's working tree — the
+//! view redquill opens in by default. Only `Q`/Ctrl-C, and `q` from outside a
+//! review, still quit.
+//!
+//! The three reasons differ only in what they leave *on disk* (see
+//! [`LeaveReason`]) and in the status line's wording: pause and a swap keep
+//! the worktree and the persisted entry, so the review resumes exactly where
+//! it stopped; finish removes both first ([`App::finish_review`]).
+//!
+//! **Leaving a review never emits.** A review's annotations have their own
+//! destinations — `review-state.json` while it is open, and for a PR/MR the
+//! forge submit flow (`super::forge_submit`) — so none of the three exits
+//! hands anything to the clipboard/stdout presentation `main` runs on quit.
+//! That path belongs to non-review sessions, whose `q` still emits exactly as
+//! it always has. The session's in-memory annotations are simply dropped as
+//! it unwinds, which is also what keeps them out of the working tree's list
+//! panel and out of the *next* review's persisted state.
 
-use super::QuitOutcome;
 use super::app::{App, Mode, ModeOrigin};
 use super::modal_keys::EndReviewAction;
+use crate::git::{DiffTarget, GitRunner};
+
+/// Why a review session is being left. All three land on the origin working
+/// tree via [`App::leave_review_session`] and clear the same in-memory state;
+/// what they leave on disk was already settled by the caller before it got
+/// here, so this only picks the status line's wording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LeaveReason {
+    /// `p` in the end-review modal, or `Esc` from the diff view. The
+    /// worktree, the persisted entry, and every annotation in it stay on
+    /// disk, so reopening this review resumes mid-review.
+    Pause,
+    /// `f` in the end-review modal, after [`App::finish_review`] has already
+    /// removed the worktree and deleted the persisted entry — annotations
+    /// included, since one entry holds both.
+    Finish,
+    /// Confirming a different branch or PR in the review launcher while a
+    /// review is already open. Identical to [`LeaveReason::Pause`] in effect;
+    /// distinct only so the status line can say the old review was paused
+    /// rather than claim the user asked to pause it.
+    Switch,
+}
+
+/// What [`App::pause_review_for_switch`] found and did — the three cases a
+/// launcher confirm has to tell apart before it starts a new review.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum SwitchPause {
+    /// No review was open; start the new one directly.
+    Nothing,
+    /// The named review was paused and the app is back on the origin
+    /// checkout, so `stage_ops`/`repo_root` are the origin's again. The
+    /// payload is the paused review's banner label, for the caller's
+    /// "paused X — starting Y" status line.
+    Paused(String),
+    /// A review was open and could not be left — the footer already says why.
+    /// The new review must not start: it would run rooted inside the outgoing
+    /// review's worktree.
+    Blocked,
+}
+
+impl SwitchPause {
+    /// The `"paused <label> \u{2014} "` prefix a launcher confirm puts in
+    /// front of what it is starting, so one footer line reports both halves
+    /// of the swap. Empty when nothing was paused.
+    pub(super) fn status_prefix(&self) -> String {
+        match self {
+            SwitchPause::Paused(label) => format!("paused {label} \u{2014} "),
+            SwitchPause::Nothing | SwitchPause::Blocked => String::new(),
+        }
+    }
+}
 
 impl App {
     /// Opens the end-review modal, capturing the mode `q` was pressed from
@@ -77,22 +141,24 @@ impl App {
     /// branch's persisted review entry — statuses and annotations live in
     /// one [`crate::review::store::PersistedReview`], so one
     /// [`crate::review::store::delete_review`] call removes both, and a
-    /// later fresh `--review` of the same branch starts clean. Returns
-    /// `Some(QuitOutcome::Emit)`, so the caller quits emitting
-    /// `app.annotations` exactly once. On failure (e.g. a dirty worktree, or
-    /// no origin backend/review session attached) the git message surfaces
-    /// as a status message, the modal closes back to its origin mode, and
-    /// the persisted state entry is left untouched for retry.
-    pub(super) fn finish_review(&mut self) -> Option<QuitOutcome> {
+    /// later fresh `--review` of the same branch starts clean. Returns `true`
+    /// on success, so the caller can hand off to
+    /// [`App::leave_review_session`] and land back on the working tree.
+    /// Nothing is emitted on the way — see this module's doc. On failure
+    /// (e.g. a dirty worktree, or no origin backend/review session attached)
+    /// the git message surfaces as a status message, the modal closes back to
+    /// its origin mode, the session stays open, and the persisted state entry
+    /// is left untouched for retry.
+    pub(super) fn finish_review(&mut self) -> bool {
         let Some(ops) = self.review_origin_ops.as_deref() else {
             self.set_status_message("finish unavailable (no origin git backend)");
             self.cancel_end_review();
-            return None;
+            return false;
         };
         let Some(path) = self.repo_root.clone() else {
             self.set_status_message("finish unavailable (no review worktree path)");
             self.cancel_end_review();
-            return None;
+            return false;
         };
         match ops.worktree_remove(&path) {
             Ok(()) => {
@@ -113,14 +179,148 @@ impl App {
                 {
                     let _ = crate::review::store::delete_review(&state_path, branch);
                 }
-                Some(QuitOutcome::Emit)
+                true
             }
             Err(e) => {
                 self.set_status_message(format!("finish failed: {e}"));
                 self.cancel_end_review();
-                None
+                false
             }
         }
+    }
+
+    /// Pauses whatever review session is open so a different one can start in
+    /// its place — the review launcher's "switch reviews" step, and the only
+    /// caller of [`LeaveReason::Switch`]. Outside a review session this does
+    /// nothing and reports [`SwitchPause::Nothing`], so a launcher confirm can
+    /// call it unconditionally.
+    ///
+    /// A swap is a pause, not a finish: the outgoing review's worktree,
+    /// persisted progress, and annotations all stay exactly where they are, so
+    /// reopening it later resumes mid-review. What the swap really buys the
+    /// caller is the re-root — after this returns [`SwitchPause::Paused`],
+    /// `stage_ops` and `repo_root` point at the origin checkout again, which
+    /// is what the incoming review's worktree/fetch machinery expects to read
+    /// them as.
+    pub(super) fn pause_review_for_switch(&mut self) -> SwitchPause {
+        if !self.in_review_session() {
+            return SwitchPause::Nothing;
+        }
+        let label = self.review_banner_label();
+        if self.leave_review_session(LeaveReason::Switch) {
+            SwitchPause::Paused(label)
+        } else {
+            SwitchPause::Blocked
+        }
+    }
+
+    /// Whether the review session in flight is a forge review of PR/MR
+    /// `number` — the check a launcher confirm makes before treating `Enter`
+    /// as a swap, since "switching" to the PR already on screen would only
+    /// tear down and rebuild the session it is already showing.
+    pub(super) fn reviewing_pr(&self, number: u64) -> bool {
+        self.in_review_session()
+            && self
+                .review_forge
+                .as_ref()
+                .is_some_and(|forge| forge.number == number)
+    }
+
+    /// Leaves the active review session and re-roots the app back onto the
+    /// origin checkout's working tree ([`DiffTarget::WorkingTree`], the
+    /// default view), returning `true` once it has landed there.
+    ///
+    /// This is the single unwind path for all three exits — the end-review
+    /// modal's pause and finish, `Esc` from the diff view, and the review
+    /// launcher's swap-to-another-review — so what a review leaves behind can
+    /// never drift between them. `reason` picks the status line's wording and
+    /// nothing else: every exit clears the same in-memory state, and what
+    /// survives on disk was already settled before this was called (pause
+    /// leaves the persisted entry alone, finish deleted it).
+    ///
+    /// Nothing is emitted here. A review's annotations reach their consumer
+    /// through the persisted entry and, for a PR/MR, the forge — never the
+    /// clipboard/stdout presentation, which belongs to a non-review session's
+    /// `q`. See this module's doc.
+    ///
+    /// The re-root is attempted *before* any session state is cleared, so a
+    /// failure — a missing origin root (never the case for a session started
+    /// through any of the real entry points, all of which record it), or a
+    /// repository that has since gone away — leaves the review fully intact
+    /// with git's own message in the footer, exactly like
+    /// [`App::confirm_worktree_switch`]'s failure path.
+    ///
+    /// Mode is deliberately untouched: the launcher stays open across a swap,
+    /// the diff view stays put on `Esc`, and the end-review modal's callers
+    /// restore their own origin mode first. Panel coherence is re-established
+    /// afterwards for the one mode that needs it.
+    pub(super) fn leave_review_session(&mut self, reason: LeaveReason) -> bool {
+        if !self.in_review_session() {
+            return false;
+        }
+        let Some(origin_root) = self.review_origin_root.clone() else {
+            self.set_status_message(
+                "can't return to the working tree (no origin repo recorded for this review)",
+            );
+            return false;
+        };
+        // Flush any status/annotation change that hasn't reached disk yet.
+        // A no-op for pause after a quiet moment (save-on-change has already
+        // written it) and for finish (whose entry is deleted below anyway,
+        // making a redundant save harmless).
+        if matches!(reason, LeaveReason::Pause | LeaveReason::Switch) {
+            self.persist_review_state();
+        }
+        let left = self.review_banner_label();
+        let runner = match GitRunner::discover_in(&origin_root) {
+            Ok(runner) => runner,
+            Err(e) => {
+                self.set_status_message(format!("can't return to the working tree: {e}"));
+                return false;
+            }
+        };
+        if let Err(e) = self.reroot(runner, DiffTarget::WorkingTree) {
+            self.set_status_message(format!("can't return to the working tree: {e}"));
+            return false;
+        }
+
+        // Past the point of no return: `reroot` has swapped the backend, the
+        // root, and the target, and cleared the forge/stale markers. Every
+        // remaining scrap of per-session state goes with it, so the working
+        // tree isn't left wearing the review's accept marks, annotations, or
+        // imported comment threads.
+        self.annotations = crate::annotate::AnnotationStore::new();
+        self.replies = super::draft_reply::DraftReplyStore::new();
+        self.review_states.clear();
+        self.review_blob_shas.clear();
+        self.review_origin_ops = None;
+        self.review_origin_root = None;
+        self.review_state_path = None;
+        self.thread_overlay.replace(Vec::new());
+        self.threads_unavailable = false;
+        // A thread fetch spawned for the PR just left must not repopulate the
+        // overlay once it lands (mirrors `spawn_thread_fetch`'s own bump).
+        self.thread_fetch_generation = self.thread_fetch_generation.wrapping_add(1);
+        self.list_cursor = 0;
+        self.list_filter = None;
+        self.rebuild_rows();
+        self.after_panel_coherence();
+
+        match reason {
+            LeaveReason::Pause => {
+                self.set_status_message(format!("paused {left} \u{2014} back on the working tree"));
+            }
+            LeaveReason::Finish => {
+                self.set_status_message(format!(
+                    "finished {left} \u{2014} back on the working tree"
+                ));
+            }
+            // Deliberately silent: the launcher immediately overwrites the
+            // footer with what it is starting, and folds the paused review's
+            // name into that one line rather than flashing two.
+            LeaveReason::Switch => {}
+        }
+        true
     }
 }
 
@@ -285,7 +485,10 @@ index 111..222 100644
 
         let outcome = app.finish_review();
 
-        assert_eq!(outcome, Some(QuitOutcome::Emit));
+        assert!(
+            outcome,
+            "a successful worktree removal reports finish succeeded"
+        );
         let state = crate::review::store::load(&state_path);
         assert!(
             !state.reviews.contains_key("feature"),
@@ -326,7 +529,7 @@ index 111..222 100644
 
         let outcome = app.finish_review();
 
-        assert_eq!(outcome, None);
+        assert!(!outcome);
         let state = crate::review::store::load(&state_path);
         assert!(
             state.reviews.contains_key("feature"),
@@ -345,7 +548,7 @@ index 111..222 100644
         app.open_end_review_modal();
 
         let outcome = app.finish_review();
-        assert_eq!(outcome, None, "a failed finish must not quit");
+        assert!(!outcome, "a failed finish must not report success");
         assert_eq!(
             app.mode,
             Mode::Normal,
@@ -365,7 +568,7 @@ index 111..222 100644
         let mut app = review_app();
         app.open_end_review_modal();
         let outcome = app.finish_review();
-        assert_eq!(outcome, None);
+        assert!(!outcome);
         assert_eq!(app.mode, Mode::Normal);
         assert!(app.status_message.is_some());
     }

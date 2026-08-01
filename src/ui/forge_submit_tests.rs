@@ -268,8 +268,14 @@ fn reply_preview_falls_back_to_the_thread_id_when_the_thread_is_missing() {
 
 // -- open / not-a-forge-session no-op ----------------------------------------
 
+/// Off a PR, `U` routes to the clipboard copy instead of the modal — there
+/// is no verdict to pick and no forge to send to. Driven with an empty
+/// annotation set on purpose: that path reports and returns *before* touching
+/// the clipboard, so this proves the routing without `cargo test` writing to
+/// the developer's real clipboard. What the copy actually hands over is
+/// covered in `annotation_export`, against an injected fake.
 #[test]
-fn open_submit_forge_is_a_no_op_hint_outside_a_forge_session() {
+fn open_submit_forge_copies_to_the_clipboard_outside_a_forge_session() {
     let mut app = App::new(vec![file("src/a.rs")]);
     // A plain diff, no review_forge.
     app.open_submit_forge();
@@ -278,7 +284,9 @@ fn open_submit_forge_is_a_no_op_hint_outside_a_forge_session() {
     assert!(
         app.status_message
             .as_deref()
-            .is_some_and(|m| m.contains("not a PR review"))
+            .is_some_and(|m| m.contains("copy")),
+        "the copy path must report itself, got {:?}",
+        app.status_message
     );
 }
 

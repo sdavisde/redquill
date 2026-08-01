@@ -270,6 +270,12 @@ fn run_tui(config: &RunConfig) -> anyhow::Result<()> {
 
     let mut app = App::with_git(snapshot, target.clone(), Box::new(runner.clone()));
     if let DiffTarget::Review { branch, .. } = &target {
+        // Recorded before `discovered` moves into `set_review_origin_ops`:
+        // pausing or finishing the review re-roots the app back onto this
+        // root's working tree rather than exiting (see
+        // `ui::end_review::App::leave_review_session`), so a `--review`
+        // launch needs it just as much as a launcher-started session does.
+        app.set_review_origin_root(discovered.root().to_path_buf());
         // Load + reconcile this branch's persisted progress before the
         // first render, so `Accepted`/`Deferred` files start collapsed and a
         // stale `Accepted` file starts marked `ChangedSinceAccepted` and
@@ -322,6 +328,11 @@ fn run_tui(config: &RunConfig) -> anyhow::Result<()> {
     ));
     let outcome = ui::run(&mut app)?;
 
+    // Only a non-review session's `q` ever reaches here with `Emit` (see
+    // `QuitOutcome`): a review's own annotations belong to its persisted
+    // entry and, for a PR/MR, to the forge submit flow, and are cleared from
+    // `app.annotations` as the review is left — so nothing a review produced
+    // can arrive here to be presented.
     if let QuitOutcome::Emit = outcome {
         let markdown = render_markdown(&app.annotations);
         present_annotations(&markdown, app.annotations.len(), config.output.as_deref())?;
@@ -354,7 +365,7 @@ fn present_annotations(
     if count == 0 {
         return Ok(());
     }
-    match copy_to_clipboard(markdown) {
+    match redquill::clipboard::copy(markdown) {
         Ok(()) => {
             let noun = if count == 1 {
                 "annotation"
@@ -370,15 +381,6 @@ fn present_annotations(
             print!("{markdown}");
         }
     }
-    Ok(())
-}
-
-/// Copies `text` to the system clipboard, returning any backend error so the
-/// caller can fall back. Kept as a thin seam around `arboard` so the fallback
-/// policy lives in one place ([`present_annotations`]).
-fn copy_to_clipboard(text: &str) -> anyhow::Result<()> {
-    let mut clipboard = arboard::Clipboard::new()?;
-    clipboard.set_text(text.to_owned())?;
     Ok(())
 }
 
