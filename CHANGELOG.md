@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.2](https://github.com/sdavisde/redquill/compare/v0.21.1...v0.21.2) (2026-09-21)
+
+
+### Bug Fixes
+
+* **git:** list files inside untracked directories ([034d3a1](https://github.com/sdavisde/redquill/commit/034d3a18ea0f2856e0d55a05e5d974201a4f80be))
+
 ## [0.21.1](https://github.com/sdavisde/redquill/compare/v0.21.0...v0.21.1) (2026-08-01)
 
 
