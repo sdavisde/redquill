@@ -1363,6 +1363,7 @@ pub fn build_review(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diff::LineOrigin;
     use crate::git::ChangeKind;
 
     /// A porcelain status entry with the given record kind, index-side (`X`)
@@ -1495,13 +1496,15 @@ mod tests {
 
     /// A minimal [`StageOps`] fake for [`build_review`]: `diff` is
     /// target-aware (separate working-tree and staged patch lists, as a
-    /// real backend's would be), `status` is fixed, and every other
-    /// operation is an unused no-op.
+    /// real backend's would be), `status` is fixed, `read_worktree_file`
+    /// looks up `worktree_files` (empty by default, so existing tests are
+    /// unaffected), and every other operation is an unused no-op.
     #[derive(Default)]
     struct Fake {
         working_tree_diff: Vec<RawFilePatch>,
         staged_diff: Vec<RawFilePatch>,
         status: Vec<FileStatus>,
+        worktree_files: HashMap<String, Vec<u8>>,
     }
 
     impl StageOps for Fake {
@@ -1532,8 +1535,8 @@ mod tests {
             Ok(())
         }
 
-        fn read_worktree_file(&self, _path: &str) -> Option<Vec<u8>> {
-            None
+        fn read_worktree_file(&self, path: &str) -> Option<Vec<u8>> {
+            self.worktree_files.get(path).cloned()
         }
 
         fn show_file(&self, _spec: &str) -> Option<String> {
@@ -1569,6 +1572,7 @@ mod tests {
                 StatusCode::Unmodified,
                 "x.rs",
             )],
+            ..Default::default()
         };
 
         let review = build_review(&fake, &DiffTarget::WorkingTree).unwrap();
@@ -1603,6 +1607,7 @@ mod tests {
                 StatusCode::Unmodified,
                 "deleted.rs",
             )],
+            ..Default::default()
         };
 
         let review = build_review(&fake, &DiffTarget::WorkingTree).unwrap();
@@ -1613,6 +1618,45 @@ mod tests {
             .position(|f| f.path == "deleted.rs")
             .expect("deleted.rs must still appear as a section");
         assert!(review.files[idx].hunks.is_empty());
+        assert!(review.patches[idx].is_none());
+    }
+
+    #[test]
+    fn untracked_entry_yields_a_synthetic_all_additions_section() {
+        // `git diff` never surfaces untracked content, so `build_review`
+        // must read the file itself and synthesize an all-additions
+        // section for it.
+        let mut worktree_files = HashMap::new();
+        worktree_files.insert("newdir/a.txt".to_string(), b"one\ntwo\n".to_vec());
+        let fake = Fake {
+            working_tree_diff: Vec::new(),
+            staged_diff: Vec::new(),
+            status: vec![status(
+                ChangeKind::Untracked,
+                StatusCode::Unmodified,
+                StatusCode::Untracked,
+                "newdir/a.txt",
+            )],
+            worktree_files,
+        };
+
+        let review = build_review(&fake, &DiffTarget::WorkingTree).unwrap();
+
+        let idx = review
+            .files
+            .iter()
+            .position(|f| f.path == "newdir/a.txt")
+            .expect("untracked file must appear as a section");
+        assert_eq!(review.files[idx].kind, FileChangeKind::Added);
+        assert_eq!(review.files[idx].hunks.len(), 1);
+        assert!(
+            review.files[idx]
+                .hunks
+                .iter()
+                .flat_map(|h| &h.lines)
+                .all(|l| l.origin == LineOrigin::Added),
+            "every line of a synthesized untracked section must be an addition"
+        );
         assert!(review.patches[idx].is_none());
     }
 
@@ -1630,6 +1674,7 @@ mod tests {
                 StatusCode::Unmodified,
                 "y.rs",
             )],
+            ..Default::default()
         };
 
         let review = build_review(&fake, &DiffTarget::Staged).unwrap();

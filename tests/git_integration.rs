@@ -149,6 +149,40 @@ fn untracked_file_is_status_only() {
 }
 
 #[test]
+fn untracked_directory_reports_each_file_individually() {
+    // Regression: git's default `-unormal` collapses an untracked
+    // directory into a single `? newdir/` record, which the runner used
+    // to pass straight through, hiding every file inside a brand-new
+    // directory from the status list.
+    let tmp = init_repo();
+    let dir = tmp.path();
+    write(dir, "newdir/shallow.txt", b"shallow\n");
+    write(dir, "newdir/sub/deep.txt", b"deep\n");
+    write(dir, "newdir/ignored.txt", b"should never appear\n");
+    write(dir, ".gitignore", b"newdir/ignored.txt\n");
+    git(dir, &["add", ".gitignore"]);
+
+    let runner = runner_for(&tmp);
+    let status = runner.status().unwrap();
+    let untracked: Vec<&str> = status
+        .iter()
+        .filter(|s| s.kind == ChangeKind::Untracked)
+        .map(|s| s.path.as_str())
+        .collect();
+
+    assert!(untracked.contains(&"newdir/shallow.txt"));
+    assert!(untracked.contains(&"newdir/sub/deep.txt"));
+    assert!(
+        !untracked.contains(&"newdir/"),
+        "the collapsed directory record must not appear: {untracked:?}"
+    );
+    assert!(
+        !untracked.iter().any(|p| p.contains("ignored.txt")),
+        "gitignored files must stay excluded: {untracked:?}"
+    );
+}
+
+#[test]
 fn renamed_file_carries_old_and_new_path() {
     let tmp = init_repo();
     let dir = tmp.path();

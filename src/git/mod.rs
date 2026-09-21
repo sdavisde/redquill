@@ -3,7 +3,7 @@
 //! git config. No TUI types leak in here.
 //!
 //! - [`GitRunner`] discovers the repo root and runs commands against it.
-//! - [`status`] parses `git status --porcelain=v2 --branch -z` into
+//! - [`status`] parses `git status --porcelain=v2 --branch -uall -z` into
 //!   [`FileStatus`]es (and, via [`StatusSnapshot`], alongside [`BranchStatus`]).
 //! - [`branch`] parses the `# branch.*` header fields of that same payload
 //!   into [`BranchStatus`] (name/short-oid, upstream, ahead/behind), and

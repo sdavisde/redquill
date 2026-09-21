@@ -95,15 +95,15 @@ impl GitRunner {
     /// skips the `# branch.*` header fields, so this keeps returning exactly
     /// the file-status list it always has.
     pub fn status(&self) -> Result<Vec<FileStatus>, GitError> {
-        let out = self.run_utf8(&["status", "--porcelain=v2", "--branch", "-z"])?;
+        let out = self.run_utf8(&["status", "--porcelain=v2", "--branch", "-uall", "-z"])?;
         parse_porcelain_v2(&out)
     }
 
     /// Returns the working-tree/index status alongside branch sync state
     /// (name, upstream, ahead/behind), parsed from one `git status
-    /// --porcelain=v2 --branch -z` invocation.
+    /// --porcelain=v2 --branch -uall -z` invocation.
     pub fn status_with_branch(&self) -> Result<StatusSnapshot, GitError> {
-        let out = self.run_utf8(&["status", "--porcelain=v2", "--branch", "-z"])?;
+        let out = self.run_utf8(&["status", "--porcelain=v2", "--branch", "-uall", "-z"])?;
         parse_porcelain_v2_full(&out)
     }
 
